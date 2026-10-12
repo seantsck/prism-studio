@@ -12,6 +12,13 @@ export function redact(input, env = process.env) {
   // JWT-shaped tokens and sb_secret / sb_publishable style keys.
   text = text.replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\b/g, "***jwt***");
   text = text.replace(/\bsb_(?:secret|publishable)_[A-Za-z0-9_-]{8,}\b/g, "***key***");
+  // Auth artefacts: header values, bearer tokens, token/code/password key=value pairs, URL fragments.
+  text = text.replace(/\b(authorization|cookie|set-cookie)(["']?\s*[:=]\s*["']?)([^\r\n"']+)/gi, "$1$2***");
+  text = text.replace(
+    /\b(access_token|refresh_token|token_hash|code_verifier|password)(["']?\s*[:=]\s*["']?)([^\s&"',;}]+)/gi,
+    "$1$2***",
+  );
+  text = text.replace(/#\S*(?:access_token|refresh_token)\S*/gi, "#***");
   // Literal secret values from the environment (password inside the DB URL, service key, ...).
   for (const value of secretValues(env)) text = text.split(value).join("***");
   return text;

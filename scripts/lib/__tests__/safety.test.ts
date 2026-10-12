@@ -13,6 +13,14 @@ describe("script safety", () => {
     expect(out).toContain("postgres.lyqdxiyjperhniwhzsvg:***@");
   });
 
+  it("redacts auth tokens, cookies and fragments", () => {
+    const out = redact(
+      "Cookie: sb-x=abc123; refresh_token=rt-value http://h/#access_token=at-value&type=recovery",
+      {},
+    );
+    for (const s of ["abc123", "rt-value", "at-value"]) expect(out).not.toContain(s);
+  });
+
   it("redacts JWT-shaped and sb_ keys", () => {
     const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop";
     expect(redact(`token ${jwt}`, {})).toBe("token ***jwt***");

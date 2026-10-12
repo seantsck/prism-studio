@@ -31,7 +31,7 @@ No generation provider is integrated and the app is not deployed. See [docs/road
 
 ```bash
 npm install
-npm run dev          # http://localhost:3000
+npm run dev          # http://localhost:3100
 ```
 
 Boots with a seeded Japanese-drama demo project (Episode 1 "The Arrangement"). Edits live for the lifetime of
@@ -50,7 +50,7 @@ npm run db:seed              # seed the demo project for PRISM_STUDIO_DEV_USER_I
 PRISM_STUDIO_PERSISTENCE=supabase npm run dev   # or set it in .env.local
 ```
 
-Open http://localhost:3000, you are redirected to `/login`; sign in with the Auth user's email and password.
+Open http://localhost:3100, you are redirected to `/login`; sign in with the Auth user's email and password.
 Details: [docs/auth.md](docs/auth.md), [docs/persistence.md](docs/persistence.md),
 [docs/local-supabase.md](docs/local-supabase.md).
 

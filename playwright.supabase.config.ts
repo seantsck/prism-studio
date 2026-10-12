@@ -13,7 +13,7 @@ try {
 // Requires `npm run db:seed -- --reset` first so the demo project is pristine.
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: "supabase-auth.spec.ts",
+  testMatch: "supabase-*.spec.ts",
   timeout: 90_000,
   workers: 1,
   expect: { timeout: 20_000 }, // remote DB: each action is a load + write + re-render
@@ -24,6 +24,6 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 300_000,
     // SUPABASE_DB_URL / NEXT_PUBLIC_* come from .env.local (loaded by Next).
-    env: { PRISM_STUDIO_PERSISTENCE: "supabase" },
+    env: { PRISM_STUDIO_PERSISTENCE: "supabase", NEXT_PUBLIC_SITE_URL: "http://localhost:3101" },
   },
 });

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { LegacyLinkGuard } from "@/components/legacy-link-guard";
 
 export const metadata: Metadata = {
   title: "Prism Studio",
@@ -9,7 +10,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark">
-      <body className="min-h-screen antialiased">{children}</body>
+      <body className="min-h-screen antialiased">
+        <LegacyLinkGuard />
+        {children}
+      </body>
     </html>
   );
 }

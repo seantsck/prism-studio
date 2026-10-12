@@ -1,4 +1,5 @@
 import { ZodError } from "zod";
+import { redactText } from "@/lib/auth/redact";
 
 /**
  * Expected, user-correctable problems (bad input, locked entity, asset in use...). The message is shown
@@ -55,7 +56,10 @@ export async function runAction(
     }
     // Unexpected: keep detail server-side.
     const reference = Math.random().toString(36).slice(2, 10);
-    console.error(`[action:${opts.name ?? "unknown"}] ${reference}`, err);
+    console.error(
+      `[action:${opts.name ?? "unknown"}] ${reference}`,
+      redactText(err instanceof Error ? (err.stack ?? err.message) : err),
+    );
     return {
       ok: false,
       error: `Something went wrong and your change was not saved. (ref ${reference})`,
