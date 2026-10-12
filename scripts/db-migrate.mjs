@@ -50,7 +50,8 @@ try {
     assertPlanSafe(plan);
     if (plan.unrecorded.length)
       throw new Error("Some applied migrations have no recorded checksum; run npm run db:migrate once.");
-    if (plan.pending.length) throw new Error(`Pending migrations: ${plan.pending.map((p) => p.name).join(", ")}`);
+    if (plan.pending.length)
+      throw new Error(`Pending migrations: ${plan.pending.map((p) => p.name).join(", ")}`);
     console.log("MIGRATION CHECKSUMS OK");
   } else {
     await client.query("begin");

@@ -1,4 +1,6 @@
+import Link from "next/link";
 import { Badge, Button, PageHeader, Panel } from "@/components/ui";
+import { buildEpisodeCoverage } from "@/domain/coverage";
 import type { Episode, ProjectData } from "@/domain/schemas";
 import { parseScreenplay, syncScript } from "@/domain/script";
 import { saveScript } from "@/server/actions";
@@ -6,6 +8,7 @@ import { ActionForm } from "@/components/action-form";
 
 export function ScriptView({ data, episode }: { data: ProjectData; episode: Episode }) {
   const parsed = parseScreenplay(episode.scriptText);
+  const coverage = buildEpisodeCoverage(data, episode.id);
   const scenes = data.scenes.filter((s) => s.episodeId === episode.id);
   const lines = data.dialogueLines.filter((l) => l.episodeId === episode.id);
   const sync = syncScript(parsed, scenes, lines, (l) =>
@@ -19,6 +22,19 @@ export function ScriptView({ data, episode }: { data: ProjectData; episode: Epis
       <PageHeader
         title={`Script — ${episode.title}`}
         subtitle="Scene headings, action and dialogue become stable structured records. Locked dialogue is never rewritten by a script edit."
+        actions={
+          <>
+            <Badge tone={coverage.percent === 100 ? "pass" : "warn"}>
+              {coverage.percent}% covered by shots
+            </Badge>
+            <Link
+              href={`/projects/${data.project.slug}/episodes/${episode.slug}/breakdown`}
+              className="rounded-[3px] border border-line2 px-2 py-1 text-[12px] text-accent hover:bg-panel2"
+            >
+              Breakdown &amp; link shots →
+            </Link>
+          </>
+        }
       />
       <div className="grid gap-4 p-6 xl:grid-cols-2">
         <Panel title="Screenplay text">

@@ -5,8 +5,6 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function assetUrl(
-  asset: { id: string; objectPath: string | null } | null | undefined,
-): string | null {
+export function assetUrl(asset: { id: string; objectPath: string | null } | null | undefined): string | null {
   return asset?.objectPath ? `/api/assets/${asset.id}` : null;
 }

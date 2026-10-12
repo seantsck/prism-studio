@@ -1,10 +1,12 @@
 import "server-only";
 import { cache } from "react";
+import { notFound } from "next/navigation";
 import { MemoryRepository } from "@/data/memory-repository";
 import { UserRepository } from "@/data/postgres-repository";
 import type { Repository } from "@/data/repository";
 import { persistenceMode } from "@/lib/supabase/config";
 import type { ProjectData } from "@/domain/schemas";
+import { UserFacingError } from "./action-result";
 import { requireUser } from "./auth";
 import { getPool } from "./db";
 
@@ -17,7 +19,7 @@ declare global {
  *   PRISM_STUDIO_PERSISTENCE=supabase  → UserRepository: verified session → role `authenticated` + JWT claims,
  *                                         so Postgres RLS enforces ownership. No dev-user fallback exists.
  *   anything else / unset              → MemoryRepository with the demo seed (single local user, no accounts).
- * PRISM_STUDIO_DEV_USER_ID is intentionally NOT read here: it is for scripts and tests only.
+ * The dev-user environment variable is intentionally NOT read here: it is for scripts and tests only.
  */
 export async function getRepo(): Promise<Repository> {
   if (persistenceMode() === "memory") {
@@ -31,7 +33,7 @@ export async function getRepo(): Promise<Repository> {
 /** Always reads from the repository. Server actions use this: they mutate and then re-render in the same request. */
 export async function requireProjectFresh(slug: string): Promise<ProjectData> {
   const data = await (await getRepo()).loadProject(slug);
-  if (!data) throw new Error(`Project "${slug}" not found`);
+  if (!data) throw new UserFacingError("That project no longer exists.");
   return data;
 }
 
@@ -45,6 +47,6 @@ export const loadProjectCached = cache(async (slug: string): Promise<ProjectData
 
 export async function requireProject(slug: string): Promise<ProjectData> {
   const data = await loadProjectCached(slug);
-  if (!data) throw new Error(`Project "${slug}" not found`);
+  if (!data) notFound();
   return data;
 }

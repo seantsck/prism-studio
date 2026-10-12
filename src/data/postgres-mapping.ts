@@ -183,8 +183,9 @@ export function sceneFromRow(row: Row, characterIds: string[], propIds: string[]
       scriptStartLine != null && scriptEndLine != null
         ? { startLine: Number(scriptStartLine), endLine: Number(scriptEndLine) }
         : null,
-    characterIds,
-    propIds,
+    // Set semantics: sorted so equal states always serialise (and fingerprint) identically.
+    characterIds: [...characterIds].sort(),
+    propIds: [...propIds].sort(),
   };
 }
 
@@ -348,7 +349,7 @@ export function shotFromRows(row: Row, joins: ShotJoinRows): Record<string, unkn
         gestures: String(c.gestures ?? ""),
         physicalInteractions: String(c.physical_interactions ?? ""),
       })),
-    propIds: joins.props.map((p) => String(p.prop_id)),
+    propIds: joins.props.map((p) => String(p.prop_id)).sort(),
     continuity: {
       ...base.continuity,
       ...asObject(row.continuity),

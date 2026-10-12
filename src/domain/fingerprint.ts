@@ -115,9 +115,7 @@ export function computeShotParts(ctx: ShotContext): ShotParts {
     lighting: fingerprint(shot.lighting),
     // Beat ids are regenerated on every save, so they are not part of the content.
     action: fingerprint({
-      beats: [...shot.action.beats]
-        .sort((a, b) => a.order - b.order)
-        .map((b) => [b.atMs, b.description]),
+      beats: [...shot.action.beats].sort((a, b) => a.order - b.order).map((b) => [b.atMs, b.description]),
       beginningPose: shot.action.beginningPose,
       endingPose: shot.action.endingPose,
     }),
@@ -201,8 +199,7 @@ export function storyboardFreshness(
     changed = [...VISUAL_PARTS]; // fingerprint only: cannot say which part
   }
   const toMs = timelineFromContext(ctx).totalMs;
-  const timingChange =
-    snap && snap.durationMs !== toMs ? { fromMs: snap.durationMs, toMs } : null;
+  const timingChange = snap && snap.durationMs !== toMs ? { fromMs: snap.durationMs, toMs } : null;
 
   const messages: string[] = [];
   for (const p of changed) {

@@ -56,7 +56,8 @@ export function findAssetUsage(data: ProjectData, assetId: string): AssetUsageRe
       label: `${charName(ref.characterId)} · ${ref.slot.replace("_", " ")} identity reference`,
       entityId: ref.id,
     });
-    for (const s of data.shots) if (s.characters.some((c) => c.characterId === ref.characterId)) affected.add(s.id);
+    for (const s of data.shots)
+      if (s.characters.some((c) => c.characterId === ref.characterId)) affected.add(s.id);
   }
   for (const look of data.looks) {
     if (!look.referenceAssetIds.includes(assetId)) continue;
@@ -84,7 +85,11 @@ export function findAssetUsage(data: ProjectData, assetId: string): AssetUsageRe
   }
   for (const v of data.voiceProfiles) {
     if (v.sampleAssetIds.includes(assetId))
-      direct.push({ kind: "voice_sample", label: `${charName(v.characterId)} · voice "${v.name}" sample`, entityId: v.id });
+      direct.push({
+        kind: "voice_sample",
+        label: `${charName(v.characterId)} · voice "${v.name}" sample`,
+        entityId: v.id,
+      });
   }
   for (const s of data.shots) {
     const g = s.generation;

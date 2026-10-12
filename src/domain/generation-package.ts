@@ -1,6 +1,11 @@
 import type { ShotContext } from "./context";
 import type { DurationBreakdown } from "./duration";
-import { computeShotParts, overallFingerprint, storyboardFreshness, type StoryboardFreshness } from "./fingerprint";
+import {
+  computeShotParts,
+  overallFingerprint,
+  storyboardFreshness,
+  type StoryboardFreshness,
+} from "./fingerprint";
 import { fingerprint } from "./hash";
 import { runPreflight } from "./preflight";
 import type { Asset, Shot } from "./schemas";
@@ -436,7 +441,8 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
   // Every referenced asset is described by value (checksum, dimensions, filename...).
   const assetIds = new Set<string>();
   const addIds = (ids: Array<string | null | undefined>) => ids.forEach((i) => i && assetIds.add(i));
-  for (const c of base.characters) addIds([...c.identityReferenceAssetIds, ...(c.look?.referenceAssetIds ?? [])]);
+  for (const c of base.characters)
+    addIds([...c.identityReferenceAssetIds, ...(c.look?.referenceAssetIds ?? [])]);
   addIds(base.set?.referenceAssetIds ?? []);
   addIds([
     base.references.startFrameAssetId,

@@ -15,7 +15,11 @@ const bytesLabel = (n: number | null) =>
 function Preview({ asset, data }: { asset: Asset; data: ProjectData }) {
   const src = assetUrl(asset);
   if (!src)
-    return <div className="flex h-40 items-center justify-center bg-bg text-faint">Placeholder — no stored file</div>;
+    return (
+      <div className="flex h-40 items-center justify-center bg-bg text-faint">
+        Placeholder — no stored file
+      </div>
+    );
   if (asset.type === "image" || asset.type === "reference")
     // eslint-disable-next-line @next/next/no-img-element
     return <img src={src} alt={asset.name} className="max-h-72 w-full bg-bg object-contain" />;
@@ -52,17 +56,26 @@ function Detail({ asset, data, base }: { asset: Asset; data: ProjectData; base: 
     ["Size", bytesLabel(asset.byteSize)],
     ["Dimensions", asset.width && asset.height ? `${asset.width} × ${asset.height}` : "—"],
     ["Duration", asset.durationMs ? formatSeconds(asset.durationMs) : "—"],
+    ["Audio", asset.sampleRate ? `${asset.sampleRate} Hz · ${asset.channels ?? "?"} ch` : "—"],
     [
-      "Audio",
-      asset.sampleRate ? `${asset.sampleRate} Hz · ${asset.channels ?? "?"} ch` : "—",
+      "Storage",
+      asset.objectPath
+        ? `${asset.storageProvider} · ${asset.bucket ? `${asset.bucket}/` : ""}${asset.objectPath}`
+        : "placeholder",
     ],
-    ["Storage", asset.objectPath ? `${asset.storageProvider} · ${asset.bucket ? `${asset.bucket}/` : ""}${asset.objectPath}` : "placeholder"],
     ["Checksum (sha256)", asset.checksum ?? "—"],
     ["Created", asset.createdAt.slice(0, 16).replace("T", " ")],
   ];
   return (
     <aside className="space-y-3">
-      <Panel title={asset.name} actions={<Link href={base} className="text-[11px] text-muted hover:text-fg">Close</Link>}>
+      <Panel
+        title={asset.name}
+        actions={
+          <Link href={base} className="text-[11px] text-muted hover:text-fg">
+            Close
+          </Link>
+        }
+      >
         <div className="-m-3 mb-3 border-b border-line">
           <Preview asset={asset} data={data} />
         </div>
@@ -126,7 +139,10 @@ function Detail({ asset, data, base }: { asset: Asset; data: ProjectData; base: 
             generation history are never deleted silently.)
           </p>
         ) : (
-          <ActionForm action={deleteAsset} confirmMessage={`Delete "${asset.name}"? This removes the stored file.`}>
+          <ActionForm
+            action={deleteAsset}
+            confirmMessage={`Delete "${asset.name}"? This removes the stored file.`}
+          >
             <input type="hidden" name="projectSlug" value={data.project.slug} />
             <input type="hidden" name="assetId" value={asset.id} />
             <Button type="submit" variant="danger">
@@ -196,7 +212,10 @@ export function AssetLibraryView({
             />
             <Button type="submit">Search</Button>
             {q ? (
-              <Link href={href({ q: undefined })} className="self-center text-[11.5px] text-muted hover:text-fg">
+              <Link
+                href={href({ q: undefined })}
+                className="self-center text-[11.5px] text-muted hover:text-fg"
+              >
                 Clear
               </Link>
             ) : null}
@@ -230,12 +249,19 @@ export function AssetLibraryView({
                         )}
                       >
                         <td className="px-3 py-1.5">
-                          <Link href={href({ asset: a.id })} className="flex items-center gap-2 hover:text-accent">
+                          <Link
+                            href={href({ asset: a.id })}
+                            className="flex items-center gap-2 hover:text-accent"
+                          >
                             {src && a.type === "image" ? (
                               // eslint-disable-next-line @next/next/no-img-element
-                              <img src={src} alt="" className="h-7 w-10 rounded-[2px] bg-bg object-cover" />
+                              <img
+                                src={src}
+                                alt=""
+                                className="h-7 w-10 shrink-0 rounded-[2px] bg-bg object-cover"
+                              />
                             ) : (
-                              <span className="flex h-7 w-10 items-center justify-center rounded-[2px] bg-bg text-[9px] uppercase text-faint">
+                              <span className="flex h-7 w-10 shrink-0 items-center justify-center overflow-hidden rounded-[2px] bg-bg text-[8px] uppercase text-faint">
                                 {a.type}
                               </span>
                             )}
@@ -306,7 +332,9 @@ export function AssetLibraryView({
         {selected ? (
           <Detail asset={selected} data={data} base={href({ asset: undefined })} />
         ) : (
-          <aside className="text-muted">Select an asset to see its preview, metadata and where it is used.</aside>
+          <aside className="text-muted">
+            Select an asset to see its preview, metadata and where it is used.
+          </aside>
         )}
       </div>
     </div>

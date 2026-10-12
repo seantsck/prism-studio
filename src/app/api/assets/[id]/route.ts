@@ -50,8 +50,14 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     }
     return new Response(Buffer.from(bytes.slice(start, end + 1)), {
       status: 206,
-      headers: { ...headers, "content-range": `bytes ${start}-${end}/${total}`, "content-length": String(end - start + 1) },
+      headers: {
+        ...headers,
+        "content-range": `bytes ${start}-${end}/${total}`,
+        "content-length": String(end - start + 1),
+      },
     });
   }
-  return new Response(Buffer.from(bytes), { headers: { ...headers, "content-length": String(bytes.length) } });
+  return new Response(Buffer.from(bytes), {
+    headers: { ...headers, "content-length": String(bytes.length) },
+  });
 }

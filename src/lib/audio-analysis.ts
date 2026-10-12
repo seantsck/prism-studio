@@ -60,7 +60,9 @@ export async function analyzeAudio(
   }
 
   const metaDurationMs =
-    typeof meta.format.duration === "number" && Number.isFinite(meta.format.duration) && meta.format.duration > 0
+    typeof meta.format.duration === "number" &&
+    Number.isFinite(meta.format.duration) &&
+    meta.format.duration > 0
       ? Math.round(meta.format.duration * 1000)
       : null;
   const decodedDurationMs = pcm ? Math.round((pcm.channelData[0].length / pcm.sampleRate) * 1000) : null;

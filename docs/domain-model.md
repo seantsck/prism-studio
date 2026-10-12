@@ -1,11 +1,12 @@
 # Domain model
 
-Source of truth: `src/domain/schemas.ts` (Zod). SQL: `supabase/migrations/0001_core.sql`, `0002_production.sql`.
+Source of truth: `src/domain/schemas.ts` (Zod). SQL: `supabase/migrations/0001`–`0011`
+([history](migration-policy.md)). The aggregate loaded for a project is `ProjectData`.
 
 ```
-User
+User (auth.users)
  └ Project ─ ProjectBible (canon, rules, guardrails)
-    ├ Asset                       generic file/reference record
+    ├ Asset                       file/reference record: purpose, storage location, metadata (see asset-lifecycle.md)
     ├ Character
     │   ├ IdentityRef             front / three_quarter / profile / full_body / additional → Asset
     │   ├ CharacterLook           wardrobe, shoes, jewelry, hair, makeup … (optionally episode-scoped, lockable)
@@ -14,55 +15,63 @@ User
     ├ Prop
     └ Episode  (script text)
         ├ Scene                   slugline, location, emotional arc, script range
-        │   └ DialogueLine        stable id, text, translation, locked
+        │   ├ ActionBlock         stable id, text, order, start/end line         (0008)
+        │   └ DialogueLine        stable id, text, translation, locked, source line range
         │        ├ PerformanceDirection (1:1)
-        │        └ PerformanceTake (N; exactly one `selected`)
+        │        └ PerformanceTake (N; one `selected`; may be `archived`)
         └ Shot
             ├ ShotCharacter[]     character + lookId (+ expression, posture, gestures…)
+            ├ scriptSources       { actionBlockIds, dialogueLineIds }             (0008)
             ├ sections            composition, spatial, continuity, action, audio, lighting, constraints, generation
             ├ approval            storyboard / performance / continuity gates
-            ├ StoryboardFrame[]   versioned; at most one approved
-            ├ GenerationAttempt[] append-only, with package snapshot
+            ├ StoryboardFrame[]   versioned; at most one approved; approved_fingerprint + approved_snapshot (0009, 0011)
+            ├ GenerationAttempt[] append-only; package_fingerprint (0009)
             └ ContinuityCheck[]   manual now, automated later
 ```
 
 ## Invariants
 
-| Invariant                                                           | Enforced by                                                                   |
-| ------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| One selected take per dialogue line                                 | `selectTake()` domain fn + partial unique index `takes_one_selected_per_line` |
-| One approved storyboard frame per shot                              | `setFrameApproved` action + `frames_one_approved_per_shot`                    |
-| A shot's Look belongs to the assigned character (and episode scope) | `validateLookLink()`; preflight rule `character.look_valid`; FK restrict      |
-| Locked dialogue text is never rewritten                             | `syncScript` / `saveDialogueLine`; `guard_locked_dialogue` trigger            |
-| Generation history is immutable                                     | `guard_attempt_history` trigger; `reviewAttempt` touches only review fields   |
-| Locked shots keep their order slot                                  | `reorderShotsInScene()`                                                       |
-| `ready_to_generate` is derived                                      | `runPreflight()` — not stored (cache columns dropped in migration 0004)       |
-| Reference-asset order is preserved                                  | `shot_reference_assets.position` + unique `(shot_id, role, position)`         |
+| Invariant                                                           | Enforced by                                                                     |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| One selected take per dialogue line                                 | `selectTake()` domain fn + partial unique index `takes_one_selected_per_line`   |
+| Archived takes are never selected                                   | `setTakeArchived` / `selectTake` action + check `takes_archived_not_selected`   |
+| One approved storyboard frame per shot                              | `setFrameApproved` action + `frames_one_approved_per_shot`                      |
+| A shot's Look belongs to the assigned character (and episode scope) | `validateLookLink()`; preflight `character.look_valid`; deferrable no-action FK |
+| Locked dialogue text is never rewritten                             | `syncScript` / `saveDialogueLine`; `guard_locked_dialogue` trigger              |
+| Generation history is immutable                                     | `guard_attempt_history` trigger (includes `package_fingerprint`)                |
+| Locked shots keep their order slot                                  | `reorderShotsInScene()`                                                         |
+| Readiness is derived                                                | `runPreflight()`; cache columns dropped in 0004                                 |
+| Reference-asset order is preserved                                  | `shot_reference_assets.position` + unique `(shot_id, role, position)`           |
+| A shot links a script element at most once                          | unique indexes on `shot_script_sources`                                         |
+| A Supabase-stored asset has bucket and path                         | check `assets_supabase_location_check`                                          |
+| An asset in use cannot be deleted                                   | `findAssetUsage` + `deleteAsset` action                                         |
+| Ownership of every row                                              | RLS (`is_project_owner`) — [security-model](security-model.md)                  |
 
 ## Design notes
 
 - **Shots reference, never repeat.** A shot stores `lookId`, `locationId`, `previousShotId`, dialogue line ids.
   Wardrobe text is read from the Look at package-assembly time.
-- **Next shot is derived.** Only `previousShotId` is stored; the next shot is computed from order, so reordering
-  cannot leave two links disagreeing.
-- **Named character count.** `continuity.characterCount` counts assigned (named) characters visible. Background
-  extras are described in `spatial.backgroundActivity` and constrained via `constraints.*`. `0` is an explicit
-  statement that an establishing shot has no named characters.
-- **Non-principal speakers.** A dialogue line may have `characterId = null` with a `speakerLabel`
-  (e.g. `REPORTER`, `MOTHER (V.O.)`) so they can have takes without being full characters.
-- **Locations are 3D-ready.** `set3d` (`modelAssetId`, `cameraRigs`, `blockingMarkers`, `lightRigs`) is nullable
-  and unused in Phase 1; `spatial.marks` use normalised 0–1 coordinates that a 3D set can later replace with world coordinates.
+- **Next shot is derived.** Only `previousShotId` is stored; the next shot is computed from order.
+- **Named character count.** `continuity.characterCount` counts assigned (named) characters visible; `0` is an
+  explicit statement that an establishing shot has none.
+- **Non-principal speakers.** A dialogue line may have `characterId = null` with a `speakerLabel`.
+- **Timing is derived.** Duration comes from selected takes ([performance-workflow](performance-workflow.md)).
+- **Freshness is hashed state.** Per-part fingerprints, not event history ([production-workflow](production-workflow.md)).
+- **Locations are 3D-ready.** `set3d` is nullable and unused; `spatial.marks` use normalised 0–1 coordinates.
 
-## Persistence mapping (for the Supabase adapter)
+## Persistence mapping
 
-| Domain                                                                             | SQL                                           |
-| ---------------------------------------------------------------------------------- | --------------------------------------------- |
-| `Shot.characters[]`                                                                | `shot_characters`                             |
-| `Shot.audio.dialogueLineIds[]`                                                     | `shot_dialogue_lines` (ordered by `position`) |
-| `Shot.propIds[]`                                                                   | `shot_props`                                  |
-| `Shot.generation.*AssetId(s)`                                                      | `shot_reference_assets.role`                  |
-| `Shot.continuity.previousShotId`                                                   | `shots.previous_shot_id`                      |
-| `Shot.spatial.locationId`                                                          | `shots.location_id`                           |
-| `Shot.composition/spatial/continuity/action/audio/lighting/constraints/generation` | JSONB columns                                 |
-| `Scene.characterIds/propIds`                                                       | `scene_characters`, `scene_props`             |
-| `Scene.scriptRange`                                                                | `scenes.script_start_line/end_line`           |
+| Domain                                                                             | SQL                                                                              |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `Shot.characters[]`                                                                | `shot_characters`                                                                |
+| `Shot.audio.dialogueLineIds[]`                                                     | `shot_dialogue_lines` (ordered by `position`)                                    |
+| `Shot.scriptSources.*`                                                             | `shot_script_sources`                                                            |
+| `Shot.propIds[]`                                                                   | `shot_props`                                                                     |
+| `Shot.generation.*AssetId(s)`                                                      | `shot_reference_assets.role`                                                     |
+| `Shot.continuity.previousShotId`                                                   | `shots.previous_shot_id`                                                         |
+| `Shot.spatial.locationId`                                                          | `shots.location_id`                                                              |
+| `Shot.composition/spatial/continuity/action/audio/lighting/constraints/generation` | JSONB columns                                                                    |
+| `Scene.characterIds/propIds`                                                       | `scene_characters`, `scene_props`                                                |
+| `Scene.scriptRange`                                                                | `scenes.script_start_line/end_line`                                              |
+| `PerformanceTake.waveform`                                                         | `performance_takes.waveform` (JSONB `{version, sampleCount, peaks, durationMs}`) |
+| `StoryboardFrame.approvedSnapshot`                                                 | `storyboard_frames.approved_snapshot` (JSONB `{parts, durationMs}`)              |

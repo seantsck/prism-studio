@@ -17,13 +17,7 @@ function Bar({ percent }: { percent: number }) {
   );
 }
 
-function Item({
-  item,
-  shotHref,
-}: {
-  item: CoverageItem;
-  shotHref: (shotId: string) => string;
-}) {
+function Item({ item, shotHref }: { item: CoverageItem; shotHref: (shotId: string) => string }) {
   return (
     <li
       className={cn(
@@ -65,15 +59,7 @@ function Item({
   );
 }
 
-function SceneBlock({
-  scene,
-  episode,
-  slug,
-}: {
-  scene: SceneCoverage;
-  episode: Episode;
-  slug: string;
-}) {
+function SceneBlock({ scene, episode, slug }: { scene: SceneCoverage; episode: Episode; slug: string }) {
   const shotHref = (shotId: string) => `/projects/${slug}/episodes/${episode.slug}/shots/${shotId}`;
   return (
     <section className="border border-line bg-panel" id={`scene-${scene.sceneNumber}`}>
@@ -92,7 +78,10 @@ function SceneBlock({
         </div>
         <div className="flex items-center gap-3">
           <span className="font-mono text-[12px]">
-            {scene.percent}% <span className="text-faint">({scene.covered}/{scene.total})</span>
+            {scene.percent}%{" "}
+            <span className="text-faint">
+              ({scene.covered}/{scene.total})
+            </span>
           </span>
           <Bar percent={scene.percent} />
         </div>

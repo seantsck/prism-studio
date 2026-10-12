@@ -6,8 +6,7 @@ export function checksumOf(sql) {
   return createHash("sha256").update(String(sql).replace(/\r\n/g, "\n"), "utf8").digest("hex");
 }
 
-export const MISMATCH_MESSAGE =
-  "Applied migration has changed on disk. Create a new migration instead.";
+export const MISMATCH_MESSAGE = "Applied migration has changed on disk. Create a new migration instead.";
 
 /**
  * files:   [{ name, sql }]            migrations on disk
@@ -34,14 +33,16 @@ export function planMigrations(files, applied) {
   }
   const missingOnDisk = applied.map((a) => a.name).filter((n) => !sorted.some((f) => f.name === n));
   // A pending file that sorts before an applied one would be applied out of order.
-  const lastApplied = applied.map((a) => a.name).sort().at(-1);
+  const lastApplied = applied
+    .map((a) => a.name)
+    .sort()
+    .at(-1);
   const outOfOrder = pending.filter((f) => lastApplied && f.name < lastApplied).map((f) => f.name);
   return { pending, mismatched, unrecorded, missingOnDisk, outOfOrder };
 }
 
 export function assertPlanSafe(plan) {
-  if (plan.mismatched.length)
-    throw new Error(`${MISMATCH_MESSAGE} (${plan.mismatched.join(", ")})`);
+  if (plan.mismatched.length) throw new Error(`${MISMATCH_MESSAGE} (${plan.mismatched.join(", ")})`);
   if (plan.missingOnDisk.length)
     throw new Error(`Applied migration file is missing on disk: ${plan.missingOnDisk.join(", ")}`);
   if (plan.outOfOrder.length)

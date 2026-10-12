@@ -27,7 +27,11 @@ describe("upload policy", () => {
   });
 
   it("accepts a valid file for an allowed kind and returns the detected mime", () => {
-    const r = checkUpload({ name: "take1.wav", size: 5000, claimedMime: "audio/wav" }, makeWav({ seconds: 0.2 }), ["audio"]);
+    const r = checkUpload(
+      { name: "take1.wav", size: 5000, claimedMime: "audio/wav" },
+      makeWav({ seconds: 0.2 }),
+      ["audio"],
+    );
     expect(r).toMatchObject({ ok: true, mime: "audio/wav", kind: "audio" });
   });
 
@@ -44,7 +48,10 @@ describe("upload policy", () => {
   });
 
   it("detects MIME spoofing between families and empty uploads", () => {
-    const spoof = checkUpload({ name: "a.png", size: 40, claimedMime: "audio/wav" }, png(4, 4), ["image", "audio"]);
+    const spoof = checkUpload({ name: "a.png", size: 40, claimedMime: "audio/wav" }, png(4, 4), [
+      "image",
+      "audio",
+    ]);
     expect(spoof.ok).toBe(false);
     expect(spoof.reason).toMatch(/does not match/);
     expect(checkUpload({ name: "a.wav", size: 0 }, new Uint8Array(), ["audio"]).reason).toMatch(/empty/);
@@ -62,7 +69,9 @@ describe("upload policy", () => {
 describe("storage paths", () => {
   it("builds <project>/<asset>/<sanitised name> and strips traversal", () => {
     expect(buildObjectPath(PROJECT, ASSET, "../../etc/passwd")).toBe(`${PROJECT}/${ASSET}/passwd`);
-    expect(buildObjectPath(PROJECT, ASSET, "Take 1 (final).wav")).toBe(`${PROJECT}/${ASSET}/Take_1_final_.wav`);
+    expect(buildObjectPath(PROJECT, ASSET, "Take 1 (final).wav")).toBe(
+      `${PROJECT}/${ASSET}/Take_1_final_.wav`,
+    );
     expect(safeFileName("")).toBe("file");
     expect(safeFileName("..")).toBe("file");
     expect(safeFileName("a".repeat(300)).length).toBeLessThanOrEqual(100);
@@ -72,7 +81,9 @@ describe("storage paths", () => {
     expect(() => buildObjectPath("not-a-uuid", ASSET, "a.png")).toThrow();
     expect(() => assertPathInProject(`${PROJECT}/${ASSET}/a.png`, PROJECT)).not.toThrow();
     expect(() => assertPathInProject(`${PROJECT}/${ASSET}/../x`, PROJECT)).toThrow();
-    expect(() => assertPathInProject(`22222222-2222-4222-8222-222222222222/${ASSET}/a.png`, PROJECT)).toThrow();
+    expect(() =>
+      assertPathInProject(`22222222-2222-4222-8222-222222222222/${ASSET}/a.png`, PROJECT),
+    ).toThrow();
     expect(() => assertPathInProject(`${PROJECT}/${ASSET}`, PROJECT)).toThrow();
   });
 });

@@ -24,7 +24,12 @@ export const OK: ActionResult = { ok: true };
 /** Next.js implements redirect()/notFound() by throwing; those must pass through untouched. */
 function isNextControlFlow(err: unknown): boolean {
   const digest = (err as { digest?: unknown } | null)?.digest;
-  return typeof digest === "string" && (digest.startsWith("NEXT_REDIRECT") || digest.startsWith("NEXT_HTTP_ERROR_FALLBACK") || digest === "NEXT_NOT_FOUND");
+  return (
+    typeof digest === "string" &&
+    (digest.startsWith("NEXT_REDIRECT") ||
+      digest.startsWith("NEXT_HTTP_ERROR_FALLBACK") ||
+      digest === "NEXT_NOT_FOUND")
+  );
 }
 
 /** Runs a server action body and converts failures into an ActionResult the form can render inline. */

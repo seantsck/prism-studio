@@ -36,7 +36,10 @@ export function ScenesView({ data, episode }: { data: ProjectData; episode: Epis
                   <Badge tone={loc ? "neutral" : "warn"}>{loc?.name ?? "no location"}</Badge>
                 </span>
               </summary>
-              <ActionForm action={saveScene} className="grid max-w-4xl grid-cols-2 gap-3 border-t border-line p-4">
+              <ActionForm
+                action={saveScene}
+                className="grid max-w-4xl grid-cols-2 gap-3 border-t border-line p-4"
+              >
                 {hidden}
                 <input type="hidden" name="id" value={s.id} />
                 <Field label="Summary" className="col-span-2">

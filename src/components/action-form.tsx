@@ -50,17 +50,15 @@ export function ActionForm({
     null,
   );
   const ref = useRef<HTMLFormElement>(null);
-  const [showSaved, setShowSaved] = useState(false);
+  // The "Saved" note is visible until this particular result is dismissed by the timer below.
+  const [dismissed, setDismissed] = useState<ActionResult | null>(null);
+  const showSaved = state?.ok === true && dismissed !== state;
 
   useEffect(() => {
-    if (!state) return;
-    if (state.ok) {
-      if (resetOnSuccess) ref.current?.reset();
-      setShowSaved(true);
-      const t = setTimeout(() => setShowSaved(false), 2200);
-      return () => clearTimeout(t);
-    }
-    setShowSaved(false);
+    if (state?.ok !== true) return;
+    if (resetOnSuccess) ref.current?.reset();
+    const t = setTimeout(() => setDismissed(state), 2200);
+    return () => clearTimeout(t);
   }, [state, resetOnSuccess]);
 
   return (
@@ -82,7 +80,11 @@ export function ActionForm({
         {children}
       </fieldset>
       {!quiet && (pending || state || showSaved) ? (
-        <div className="mt-1.5 min-h-4 text-[11px]" aria-live="polite" role={state && !state.ok ? "alert" : undefined}>
+        <div
+          className="mt-1.5 min-h-4 text-[11px]"
+          aria-live="polite"
+          role={state && !state.ok ? "alert" : undefined}
+        >
           {pending ? (
             <span className="inline-flex items-center gap-1 text-muted">
               <Loader2 className="h-3 w-3 animate-spin" /> Saving…

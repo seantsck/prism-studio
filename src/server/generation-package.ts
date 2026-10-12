@@ -8,7 +8,10 @@ import { requireProjectFresh } from "./repo";
  * Loads the owning project through the (RLS-bound) repository, resolves the full shot context,
  * and delegates to the pure domain assembler. No provider is contacted.
  */
-export async function buildGenerationPackage(projectSlug: string, shotId: string): Promise<GenerationPackage> {
+export async function buildGenerationPackage(
+  projectSlug: string,
+  shotId: string,
+): Promise<GenerationPackage> {
   const data = await requireProjectFresh(projectSlug);
   return assembleGenerationPackage(buildShotContext(data, shotId));
 }

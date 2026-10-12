@@ -172,13 +172,20 @@ export function AudioPlayer({
           if (e.key === "ArrowLeft") seek((positionMs - 500) / durationMs);
         }}
       >
-        <WaveformBars waveform={waveform} progress={durationMs ? positionMs / durationMs : 0} height={compact ? 24 : 36} />
+        <WaveformBars
+          waveform={waveform}
+          progress={durationMs ? positionMs / durationMs : 0}
+          height={compact ? 24 : 36}
+        />
       </div>
-      <span className="w-[78px] shrink-0 text-right font-mono text-[10.5px] text-muted">
+      <span className="w-[104px] shrink-0 whitespace-nowrap text-right font-mono text-[10.5px] text-muted">
         {fmt(positionMs)} / {fmt(durationMs)}
       </span>
       {failed ? (
-        <span className="inline-flex items-center gap-1 text-[10.5px] text-warn" title="The audio file could not be loaded">
+        <span
+          className="inline-flex items-center gap-1 text-[10.5px] text-warn"
+          title="The audio file could not be loaded"
+        >
           <AlertTriangle className="h-3 w-3" /> unavailable
         </span>
       ) : null}

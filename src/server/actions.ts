@@ -104,7 +104,11 @@ async function ingestUpload(
   opts: IngestOptions,
 ): Promise<Ingested> {
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const check = checkUpload({ name: file.name, size: file.size, claimedMime: file.type }, bytes, opts.allowed);
+  const check = checkUpload(
+    { name: file.name, size: file.size, claimedMime: file.type },
+    bytes,
+    opts.allowed,
+  );
   if (!check.ok || !check.kind || !check.mime) throw new UserFacingError(check.reason ?? "Unsupported file.");
 
   let audio: Ingested["audio"] = null;
@@ -773,7 +777,9 @@ async function reorderShots_impl(sceneId: string, orderedIds: string[], projectS
       current = reorderShotsInScene(current, id, target);
     }
   });
-  await (await getRepo()).upsertMany(
+  await (
+    await getRepo()
+  ).upsertMany(
     data.project.id,
     "shots",
     current.map((s) => ({ ...s, updatedAt: now() })),
@@ -1010,11 +1016,15 @@ async function setFrameApproved_impl(form: FormData) {
     await repo.upsert(data.project.id, "frames", {
       ...f,
       approved,
-      approvedFingerprint: f.id === frame.id ? (approved_?.fingerprint ?? null) : approved ? f.approvedFingerprint : null,
+      approvedFingerprint:
+        f.id === frame.id ? (approved_?.fingerprint ?? null) : approved ? f.approvedFingerprint : null,
       approvedSnapshot:
         f.id === frame.id
           ? approved_
-            ? { parts: approved_.snapshot.parts as Record<string, string>, durationMs: approved_.snapshot.durationMs }
+            ? {
+                parts: approved_.snapshot.parts as Record<string, string>,
+                durationMs: approved_.snapshot.durationMs,
+              }
             : null
           : approved
             ? f.approvedSnapshot
@@ -1150,7 +1160,10 @@ async function uploadAsset_impl(form: FormData) {
     allowed: ["image", "audio", "video", "document"],
     purpose,
     source: "upload",
-    tags: lines(form, "tags").flatMap((l) => l.split(",")).map((t) => t.trim()).filter(Boolean),
+    tags: lines(form, "tags")
+      .flatMap((l) => l.split(","))
+      .map((t) => t.trim())
+      .filter(Boolean),
     notes: str(form, "notes"),
   });
   try {
@@ -1221,11 +1234,7 @@ async function setShotSource_impl(form: FormData) {
   const key = kind === "action" ? "actionBlockIds" : "dialogueLineIds";
   const current = shot.scriptSources[key];
   const next = link ? [...new Set([...current, sourceId])] : current.filter((x) => x !== sourceId);
-  await saveShot(
-    data.project.id,
-    { ...shot, scriptSources: { ...shot.scriptSources, [key]: next } },
-    slug,
-  );
+  await saveShot(data.project.id, { ...shot, scriptSources: { ...shot.scriptSources, [key]: next } }, slug);
 }
 
 /** Manual shot creation from selected script content. (AI may only propose such selections, never apply them.) */
@@ -1273,7 +1282,7 @@ async function createShotFromSources_impl(form: FormData) {
     episodeId: scene.episodeId,
     sceneId: scene.id,
     shotCode: str(form, "shotCode") || `${scene.sceneNumber}${letter}`,
-    title: str(form, "title") || (firstText.slice(0, 48) || "Untitled shot"),
+    title: str(form, "title") || firstText.slice(0, 48) || "Untitled shot",
     order: siblings.length,
   });
   const shot = shotSchema.parse({

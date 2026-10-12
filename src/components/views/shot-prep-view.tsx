@@ -223,7 +223,10 @@ function Gate({
 }) {
   const on = shot.approval[gate];
   return (
-    <ActionForm action={setShotApproval} className="flex items-center justify-between border border-line px-3 py-2">
+    <ActionForm
+      action={setShotApproval}
+      className="flex items-center justify-between border border-line px-3 py-2"
+    >
       <input type="hidden" name="projectSlug" value={data.project.slug} />
       <input type="hidden" name="shotId" value={shot.id} />
       <input type="hidden" name="gate" value={gate} />
@@ -296,7 +299,9 @@ export function ShotPrepView({
     .filter((a) => a.shotId === shot.id)
     .sort((a, b) => b.attemptNumber - a.attemptNumber)[0];
   const changedSinceAttempt =
-    lastAttempt && lastAttempt.packageFingerprint && lastAttempt.packageFingerprint !== pkg.provenance.fingerprint;
+    lastAttempt &&
+    lastAttempt.packageFingerprint &&
+    lastAttempt.packageFingerprint !== pkg.provenance.fingerprint;
 
   const sectionProps = (key: string) => {
     const meta = SECTION_ORDER.find((s) => s.key === key)!;
@@ -455,7 +460,9 @@ export function ShotPrepView({
               if (freeA.length + freeD.length === 0) return null;
               return (
                 <div className="border-t border-line pt-3">
-                  <div className="mb-1.5 text-[11px] text-muted">Other content in scene {ctx.scene.sceneNumber}</div>
+                  <div className="mb-1.5 text-[11px] text-muted">
+                    Other content in scene {ctx.scene.sceneNumber}
+                  </div>
                   <ul className="space-y-1">
                     {freeA.map((a) => (
                       <li key={a.id} className="flex items-start gap-2 text-[12px]">
@@ -654,7 +661,9 @@ export function ShotPrepView({
                   <div className="flex items-center justify-between">
                     <span className="font-medium">{c.character?.name ?? "Unknown character"}</span>
                     {c.look ? (
-                      <Badge tone={c.look.locked ? "pass" : "warn"}>{c.look.locked ? "locked" : "unlocked"}</Badge>
+                      <Badge tone={c.look.locked ? "pass" : "warn"}>
+                        {c.look.locked ? "locked" : "unlocked"}
+                      </Badge>
                     ) : (
                       <Badge tone="fail">no Look assigned</Badge>
                     )}
@@ -682,8 +691,8 @@ export function ShotPrepView({
                         ))}
                       <dt className="text-muted">References</dt>
                       <dd>
-                        {c.look.referenceAssetIds.length} Look image(s) · {c.identityRefs.filter((r) => r.assetId).length}{" "}
-                        identity image(s)
+                        {c.look.referenceAssetIds.length} Look image(s) ·{" "}
+                        {c.identityRefs.filter((r) => r.assetId).length} identity image(s)
                       </dd>
                     </dl>
                   ) : null}
@@ -733,7 +742,11 @@ export function ShotPrepView({
             <SectionForm sectionKey="blocking" shot={shot} data={data} />
             <ActionForm action={saveShotBeats} className="grid grid-cols-2 gap-3 border-t border-line pt-3">
               {hidden}
-              <Field label="Subject marks" hint="label | x 0–1 | y 0–1 | notes — one per line" className="col-span-2">
+              <Field
+                label="Subject marks"
+                hint="label | x 0–1 | y 0–1 | notes — one per line"
+                className="col-span-2"
+              >
                 <textarea
                   name="marks"
                   rows={3}
@@ -837,11 +850,14 @@ export function ShotPrepView({
                     </li>
                   ) : null}
                 </ul>
-                <div className="mt-1 text-[11px] text-warn/80">Re-approve the frame to accept the change.</div>
+                <div className="mt-1 text-[11px] text-warn/80">
+                  Re-approve the frame to accept the change.
+                </div>
               </div>
             ) : freshness.status === "fresh" ? (
               <div className="text-[12px] text-pass">
-                Approved frame is current (fingerprint {shortFingerprint(ctx.approvedFrame?.approvedFingerprint)}).
+                Approved frame is current (fingerprint{" "}
+                {shortFingerprint(ctx.approvedFrame?.approvedFingerprint)}).
               </div>
             ) : null}
             <div className="space-y-1.5">
@@ -944,7 +960,11 @@ export function ShotPrepView({
               ) : null}
               <details>
                 <summary className="text-[11px] text-accent">+ Record review ▾</summary>
-                <ActionForm action={saveContinuityCheck} resetOnSuccess className="mt-2 grid grid-cols-3 gap-2">
+                <ActionForm
+                  action={saveContinuityCheck}
+                  resetOnSuccess
+                  className="mt-2 grid grid-cols-3 gap-2"
+                >
                   {hidden}
                   {CONTINUITY_DIMENSIONS.map((d) => (
                     <Field label={d} key={d}>
@@ -1080,7 +1100,9 @@ export function ShotPrepView({
 
 function TimingList({ timeline }: { timeline: ReturnType<typeof timelineFromContext> }) {
   if (timeline.segments.length === 0)
-    return <div className="text-[12px] text-warn">No duration set (manual target missing, no performance).</div>;
+    return (
+      <div className="text-[12px] text-warn">No duration set (manual target missing, no performance).</div>
+    );
   return (
     <ol className="space-y-0.5 font-mono text-[11.5px]" data-testid="timing-list">
       {timeline.segments.map((s, i) => (

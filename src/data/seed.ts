@@ -67,7 +67,14 @@ export function buildSeedProject(): ProjectData {
       projectId,
       createdBy: null,
       type,
-      purpose: type === "audio" ? "performance_audio" : type === "image" ? "storyboard" : "other",
+      purpose:
+        type === "audio"
+          ? "performance_audio"
+          : type === "image"
+            ? "storyboard"
+            : type === "reference"
+              ? "identity_ref"
+              : "other",
       source: "seed",
       name,
       originalFilename: "",
@@ -372,6 +379,12 @@ export function buildSeedProject(): ProjectData {
     order: n - 1,
     ...extra,
   });
+  // Cast/prop membership is a set; the SQL adapter returns it sorted, so keep fixtures canonical.
+  const canonicalScene = (sc: Scene): Scene => ({
+    ...sc,
+    characterIds: [...sc.characterIds].sort(),
+    propIds: [...sc.propIds].sort(),
+  });
   const scenes: Scene[] = [
     scene(1, "EXT. TOKYO NIGHT STREETS - NIGHT", streets.id, {
       summary: "A black sedan carries Yumeko toward the arrangement dinner.",
@@ -417,7 +430,7 @@ export function buildSeedProject(): ProjectData {
       emotionLeaving: "Stunned",
       characterIds: [yumeko.id, sean.id],
     }),
-  ];
+  ].map(canonicalScene);
   const sceneId = (n: number) => scenes[n - 1].id;
 
   // ── Dialogue + performance ──
@@ -1149,12 +1162,22 @@ export function buildSeedProject(): ProjectData {
   // Which action block each shot was made from (index within its scene). 6A is deliberately left
   // unlinked so the demo shows an uncovered beat.
   const SOURCE_LINKS: Record<string, number[]> = {
-    "1A": [0], "1B": [0], "1C": [1], "2A": [0], "2B": [1], "2C": [0], "3A": [0], "4A": [0], "5A": [0],
+    "1A": [0],
+    "1B": [0],
+    "1C": [1],
+    "2A": [0],
+    "2B": [1],
+    "2C": [0],
+    "3A": [0],
+    "4A": [0],
+    "5A": [0],
   };
   for (const shot of shots) {
     const idx = SOURCE_LINKS[shot.shotCode];
     if (!idx) continue;
-    const sceneBlocks = actionBlocks.filter((b) => b.sceneId === shot.sceneId).sort((x, y) => x.order - y.order);
+    const sceneBlocks = actionBlocks
+      .filter((b) => b.sceneId === shot.sceneId)
+      .sort((x, y) => x.order - y.order);
     shot.scriptSources.actionBlockIds = idx.map((n) => sceneBlocks[n]?.id).filter((x): x is string => !!x);
   }
 

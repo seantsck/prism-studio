@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { buildShotContext } from "@/domain/context";
 import { computeShotDuration } from "@/domain/duration";
-import { buildSceneAudioAssembly, buildShotTimeline, describeTimeline, timelineFromContext } from "@/domain/timeline";
+import {
+  buildSceneAudioAssembly,
+  buildShotTimeline,
+  describeTimeline,
+  timelineFromContext,
+} from "@/domain/timeline";
 import { seed, shotByCode } from "./helpers";
 
 describe("shot timeline (explainable timing)", () => {
@@ -62,7 +67,12 @@ describe("shot timeline (explainable timing)", () => {
       targetDurationMs: 5000,
     };
     const t = buildShotTimeline(shot as never, [
-      { lineId: "l1", speaker: "A", text: "hi", take: { id: "t", takeNumber: 1, durationMs: 1500, audioAssetId: null } },
+      {
+        lineId: "l1",
+        speaker: "A",
+        text: "hi",
+        take: { id: "t", takeNumber: 1, durationMs: 1500, audioAssetId: null },
+      },
     ]);
     expect(t.totalMs).toBe(5000);
     expect(t.source).toBe("manual");
@@ -95,6 +105,7 @@ describe("scene audio assembly", () => {
     expect(a.cues.some((c) => c.kind === "dialogue" && !c.placeholder)).toBe(true);
     expect(a.cues.some((c) => c.kind === "ambience" && c.placeholder)).toBe(true);
     // sorted by start time
-    for (let i = 1; i < a.cues.length; i++) expect(a.cues[i].startMs).toBeGreaterThanOrEqual(a.cues[i - 1].startMs);
+    for (let i = 1; i < a.cues.length; i++)
+      expect(a.cues[i].startMs).toBeGreaterThanOrEqual(a.cues[i - 1].startMs);
   });
 });

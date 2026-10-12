@@ -46,7 +46,9 @@ describe("audio analysis (server metadata is canonical)", () => {
 
   it("fails clearly on empty and invalid audio", async () => {
     await expect(analyzeAudio(new Uint8Array())).rejects.toBeInstanceOf(AudioAnalysisError);
-    await expect(analyzeAudio(new Uint8Array(2000).fill(7))).rejects.toThrow(/could not be read as audio|No playable audio/);
+    await expect(analyzeAudio(new Uint8Array(2000).fill(7))).rejects.toThrow(
+      /could not be read as audio|No playable audio/,
+    );
     const truncated = makeWav({ seconds: 1 }).slice(0, 30);
     await expect(analyzeAudio(truncated)).rejects.toBeInstanceOf(AudioAnalysisError);
   });

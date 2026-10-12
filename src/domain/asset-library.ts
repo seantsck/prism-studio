@@ -19,7 +19,11 @@ export function isAssetFilter(v: string | undefined): v is AssetFilterKey {
   return ASSET_FILTERS.some((f) => f.key === v);
 }
 
-export function matchesFilter(asset: Asset, usage: AssetUsageReport | undefined, filter: AssetFilterKey): boolean {
+export function matchesFilter(
+  asset: Asset,
+  usage: AssetUsageReport | undefined,
+  filter: AssetFilterKey,
+): boolean {
   switch (filter) {
     case "all":
       return true;
@@ -28,26 +32,46 @@ export function matchesFilter(asset: Asset, usage: AssetUsageReport | undefined,
     case "video":
       return asset.type === filter;
     case "storyboard":
-      return asset.purpose === "storyboard" || usage?.direct.some((u) => u.kind === "storyboard_frame") === true;
+      return (
+        asset.purpose === "storyboard" || usage?.direct.some((u) => u.kind === "storyboard_frame") === true
+      );
     case "character":
-      return asset.purpose === "identity_ref" || usage?.direct.some((u) => u.kind === "identity_ref") === true;
+      return (
+        asset.purpose === "identity_ref" || usage?.direct.some((u) => u.kind === "identity_ref") === true
+      );
     case "look":
       return asset.purpose === "look_ref" || usage?.direct.some((u) => u.kind === "look_ref") === true;
     case "location":
-      return asset.purpose === "location_ref" || usage?.direct.some((u) => u.kind === "location_ref") === true;
+      return (
+        asset.purpose === "location_ref" || usage?.direct.some((u) => u.kind === "location_ref") === true
+      );
     case "generation_input":
       return (
         asset.purpose === "generation_input" ||
         usage?.direct.some((u) => u.kind === "attempt_input" || u.kind.startsWith("shot_")) === true
       );
     case "generation_output":
-      return asset.purpose === "generation_output" || usage?.direct.some((u) => u.kind === "attempt_output") === true;
+      return (
+        asset.purpose === "generation_output" ||
+        usage?.direct.some((u) => u.kind === "attempt_output") === true
+      );
   }
 }
 
 /** Lower-cased haystack: file name, tags, purpose, who/what/where uses it (character, scene, shot, location). */
-export function assetSearchText(data: ProjectData, asset: Asset, usage: AssetUsageReport | undefined): string {
-  const parts: string[] = [asset.name, asset.originalFilename, asset.purpose, asset.type, asset.notes, ...asset.tags];
+export function assetSearchText(
+  data: ProjectData,
+  asset: Asset,
+  usage: AssetUsageReport | undefined,
+): string {
+  const parts: string[] = [
+    asset.name,
+    asset.originalFilename,
+    asset.purpose,
+    asset.type,
+    asset.notes,
+    ...asset.tags,
+  ];
   if (usage) {
     parts.push(...usage.direct.map((u) => u.label));
     for (const s of usage.shots) {

@@ -452,24 +452,38 @@ export interface VerifiedClaims {
   email?: string | null;
 }
 
+/**
+ * Transaction preamble that makes Postgres evaluate RLS as the given identity — exactly what PostgREST does
+ * for a request carrying that JWT. Exported so integration tests exercise the very same statement.
+ *   role "authenticated" + claims.sub  → auth.uid() = sub
+ *   role "anon"                         → no identity
+ */
+export function rlsPreamble(
+  claims: VerifiedClaims | null,
+  role: "authenticated" | "anon" = "authenticated",
+): string {
+  if (claims && !UUID_RE.test(claims.sub)) throw new Error("JWT subject must be a UUID");
+  const json = JSON.stringify(
+    claims
+      ? { sub: claims.sub, role, aud: role, ...(claims.email ? { email: claims.email } : {}) }
+      : { role, aud: role },
+  );
+  // Single-quoted SQL literal (standard_conforming_strings is on): only the quote needs escaping.
+  const literal = json.replace(/'/g, "''");
+  return `begin; set local role ${role}; select set_config('request.jwt.claims', '${literal}', true)`;
+}
+
 /** Application path. Postgres enforces ownership: statements run as role `authenticated` with the user's claims. */
 export class UserRepository extends PostgresRepositoryBase {
-  private readonly claimsJson: string;
+  private readonly claims: VerifiedClaims;
 
   constructor(pool: Pool, claims: VerifiedClaims) {
     if (!UUID_RE.test(claims.sub)) throw new Error("JWT subject must be a UUID");
     super(pool, claims.sub);
-    const json = JSON.stringify({
-      sub: claims.sub,
-      role: "authenticated",
-      aud: "authenticated",
-      ...(claims.email ? { email: claims.email } : {}),
-    });
-    // Single-quoted SQL literal (standard_conforming_strings is on): only the quote needs escaping.
-    this.claimsJson = json.replace(/'/g, "''");
+    this.claims = { sub: claims.sub, email: claims.email ?? null };
   }
 
   protected preamble(): string {
-    return `begin; set local role authenticated; select set_config('request.jwt.claims', '${this.claimsJson}', true)`;
+    return rlsPreamble(this.claims);
   }
 }

@@ -49,10 +49,7 @@ describe("script traceability + coverage", () => {
   it("action block ids stay stable when the script is edited around them", () => {
     const data = seed();
     const ep = data.episodes[0];
-    const edited = ep.scriptText.replace(
-      "The lobby is hushed.",
-      "The lobby is hushed and gleaming.",
-    );
+    const edited = ep.scriptText.replace("The lobby is hushed.", "The lobby is hushed and gleaming.");
     const parsed = parseScreenplay(edited);
     const epScenes = data.scenes.filter((s) => s.episodeId === ep.id);
     const epLines = data.dialogueLines.filter((l) => l.episodeId === ep.id);
@@ -75,7 +72,9 @@ describe("script traceability + coverage", () => {
 describe("asset library", () => {
   it("reports where an asset is used, including shots reached via the character", () => {
     const data = seed();
-    const ref = data.identityRefs.find((r) => r.assetId && data.characters.find((c) => c.id === r.characterId)?.name === "Yumeko")!;
+    const ref = data.identityRefs.find(
+      (r) => r.assetId && data.characters.find((c) => c.id === r.characterId)?.name === "Yumeko",
+    )!;
     const u = findAssetUsage(data, ref.assetId!);
     expect(u.inUse).toBe(true);
     expect(u.direct[0].kind).toBe("identity_ref");

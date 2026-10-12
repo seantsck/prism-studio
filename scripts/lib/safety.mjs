@@ -35,7 +35,11 @@ function secretValues(env) {
       /* not a URL */
     }
   }
-  for (const key of ["SUPABASE_SERVICE_ROLE_KEY", "PRISM_STUDIO_TEST_PASSWORD", "PRISM_STUDIO_DEV_USER_PASSWORD"]) {
+  for (const key of [
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "PRISM_STUDIO_TEST_PASSWORD",
+    "PRISM_STUDIO_DEV_USER_PASSWORD",
+  ]) {
     const v = env[key];
     if (v && v.length >= 6) values.add(v);
   }

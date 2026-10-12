@@ -80,17 +80,26 @@ export function SortableBoard({
     setError(null);
     start(async () => {
       try {
-        await reorderShots(sceneId, next, projectSlug);
-      } catch (err) {
+        const result = await reorderShots(sceneId, next, projectSlug);
+        if (!result.ok) {
+          setOrder(previous);
+          setError(result.error);
+        }
+      } catch {
         setOrder(previous);
-        setError(err instanceof Error ? err.message : "Reorder failed");
+        setError("The new order could not be saved. Check your connection and try again.");
       }
     });
   };
 
   return (
     <div>
-      {error ? <div className="mb-2 text-fail">{error}</div> : null}
+      {error ? (
+        <div role="alert" className="mb-2 text-fail">
+          {error}
+        </div>
+      ) : null}
+      {pending ? <div className="mb-2 text-[11px] text-muted">Saving order…</div> : null}
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <SortableContext items={order} strategy={rectSortingStrategy}>
           <div

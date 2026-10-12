@@ -24,7 +24,8 @@ const ascii = (b: Uint8Array, from: number, to: number) => String.fromCharCode(.
 export function sniffUpload(bytes: Uint8Array): Sniffed | null {
   if (bytes.length < 12) return null;
   if (bytes[0] === 0x89 && ascii(bytes, 1, 4) === "PNG") return { mime: "image/png", kind: "image" };
-  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return { mime: "image/jpeg", kind: "image" };
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
+    return { mime: "image/jpeg", kind: "image" };
   if (ascii(bytes, 0, 4) === "GIF8") return { mime: "image/gif", kind: "image" };
   if (ascii(bytes, 0, 4) === "RIFF") {
     const form = ascii(bytes, 8, 12);
@@ -50,8 +51,37 @@ export function sniffUpload(bytes: Uint8Array): Sniffed | null {
 }
 
 const BLOCKED_EXTENSIONS = new Set([
-  "exe", "dll", "bat", "cmd", "com", "msi", "scr", "ps1", "sh", "bash", "zsh", "js", "mjs", "cjs", "jar", "vbs",
-  "html", "htm", "xhtml", "svg", "xml", "php", "py", "rb", "pl", "app", "apk", "dmg", "iso", "lnk", "wasm",
+  "exe",
+  "dll",
+  "bat",
+  "cmd",
+  "com",
+  "msi",
+  "scr",
+  "ps1",
+  "sh",
+  "bash",
+  "zsh",
+  "js",
+  "mjs",
+  "cjs",
+  "jar",
+  "vbs",
+  "html",
+  "htm",
+  "xhtml",
+  "svg",
+  "xml",
+  "php",
+  "py",
+  "rb",
+  "pl",
+  "app",
+  "apk",
+  "dmg",
+  "iso",
+  "lnk",
+  "wasm",
 ]);
 
 export function fileExtension(name: string): string {
@@ -101,7 +131,12 @@ export function checkUpload(
   // A claimed type from a different family than the real content is a spoofing signal.
   const claimedFamily = file.claimedMime?.split("/")[0];
   const realFamily = sniffed.mime.split("/")[0];
-  if (claimedFamily && claimedFamily !== "application" && claimedFamily !== "" && claimedFamily !== realFamily) {
+  if (
+    claimedFamily &&
+    claimedFamily !== "application" &&
+    claimedFamily !== "" &&
+    claimedFamily !== realFamily
+  ) {
     // webm audio vs video and m4a/mp4 overlap legitimately between audio and video families.
     const overlap = new Set(["audio", "video"]);
     if (!(overlap.has(claimedFamily) && overlap.has(realFamily))) {

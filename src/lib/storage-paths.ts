@@ -11,7 +11,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function safeFileName(name: string): string {
   const base = (name.split(/[\\/]/).pop() ?? "").normalize("NFKC");
   const cleaned = base
-    // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f]/g, "")
     .replace(/\.{2,}/g, ".")
     .replace(/[^\p{L}\p{N}._ -]+/gu, "_")

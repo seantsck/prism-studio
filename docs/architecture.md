@@ -3,59 +3,85 @@
 ## Layers
 
 ```
-app/ (routes, thin)            components/ (UI, no business rules)
-        │                               │
-        └────────────► server/ ◄────────┘     server actions: validate → call domain → persist
-                          │
-              ┌───────────┴───────────┐
-              ▼                       ▼
-          domain/  (pure TS)      data/ (Repository interface, memory impl, seeds)
+src/domain   pure TypeScript: schemas, preflight, timeline, fingerprints, package, animatic, coverage
+   ▲
+src/data     Repository interface · MemoryRepository · PostgresRepository (UserRepository / AdminRepository)
+   ▲
+src/server   auth.ts · repo.ts · storage.ts · db.ts · actions.ts · action-result.ts · generation-package.ts
+   ▲
+src/app (routes) · src/components (UI)         src/proxy.ts (route protection)    src/lib/supabase/* (@supabase/ssr clients)
 ```
 
-- **`domain/`** has no React, Next or Supabase imports. Everything is a pure function of typed data:
-  `buildShotContext → runPreflight / computeShotDuration / assembleGenerationPackage / buildAnimaticTimeline`.
-  This is what the unit tests cover and what a provider adapter or background worker would reuse unchanged.
-- **`data/Repository`** is the only persistence boundary. `MemoryRepository` is the Phase 1 implementation.
-  `PostgresRepository` (`PRISM_STUDIO_PERSISTENCE=supabase`) implements the same interface against `supabase/migrations/*`; it owns the
-  camelCase ↔ snake_case mapping and the normalisation of embedded arrays (shot characters, dialogue links)
-  into join tables.
-- **`server/actions.ts`** is the only write path from the UI. Each action: parse `FormData` → load project →
-  call a domain service → `Zod.parse` the resulting entity → `repo.upsert`. Components never mutate state.
-- **Routes are thin.** Views in `components/views/*` are shared by project-level pages (`/projects/x/perform?ep=ep-1`)
-  and episode-level pages (`/projects/x/episodes/ep-1/perform`).
+- **`domain/`** has no React, Next, Node or Supabase imports (SHA-256 is hand-written in `hash.ts` for this
+  reason). Everything is a pure function of typed data:
+  `buildShotContext → runPreflight / timelineFromContext / assembleGenerationPackage / buildAnimaticTimeline /
+buildEpisodeCoverage / storyboardFreshness`. The unit tests cover this layer.
+- **`data/`** is the only persistence boundary. See [persistence](persistence.md).
+- **`server/`** is server-only (`import "server-only"`). `actions.ts` is the only write path from the UI: each
+  action loads the project fresh, calls domain functions, `Zod.parse`s the resulting entity and calls
+  `repo.upsert`. `repo.ts#getRepo()` picks the repository per request.
+- **Routes are thin.** Views in `components/views/*` are shared by project-level pages and episode-level pages
+  (`/projects/x/perform` and `/projects/x/episodes/ep-1/perform`).
+- **`src/proxy.ts`** is the Next.js 16 proxy (the former middleware). In supabase mode it refreshes the Auth
+  session and redirects unauthenticated page requests to `/login?next=…` (API routes get `401`). It is a
+  convenience layer; data access is enforced by RLS and each action/route re-checks the session. See [auth](auth.md).
+
+## Modes
+
+| `PRISM_STUDIO_PERSISTENCE` | Repository                        | Identity                       | Files                     |
+| -------------------------- | --------------------------------- | ------------------------------ | ------------------------- |
+| unset / `memory`           | `MemoryRepository` (seeded)       | none (fixed `LOCAL_USER_ID`)   | `.local-storage/` on disk |
+| `supabase`                 | `UserRepository` over the pg pool | verified Supabase Auth session | private bucket            |
+
+Memory mode has no accounts and the proxy is a no-op there. `PRISM_STUDIO_DEV_USER_ID` is read only by scripts
+(`scripts/lib/dev-user.mjs`), never by the app; `production-flow.test.ts` fails if any file under `src/` mentions it.
+
+## Request flow (supabase mode)
+
+```
+browser ─► proxy.ts (refresh cookies, getClaims) ─► page / route / server action
+                                                       │ requireUser() → getClaims() (verified JWT)
+                                                       ▼
+                                   getRepo() → new UserRepository(pool, {sub,email})
+                                                       │ begin; set local role authenticated; set_config('request.jwt.claims', …)
+                                                       ▼
+                                                   Postgres RLS
+```
+
+## Errors and feedback
+
+Server actions are wrapped in `runAction` and return an `ActionResult`
+(`{ ok: true } | { ok: false, error, fieldErrors?, reference? }`):
+
+- `UserFacingError` (locked entity, asset in use, bad input) and `ZodError` become inline messages.
+- Anything else is logged server-side with a short reference id; the user sees a generic message plus the id.
+- `<ActionForm>` (`components/action-form.tsx`) shows a pending state, "Saved", inline errors, disables controls
+  while pending and keeps typed input when validation fails.
+- `app/error.tsx` and `app/not-found.tsx` are last-resort boundaries.
 
 ## Key decisions
 
-| Decision                                           | Reason                                                                                                                                                                                 |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Domain independent of AI providers                 | Providers change monthly; the package format must not. Adapters (Phase 2) translate `GenerationPackage` to payloads.                                                                   |
-| Preflight is a rule table, not a function with ifs | Rules are data (`PREFLIGHT_RULES`). AI continuity checks can later be appended as additional rule sources without touching the evaluator.                                              |
-| `ready_to_generate` is derived, not stored         | Computed live from required gates (no `prep_score`/`ready_to_generate` columns since migration 0004), so it cannot drift from reality.                                                 |
-| Shot sections as JSONB, relations as tables        | Sections (camera, blocking, audio…) are edited as units and evolve quickly; characters/looks/dialogue/props are real FKs so integrity is enforced.                                     |
-| Assets are rows, not URLs                          | Everything references `asset.id`. `StorageProvider` hides where bytes live (`LocalDiskStorage` now; Supabase Storage later).                                                           |
-| Append-only generation history                     | Attempts snapshot the full package; DB trigger blocks edits to prompt/snapshot/settings.                                                                                               |
-| Dialogue lock                                      | `locked` lines are immune to script sync and, in SQL, to text updates until unlocked.                                                                                                  |
-| shadcn-style primitives, no CLI                    | `components/ui.tsx` follows the shadcn pattern (cva + tailwind-merge + CSS tokens) but is hand-written, so the dependency set stays small and `shadcn add` can still be adopted later. |
-| Server actions + native forms                      | Zero client JS for CRUD; client components exist only where interaction demands it (animatic player, drag-reorder, audio duration probe).                                              |
-
-## Storage
-
-`StorageProvider { put, get }`. Dev: `.local-storage/<projectId>/<assetId>/<filename>`, served through
-`/api/assets/[id]`. Production target: Supabase Storage bucket `prism-assets` with the same path scheme;
-bucket policies derive ownership from the first path segment (see `0003_rls_draft.sql`).
-
-## Auth / RLS
-
-Ownership is `projects.user_id`; every child row carries `project_id` for a single indexed policy check.
-RLS is drafted deliberately in `0003_rls_draft.sql` and is **not** assumed by the app: today the app runs with a
-fixed local user id (`LOCAL_USER_ID`). Collaboration and billing are intentionally absent.
+| Decision                                    | Reason                                                                                                                              |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Domain independent of AI providers          | Providers change monthly; the package format must not. Adapters (Phase 2) translate `GenerationPackage`.                            |
+| Preflight is a rule table                   | Rules are data (`PREFLIGHT_RULES`); AI checks can later append rule sources without touching the evaluator.                         |
+| Readiness is derived, not stored            | `prep_score` / `ready_to_generate` columns were dropped in 0004; computed live so they cannot drift.                                |
+| Shot sections as JSONB, relations as tables | Sections are edited as units and evolve; characters, looks, dialogue, props, script sources are real FKs.                           |
+| Assets are rows, not URLs                   | Everything references `asset.id`; `StorageProvider` hides where bytes live. See [storage](storage.md).                              |
+| Append-only generation history              | Trigger `guard_attempt_history` blocks edits to prompt, snapshot, fingerprint, settings, inputs.                                    |
+| Freshness by content hash                   | Per-part fingerprints, not event sourcing. See [production-workflow](production-workflow.md).                                       |
+| RLS is the authority                        | The app connects with a privileged pool but drops to role `authenticated` per transaction. See [security-model](security-model.md). |
+| Server actions + native forms               | Little client JS; client components only where interaction demands (animatic, drag-reorder, audio input).                           |
 
 ## Testing
 
-- `src/domain/__tests__` — Vitest, no DOM: duration, take selection, Look linking, ordering, preflight,
-  continuity requirements, generation package, seed schema validity, script sync, animatic timeline.
-- `e2e/` — Playwright smoke tests against a production build.
+| Suite                                                      | Where                                       | Notes                                                                                           |
+| ---------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Unit (`npm test`)                                          | `src/**/__tests__`, `scripts/lib/__tests__` | Domain, SQL mapping, upload policy, audio analysis, migration checksums, redaction, env safety. |
+| Memory e2e (`npm run test:e2e`)                            | `e2e/smoke`, `e2e/workflow`                 | Production build, forced memory mode.                                                           |
+| DB (`db:validate`, `db:behavior`, `db:rls`, `db:exercise`) | `scripts/`                                  | Run against the dedicated project; see [local-supabase](local-supabase.md).                     |
+| Supabase e2e (`test:e2e:supabase`)                         | `e2e/supabase-auth.spec.ts`                 | Real Auth; needs `PRISM_STUDIO_TEST_PASSWORD`, skipped without it.                              |
 
 ## Not built yet
 
-Provider adapters, queues, auth, Supabase Storage provider, 3D sets, NLE-grade editing — see [roadmap](roadmap.md).
+Provider adapters, queues, collaboration, 3D sets, NLE export. See [roadmap](roadmap.md).

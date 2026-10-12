@@ -19,7 +19,8 @@ export function readImageSize(bytes: Uint8Array): { width: number; height: numbe
       const h = 1 + (bytes[27] | (bytes[28] << 8) | (bytes[29] << 16));
       return { width: w, height: h };
     }
-    if (kind === "VP8 ") return { width: v.getUint16(26, true) & 0x3fff, height: v.getUint16(28, true) & 0x3fff };
+    if (kind === "VP8 ")
+      return { width: v.getUint16(26, true) & 0x3fff, height: v.getUint16(28, true) & 0x3fff };
     if (kind === "VP8L") {
       const bits = v.getUint32(21, true);
       return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };

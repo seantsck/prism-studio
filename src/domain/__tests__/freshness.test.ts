@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { buildShotContext } from "@/domain/context";
-import { approvalSnapshot, computeShotParts, storyboardFreshness, visualFingerprint } from "@/domain/fingerprint";
+import {
+  approvalSnapshot,
+  computeShotParts,
+  storyboardFreshness,
+  visualFingerprint,
+} from "@/domain/fingerprint";
 import { assembleGenerationPackage } from "@/domain/generation-package";
 import { canonicalJson, fingerprint, sha256 } from "@/domain/hash";
 import { runPreflight } from "@/domain/preflight";
@@ -15,7 +20,9 @@ describe("hashing", () => {
     expect(sha256("日本語")).toHaveLength(64);
   });
   it("canonical JSON ignores key order", () => {
-    expect(canonicalJson({ b: 1, a: [2, { d: 1, c: 2 }] })).toBe(canonicalJson({ a: [2, { c: 2, d: 1 }], b: 1 }));
+    expect(canonicalJson({ b: 1, a: [2, { d: 1, c: 2 }] })).toBe(
+      canonicalJson({ a: [2, { c: 2, d: 1 }], b: 1 }),
+    );
     expect(fingerprint({ a: 1 })).not.toBe(fingerprint({ a: 2 }));
   });
 });
@@ -26,7 +33,10 @@ function approved3A(data: ProjectData) {
   const { fingerprint: fp, snapshot } = approvalSnapshot(buildShotContext(data, shot.id));
   const frame = data.frames.find((f) => f.shotId === shot.id && f.approved)!;
   frame.approvedFingerprint = fp;
-  frame.approvedSnapshot = { parts: snapshot.parts as Record<string, string>, durationMs: snapshot.durationMs };
+  frame.approvedSnapshot = {
+    parts: snapshot.parts as Record<string, string>,
+    durationMs: snapshot.durationMs,
+  };
   return { shot, frame };
 }
 const freshness = (data: ProjectData, shotId: string) => {

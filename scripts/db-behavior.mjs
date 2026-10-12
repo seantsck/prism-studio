@@ -191,6 +191,120 @@ try {
     /check/,
   );
 
+  // ── Phase 1C: assets, archived takes, script sources, freshness ──
+  const AB = id();
+  await client.query(
+    "insert into action_blocks (id, project_id, episode_id, scene_id, text, \"order\", start_line, end_line) values ($1,$2,$3,$4,'He enters.',0,3,3)",
+    [AB, P, E, S],
+  );
+  const srcInsert =
+    "insert into shot_script_sources (shot_id, action_block_id, dialogue_line_id, position) values ($1,$2,$3,0)";
+  await expectOk("a shot can link an action block as its script source", async () => {
+    await client.query(srcInsert, [SH, AB, null]);
+  });
+  await expectError("the same source cannot be linked twice", srcInsert, [SH, AB, null], /unique/);
+  await expectError(
+    "a source row must reference exactly one of action block / dialogue line",
+    srcInsert,
+    [SH, AB, L],
+    /check|unique/,
+  );
+  await expectError("a source row must reference something", srcInsert, [SH, null, null], /check/);
+
+  const TK2 = id();
+  await client.query(takeInsert, [TK2, P, L, 1800, 7, false]);
+  await expectOk("a take can be archived", async () => {
+    await client.query("update performance_takes set archived = true, archived_at = now() where id = $1", [
+      TK2,
+    ]);
+  });
+  await expectError(
+    "an archived take cannot be selected",
+    "update performance_takes set selected = true where id = $1",
+    [TK2],
+    /takes_archived_not_selected|check|unique/,
+  );
+  await expectError(
+    "waveform must be a versioned object",
+    "update performance_takes set waveform = '[0.1,0.2]'::jsonb where id = $1",
+    [TK2],
+    /takes_waveform_shape|check/,
+  );
+  await expectOk("a versioned waveform object is accepted", async () => {
+    await client.query(
+      "update performance_takes set waveform = $2::jsonb, duration_source = 'server_metadata' where id = $1",
+      [TK2, JSON.stringify({ version: 1, sampleCount: 2, peaks: [0.1, 1], durationMs: 1800 })],
+    );
+  });
+  await expectError(
+    "unknown duration source is rejected",
+    "update performance_takes set duration_source = 'guess' where id = $1",
+    [TK2],
+    /check/,
+  );
+
+  const AS = id();
+  const assetInsert =
+    "insert into assets (id, project_id, type, name, purpose, storage_provider, bucket, object_path, byte_size, source) values ($1,$2,'audio','a.wav',$3,$4,$5,$6,$7,'upload')";
+  await expectError(
+    "a supabase-stored asset must name its bucket and object path",
+    assetInsert,
+    [AS, P, "performance_audio", "supabase", null, null, 10],
+    /assets_supabase_location_check|check/,
+  );
+  await expectError(
+    "an unknown asset purpose is rejected",
+    assetInsert,
+    [AS, P, "wallpaper", "none", null, null, 10],
+    /assets_purpose_check|check/,
+  );
+  await expectError(
+    "negative byte sizes are rejected",
+    assetInsert,
+    [AS, P, "other", "none", null, null, -5],
+    /byte_size|check/,
+  );
+  await expectOk("a fully described stored asset is accepted", async () => {
+    await client.query(assetInsert, [
+      AS,
+      P,
+      "performance_audio",
+      "supabase",
+      "prism-assets",
+      `${P}/${AS}/a.wav`,
+      1234,
+    ]);
+  });
+  await expectError(
+    "two assets cannot claim the same bucket object",
+    assetInsert,
+    [id(), P, "performance_audio", "supabase", "prism-assets", `${P}/${AS}/a.wav`, 1],
+    /unique/,
+  );
+  await expectOk("updated_at is maintained by trigger (cannot be set into the past)", async () => {
+    await client.query("update assets set updated_at = '2001-01-01', notes = 'n' where id = $1", [AS]);
+    const r = await client.query("select updated_at = now() as fresh from assets where id = $1", [AS]);
+    return { ok: r.rows[0].fresh === true };
+  });
+  await expectError(
+    "frame approval snapshot must be an object with parts",
+    "update storyboard_frames set approved_snapshot = '[1]'::jsonb where shot_id = $1",
+    [SH],
+    /frames_snapshot_shape|check/,
+  );
+  await expectOk("a frame records what it was approved against", async () => {
+    await client.query(
+      "update storyboard_frames set approved_fingerprint = 'abc', approved_at = now(), approved_snapshot = $2::jsonb where shot_id = $1",
+      [SH, JSON.stringify({ parts: { camera: "x" }, durationMs: 4500 })],
+    );
+  });
+  await expectError(
+    "the attempt package fingerprint is immutable history",
+    "update generation_attempts set package_fingerprint = 'rewritten' where id = $1",
+    [A1],
+    /append-only/,
+  );
+
   await expectOk("deleting a project cascades to children (incl. shot Looks in use)", async () => {
     await client.query("savepoint c");
     await client.query("delete from projects where id=$1", [P]);

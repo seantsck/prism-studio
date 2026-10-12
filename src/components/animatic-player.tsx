@@ -168,7 +168,8 @@ export function AnimaticPlayer({
       active.current?.audio.pause();
       return;
     }
-    if (active.current && !active.current.audio.ended) void active.current.audio.play().catch(() => undefined);
+    if (active.current && !active.current.audio.ended)
+      void active.current.audio.play().catch(() => undefined);
     let raf = 0;
     let last = performance.now();
     const tick = (now: number) => {
@@ -213,17 +214,20 @@ export function AnimaticPlayer({
   }, [muted]);
   useEffect(() => stopAudio, [stopAudio]);
 
-  const jump = useCallback(
-    (dir: -1 | 1) => {
-      if (clips.length === 0) return;
-      const i = currentIndex < 0 ? 0 : currentIndex;
-      // "Previous" inside a clip first returns to that clip's start.
-      const atStart = current ? Math.abs(time - current.startMs) < 400 : true;
-      const target = dir === -1 && !atStart ? clips[i] : clips[Math.max(0, Math.min(clips.length - 1, i + dir))];
-      if (target) seek(target.startMs);
-    },
-    [clips, current, currentIndex, seek, time],
-  );
+  const jump = (dir: -1 | 1) => {
+    if (clips.length === 0) return;
+    const i = currentIndex < 0 ? 0 : currentIndex;
+    // "Previous" inside a clip first returns to that clip's start.
+    const atStart = current ? Math.abs(time - current.startMs) < 400 : true;
+    const target =
+      dir === -1 && !atStart ? clips[i] : clips[Math.max(0, Math.min(clips.length - 1, i + dir))];
+    if (target) seek(target.startMs);
+  };
+  // Keyboard handler reads the latest closure through a ref so it is not re-bound on every frame.
+  const jumpRef = useRef(jump);
+  useEffect(() => {
+    jumpRef.current = jump;
+  });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -247,11 +251,11 @@ export function AnimaticPlayer({
           break;
         case "[":
         case ",":
-          jump(-1);
+          jumpRef.current(-1);
           break;
         case "]":
         case ".":
-          jump(1);
+          jumpRef.current(1);
           break;
         case "m":
         case "M":
@@ -269,7 +273,7 @@ export function AnimaticPlayer({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [jump, playing, seek, totalMs]);
+  }, [playing, seek, totalMs]);
 
   const widthPct = (ms: number) => `${(ms / Math.max(totalMs, 1)) * 100}%`;
 
@@ -303,7 +307,9 @@ export function AnimaticPlayer({
             {activeCue ? (
               <div className="absolute inset-x-0 bottom-3 text-center">
                 <span className="inline-block max-w-[80%] bg-black/75 px-3 py-1 text-[15px]">
-                  <span className="mr-2 font-mono text-[10.5px] uppercase text-accent">{activeCue.speaker}</span>
+                  <span className="mr-2 font-mono text-[10.5px] uppercase text-accent">
+                    {activeCue.speaker}
+                  </span>
                   {activeCue.text}
                 </span>
               </div>
@@ -354,8 +360,8 @@ export function AnimaticPlayer({
           {clipFailures.length > 0 ? (
             <div className="flex items-center gap-2 border-t border-warn/30 bg-warn/10 px-3 py-1.5 text-[11.5px] text-warn">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              Audio could not be loaded for {clipFailures.map((c) => c.speaker).join(", ")}. Playback continues on
-              the planned timing with subtitles.
+              Audio could not be loaded for {clipFailures.map((c) => c.speaker).join(", ")}. Playback
+              continues on the planned timing with subtitles.
             </div>
           ) : null}
         </div>
@@ -385,14 +391,15 @@ export function AnimaticPlayer({
                 <Row k="Music" v={current.musicCue || "—"} />
               </dl>
               <div>
-                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">Timing</div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  Timing
+                </div>
                 <ol className="space-y-0.5 font-mono text-[11px]">
                   {current.segments.length === 0 ? (
                     <li className="text-faint">No timing set</li>
                   ) : (
                     current.segments.map((s, i) => {
-                      const nowIn =
-                        time - current.startMs >= s.startMs && time - current.startMs < s.endMs;
+                      const nowIn = time - current.startMs >= s.startMs && time - current.startMs < s.endMs;
                       return (
                         <li key={i} className={cn("flex gap-2", nowIn ? "text-accent" : "text-muted")}>
                           <span className="w-[88px] shrink-0">
@@ -421,9 +428,9 @@ export function AnimaticPlayer({
             <p className="text-muted">No shots.</p>
           )}
           <p className="border-t border-line pt-2 text-[10.5px] leading-relaxed text-faint">
-            <b className="font-medium text-muted">Keys:</b> Space play · ←/→ ±1s (Shift ±5s) · [ ] shot · M mute ·
-            Home/End. Dialogue plays from each line&apos;s selected take and drives the clock; takes without a
-            file show as timed subtitles.
+            <b className="font-medium text-muted">Keys:</b> Space play · ←/→ ±1s (Shift ±5s) · [ ] shot · M
+            mute · Home/End. Dialogue plays from each line&apos;s selected take and drives the clock; takes
+            without a file show as timed subtitles.
           </p>
         </div>
       </div>
@@ -566,7 +573,9 @@ export function AnimaticPlayer({
                       type="number"
                       step="0.1"
                       min="0"
-                      defaultValue={c.durationSource === "performance" ? "" : (c.durationMs / 1000).toFixed(1)}
+                      defaultValue={
+                        c.durationSource === "performance" ? "" : (c.durationMs / 1000).toFixed(1)
+                      }
                       placeholder="s"
                       className="!w-16 !py-0.5"
                     />

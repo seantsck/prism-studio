@@ -60,7 +60,12 @@ function TakeRow({
         <ActionForm action={rateTake} className="flex items-center gap-1" quiet>
           {hidden}
           <input type="hidden" name="takeId" value={take.id} />
-          <select name="rating" defaultValue={take.rating} className="!w-12 !px-1 !py-0.5" aria-label="Rating">
+          <select
+            name="rating"
+            defaultValue={take.rating}
+            className="!w-12 !px-1 !py-0.5"
+            aria-label="Rating"
+          >
             {[0, 1, 2, 3, 4, 5].map((r) => (
               <option key={r} value={r}>
                 {r ? "★".repeat(r) : "–"}
@@ -102,7 +107,9 @@ function TakeRow({
           selected={take.selected}
           compact
         />
-        {!url ? <div className="mt-0.5 text-[10.5px] text-faint">No audio file attached (placeholder take).</div> : null}
+        {!url ? (
+          <div className="mt-0.5 text-[10.5px] text-faint">No audio file attached (placeholder take).</div>
+        ) : null}
       </div>
     </div>
   );
@@ -317,14 +324,20 @@ function LineCard({ data, episode, line }: { data: ProjectData; episode: Episode
                       {t.selected ? " ★" : ""}
                     </span>
                     <div style={{ width: `${(t.durationMs / longest) * 100}%` }}>
-                      <WaveformBars waveform={t.waveform} height={22} tone={t.selected ? "accent" : "muted"} />
+                      <WaveformBars
+                        waveform={t.waveform}
+                        height={22}
+                        tone={t.selected ? "accent" : "muted"}
+                      />
                     </div>
                     <span className="shrink-0 font-mono text-[10.5px] text-muted">
                       {formatSeconds(t.durationMs)}
                     </span>
                   </div>
                 ))}
-                <div className="text-[10.5px] text-faint">Widths are to scale: the longest take fills the row.</div>
+                <div className="text-[10.5px] text-faint">
+                  Widths are to scale: the longest take fills the row.
+                </div>
               </div>
             </details>
           ) : null}

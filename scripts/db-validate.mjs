@@ -135,11 +135,13 @@ for (const cmd of ["SELECT", "INSERT", "UPDATE", "DELETE"]) {
 const anyPublicWrite = await rows(
   "select policyname from pg_policies where schemaname='storage' and tablename='objects' and (roles @> '{anon}' or roles @> '{public}') and (qual ilike '%prism-assets%' or with_check ilike '%prism-assets%')",
 );
-for (const p of anyPublicWrite) storageProblems.push(`anon/public policy touches prism-assets: ${p.policyname}`);
+for (const p of anyPublicWrite)
+  storageProblems.push(`anon/public policy touches prism-assets: ${p.policyname}`);
 
-const ledger = await rows("select name, checksum, checksum_baseline from public.prism_migrations order by name");
+const ledger = await rows(
+  "select name, checksum, checksum_baseline from public.prism_migrations order by name",
+);
 const ledgerProblems = ledger.filter((m) => !m.checksum).map((m) => `no checksum for ${m.name}`);
-
 
 console.log({
   tables: names.length,
@@ -156,7 +158,11 @@ console.log({
   functions: fn.map((f) => f.proname).sort(),
   columnProblems,
   storage: bucket
-    ? { public: bucket.public, fileSizeLimit: bucket.file_size_limit, mimeTypes: bucket.allowed_mime_types?.length }
+    ? {
+        public: bucket.public,
+        fileSizeLimit: bucket.file_size_limit,
+        mimeTypes: bucket.allowed_mime_types?.length,
+      }
     : null,
   storagePolicies: storagePolicies.map((p) => p.cmd).sort(),
   storageProblems,
