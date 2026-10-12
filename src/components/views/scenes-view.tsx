@@ -1,6 +1,7 @@
 import { Badge, Button, Field, PageHeader, Panel } from "@/components/ui";
 import type { Episode, ProjectData } from "@/domain/schemas";
 import { saveScene } from "@/server/actions";
+import { ActionForm } from "@/components/action-form";
 
 export function ScenesView({ data, episode }: { data: ProjectData; episode: Episode }) {
   const scenes = data.scenes.filter((s) => s.episodeId === episode.id).sort((a, b) => a.order - b.order);
@@ -35,7 +36,7 @@ export function ScenesView({ data, episode }: { data: ProjectData; episode: Epis
                   <Badge tone={loc ? "neutral" : "warn"}>{loc?.name ?? "no location"}</Badge>
                 </span>
               </summary>
-              <form action={saveScene} className="grid max-w-4xl grid-cols-2 gap-3 border-t border-line p-4">
+              <ActionForm action={saveScene} className="grid max-w-4xl grid-cols-2 gap-3 border-t border-line p-4">
                 {hidden}
                 <input type="hidden" name="id" value={s.id} />
                 <Field label="Summary" className="col-span-2">
@@ -102,7 +103,7 @@ export function ScenesView({ data, episode }: { data: ProjectData; episode: Epis
                     Script lines {s.scriptRange?.startLine ?? "–"}–{s.scriptRange?.endLine ?? "–"}
                   </span>
                 </div>
-              </form>
+              </ActionForm>
             </details>
           );
         })}

@@ -1,6 +1,7 @@
 import type { ZodType } from "zod";
 import { emptyShot } from "@/domain/shot-defaults";
 import {
+  actionBlockSchema,
   assetSchema,
   characterSchema,
   continuityCheckSchema,
@@ -60,7 +61,7 @@ const spec = (
 });
 
 export const COLLECTIONS: Record<CollectionName, CollectionSpec> = {
-  assets: spec("assets", assetSchema, { json: ["metadata"] }),
+  assets: spec("assets", assetSchema, { json: ["metadata"], numeric: ["byteSize", "frameRate"] }),
   characters: spec("characters", characterSchema),
   identityRefs: spec("character_identity_refs", identityRefSchema, { json: ["metadata"] }),
   looks: spec("character_looks", lookSchema),
@@ -71,9 +72,10 @@ export const COLLECTIONS: Record<CollectionName, CollectionSpec> = {
   scenes: spec("scenes", sceneSchema, { virtual: ["scriptRange", "characterIds", "propIds"] }),
   shots: spec("shots", shotSchema, { virtual: ["*"] }),
   dialogueLines: spec("dialogue_lines", dialogueLineSchema),
+  actionBlocks: spec("action_blocks", actionBlockSchema),
   directions: spec("performance_directions", performanceDirectionSchema),
   takes: spec("performance_takes", performanceTakeSchema, { json: ["waveform"] }),
-  frames: spec("storyboard_frames", storyboardFrameSchema),
+  frames: spec("storyboard_frames", storyboardFrameSchema, { json: ["approvedSnapshot"] }),
   attempts: spec("generation_attempts", generationAttemptSchema, {
     json: ["packageSnapshot", "modelSettings"],
     numeric: ["costUsd"],
@@ -194,6 +196,7 @@ export interface ShotRows {
   props: Row[];
   lines: Row[];
   assets: Row[];
+  sources: Row[];
 }
 
 const json = (v: unknown) => JSON.stringify(v);
@@ -275,6 +278,20 @@ export function shotToRows(shot: Shot): ShotRows {
       position,
     })),
     assets,
+    sources: [
+      ...shot.scriptSources.actionBlockIds.map((action_block_id, i) => ({
+        shot_id: shot.id,
+        action_block_id,
+        dialogue_line_id: null,
+        position: i,
+      })),
+      ...shot.scriptSources.dialogueLineIds.map((dialogue_line_id, i) => ({
+        shot_id: shot.id,
+        action_block_id: null,
+        dialogue_line_id,
+        position: i,
+      })),
+    ],
   };
 }
 
@@ -283,6 +300,7 @@ export interface ShotJoinRows {
   props: Row[];
   lines: Row[];
   assets: Row[];
+  sources: Row[];
 }
 
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v));
@@ -354,6 +372,16 @@ export function shotFromRows(row: Row, joins: ShotJoinRows): Record<string, unkn
       endFrameAssetId: first("end_frame"),
       referenceVideoAssetId: first("reference_video"),
       referenceAudioAssetId: first("reference_audio"),
+    },
+    scriptSources: {
+      actionBlockIds: joins.sources
+        .filter((r) => r.action_block_id != null)
+        .sort((a, b) => Number(a.position) - Number(b.position))
+        .map((r) => String(r.action_block_id)),
+      dialogueLineIds: joins.sources
+        .filter((r) => r.dialogue_line_id != null)
+        .sort((a, b) => Number(a.position) - Number(b.position))
+        .map((r) => String(r.dialogue_line_id)),
     },
     approval: {
       storyboardApproved: Boolean(row.approval_storyboard),

@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { assembleGenerationPackage } from "@/domain/generation-package";
 import { buildShotContext } from "@/domain/context";
-import { renderScreenplay } from "@/domain/script";
+import { approvalSnapshot } from "@/domain/fingerprint";
+import { parseScreenplay, renderScreenplay } from "@/domain/script";
 import { makeShot } from "@/domain/shot-defaults";
 import type {
+  ActionBlock,
   Asset,
   Character,
   CharacterLook,
@@ -20,6 +22,7 @@ import type {
   Shot,
   StoryboardFrame,
   VoiceProfile,
+  Waveform,
 } from "@/domain/schemas";
 
 /**
@@ -34,6 +37,21 @@ export function uid(key: string): string {
 }
 
 export const LOCAL_USER_ID = uid("local-user");
+
+/** Deterministic placeholder waveform so demo takes render a plausible shape (real peaks come from audio files). */
+export function syntheticWaveform(key: string, durationMs: number, count = 120): Waveform {
+  let x = parseInt(createHash("sha1").update(key).digest("hex").slice(0, 8), 16) || 1;
+  const rand = () => {
+    x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+    return x / 0xffffffff;
+  };
+  const peaks: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const envelope = Math.sin((Math.PI * (i + 0.5)) / count) ** 0.6;
+    peaks.push(Number(Math.min(1, 0.08 + envelope * (0.25 + 0.7 * rand())).toFixed(3)));
+  }
+  return { version: 1, sampleCount: count, peaks, durationMs };
+}
 const T0 = "2026-10-01T09:00:00.000Z";
 
 export function buildSeedProject(): ProjectData {
@@ -47,18 +65,29 @@ export function buildSeedProject(): ProjectData {
     assets.push({
       id,
       projectId,
+      createdBy: null,
       type,
+      purpose: type === "audio" ? "performance_audio" : type === "image" ? "storyboard" : "other",
+      source: "seed",
       name,
+      originalFilename: "",
+      storageProvider: "none",
+      bucket: null,
+      objectPath: null,
       mime: null,
-      storagePath: null,
+      byteSize: null,
+      checksum: null,
       width: type === "image" || type === "reference" ? 1920 : null,
       height: type === "image" || type === "reference" ? 1080 : null,
       durationMs: null,
-      checksum: null,
-      source: "seed",
+      frameRate: null,
+      sampleRate: null,
+      channels: null,
       tags: [],
+      notes: "",
       metadata: {},
-      uploadedAt: T0,
+      createdAt: T0,
+      updatedAt: T0,
       ...extra,
     });
     return id;
@@ -426,6 +455,8 @@ export function buildSeedProject(): ProjectData {
       subtext: extra.subtext ?? "",
       locked: extra.locked ?? false,
       order: lineOrder++,
+      sourceStartLine: null,
+      sourceEndLine: null,
     });
     if (extra.direction) {
       directions.push({
@@ -468,12 +499,14 @@ export function buildSeedProject(): ProjectData {
         source: "seed",
       }),
       durationMs,
-      waveform: null,
+      durationSource: "seed",
+      waveform: syntheticWaveform(`take:${lineId}:${n}`, durationMs),
       transcript: "",
       takeNumber: n,
       notes: "",
       rating: 0,
       selected: false,
+      archived: false,
       createdAt: T0,
       ...t,
     });
@@ -1053,6 +1086,9 @@ export function buildSeedProject(): ProjectData {
       source: "sketch",
       notes,
       approved,
+      approvedFingerprint: null,
+      approvedSnapshot: null,
+      approvedAt: null,
       createdAt: T0,
     });
   };
@@ -1079,6 +1115,48 @@ export function buildSeedProject(): ProjectData {
   for (const l of dialogueLines)
     (byScene[l.sceneId] ??= []).push({ speaker: l.speakerLabel, text: l.originalText });
   const scriptText = renderScreenplay(scenes, actions, byScene);
+
+  // ── Script traceability: stable action-block ids + source line ranges, derived from the rendered script ──
+  const actionBlocks: ActionBlock[] = [];
+  parseScreenplay(scriptText).forEach((parsedScene, i) => {
+    const scene = scenes[i];
+    if (!scene) return;
+    scene.scriptRange = { startLine: parsedScene.startLine, endLine: parsedScene.endLine };
+    const sceneLines = dialogueLines.filter((l) => l.sceneId === scene.id).sort((a, b) => a.order - b.order);
+    let a = 0;
+    let d = 0;
+    for (const block of parsedScene.blocks) {
+      if (block.kind === "action") {
+        actionBlocks.push({
+          id: uid(`action:${i + 1}:${a}`),
+          projectId,
+          episodeId,
+          sceneId: scene.id,
+          text: block.text,
+          order: a++,
+          startLine: block.line,
+          endLine: block.endLine,
+        });
+      } else {
+        const line = sceneLines[d++];
+        if (line) {
+          line.sourceStartLine = block.line;
+          line.sourceEndLine = block.endLine;
+        }
+      }
+    }
+  });
+  // Which action block each shot was made from (index within its scene). 6A is deliberately left
+  // unlinked so the demo shows an uncovered beat.
+  const SOURCE_LINKS: Record<string, number[]> = {
+    "1A": [0], "1B": [0], "1C": [1], "2A": [0], "2B": [1], "2C": [0], "3A": [0], "4A": [0], "5A": [0],
+  };
+  for (const shot of shots) {
+    const idx = SOURCE_LINKS[shot.shotCode];
+    if (!idx) continue;
+    const sceneBlocks = actionBlocks.filter((b) => b.sceneId === shot.sceneId).sort((x, y) => x.order - y.order);
+    shot.scriptSources.actionBlockIds = idx.map((n) => sceneBlocks[n]?.id).filter((x): x is string => !!x);
+  }
 
   const episode = {
     id: episodeId,
@@ -1160,6 +1238,7 @@ export function buildSeedProject(): ProjectData {
     scenes,
     shots,
     dialogueLines,
+    actionBlocks,
     directions,
     takes,
     frames,
@@ -1184,6 +1263,7 @@ export function buildSeedProject(): ProjectData {
     prompt: pkg.prompt.positive,
     negativePrompt: pkg.prompt.negative,
     packageSnapshot: JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>,
+    packageFingerprint: pkg.provenance.fingerprint,
     modelSettings: {},
     inputAssetIds: [],
     outputAssetId: null,
@@ -1238,5 +1318,14 @@ export function buildSeedProject(): ProjectData {
     createdAt: T0,
   };
   data.continuityChecks = [check];
+
+  // Approved frames are fresh at seed time: record what they were approved against.
+  for (const f of data.frames) {
+    if (!f.approved) continue;
+    const { fingerprint, snapshot } = approvalSnapshot(buildShotContext(data, f.shotId));
+    f.approvedFingerprint = fingerprint;
+    f.approvedSnapshot = { parts: snapshot.parts as Record<string, string>, durationMs: snapshot.durationMs };
+    f.approvedAt = T0;
+  }
   return data;
 }

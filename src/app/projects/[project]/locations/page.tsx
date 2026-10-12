@@ -1,6 +1,7 @@
 import { Badge, Button, Field, PageHeader, Panel } from "@/components/ui";
 import { saveLocation, setLocationLocked } from "@/server/actions";
 import { requireProject } from "@/server/repo";
+import { ActionForm } from "@/components/action-form";
 
 export default async function LocationsPage({ params }: { params: Promise<{ project: string }> }) {
   const { project: slug } = await params;
@@ -32,7 +33,7 @@ export default async function LocationsPage({ params }: { params: Promise<{ proj
               ) : null}
             </summary>
             <div className="border-t border-line p-4">
-              <form action={saveLocation} className="grid max-w-4xl grid-cols-2 gap-3">
+              <ActionForm action={saveLocation} className="grid max-w-4xl grid-cols-2 gap-3">
                 {hidden}
                 {l ? <input type="hidden" name="id" value={l.id} /> : null}
                 <Field label="Name" className="col-span-2">
@@ -83,14 +84,14 @@ export default async function LocationsPage({ params }: { params: Promise<{ proj
                     </Button>
                   </div>
                 ) : null}
-              </form>
+              </ActionForm>
               {l ? (
-                <form action={setLocationLocked} className="mt-3">
+                <ActionForm action={setLocationLocked} className="mt-3">
                   {hidden}
                   <input type="hidden" name="id" value={l.id} />
                   <input type="hidden" name="locked" value={String(!l.locked)} />
                   <Button type="submit">{l.locked ? "Unlock location" : "Lock location"}</Button>
-                </form>
+                </ActionForm>
               ) : null}
               {l ? (
                 <Panel title="3D set (reserved)" className="mt-4 max-w-4xl">

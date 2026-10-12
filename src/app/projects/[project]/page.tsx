@@ -7,6 +7,7 @@ import { summarizeEpisode } from "@/domain/summary";
 import { episodePath } from "@/lib/paths";
 import { saveProject } from "@/server/actions";
 import { requireProject } from "@/server/repo";
+import { ActionForm } from "@/components/action-form";
 
 export default async function OverviewPage({ params }: { params: Promise<{ project: string }> }) {
   const { project: slug } = await params;
@@ -96,7 +97,7 @@ export default async function OverviewPage({ params }: { params: Promise<{ proje
         </Panel>
 
         <Panel title="Project details">
-          <form action={saveProject} className="grid max-w-3xl grid-cols-2 gap-3">
+          <ActionForm action={saveProject} className="grid max-w-3xl grid-cols-2 gap-3">
             <input type="hidden" name="projectSlug" value={slug} />
             <Field label="Title" className="col-span-2">
               <input name="title" defaultValue={data.project.title} />
@@ -132,7 +133,7 @@ export default async function OverviewPage({ params }: { params: Promise<{ proje
                 Save
               </Button>
             </div>
-          </form>
+          </ActionForm>
         </Panel>
       </div>
     </div>

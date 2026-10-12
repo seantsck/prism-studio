@@ -1,4 +1,5 @@
 import type { ShotContext } from "./context";
+import { storyboardFreshness } from "./fingerprint";
 import { validateLookLink } from "./looks";
 
 /**
@@ -353,6 +354,19 @@ export const PREFLIGHT_RULES: PreflightRule[] = [
     evaluate: (c) => {
       if (c.frames.length === 0) return na("No frame to approve");
       return check(Boolean(c.approvedFrame) && c.shot.approval.storyboardApproved, "Storyboard not approved");
+    },
+  },
+  {
+    id: "storyboard.fresh",
+    section: "storyboard",
+    severity: "recommended",
+    label: "Approved storyboard matches the current shot",
+    evaluate: (c) => {
+      if (!c.approvedFrame) return na("No approved frame");
+      const f = storyboardFreshness(c, c.approvedFrame);
+      if (f.status === "stale") return warn(f.messages.join(" "));
+      if (f.status === "unknown") return warn(f.messages.join(" "));
+      return f.timingChange ? warn(f.messages.join(" ")) : pass();
     },
   },
   {

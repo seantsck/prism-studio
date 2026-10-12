@@ -1,12 +1,17 @@
 import { buildShotContext, shotOrder } from "./context";
-import type { ProjectData, Shot } from "./schemas";
+import { storyboardFreshness, type StoryboardFreshnessStatus } from "./fingerprint";
+import type { ProjectData, Shot, Waveform } from "./schemas";
+import { timelineFromContext, type TimelineSegment } from "./timeline";
 
 export interface AnimaticAudioCue {
   lineId: string;
   speaker: string;
   text: string;
   takeId: string;
+  takeNumber: number;
   audioAssetId: string | null;
+  waveform: Waveform | null;
+  /** Absolute offset in the episode timeline. */
   startMs: number;
   durationMs: number;
 }
@@ -21,15 +26,29 @@ export interface AnimaticClip {
   durationMs: number;
   durationSource: "manual" | "performance" | "manual_fallback" | "unset";
   frame: { frameId: string; assetId: string | null; approved: boolean; version: number } | null;
+  /** "stale" when the approved frame predates a change to the shot (see domain/fingerprint.ts). */
+  frameFreshness: StoryboardFreshnessStatus;
+  freshnessMessages: string[];
   cues: AnimaticAudioCue[];
+  /** Labelled time map relative to the clip start: pre-roll, takes, pauses, reaction hold. */
+  segments: TimelineSegment[];
   ambience: string;
   musicCue: string;
   status: Shot["status"];
 }
 
+export interface AnimaticScene {
+  sceneId: string;
+  sceneNumber: string;
+  slugline: string;
+  startMs: number;
+  endMs: number;
+}
+
 export interface AnimaticTimeline {
   episodeId: string;
   clips: AnimaticClip[];
+  scenes: AnimaticScene[];
   totalMs: number;
 }
 
@@ -37,25 +56,30 @@ export interface AnimaticTimeline {
 export function buildAnimaticTimeline(data: ProjectData, episodeId: string): AnimaticTimeline {
   const shots = data.shots.filter((s) => s.episodeId === episodeId).sort(shotOrder(data));
   let cursor = 0;
+  const scenes: AnimaticScene[] = [];
+
   const clips = shots.map<AnimaticClip>((shot) => {
     const ctx = buildShotContext(data, shot.id);
-    const durationMs = Math.max(ctx.duration.durationMs, 0);
+    const timeline = timelineFromContext(ctx);
+    const durationMs = Math.max(timeline.totalMs, 0);
     const frame = ctx.approvedFrame ?? ctx.frames[0] ?? null;
+    const freshness = storyboardFreshness(ctx, ctx.approvedFrame);
 
     const cues: AnimaticAudioCue[] = [];
-    let at = cursor + shot.audio.preRollMs;
-    for (const l of ctx.lines) {
-      if (!l.selectedTake) continue;
+    for (const seg of timeline.segments) {
+      if (seg.kind !== "dialogue" || !seg.lineId) continue;
+      const line = ctx.lines.find((l) => l.line.id === seg.lineId);
       cues.push({
-        lineId: l.line.id,
-        speaker: l.character?.name ?? l.line.speakerLabel,
-        text: l.line.originalText,
-        takeId: l.selectedTake.id,
-        audioAssetId: l.selectedTake.audioAssetId,
-        startMs: at,
-        durationMs: l.selectedTake.durationMs,
+        lineId: seg.lineId,
+        speaker: seg.speaker ?? "",
+        text: seg.text ?? "",
+        takeId: seg.takeId ?? "",
+        takeNumber: seg.takeNumber ?? 0,
+        audioAssetId: seg.audioAssetId ?? null,
+        waveform: line?.selectedTake?.waveform ?? null,
+        startMs: cursor + seg.startMs,
+        durationMs: seg.endMs - seg.startMs,
       });
-      at += l.selectedTake.durationMs + shot.audio.interLineGapMs;
     }
 
     const clip: AnimaticClip = {
@@ -66,19 +90,33 @@ export function buildAnimaticTimeline(data: ProjectData, episodeId: string): Ani
       sceneNumber: ctx.scene.sceneNumber,
       startMs: cursor,
       durationMs,
-      durationSource: ctx.duration.source,
+      durationSource: timeline.source,
       frame: frame
         ? { frameId: frame.id, assetId: frame.assetId, approved: frame.approved, version: frame.version }
         : null,
+      frameFreshness: freshness.status,
+      freshnessMessages: freshness.messages,
       cues,
+      segments: timeline.segments,
       ambience: shot.audio.ambience,
       musicCue: shot.audio.musicCue,
       status: shot.status,
     };
+
+    const last = scenes[scenes.length - 1];
+    if (last && last.sceneId === shot.sceneId) last.endMs = cursor + durationMs;
+    else
+      scenes.push({
+        sceneId: shot.sceneId,
+        sceneNumber: ctx.scene.sceneNumber,
+        slugline: ctx.scene.slugline,
+        startMs: cursor,
+        endMs: cursor + durationMs,
+      });
     cursor += durationMs;
     return clip;
   });
-  return { episodeId, clips, totalMs: cursor };
+  return { episodeId, clips, scenes, totalMs: cursor };
 }
 
 export function clipAt(timeline: AnimaticTimeline, ms: number): AnimaticClip | null {

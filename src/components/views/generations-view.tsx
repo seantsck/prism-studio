@@ -6,6 +6,7 @@ import { assembleGenerationPackage, renderGenerationBrief } from "@/domain/gener
 import { summarizeEpisode } from "@/domain/summary";
 import { shotPath } from "@/lib/paths";
 import { logAttempt, reviewAttempt } from "@/server/actions";
+import { ActionForm } from "@/components/action-form";
 
 const ATTEMPT_TONE = {
   approved: "pass",
@@ -95,7 +96,7 @@ export function GenerationsView({ data, episode }: { data: ProjectData; episode:
                   </h3>
                   <div className="space-y-2">
                     {attempts.map((a) => (
-                      <form key={a.id} action={reviewAttempt} className="border border-line p-2.5">
+                      <ActionForm key={a.id} action={reviewAttempt} className="border border-line p-2.5">
                         {hidden}
                         <input type="hidden" name="attemptId" value={a.id} />
                         <div className="flex items-center justify-between">
@@ -132,7 +133,7 @@ export function GenerationsView({ data, episode }: { data: ProjectData; episode:
                             </Button>
                           </div>
                         </details>
-                      </form>
+                      </ActionForm>
                     ))}
                     {attempts.length === 0 ? (
                       <div className="border border-dashed border-line2 p-3 text-muted">
@@ -145,7 +146,7 @@ export function GenerationsView({ data, episode }: { data: ProjectData; episode:
                     <summary className="text-[11px] font-semibold uppercase tracking-wide text-accent">
                       + Log attempt ▾
                     </summary>
-                    <form action={logAttempt} className="mt-2 grid grid-cols-2 gap-2">
+                    <ActionForm action={logAttempt} className="mt-2 grid grid-cols-2 gap-2">
                       {hidden}
                       <input type="hidden" name="shotId" value={ctx.shot.id} />
                       <Field label="Provider">
@@ -178,7 +179,7 @@ export function GenerationsView({ data, episode }: { data: ProjectData; episode:
                           Log attempt
                         </Button>
                       </div>
-                    </form>
+                    </ActionForm>
                   </details>
                 </div>
               </div>

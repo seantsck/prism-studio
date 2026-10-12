@@ -1,5 +1,6 @@
 import { computeShotDuration, selectedTake, type ShotDuration } from "./duration";
 import type {
+  ActionBlock,
   Asset,
   Character,
   CharacterLook,
@@ -55,6 +56,9 @@ export interface ShotContext {
   approvedFrame: StoryboardFrame | null;
   assets: Map<string, Asset>;
   duration: ShotDuration;
+  /** Script content this shot links to, resolved from shot.scriptSources / audio.dialogueLineIds. */
+  sourceActions: ActionBlock[];
+  sourceDialogue: DialogueLine[];
 }
 
 export function buildShotContext(data: ProjectData, shotId: string): ShotContext {
@@ -115,6 +119,12 @@ export function buildShotContext(data: ProjectData, shotId: string): ShotContext
     approvedFrame: frames.find((f) => f.approved) ?? null,
     assets,
     duration: computeShotDuration(shot, lineTakes),
+    sourceActions: shot.scriptSources.actionBlockIds
+      .map((id) => data.actionBlocks.find((b) => b.id === id))
+      .filter((b): b is ActionBlock => Boolean(b)),
+    sourceDialogue: [...new Set([...shot.scriptSources.dialogueLineIds, ...shot.audio.dialogueLineIds])]
+      .map((id) => data.dialogueLines.find((l) => l.id === id))
+      .filter((l): l is DialogueLine => Boolean(l)),
   };
 }
 

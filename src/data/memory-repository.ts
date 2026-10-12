@@ -46,6 +46,7 @@ export class MemoryRepository implements Repository {
       scenes: [],
       shots: [],
       dialogueLines: [],
+      actionBlocks: [],
       directions: [],
       takes: [],
       frames: [],

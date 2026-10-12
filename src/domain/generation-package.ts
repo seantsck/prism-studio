@@ -1,16 +1,50 @@
 import type { ShotContext } from "./context";
 import type { DurationBreakdown } from "./duration";
+import { computeShotParts, overallFingerprint, storyboardFreshness, type StoryboardFreshness } from "./fingerprint";
+import { fingerprint } from "./hash";
 import { runPreflight } from "./preflight";
-import type { Shot } from "./schemas";
+import type { Asset, Shot } from "./schemas";
+import { timelineFromContext, type TimelineSegment } from "./timeline";
+
+/** Bump when the package SHAPE changes. Attempts keep the version they were built with. */
+export const PACKAGE_SCHEMA_VERSION = 2 as const;
+
+/** Self-describing asset record embedded in the package so history stays interpretable if the asset later changes. */
+export interface PackageAsset {
+  id: string;
+  type: Asset["type"];
+  purpose: Asset["purpose"];
+  name: string;
+  originalFilename: string;
+  mime: string | null;
+  byteSize: number | null;
+  checksum: string | null;
+  width: number | null;
+  height: number | null;
+  durationMs: number | null;
+  sampleRate: number | null;
+  channels: number | null;
+  storageProvider: Asset["storageProvider"];
+  bucket: string | null;
+  objectPath: string | null;
+}
 
 /**
  * Normalized, provider-independent generation package. Provider adapters (Phase 2) translate this
  * into provider payloads. Principle: never ask a model to remember what Prism Studio can store.
  */
 export interface GenerationPackage {
-  version: 1;
+  version: typeof PACKAGE_SCHEMA_VERSION;
+  packageSchemaVersion: typeof PACKAGE_SCHEMA_VERSION;
   builtAt: string;
+  project: { id: string; title: string; slug: string; defaultLanguage: string };
+  episode: { id: string; number: number; title: string };
   shot: { id: string; code: string; title: string; status: Shot["status"] };
+  /** Script content this shot was made from, copied by value so the snapshot stays readable. */
+  sourceScript: {
+    actions: Array<{ id: string; text: string; startLine: number | null }>;
+    dialogue: Array<{ id: string; speaker: string; text: string; startLine: number | null; locked: boolean }>;
+  };
   storyIntent: {
     storyBeat: string;
     dramaticPurpose: string;
@@ -83,7 +117,11 @@ export interface GenerationPackage {
   }>;
   timing: {
     durationMs: number;
+    /** shot.durationMode: how timing is meant to be derived. */
+    mode: Shot["durationMode"];
     source: string;
+    /** Labelled, contiguous time map: pre-roll, each selected take, pauses, reaction hold. */
+    segments: TimelineSegment[];
     breakdown: DurationBreakdown | null;
     beats: Array<{ atMs: number; description: string }>;
     beginningPose: string;
@@ -95,6 +133,7 @@ export interface GenerationPackage {
   };
   continuity: {
     previousShot: { id: string; code: string; title: string } | null;
+    nextShot: { id: string; code: string; title: string } | null;
     wardrobe: string;
     hair: string;
     makeup: string;
@@ -134,8 +173,25 @@ export interface GenerationPackage {
     resolution: string;
     fps: number;
   };
+  /** Every asset id referenced anywhere in this package, described by value. */
+  assets: Record<string, PackageAsset>;
+  freshness: { storyboard: StoryboardFreshness };
   readiness: { ready: boolean; score: number; blockers: string[]; warnings: string[] };
   prompt: { positive: string; negative: string };
+  provenance: {
+    /** Hash of the whole package content (excluding builtAt and this provenance block). */
+    fingerprint: string;
+    /** Per-part content hashes: which inputs this package was built from. */
+    parts: Record<string, string>;
+    builtAt: string;
+    sourceVersions: {
+      shotUpdatedAt: string;
+      lookIds: string[];
+      locationId: string | null;
+      selectedTakeIds: string[];
+      storyboardFrameId: string | null;
+    };
+  };
 }
 
 const nonEmpty = (xs: Array<string | null | undefined>) => xs.map((x) => x?.trim() ?? "").filter(Boolean);
@@ -238,10 +294,29 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
   ]).join(". ");
 
   const approved = ctx.approvedFrame;
-  return {
-    version: 1,
+  const timeline = timelineFromContext(ctx);
+  const base: Omit<GenerationPackage, "assets" | "provenance"> = {
+    version: PACKAGE_SCHEMA_VERSION,
+    packageSchemaVersion: PACKAGE_SCHEMA_VERSION,
     builtAt: now.toISOString(),
+    project: {
+      id: ctx.project.id,
+      title: ctx.project.title,
+      slug: ctx.project.slug,
+      defaultLanguage: ctx.project.defaultLanguage,
+    },
+    episode: { id: ctx.episode.id, number: ctx.episode.number, title: ctx.episode.title },
     shot: { id: shot.id, code: shot.shotCode, title: shot.title, status: shot.status },
+    sourceScript: {
+      actions: ctx.sourceActions.map((a) => ({ id: a.id, text: a.text, startLine: a.startLine })),
+      dialogue: ctx.sourceDialogue.map((l) => ({
+        id: l.id,
+        speaker: ctx.lines.find((x) => x.line.id === l.id)?.character?.name ?? l.speakerLabel,
+        text: l.originalText,
+        startLine: l.sourceStartLine,
+        locked: l.locked,
+      })),
+    },
     storyIntent: {
       storyBeat: shot.storyBeat,
       dramaticPurpose: shot.dramaticPurpose,
@@ -280,7 +355,9 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
     performance,
     timing: {
       durationMs: ctx.duration.durationMs,
+      mode: shot.durationMode,
       source: ctx.duration.source,
+      segments: timeline.segments,
       breakdown: ctx.duration.breakdown,
       beats: [...shot.action.beats]
         .sort((a, b) => a.order - b.order)
@@ -295,6 +372,9 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
     continuity: {
       previousShot: ctx.previousShot
         ? { id: ctx.previousShot.id, code: ctx.previousShot.shotCode, title: ctx.previousShot.title }
+        : null,
+      nextShot: ctx.nextShot
+        ? { id: ctx.nextShot.id, code: ctx.nextShot.shotCode, title: ctx.nextShot.title }
         : null,
       wardrobe: shot.continuity.wardrobe,
       hair: shot.continuity.hair,
@@ -340,6 +420,7 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
       resolution: shot.generation.resolution,
       fps: shot.generation.fps,
     },
+    freshness: { storyboard: storyboardFreshness(ctx, approved) },
     readiness: {
       ready: report.ready,
       score: report.score,
@@ -349,6 +430,65 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
     prompt: {
       positive: visual,
       negative: negative.concat(bible.guardrails).join("; "),
+    },
+  };
+
+  // Every referenced asset is described by value (checksum, dimensions, filename...).
+  const assetIds = new Set<string>();
+  const addIds = (ids: Array<string | null | undefined>) => ids.forEach((i) => i && assetIds.add(i));
+  for (const c of base.characters) addIds([...c.identityReferenceAssetIds, ...(c.look?.referenceAssetIds ?? [])]);
+  addIds(base.set?.referenceAssetIds ?? []);
+  addIds([
+    base.references.startFrameAssetId,
+    base.references.endFrameAssetId,
+    base.references.approvedStoryboardFrame?.assetId,
+    base.references.referenceVideoAssetId,
+    base.references.referenceAudioAssetId,
+    base.lighting.referenceAssetId,
+    ...base.references.referenceAssetIds,
+    ...base.performance.map((p) => p.selectedTake?.audioAssetId),
+  ]);
+  const assets: GenerationPackage["assets"] = {};
+  for (const id of [...assetIds].sort()) {
+    const a = ctx.assets.get(id);
+    if (!a) continue;
+    assets[id] = {
+      id: a.id,
+      type: a.type,
+      purpose: a.purpose,
+      name: a.name,
+      originalFilename: a.originalFilename,
+      mime: a.mime,
+      byteSize: a.byteSize,
+      checksum: a.checksum,
+      width: a.width,
+      height: a.height,
+      durationMs: a.durationMs,
+      sampleRate: a.sampleRate,
+      channels: a.channels,
+      storageProvider: a.storageProvider,
+      bucket: a.bucket,
+      objectPath: a.objectPath,
+    };
+  }
+
+  const parts = computeShotParts(ctx);
+  const content = { ...base, assets };
+  // builtAt is excluded: rebuilding an unchanged shot must yield the same fingerprint.
+  const contentFingerprint = fingerprint({ ...content, builtAt: null });
+  return {
+    ...content,
+    provenance: {
+      fingerprint: contentFingerprint,
+      parts: { ...parts, overall: overallFingerprint(parts) },
+      builtAt: base.builtAt,
+      sourceVersions: {
+        shotUpdatedAt: shot.updatedAt,
+        lookIds: ctx.characters.flatMap((c) => (c.look ? [c.look.id] : [])),
+        locationId: ctx.location?.id ?? null,
+        selectedTakeIds: ctx.lines.flatMap((l) => (l.selectedTake ? [l.selectedTake.id] : [])),
+        storyboardFrameId: approved?.id ?? null,
+      },
     },
   };
 }

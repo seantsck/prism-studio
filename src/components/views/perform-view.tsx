@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { ActionForm } from "@/components/action-form";
 import { AudioFileInput } from "@/components/audio-file-input";
+import { AudioPlayer, WaveformBars } from "@/components/audio-player";
 import { Badge, Button, Field, PageHeader } from "@/components/ui";
 import { formatSeconds } from "@/domain/duration";
 import {
@@ -8,6 +10,7 @@ import {
   VOLUMES,
   type DialogueLine,
   type Episode,
+  type PerformanceTake,
   type ProjectData,
 } from "@/domain/schemas";
 import { shotPath } from "@/lib/paths";
@@ -19,19 +22,109 @@ import {
   saveDirection,
   selectTake,
   setLineLocked,
+  setTakeArchived,
 } from "@/server/actions";
+
+const DURATION_SOURCE_LABEL: Record<PerformanceTake["durationSource"], string> = {
+  server_metadata: "measured",
+  browser_hint: "browser hint",
+  manual: "manual",
+  seed: "demo",
+};
+
+function TakeRow({
+  data,
+  take,
+  hidden,
+}: {
+  data: ProjectData;
+  take: PerformanceTake;
+  hidden: React.ReactNode;
+}) {
+  const asset = data.assets.find((a) => a.id === take.audioAssetId);
+  const url = assetUrl(asset);
+  return (
+    <div
+      className={`border px-2.5 py-2 ${take.selected ? "border-accent/60 bg-accent/5" : "border-line"} ${take.archived ? "opacity-60" : ""}`}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="w-6 font-mono text-[11px] text-muted">#{take.takeNumber}</span>
+        <span className="w-12 font-mono text-[12px]">{formatSeconds(take.durationMs)}</span>
+        <Badge>{take.sourceType.replace("_", " ")}</Badge>
+        <Badge tone={take.durationSource === "server_metadata" ? "pass" : "neutral"}>
+          {DURATION_SOURCE_LABEL[take.durationSource]}
+        </Badge>
+        {take.archived ? <Badge tone="warn">archived</Badge> : null}
+        <span className="min-w-0 flex-1 truncate text-muted">{take.notes}</span>
+
+        <ActionForm action={rateTake} className="flex items-center gap-1" quiet>
+          {hidden}
+          <input type="hidden" name="takeId" value={take.id} />
+          <select name="rating" defaultValue={take.rating} className="!w-12 !px-1 !py-0.5" aria-label="Rating">
+            {[0, 1, 2, 3, 4, 5].map((r) => (
+              <option key={r} value={r}>
+                {r ? "★".repeat(r) : "–"}
+              </option>
+            ))}
+          </select>
+          <Button size="sm" variant="ghost" type="submit">
+            Rate
+          </Button>
+        </ActionForm>
+
+        {take.selected ? (
+          <Badge tone="accent">canonical</Badge>
+        ) : take.archived ? null : (
+          <ActionForm action={selectTake}>
+            {hidden}
+            <input type="hidden" name="takeId" value={take.id} />
+            <Button size="sm" type="submit">
+              Select
+            </Button>
+          </ActionForm>
+        )}
+
+        <ActionForm action={setTakeArchived} quiet>
+          {hidden}
+          <input type="hidden" name="takeId" value={take.id} />
+          <input type="hidden" name="archived" value={String(!take.archived)} />
+          <Button size="sm" variant="ghost" type="submit">
+            {take.archived ? "Restore" : "Archive"}
+          </Button>
+        </ActionForm>
+      </div>
+      <div className="mt-1.5">
+        <AudioPlayer
+          src={url}
+          waveform={take.waveform}
+          durationMs={take.durationMs}
+          label={`take ${take.takeNumber}`}
+          selected={take.selected}
+          compact
+        />
+        {!url ? <div className="mt-0.5 text-[10.5px] text-faint">No audio file attached (placeholder take).</div> : null}
+      </div>
+    </div>
+  );
+}
 
 function LineCard({ data, episode, line }: { data: ProjectData; episode: Episode; line: DialogueLine }) {
   const slug = data.project.slug;
   const hidden = <input type="hidden" name="projectSlug" value={slug} />;
   const character = data.characters.find((c) => c.id === line.characterId);
   const direction = data.directions.find((d) => d.dialogueLineId === line.id);
-  const takes = data.takes
+  const scene = data.scenes.find((s) => s.id === line.sceneId);
+  const allTakes = data.takes
     .filter((t) => t.dialogueLineId === line.id)
     .sort((a, b) => a.takeNumber - b.takeNumber);
-  const selected = takes.find((t) => t.selected);
+  const active = allTakes.filter((t) => !t.archived);
+  const archived = allTakes.filter((t) => t.archived);
+  const selected = active.find((t) => t.selected);
   const voices = data.voiceProfiles.filter((v) => v.characterId === line.characterId);
-  const shots = data.shots.filter((s) => s.audio.dialogueLineIds.includes(line.id));
+  const shots = data.shots.filter(
+    (s) => s.audio.dialogueLineIds.includes(line.id) || s.scriptSources.dialogueLineIds.includes(line.id),
+  );
+  const longest = Math.max(1, ...active.map((t) => t.durationMs));
 
   return (
     <article className="border border-line bg-panel">
@@ -45,13 +138,36 @@ function LineCard({ data, episode, line }: { data: ProjectData; episode: Episode
         <div className="min-w-0 flex-1">
           <div className="text-[15px] leading-snug">{line.originalText}</div>
           {line.translation ? <div className="mt-0.5 text-muted">{line.translation}</div> : null}
-          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          {line.pronunciationNotes ? (
+            <div className="mt-0.5 text-[11.5px] text-info">Pronunciation: {line.pronunciationNotes}</div>
+          ) : null}
+          {scene ? (
+            <div className="mt-1 text-[11px] text-faint">
+              Scene {scene.sceneNumber} · {scene.slugline}
+              {scene.emotionEntering ? ` · ${scene.emotionEntering} → ${scene.emotionLeaving}` : ""}
+            </div>
+          ) : null}
+          {line.dramaticContext || line.subtext ? (
+            <div className="mt-0.5 text-[11.5px] text-muted">
+              {line.dramaticContext}
+              {line.subtext ? <span className="italic"> — subtext: {line.subtext}</span> : null}
+            </div>
+          ) : null}
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             <Badge tone={line.locked ? "pass" : "warn"}>{line.locked ? "text locked" : "text open"}</Badge>
             <Badge tone={selected ? "pass" : "fail"}>
               {selected
                 ? `canonical: take ${selected.takeNumber} · ${formatSeconds(selected.durationMs)}`
                 : "no canonical take"}
             </Badge>
+            {direction ? (
+              <>
+                {direction.emotion ? <Badge tone="info">{direction.emotion}</Badge> : null}
+                <Badge>{direction.pace.replace("_", " ")}</Badge>
+                <Badge>{direction.volume}</Badge>
+                <Badge>intensity {direction.intensity}</Badge>
+              </>
+            ) : null}
             {shots.map((s) => (
               <Link key={s.id} href={shotPath(slug, episode.slug, s.id, "performance")}>
                 <Badge tone="info">shot {s.shotCode}</Badge>
@@ -59,23 +175,23 @@ function LineCard({ data, episode, line }: { data: ProjectData; episode: Episode
             ))}
           </div>
         </div>
-        <form action={setLineLocked}>
+        <ActionForm action={setLineLocked} quiet>
           {hidden}
           <input type="hidden" name="lineId" value={line.id} />
           <input type="hidden" name="locked" value={String(!line.locked)} />
           <Button size="sm" type="submit">
             {line.locked ? "Unlock text" : "Lock text"}
           </Button>
-        </form>
+        </ActionForm>
       </header>
 
-      <div className="grid gap-4 p-4 lg:grid-cols-[1fr_1.2fr]">
+      <div className="grid gap-4 p-4 lg:grid-cols-[1fr_1.4fr]">
         <div className="space-y-3">
           <details>
             <summary className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
               Performance direction ▾
             </summary>
-            <form action={saveDirection} className="grid grid-cols-2 gap-2">
+            <ActionForm action={saveDirection} className="grid grid-cols-2 gap-2">
               {hidden}
               <input type="hidden" name="lineId" value={line.id} />
               <Field label="Emotion">
@@ -129,13 +245,14 @@ function LineCard({ data, episode, line }: { data: ProjectData; episode: Episode
                   Save direction
                 </Button>
               </div>
-            </form>
+            </ActionForm>
           </details>
           {direction ? (
             <div className="text-[12px] text-muted">
               <span className="text-fg">{direction.emotion || "—"}</span> · wants:{" "}
-              {direction.objective || "—"} · intensity{" "}
-              <span className="font-mono">{direction.intensity}</span> · {direction.pace} · {direction.volume}
+              {direction.objective || "—"}
+              {direction.pauses ? ` · pauses: ${direction.pauses}` : ""}
+              {direction.breaths ? ` · breath: ${direction.breaths}` : ""}
             </div>
           ) : null}
 
@@ -143,7 +260,7 @@ function LineCard({ data, episode, line }: { data: ProjectData; episode: Episode
             <summary className="text-[11px] font-semibold uppercase tracking-wide text-muted">
               Line details ▾
             </summary>
-            <form action={saveDialogueLine} className="mt-2 space-y-2">
+            <ActionForm action={saveDialogueLine} className="mt-2 space-y-2">
               {hidden}
               <input type="hidden" name="lineId" value={line.id} />
               <Field label="Text" hint={line.locked ? "Locked — unlock to edit" : undefined}>
@@ -169,70 +286,67 @@ function LineCard({ data, episode, line }: { data: ProjectData; episode: Episode
               <Button size="sm" type="submit">
                 Save line
               </Button>
-            </form>
+            </ActionForm>
           </details>
         </div>
 
         <div>
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
-            Takes ({takes.length})
+            Takes ({active.length}
+            {archived.length ? ` + ${archived.length} archived` : ""})
           </div>
           <div className="space-y-1.5">
-            {takes.map((t) => {
-              const asset = data.assets.find((a) => a.id === t.audioAssetId);
-              const url = assetUrl(asset);
-              return (
-                <div
-                  key={t.id}
-                  className={`flex items-center gap-3 border px-2.5 py-1.5 ${t.selected ? "border-accent/60 bg-accent/5" : "border-line"}`}
-                >
-                  <span className="w-6 font-mono text-[11px] text-muted">#{t.takeNumber}</span>
-                  <span className="w-12 font-mono text-[12px]">{formatSeconds(t.durationMs)}</span>
-                  <Badge>{t.sourceType.replace("_", " ")}</Badge>
-                  <span className="min-w-0 flex-1 truncate text-muted">{t.notes}</span>
-                  {url ? (
-                    <audio controls src={url} className="h-6 w-40" preload="none" />
-                  ) : (
-                    <span className="text-[10.5px] text-faint">no audio file</span>
-                  )}
-                  <form action={rateTake} className="flex items-center gap-1">
-                    {hidden}
-                    <input type="hidden" name="takeId" value={t.id} />
-                    <select name="rating" defaultValue={t.rating} className="!w-12 !px-1 !py-0.5">
-                      {[0, 1, 2, 3, 4, 5].map((r) => (
-                        <option key={r} value={r}>
-                          {r ? "★".repeat(r) : "–"}
-                        </option>
-                      ))}
-                    </select>
-                    <Button size="sm" variant="ghost" type="submit">
-                      Rate
-                    </Button>
-                  </form>
-                  {t.selected ? (
-                    <Badge tone="accent">canonical</Badge>
-                  ) : (
-                    <form action={selectTake}>
-                      {hidden}
-                      <input type="hidden" name="takeId" value={t.id} />
-                      <Button size="sm" type="submit">
-                        Select
-                      </Button>
-                    </form>
-                  )}
-                </div>
-              );
-            })}
-            {takes.length === 0 ? (
+            {active.map((t) => (
+              <TakeRow key={t.id} data={data} take={t} hidden={hidden} />
+            ))}
+            {active.length === 0 ? (
               <div className="border border-dashed border-line2 p-3 text-muted">No takes yet.</div>
             ) : null}
           </div>
+
+          {active.length > 1 ? (
+            <details className="mt-3">
+              <summary className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                Compare takes ▾
+              </summary>
+              <div className="mt-2 space-y-1.5 border border-line p-2">
+                {active.map((t) => (
+                  <div key={t.id} className="flex items-center gap-2">
+                    <span className="w-14 shrink-0 font-mono text-[10.5px] text-muted">
+                      #{t.takeNumber}
+                      {t.selected ? " ★" : ""}
+                    </span>
+                    <div style={{ width: `${(t.durationMs / longest) * 100}%` }}>
+                      <WaveformBars waveform={t.waveform} height={22} tone={t.selected ? "accent" : "muted"} />
+                    </div>
+                    <span className="shrink-0 font-mono text-[10.5px] text-muted">
+                      {formatSeconds(t.durationMs)}
+                    </span>
+                  </div>
+                ))}
+                <div className="text-[10.5px] text-faint">Widths are to scale: the longest take fills the row.</div>
+              </div>
+            </details>
+          ) : null}
+
+          {archived.length > 0 ? (
+            <details className="mt-3">
+              <summary className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                Archived takes ({archived.length}) ▾
+              </summary>
+              <div className="mt-2 space-y-1.5">
+                {archived.map((t) => (
+                  <TakeRow key={t.id} data={data} take={t} hidden={hidden} />
+                ))}
+              </div>
+            </details>
+          ) : null}
 
           <details className="mt-3">
             <summary className="text-[11px] font-semibold uppercase tracking-wide text-accent">
               + Add take ▾
             </summary>
-            <form action={addTake} className="mt-2 grid grid-cols-2 gap-2">
+            <ActionForm action={addTake} resetOnSuccess className="mt-2 grid grid-cols-2 gap-2">
               {hidden}
               <input type="hidden" name="lineId" value={line.id} />
               <Field label="Source">
@@ -271,7 +385,7 @@ function LineCard({ data, episode, line }: { data: ProjectData; episode: Episode
                   Add take
                 </Button>
               </div>
-            </form>
+            </ActionForm>
           </details>
         </div>
       </div>
@@ -283,7 +397,7 @@ export function PerformView({ data, episode }: { data: ProjectData; episode: Epi
   const scenes = data.scenes.filter((s) => s.episodeId === episode.id).sort((a, b) => a.order - b.order);
   const lines = data.dialogueLines.filter((l) => l.episodeId === episode.id);
   const withTake = lines.filter((l) =>
-    data.takes.some((t) => t.dialogueLineId === l.id && t.selected),
+    data.takes.some((t) => t.dialogueLineId === l.id && t.selected && !t.archived),
   ).length;
   const lockedLines = lines.filter((l) => l.locked).length;
 

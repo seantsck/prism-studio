@@ -6,7 +6,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function assetUrl(
-  asset: { id: string; storagePath: string | null } | null | undefined,
+  asset: { id: string; objectPath: string | null } | null | undefined,
 ): string | null {
-  return asset?.storagePath ? `/api/assets/${asset.id}` : null;
+  return asset?.objectPath ? `/api/assets/${asset.id}` : null;
 }

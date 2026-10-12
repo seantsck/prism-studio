@@ -2,20 +2,24 @@
 //   npx tsx --env-file=.env.local scripts/db-seed.mts            # skip if already seeded
 //   npx tsx --env-file=.env.local scripts/db-seed.mts --reset    # delete the demo project (cascades) and re-seed
 import pg from "pg";
-import { PostgresRepository } from "../src/data/postgres-repository";
+import { AdminRepository } from "../src/data/postgres-repository";
 import { buildSeedProject } from "../src/data/seed";
 
 import { assertDevUserExists, readDevUserEnv } from "./lib/dev-user.mjs";
+import { startScript } from "./lib/safety.mjs";
 
 const dev = readDevUserEnv(); // validates ref + UUID before any query
-const url = dev.url;
+const url = startScript({
+  mode: process.argv.includes("--reset") ? "seed --reset (replaces the demo project)" : "seed",
+  devOwner: dev.id,
+});
 const owner = dev.id;
 
 const pool = new pg.Pool({ connectionString: url, ssl: { rejectUnauthorized: false }, max: 2 });
 try {
   await assertDevUserExists(pool, dev);
   const seed = buildSeedProject();
-  const repo = new PostgresRepository(pool, owner);
+  const repo = new AdminRepository(pool, owner);
   const reset = process.argv.includes("--reset");
 
   const existing = await repo.loadProject(seed.project.slug);
@@ -42,6 +46,7 @@ try {
     await repo.upsertMany(pid, "props", seed.props);
     await repo.upsertMany(pid, "scenes", seed.scenes);
     await repo.upsertMany(pid, "dialogueLines", seed.dialogueLines);
+    await repo.upsertMany(pid, "actionBlocks", seed.actionBlocks);
     await repo.upsertMany(pid, "shots", seed.shots);
     await repo.upsertMany(pid, "directions", seed.directions);
     await repo.upsertMany(pid, "takes", seed.takes);

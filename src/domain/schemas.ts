@@ -30,7 +30,30 @@ export const ASSET_SOURCES = [
   "recording",
   "import",
   "seed",
+  "extracted",
+  "3d_render",
+  "storyboard",
+  "provider_output",
 ] as const;
+/** What an asset is FOR (type says what it is). Drives the library filters and storage conventions. */
+export const ASSET_PURPOSES = [
+  "identity_ref",
+  "look_ref",
+  "location_ref",
+  "prop_ref",
+  "storyboard",
+  "performance_audio",
+  "reference_audio",
+  "generation_input",
+  "generation_output",
+  "video_reference",
+  "document",
+  "waveform",
+  "model_3d",
+  "other",
+] as const;
+export const STORAGE_PROVIDERS = ["none", "local", "supabase"] as const;
+export const DURATION_SOURCES = ["server_metadata", "browser_hint", "manual", "seed"] as const;
 export const IDENTITY_SLOTS = ["front", "three_quarter", "profile", "full_body", "additional"] as const;
 export const TAKE_SOURCES = ["human_recording", "generated_voice", "temp_voice"] as const;
 export const DURATION_MODES = ["manual", "derived_from_performance"] as const;
@@ -92,21 +115,38 @@ export type ProjectBible = z.infer<typeof bibleSchema>;
 // ───────────────────────── Assets ─────────────────────────
 
 export const assetSchema = z.object({
+  // identity
   id,
   projectId: id,
+  /** Auth user that created the asset (null for seeded/system assets). */
+  createdBy: nullableId,
   type: z.enum(ASSET_TYPES),
+  purpose: z.enum(ASSET_PURPOSES),
+  source: z.enum(ASSET_SOURCES),
+  // storage
   name: text,
+  originalFilename: text,
+  storageProvider: z.enum(STORAGE_PROVIDERS),
+  bucket: text.nullable(),
+  /** Key inside the bucket/provider. Null = placeholder (not yet uploaded). */
+  objectPath: text.nullable(),
+  // technical metadata (server-read wherever possible)
   mime: text.nullable(),
-  storagePath: text.nullable(),
+  byteSize: z.number().int().nonnegative().nullable(),
+  checksum: text.nullable(),
   width: z.number().int().nullable(),
   height: z.number().int().nullable(),
   durationMs: z.number().int().nullable(),
-  checksum: text.nullable(),
-  source: z.enum(ASSET_SOURCES),
+  frameRate: z.number().positive().nullable(),
+  sampleRate: z.number().int().positive().nullable(),
+  channels: z.number().int().positive().nullable(),
+  // production
   tags: z.array(text),
-  /** Free-form technical metadata (waveform peaks, codec…). */
+  notes: text,
+  /** Free-form technical metadata (codec, loudness…). */
   metadata: z.record(z.string(), z.unknown()),
-  uploadedAt: iso,
+  createdAt: iso,
+  updatedAt: iso,
 });
 export type Asset = z.infer<typeof assetSchema>;
 
@@ -256,6 +296,15 @@ export type Scene = z.infer<typeof sceneSchema>;
 
 // ───────────────────────── Dialogue & Performance ─────────────────────────
 
+export const waveformSchema = z.object({
+  version: z.literal(1),
+  sampleCount: z.number().int().nonnegative(),
+  /** Normalised 0..1 peak amplitude per bucket. */
+  peaks: z.array(z.number().min(0).max(1)),
+  durationMs: z.number().int().nonnegative(),
+});
+export type Waveform = z.infer<typeof waveformSchema>;
+
 export const dialogueLineSchema = z.object({
   id,
   projectId: id,
@@ -273,8 +322,24 @@ export const dialogueLineSchema = z.object({
   /** Approved dialogue is locked; script sync and AI revision must not alter it. */
   locked: z.boolean(),
   order: z.number().int(),
+  /** Source range in the episode script (1-based, inclusive). Null for hand-created lines. */
+  sourceStartLine: z.number().int().nullable(),
+  sourceEndLine: z.number().int().nullable(),
 });
 export type DialogueLine = z.infer<typeof dialogueLineSchema>;
+
+/** A stable-ID action paragraph of the script. Shots reference these, never copy them. */
+export const actionBlockSchema = z.object({
+  id,
+  projectId: id,
+  episodeId: id,
+  sceneId: id,
+  text,
+  order: z.number().int(),
+  startLine: z.number().int().nullable(),
+  endLine: z.number().int().nullable(),
+});
+export type ActionBlock = z.infer<typeof actionBlockSchema>;
 
 export const performanceDirectionSchema = z.object({
   id,
@@ -301,12 +366,16 @@ export const performanceTakeSchema = z.object({
   sourceType: z.enum(TAKE_SOURCES),
   audioAssetId: nullableId,
   durationMs: z.number().int().positive(),
-  waveform: z.array(z.number()).nullable(),
+  /** Where durationMs came from; server-read metadata outranks a browser hint. */
+  durationSource: z.enum(DURATION_SOURCES),
+  waveform: waveformSchema.nullable(),
   transcript: text,
   takeNumber: z.number().int().positive(),
   notes: text,
   rating: z.number().int().min(0).max(5),
   selected: z.boolean(),
+  /** Archived takes keep their history but are hidden and can never be canonical. */
+  archived: z.boolean(),
   createdAt: iso,
 });
 export type PerformanceTake = z.infer<typeof performanceTakeSchema>;
@@ -417,6 +486,11 @@ const generationPrefsSchema = z.object({
   fps: z.number().positive(),
 });
 
+const scriptSourcesSchema = z.object({
+  actionBlockIds: z.array(id),
+  dialogueLineIds: z.array(id),
+});
+
 const approvalSchema = z.object({
   storyboardApproved: z.boolean(),
   performanceApproved: z.boolean(),
@@ -446,6 +520,8 @@ export const shotSchema = z.object({
   lighting: lightingSchema,
   constraints: constraintsSchema,
   generation: generationPrefsSchema,
+  /** Script content this shot was made from (traceability + coverage). */
+  scriptSources: scriptSourcesSchema,
   approval: approvalSchema,
   createdAt: iso,
   updatedAt: iso,
@@ -463,6 +539,11 @@ export const storyboardFrameSchema = z.object({
   source: z.enum(FRAME_SOURCES),
   notes: text,
   approved: z.boolean(),
+  /** Fingerprint of the shot's visual inputs at approval time; compare to detect a stale storyboard. */
+  approvedFingerprint: text.nullable(),
+  /** Per-part fingerprints + derived duration at approval time (see domain/fingerprint.ts). */
+  approvedSnapshot: z.object({ parts: z.record(z.string(), z.string()), durationMs: z.number() }).nullable(),
+  approvedAt: iso.nullable(),
   createdAt: iso,
 });
 export type StoryboardFrame = z.infer<typeof storyboardFrameSchema>;
@@ -479,6 +560,8 @@ export const generationAttemptSchema = z.object({
   negativePrompt: text,
   /** Frozen GenerationPackage at attempt time. History is never rewritten. */
   packageSnapshot: z.record(z.string(), z.unknown()),
+  /** Fingerprint of that package (also inside the snapshot's provenance). Immutable. */
+  packageFingerprint: text,
   modelSettings: z.record(z.string(), z.unknown()),
   inputAssetIds: z.array(id),
   outputAssetId: nullableId,
@@ -537,6 +620,7 @@ export interface Collections {
   scenes: Scene[];
   shots: Shot[];
   dialogueLines: DialogueLine[];
+  actionBlocks: ActionBlock[];
   directions: PerformanceDirection[];
   takes: PerformanceTake[];
   frames: StoryboardFrame[];

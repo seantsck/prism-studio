@@ -17,6 +17,7 @@ export function AnimaticView({ data, episode }: { data: ProjectData; episode: Ep
       shotId: c.shotId,
       shotCode: c.shotCode,
       title: c.title,
+      sceneId: c.sceneId,
       sceneNumber: c.sceneNumber,
       startMs: c.startMs,
       durationMs: c.durationMs,
@@ -27,29 +28,41 @@ export function AnimaticView({ data, episode }: { data: ProjectData; episode: Ep
       frameLabel: [shot.composition.shotSize, shot.composition.framing].filter(Boolean).join(" · "),
       frameApproved: c.frame?.approved ?? false,
       hasFrame: Boolean(c.frame),
+      frameFreshness: c.frameFreshness,
+      freshnessMessages: c.freshnessMessages,
       ambience: c.ambience,
       musicCue: c.musicCue,
+      segments: c.segments.map((s) => ({
+        kind: s.kind,
+        label: s.label,
+        startMs: s.startMs,
+        endMs: s.endMs,
+      })),
       cues: c.cues.map((cue) => ({
         lineId: cue.lineId,
         speaker: cue.speaker,
         text: cue.text,
+        takeNumber: cue.takeNumber,
         startMs: cue.startMs,
         durationMs: cue.durationMs,
         audioUrl: cue.audioAssetId ? assetUrl(assets.get(cue.audioAssetId)) : null,
+        waveform: cue.waveform,
       })),
     };
   });
 
   const unapproved = clips.filter((c) => !c.frameApproved).length;
+  const stale = clips.filter((c) => c.frameFreshness === "stale").length;
   return (
     <div>
       <PageHeader
         title={`Animatic — ${episode.title}`}
-        subtitle="Approved frames + planned durations + selected performances. Works before any video exists."
+        subtitle="Approved frames + planned durations + selected performances. Audio drives timing wherever a take is attached."
         actions={
           <>
             <Badge tone="info">Runtime {formatDuration(timeline.totalMs)}</Badge>
             <Badge tone={unapproved ? "warn" : "pass"}>{unapproved} unapproved</Badge>
+            {stale ? <Badge tone="warn">{stale} stale storyboard</Badge> : null}
           </>
         }
       />
@@ -59,7 +72,12 @@ export function AnimaticView({ data, episode }: { data: ProjectData; episode: Ep
             No shots in this episode yet.
           </div>
         ) : (
-          <AnimaticPlayer clips={clips} totalMs={timeline.totalMs} projectSlug={data.project.slug} />
+          <AnimaticPlayer
+            clips={clips}
+            scenes={timeline.scenes}
+            totalMs={timeline.totalMs}
+            projectSlug={data.project.slug}
+          />
         )}
       </div>
     </div>

@@ -84,6 +84,7 @@ export function emptyShot(
       forbiddenActions: [],
       generatorNotes: "",
     },
+    scriptSources: { actionBlockIds: [], dialogueLineIds: [] },
     generation: {
       modality: "video",
       provider: null,

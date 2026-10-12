@@ -1,0 +1,88 @@
+// Safety rails shared by every script that touches the dedicated Prism Studio database.
+//   - ref guard (the connection string must name the dedicated project)
+//   - visible target banner BEFORE any mutation
+//   - secret redaction for anything that gets printed (including exception messages)
+export const PRISM_STUDIO_REF = "lyqdxiyjperhniwhzsvg";
+
+/** Removes passwords/keys from any text. Safe to call on arbitrary strings and error messages. */
+export function redact(input, env = process.env) {
+  let text = String(input ?? "");
+  // postgres://user:password@host/db  →  postgres://user:***@host/db
+  text = text.replace(/(postgres(?:ql)?:\/\/[^:\s/@]+:)([^@\s]+)(@)/gi, "$1***$3");
+  // JWT-shaped tokens and sb_secret / sb_publishable style keys.
+  text = text.replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\b/g, "***jwt***");
+  text = text.replace(/\bsb_(?:secret|publishable)_[A-Za-z0-9_-]{8,}\b/g, "***key***");
+  // Literal secret values from the environment (password inside the DB URL, service key, ...).
+  for (const value of secretValues(env)) text = text.split(value).join("***");
+  return text;
+}
+
+function secretValues(env) {
+  const values = new Set();
+  const url = env.SUPABASE_DB_URL;
+  if (url) {
+    try {
+      const u = new URL(url);
+      if (u.password) {
+        values.add(u.password);
+        try {
+          values.add(decodeURIComponent(u.password));
+        } catch {
+          /* not percent-encoded */
+        }
+      }
+    } catch {
+      /* not a URL */
+    }
+  }
+  for (const key of ["SUPABASE_SERVICE_ROLE_KEY", "PRISM_STUDIO_TEST_PASSWORD", "PRISM_STUDIO_DEV_USER_PASSWORD"]) {
+    const v = env[key];
+    if (v && v.length >= 6) values.add(v);
+  }
+  return [...values].filter((v) => v.length >= 6);
+}
+
+/** Host + database name only. Never user, never password. */
+export function safeTarget(url) {
+  try {
+    const u = new URL(url);
+    return `${u.hostname}:${u.port || "5432"}${u.pathname}`;
+  } catch {
+    return "<unparseable connection string>";
+  }
+}
+
+export function assertProjectRef(url, what = "SUPABASE_DB_URL") {
+  if (!url) throw new Error(`${what} is not set`);
+  if (!url.includes(PRISM_STUDIO_REF))
+    throw new Error(`${what} does not target Prism Studio project ${PRISM_STUDIO_REF}; refusing.`);
+}
+
+/** Prints the target banner. Call before the first statement that can mutate anything. */
+export function printBanner({ mode, url, devOwner = null, log = console.log }) {
+  log("──────────────────────────────────────────────");
+  log(`Target Supabase project: ${PRISM_STUDIO_REF}`);
+  log(`Database host:           ${safeTarget(url)}`);
+  log(`Mode:                    ${mode}`);
+  log(`Dev owner:               ${devOwner ?? "N/A"}`);
+  log("──────────────────────────────────────────────");
+}
+
+/** Makes uncaught errors print redacted. */
+export function installRedactingHandlers() {
+  const show = (err) => {
+    const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.error(redact(text));
+    process.exitCode = 1;
+  };
+  process.on("uncaughtException", show);
+  process.on("unhandledRejection", show);
+}
+
+/** One call for scripts: guard + banner + redacting handlers. Returns the validated connection string. */
+export function startScript({ mode, devOwner = null, env = process.env }) {
+  installRedactingHandlers();
+  assertProjectRef(env.SUPABASE_DB_URL);
+  printBanner({ mode, url: env.SUPABASE_DB_URL, devOwner });
+  return env.SUPABASE_DB_URL;
+}

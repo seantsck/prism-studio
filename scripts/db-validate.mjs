@@ -1,10 +1,9 @@
 // Structural validation of the applied schema (read-only, catalog queries only).
 import pg from "pg";
 
-const REF = "lyqdxiyjperhniwhzsvg";
-const url = process.env.SUPABASE_DB_URL;
-if (!url?.includes(REF))
-  throw new Error("SUPABASE_DB_URL does not point at the Prism Studio project; refusing.");
+import { startScript } from "./lib/safety.mjs";
+
+const url = startScript({ mode: "validate (read-only)" });
 const client = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
 await client.connect();
 const rows = async (sql, p = []) => (await client.query(sql, p)).rows;
@@ -24,6 +23,7 @@ const expectedTables = [
   "scene_characters",
   "scene_props",
   "dialogue_lines",
+  "action_blocks",
   "performance_directions",
   "performance_takes",
   "shots",
@@ -31,6 +31,7 @@ const expectedTables = [
   "shot_props",
   "shot_dialogue_lines",
   "shot_reference_assets",
+  "shot_script_sources",
   "storyboard_frames",
   "generation_attempts",
   "continuity_checks",
@@ -57,14 +58,88 @@ const must = {
     "frames_one_approved_per_shot",
     "attempts_one_approved_per_shot",
     "identity_refs_slot_uniq",
+    "shot_reference_assets_order_uq",
+    "assets_object_uq",
+    "shot_script_sources_action_uq",
+    "shot_script_sources_dialogue_uq",
   ],
-  triggers: ["dialogue_locked_guard", "attempts_history_guard", "shots_updated", "projects_updated"],
+  triggers: [
+    "dialogue_locked_guard",
+    "attempts_history_guard",
+    "shots_updated",
+    "projects_updated",
+    "assets_updated",
+    "action_blocks_updated",
+  ],
 };
 const missingIdx = must.indexes.filter((i) => !idx.some((x) => x.indexname === i));
 const missingTrig = must.triggers.filter((t) => !trig.some((x) => x.tgname === t));
 const fn = await rows(
-  "select proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and proname in ('is_project_owner','set_updated_at','guard_locked_dialogue','guard_attempt_history')",
+  "select proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and proname in ('is_project_owner','set_updated_at','guard_locked_dialogue','guard_attempt_history','storage_object_project_id')",
 );
+
+// ── column-level + storage + migration-ledger checks ──
+const columns = await rows(
+  "select table_name, column_name from information_schema.columns where table_schema='public' and table_name in ('assets','shots','performance_takes','storyboard_frames','generation_attempts','dialogue_lines','shot_reference_assets')",
+);
+const hasCol = (t, c) => columns.some((x) => x.table_name === t && x.column_name === c);
+const columnProblems = [
+  ...[
+    ["assets", "object_path"],
+    ["assets", "bucket"],
+    ["assets", "storage_provider"],
+    ["assets", "purpose"],
+    ["assets", "byte_size"],
+    ["assets", "created_by"],
+    ["assets", "sample_rate"],
+    ["performance_takes", "archived"],
+    ["performance_takes", "duration_source"],
+    ["storyboard_frames", "approved_snapshot"],
+    ["generation_attempts", "package_fingerprint"],
+    ["dialogue_lines", "source_start_line"],
+    ["shot_reference_assets", "position"],
+  ]
+    .filter(([t, c]) => !hasCol(t, c))
+    .map(([t, c]) => `missing ${t}.${c}`),
+  ...[
+    ["shots", "prep_score"],
+    ["shots", "ready_to_generate"],
+    ["assets", "storage_path"],
+    ["assets", "uploaded_at"],
+  ]
+    .filter(([t, c]) => hasCol(t, c))
+    .map(([t, c]) => `stale column still present: ${t}.${c}`),
+];
+
+const bucket = (
+  await rows(
+    "select id, public, file_size_limit, allowed_mime_types from storage.buckets where id = 'prism-assets'",
+  )
+)[0];
+const storagePolicies = await rows(
+  "select policyname, cmd, roles from pg_policies where schemaname='storage' and tablename='objects' and policyname like 'prism_assets_%'",
+);
+const storageProblems = [];
+if (!bucket) storageProblems.push("bucket prism-assets missing");
+else {
+  if (bucket.public !== false) storageProblems.push("bucket prism-assets is PUBLIC");
+  if (!bucket.file_size_limit) storageProblems.push("bucket has no file size limit");
+  if (!bucket.allowed_mime_types?.length) storageProblems.push("bucket has no MIME allow-list");
+}
+for (const cmd of ["SELECT", "INSERT", "UPDATE", "DELETE"]) {
+  const p = storagePolicies.find((x) => x.cmd === cmd);
+  if (!p) storageProblems.push(`storage policy for ${cmd} missing`);
+  else if (!String(p.roles).includes("authenticated") || String(p.roles).includes("anon"))
+    storageProblems.push(`storage ${cmd} policy has unexpected roles ${p.roles}`);
+}
+const anyPublicWrite = await rows(
+  "select policyname from pg_policies where schemaname='storage' and tablename='objects' and (roles @> '{anon}' or roles @> '{public}') and (qual ilike '%prism-assets%' or with_check ilike '%prism-assets%')",
+);
+for (const p of anyPublicWrite) storageProblems.push(`anon/public policy touches prism-assets: ${p.policyname}`);
+
+const ledger = await rows("select name, checksum, checksum_baseline from public.prism_migrations order by name");
+const ledgerProblems = ledger.filter((m) => !m.checksum).map((m) => `no checksum for ${m.name}`);
+
 
 console.log({
   tables: names.length,
@@ -79,6 +154,14 @@ console.log({
   missingIdx,
   missingTrig,
   functions: fn.map((f) => f.proname).sort(),
+  columnProblems,
+  storage: bucket
+    ? { public: bucket.public, fileSizeLimit: bucket.file_size_limit, mimeTypes: bucket.allowed_mime_types?.length }
+    : null,
+  storagePolicies: storagePolicies.map((p) => p.cmd).sort(),
+  storageProblems,
+  migrations: ledger.length,
+  ledgerProblems,
 });
 const ok =
   !missing.length &&
@@ -87,7 +170,10 @@ const ok =
   !noPolicy.length &&
   !missingIdx.length &&
   !missingTrig.length &&
-  fn.length === 4;
+  !columnProblems.length &&
+  !storageProblems.length &&
+  !ledgerProblems.length &&
+  fn.length === 5;
 console.log(ok ? "STRUCTURE OK" : "STRUCTURE PROBLEMS");
 await client.end();
 process.exitCode = ok ? 0 : 1;

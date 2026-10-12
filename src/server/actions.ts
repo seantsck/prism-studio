@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { buildShotContext } from "@/domain/context";
+import { findAssetUsage } from "@/domain/asset-usage";
+import { approvalSnapshot } from "@/domain/fingerprint";
 import { assembleGenerationPackage } from "@/domain/generation-package";
 import { reorderShotsInScene } from "@/domain/ordering";
 import {
@@ -11,6 +13,8 @@ import {
   PACES,
   VOLUMES,
   TAKE_SOURCES,
+  ASSET_PURPOSES,
+  actionBlockSchema,
   assetSchema,
   bibleSchema,
   characterSchema,
@@ -36,8 +40,14 @@ import { emptyShot } from "@/domain/shot-defaults";
 import { SHOT_SECTION_SPECS, applySection } from "@/domain/shot-fields";
 import { validateLookLink } from "@/domain/looks";
 import { nextTakeNumber, selectTake as selectTakeDomain } from "@/domain/takes";
+import { analyzeAudio, AudioAnalysisError } from "@/lib/audio-analysis";
+import { readImageSize } from "@/lib/image-size";
+import { buildObjectPath } from "@/lib/storage-paths";
+import { checkUpload, type UploadKind } from "@/lib/upload-policy";
+import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { getRepo, requireProjectFresh } from "./repo";
-import { checksum, safeFileName, storage } from "./storage";
+import { checksum, getUploadStorage, storageForAsset } from "./storage";
+import type { ProjectData } from "@/domain/schemas";
 
 // ───────────────────────── helpers ─────────────────────────
 
@@ -61,40 +71,105 @@ const slugify = (s: string) =>
 
 async function load(form: FormData) {
   const data = await requireProjectFresh(str(form, "projectSlug"));
-  return { data, repo: getRepo(), slug: data.project.slug };
+  return { data, repo: await getRepo(), slug: data.project.slug };
 }
 
 function refresh(slug: string) {
   revalidatePath(`/projects/${slug}`, "layout");
 }
 
-async function storeFile(
-  projectId: string,
+interface IngestOptions {
+  allowed: readonly UploadKind[];
+  purpose: Asset["purpose"];
+  source: Asset["source"];
+  tags?: string[];
+  notes?: string;
+}
+
+interface Ingested {
+  asset: Asset;
+  bytes: Uint8Array;
+  audio: Awaited<ReturnType<typeof analyzeAudio>> | null;
+}
+
+/**
+ * Validates, inspects and stores one uploaded file, returning the (not yet persisted) Asset row.
+ * Everything the product relies on — type, MIME, size, dimensions, duration — is read server-side from
+ * the bytes; browser-supplied values are only hints.
+ */
+async function ingestUpload(
+  data: ProjectData,
+  userId: string,
   file: File,
-  type: Asset["type"],
-  source: Asset["source"],
-  extra: { durationMs?: number | null } = {},
-): Promise<Asset> {
-  const id = randomUUID();
+  opts: IngestOptions,
+): Promise<Ingested> {
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const storagePath = `${projectId}/${id}/${safeFileName(file.name)}`;
-  await storage.put(storagePath, bytes);
-  return assetSchema.parse({
+  const check = checkUpload({ name: file.name, size: file.size, claimedMime: file.type }, bytes, opts.allowed);
+  if (!check.ok || !check.kind || !check.mime) throw new UserFacingError(check.reason ?? "Unsupported file.");
+
+  let audio: Ingested["audio"] = null;
+  if (check.kind === "audio") {
+    try {
+      audio = await analyzeAudio(bytes);
+    } catch (err) {
+      if (err instanceof AudioAnalysisError) throw new UserFacingError(err.userMessage);
+      throw err;
+    }
+  }
+  const image = check.kind === "image" ? readImageSize(bytes) : null;
+
+  const id = randomUUID();
+  const objectPath = buildObjectPath(data.project.id, id, file.name);
+  const storage = await getUploadStorage();
+  await storage.put(objectPath, bytes, check.mime);
+
+  const stamp = now();
+  const asset = assetSchema.parse({
     id,
-    projectId,
-    type,
+    projectId: data.project.id,
+    createdBy: userId,
+    type: check.kind,
+    purpose: opts.purpose,
+    source: opts.source,
     name: file.name,
-    mime: file.type || null,
-    storagePath,
-    width: null,
-    height: null,
-    durationMs: extra.durationMs ?? null,
+    originalFilename: file.name,
+    storageProvider: storage.name,
+    bucket: storage.bucket,
+    objectPath,
+    mime: check.mime,
+    byteSize: bytes.length,
     checksum: checksum(bytes),
-    source,
-    tags: [],
-    metadata: {},
-    uploadedAt: now(),
+    width: image?.width ?? null,
+    height: image?.height ?? null,
+    durationMs: audio?.durationMs ?? null,
+    frameRate: null,
+    sampleRate: audio?.sampleRate ?? null,
+    channels: audio?.channels ?? null,
+    tags: opts.tags ?? [],
+    notes: opts.notes ?? "",
+    metadata: audio
+      ? {
+          codec: audio.codec,
+          container: audio.container,
+          bitrate: audio.bitrate,
+          durationFrom: audio.durationFrom,
+          waveformStatus: audio.waveformStatus,
+        }
+      : {},
+    createdAt: stamp,
+    updatedAt: stamp,
   });
+  return { asset, bytes, audio };
+}
+
+/** Best-effort cleanup when the database write that should reference an uploaded object fails. */
+async function discardUpload(asset: Asset): Promise<void> {
+  try {
+    const storage = await storageForAsset(asset);
+    if (storage && asset.objectPath) await storage.remove(asset.objectPath);
+  } catch {
+    /* orphaned object: harmless, never referenced */
+  }
 }
 
 const hasFile = (f: FormData, k: string): File | null => {
@@ -104,10 +179,10 @@ const hasFile = (f: FormData, k: string): File | null => {
 
 // ───────────────────────── Projects & bible ─────────────────────────
 
-export async function createProject(form: FormData) {
+async function createProject_impl(form: FormData) {
   const title = str(form, "title");
-  if (!title) throw new Error("Title is required");
-  const repo = getRepo();
+  if (!title) throw new UserFacingError("Title is required");
+  const repo = await getRepo();
   const existing = new Set((await repo.listProjects()).map((p) => p.slug));
   let slug = slugify(title);
   while (existing.has(slug)) slug = `${slug}-${randomUUID().slice(0, 4)}`;
@@ -154,7 +229,7 @@ export async function createProject(form: FormData) {
   redirect(`/projects/${slug}`);
 }
 
-export async function saveProject(form: FormData) {
+async function saveProject_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const project = projectSchema.parse({
     ...data.project,
@@ -171,7 +246,7 @@ export async function saveProject(form: FormData) {
   refresh(slug);
 }
 
-export async function saveBible(form: FormData) {
+async function saveBible_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const bible = bibleSchema.parse({
     ...data.bible,
@@ -197,7 +272,7 @@ export async function saveBible(form: FormData) {
 
 // ───────────────────────── Characters / looks / voices ─────────────────────────
 
-export async function saveCharacter(form: FormData) {
+async function saveCharacter_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const id = str(form, "id");
   const existing = data.characters.find((c) => c.id === id);
@@ -221,7 +296,7 @@ export async function saveCharacter(form: FormData) {
   if (!existing) redirect(`/projects/${slug}/characters/${character.id}`);
 }
 
-export async function saveLook(form: FormData) {
+async function saveLook_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const existing = data.looks.find((l) => l.id === str(form, "id"));
   const look = lookSchema.parse({
@@ -241,23 +316,23 @@ export async function saveLook(form: FormData) {
     referenceAssetIds: existing?.referenceAssetIds ?? [],
     locked: existing?.locked ?? false,
   });
-  if (existing?.locked) throw new Error("Look is locked; unlock it before editing.");
+  if (existing?.locked) throw new UserFacingError("Look is locked; unlock it before editing.");
   await repo.upsert(data.project.id, "looks", look);
   refresh(slug);
 }
 
-export async function setLookLocked(form: FormData) {
+async function setLookLocked_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const look = data.looks.find((l) => l.id === str(form, "id"));
-  if (!look) throw new Error("Look not found");
+  if (!look) throw new UserFacingError("Look not found");
   await repo.upsert(data.project.id, "looks", { ...look, locked: str(form, "locked") === "true" });
   refresh(slug);
 }
 
-export async function saveVoiceProfile(form: FormData) {
+async function saveVoiceProfile_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const existing = data.voiceProfiles.find((v) => v.id === str(form, "id"));
-  if (existing?.locked) throw new Error("Voice profile is locked.");
+  if (existing?.locked) throw new UserFacingError("Voice profile is locked.");
   const voice = voiceProfileSchema.parse({
     id: existing?.id ?? randomUUID(),
     projectId: data.project.id,
@@ -281,21 +356,31 @@ export async function saveVoiceProfile(form: FormData) {
   refresh(slug);
 }
 
-export async function setVoiceLocked(form: FormData) {
+async function setVoiceLocked_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const v = data.voiceProfiles.find((x) => x.id === str(form, "id"));
-  if (!v) throw new Error("Voice profile not found");
+  if (!v) throw new UserFacingError("Voice profile not found");
   await repo.upsert(data.project.id, "voiceProfiles", { ...v, locked: str(form, "locked") === "true" });
   refresh(slug);
 }
 
-export async function uploadIdentityRef(form: FormData) {
+async function uploadIdentityRef_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const file = hasFile(form, "file");
-  if (!file) throw new Error("Choose an image");
+  if (!file) throw new UserFacingError("Choose an image to upload.");
   const slot = str(form, "slot") as (typeof IDENTITY_SLOTS)[number];
-  const asset = await storeFile(data.project.id, file, "reference", "upload");
-  await repo.upsert(data.project.id, "assets", { ...asset, tags: ["identity"] });
+  const { asset } = await ingestUpload(data, repo.currentUserId(), file, {
+    allowed: ["image"],
+    purpose: "identity_ref",
+    source: "upload",
+    tags: ["identity"],
+  });
+  try {
+    await repo.upsert(data.project.id, "assets", asset);
+  } catch (err) {
+    await discardUpload(asset);
+    throw err;
+  }
   const characterId = str(form, "characterId");
   const existing = data.identityRefs.find(
     (r) => r.characterId === characterId && r.slot === slot && slot !== "additional",
@@ -312,7 +397,7 @@ export async function uploadIdentityRef(form: FormData) {
   refresh(slug);
 }
 
-export async function setIdentityLocked(form: FormData) {
+async function setIdentityLocked_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const characterId = str(form, "characterId");
   const locked = str(form, "locked") === "true";
@@ -334,10 +419,10 @@ const namedList = (f: FormData, k: string, prefix: string) =>
     };
   });
 
-export async function saveLocation(form: FormData) {
+async function saveLocation_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const existing = data.locations.find((l) => l.id === str(form, "id"));
-  if (existing?.locked) throw new Error("Location is locked; unlock it before editing.");
+  if (existing?.locked) throw new UserFacingError("Location is locked; unlock it before editing.");
   const location = locationSchema.parse({
     id: existing?.id ?? randomUUID(),
     projectId: data.project.id,
@@ -356,17 +441,17 @@ export async function saveLocation(form: FormData) {
   refresh(slug);
 }
 
-export async function setLocationLocked(form: FormData) {
+async function setLocationLocked_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const l = data.locations.find((x) => x.id === str(form, "id"));
-  if (!l) throw new Error("Location not found");
+  if (!l) throw new UserFacingError("Location not found");
   await repo.upsert(data.project.id, "locations", { ...l, locked: str(form, "locked") === "true" });
   refresh(slug);
 }
 
 // ───────────────────────── Episodes / script / scenes ─────────────────────────
 
-export async function createEpisode(form: FormData) {
+async function createEpisode_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const number = data.episodes.reduce((m, e) => Math.max(m, e.number), 0) + 1;
   const episode = episodeSchema.parse({
@@ -387,10 +472,10 @@ export async function createEpisode(form: FormData) {
 }
 
 /** Parse the script and reconcile it with stored scenes/lines, preserving IDs and locked dialogue. */
-export async function saveScript(form: FormData) {
+async function saveScript_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const episode = data.episodes.find((e) => e.id === str(form, "episodeId"));
-  if (!episode) throw new Error("Episode not found");
+  if (!episode) throw new UserFacingError("Episode not found");
   const text = String(form.get("scriptText") ?? "");
   const parsed = parseScreenplay(text);
   const epScenes = data.scenes.filter((s) => s.episodeId === episode.id);
@@ -399,7 +484,8 @@ export async function saveScript(form: FormData) {
     l.characterId
       ? (data.characters.find((c) => c.id === l.characterId)?.name.toUpperCase() ?? l.speakerLabel)
       : l.speakerLabel;
-  const sync = syncScript(parsed, epScenes, epLines, nameOf);
+  const epActions = data.actionBlocks.filter((a) => a.episodeId === episode.id);
+  const sync = syncScript(parsed, epScenes, epLines, nameOf, epActions);
 
   const characterByCue = new Map(data.characters.map((c) => [c.name.toUpperCase(), c.id]));
   const locationByName = (name: string) =>
@@ -448,9 +534,44 @@ export async function saveScript(form: FormData) {
         subtext: prevLine?.subtext ?? "",
         locked: prevLine?.locked ?? false,
         order: lineOrder++,
+        sourceStartLine: l.parsed.line,
+        sourceEndLine: l.parsed.endLine,
       });
       await repo.upsert(data.project.id, "dialogueLines", line);
     }
+
+    // Action paragraphs get stable ids too, so shots can reference them and coverage can be computed.
+    for (const [order, a] of s.actions.entries()) {
+      await repo.upsert(
+        data.project.id,
+        "actionBlocks",
+        actionBlockSchema.parse({
+          id: a.existingId ?? randomUUID(),
+          projectId: data.project.id,
+          episodeId: episode.id,
+          sceneId: scene.id,
+          text: a.parsed.text,
+          order,
+          startLine: a.parsed.line,
+          endLine: a.parsed.endLine,
+        }),
+      );
+    }
+  }
+
+  // Blocks that vanished from the script: unlink them from shots first, so no shot points at nothing.
+  for (const id of sync.removedActionIds) {
+    for (const shot of data.shots.filter((x) => x.scriptSources.actionBlockIds.includes(id))) {
+      await repo.upsert(data.project.id, "shots", {
+        ...shot,
+        scriptSources: {
+          ...shot.scriptSources,
+          actionBlockIds: shot.scriptSources.actionBlockIds.filter((x) => x !== id),
+        },
+        updatedAt: now(),
+      });
+    }
+    await repo.remove(data.project.id, "actionBlocks", id);
   }
 
   // Remove scenes/lines no longer in the script only when nothing downstream depends on them.
@@ -467,10 +588,10 @@ export async function saveScript(form: FormData) {
   refresh(slug);
 }
 
-export async function saveScene(form: FormData) {
+async function saveScene_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const scene = data.scenes.find((s) => s.id === str(form, "id"));
-  if (!scene) throw new Error("Scene not found");
+  if (!scene) throw new UserFacingError("Scene not found");
   const next = sceneSchema.parse({
     ...scene,
     summary: str(form, "summary"),
@@ -489,10 +610,10 @@ export async function saveScene(form: FormData) {
 
 // ───────────────────────── Shots ─────────────────────────
 
-export async function createShot(form: FormData) {
+async function createShot_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const scene = data.scenes.find((s) => s.id === str(form, "sceneId"));
-  if (!scene) throw new Error("Scene not found");
+  if (!scene) throw new UserFacingError("Scene not found");
   const siblings = data.shots.filter((s) => s.sceneId === scene.id);
   const letter = String.fromCharCode(65 + siblings.length);
   const base = emptyShot({
@@ -518,24 +639,24 @@ export async function createShot(form: FormData) {
 async function loadShot(form: FormData) {
   const base = await load(form);
   const shot = base.data.shots.find((s) => s.id === str(form, "shotId"));
-  if (!shot) throw new Error("Shot not found");
+  if (!shot) throw new UserFacingError("Shot not found");
   return { ...base, shot };
 }
 
 async function saveShot(projectId: string, shot: Shot, slug: string) {
   const parsed = shotSchema.parse({ ...shot, updatedAt: now() });
-  await getRepo().upsert(projectId, "shots", parsed);
+  await (await getRepo()).upsert(projectId, "shots", parsed);
   refresh(slug);
 }
 
-export async function saveShotSection(form: FormData) {
+async function saveShotSection_impl(form: FormData) {
   const { data, shot, slug } = await loadShot(form);
   const spec = SHOT_SECTION_SPECS.find((s) => s.key === str(form, "section"));
-  if (!spec) throw new Error("Unknown section");
+  if (!spec) throw new UserFacingError("Unknown section");
   await saveShot(data.project.id, applySection(shot, spec, form), slug);
 }
 
-export async function saveShotCharacters(form: FormData) {
+async function saveShotCharacters_impl(form: FormData) {
   const { data, shot, slug } = await loadShot(form);
   const ids = form.getAll("characterId").map(String).filter(Boolean);
   const characters = ids.map((characterId) => {
@@ -564,40 +685,57 @@ export async function saveShotCharacters(form: FormData) {
   );
 }
 
-export async function saveShotDialogue(form: FormData) {
+async function saveShotDialogue_impl(form: FormData) {
   const { data, shot, slug } = await loadShot(form);
   const ids = form.getAll("lineId").map(String);
   await saveShot(data.project.id, { ...shot, audio: { ...shot.audio, dialogueLineIds: ids } }, slug);
 }
 
-export async function saveShotBeats(form: FormData) {
+async function saveShotBeats_impl(form: FormData) {
   const { data, shot, slug } = await loadShot(form);
-  const beats = lines(form, "beats").map((l, order) => {
-    const [at, ...rest] = l.split("|");
-    const hasTime = rest.length > 0 && !Number.isNaN(Number(at));
-    return {
-      id: randomUUID(),
-      order,
-      atMs: hasTime ? Math.round(Number(at) * 1000) : 0,
-      description: (hasTime ? rest.join("|") : l).trim(),
-    };
-  });
-  const marks = lines(form, "marks").map((l) => {
-    const [label, x, y, notes] = l.split("|").map((p) => p.trim());
-    return { label: label ?? "", x: Number(x) || 0, y: Number(y) || 0, notes: notes ?? "" };
-  });
-  await saveShot(
-    data.project.id,
-    { ...shot, action: { ...shot.action, beats }, spatial: { ...shot.spatial, marks } },
-    slug,
-  );
+  // The beats form (Action timing) and the marks form (Blocking) are separate; only touch what was sent.
+  let action = shot.action;
+  let spatial = shot.spatial;
+  if (form.has("beats")) {
+    const previous = [...shot.action.beats].sort((a, b) => a.order - b.order);
+    const beats = lines(form, "beats").map((l, order) => {
+      const [at, ...rest] = l.split("|");
+      const hasTime = rest.length > 0 && !Number.isNaN(Number(at));
+      return {
+        // Keep ids stable for unchanged positions.
+        id: previous[order]?.id ?? randomUUID(),
+        order,
+        atMs: hasTime ? Math.round(Number(at) * 1000) : 0,
+        description: (hasTime ? rest.join("|") : l).trim(),
+      };
+    });
+    action = { ...action, beats };
+  }
+  if (form.has("marks")) {
+    const marks = lines(form, "marks").map((l) => {
+      const [label, x, y, notes] = l.split("|").map((p) => p.trim());
+      return { label: label ?? "", x: Number(x) || 0, y: Number(y) || 0, notes: notes ?? "" };
+    });
+    spatial = { ...spatial, marks };
+  }
+  await saveShot(data.project.id, { ...shot, action, spatial }, slug);
 }
 
-export async function setShotApproval(form: FormData) {
+async function saveShotProps_impl(form: FormData) {
+  const { data, shot, slug } = await loadShot(form);
+  const known = new Set(data.props.map((p) => p.id));
+  const propIds = form
+    .getAll("propId")
+    .map(String)
+    .filter((id) => known.has(id));
+  await saveShot(data.project.id, { ...shot, propIds }, slug);
+}
+
+async function setShotApproval_impl(form: FormData) {
   const { data, shot, slug } = await loadShot(form);
   const gate = str(form, "gate") as keyof Shot["approval"];
   if (!["storyboardApproved", "performanceApproved", "continuityApproved"].includes(gate))
-    throw new Error("Unknown gate");
+    throw new UserFacingError("Unknown gate");
   await saveShot(
     data.project.id,
     { ...shot, approval: { ...shot.approval, [gate]: str(form, "value") === "true" } },
@@ -605,7 +743,7 @@ export async function setShotApproval(form: FormData) {
   );
 }
 
-export async function setShotDuration(form: FormData) {
+async function setShotDuration_impl(form: FormData) {
   const { data, shot, slug } = await loadShot(form);
   const mode =
     str(form, "durationMode") === "derived_from_performance" ? "derived_from_performance" : "manual";
@@ -622,12 +760,12 @@ export async function setShotDuration(form: FormData) {
   );
 }
 
-export async function reorderShots(sceneId: string, orderedIds: string[], projectSlug: string) {
+async function reorderShots_impl(sceneId: string, orderedIds: string[], projectSlug: string) {
   const data = await requireProjectFresh(projectSlug);
   const sceneShots = data.shots.filter((s) => s.sceneId === sceneId);
   const byId = new Map(sceneShots.map((s) => [s.id, s]));
   if (orderedIds.length !== sceneShots.length || orderedIds.some((id) => !byId.has(id)))
-    throw new Error("Invalid order");
+    throw new UserFacingError("Invalid order");
   // Express the requested order as a sequence of rule-checked single moves.
   let current = [...sceneShots].sort((a, b) => a.order - b.order);
   orderedIds.forEach((id, target) => {
@@ -635,7 +773,7 @@ export async function reorderShots(sceneId: string, orderedIds: string[], projec
       current = reorderShotsInScene(current, id, target);
     }
   });
-  await getRepo().upsertMany(
+  await (await getRepo()).upsertMany(
     data.project.id,
     "shots",
     current.map((s) => ({ ...s, updatedAt: now() })),
@@ -645,13 +783,13 @@ export async function reorderShots(sceneId: string, orderedIds: string[], projec
 
 // ───────────────────────── Performance ─────────────────────────
 
-export async function saveDialogueLine(form: FormData) {
+async function saveDialogueLine_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const line = data.dialogueLines.find((l) => l.id === str(form, "lineId"));
-  if (!line) throw new Error("Line not found");
+  if (!line) throw new UserFacingError("Line not found");
   const text = str(form, "originalText");
   if (line.locked && text !== line.originalText)
-    throw new Error("Dialogue is locked; unlock it to change the text.");
+    throw new UserFacingError("Dialogue is locked; unlock it to change the text.");
   const next = dialogueLineSchema.parse({
     ...line,
     originalText: line.locked ? line.originalText : text,
@@ -664,15 +802,15 @@ export async function saveDialogueLine(form: FormData) {
   refresh(slug);
 }
 
-export async function setLineLocked(form: FormData) {
+async function setLineLocked_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const line = data.dialogueLines.find((l) => l.id === str(form, "lineId"));
-  if (!line) throw new Error("Line not found");
+  if (!line) throw new UserFacingError("Line not found");
   await repo.upsert(data.project.id, "dialogueLines", { ...line, locked: str(form, "locked") === "true" });
   refresh(slug);
 }
 
-export async function saveDirection(form: FormData) {
+async function saveDirection_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const lineId = str(form, "lineId");
   const existing = data.directions.find((d) => d.dialogueLineId === lineId);
@@ -696,27 +834,42 @@ export async function saveDirection(form: FormData) {
   refresh(slug);
 }
 
-export async function addTake(form: FormData) {
+async function addTake_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const line = data.dialogueLines.find((l) => l.id === str(form, "lineId"));
-  if (!line) throw new Error("Line not found");
-  const durationMs = Math.round(Number(str(form, "durationSec")) * 1000);
-  if (!durationMs || durationMs <= 0) throw new Error("Duration is required");
+  if (!line) throw new UserFacingError("That dialogue line no longer exists.");
   const sourceRaw = str(form, "sourceType");
   const sourceType = (TAKE_SOURCES as readonly string[]).includes(sourceRaw) ? sourceRaw : "temp_voice";
 
-  let audioAssetId: string | null = null;
   const file = hasFile(form, "file");
+  const manualMs = Math.round(Number(str(form, "durationSec")) * 1000);
+  // The browser's measured length is a hint only (shown while uploading); the file's own metadata wins.
+  const hintMs = Math.round(Number(str(form, "durationHintSec")) * 1000) || null;
+
+  let audioAssetId: string | null = null;
+  let durationMs: number;
+  let durationSource: "server_metadata" | "manual" = "manual";
+  let waveform: ReturnType<typeof performanceTakeSchema.parse>["waveform"] = null;
+  let ingested: Awaited<ReturnType<typeof ingestUpload>> | null = null;
+
   if (file) {
-    const asset = await storeFile(
-      data.project.id,
-      file,
-      "audio",
-      sourceType === "human_recording" ? "recording" : "upload",
-      { durationMs },
-    );
-    await repo.upsert(data.project.id, "assets", asset);
-    audioAssetId = asset.id;
+    ingested = await ingestUpload(data, repo.currentUserId(), file, {
+      allowed: ["audio"],
+      purpose: "performance_audio",
+      source: sourceType === "human_recording" ? "recording" : "upload",
+      tags: ["performance"],
+    });
+    durationMs = ingested.audio!.durationMs;
+    durationSource = "server_metadata";
+    waveform = ingested.audio!.waveform;
+    ingested.asset.metadata = { ...ingested.asset.metadata, browserHintMs: hintMs };
+    audioAssetId = ingested.asset.id;
+  } else {
+    if (!manualMs || manualMs <= 0)
+      throw new UserFacingError("Attach an audio file, or enter the take duration.", {
+        durationSec: "Duration is required without a file",
+      });
+    durationMs = manualMs;
   }
 
   const existing = data.takes.filter((t) => t.dialogueLineId === line.id);
@@ -729,23 +882,47 @@ export async function addTake(form: FormData) {
     sourceType,
     audioAssetId,
     durationMs,
-    waveform: null,
+    durationSource,
+    waveform,
     transcript: str(form, "transcript"),
     takeNumber: nextTakeNumber(existing, line.id),
     notes: str(form, "notes"),
     rating: Math.max(0, Math.min(5, int(form, "rating", 0))),
     // First take becomes canonical by default so downstream timing has something to use.
-    selected: existing.length === 0,
+    selected: existing.filter((t) => !t.archived).length === 0,
+    archived: false,
     createdAt: now(),
   });
-  await repo.upsert(data.project.id, "takes", take);
+  try {
+    if (ingested) await repo.upsert(data.project.id, "assets", ingested.asset);
+    await repo.upsert(data.project.id, "takes", take);
+  } catch (err) {
+    if (ingested) await discardUpload(ingested.asset);
+    throw err;
+  }
   refresh(slug);
 }
 
-export async function selectTake(form: FormData) {
+/** Archive keeps the take (and its audio) for history but removes it from selection. Never deletes. */
+async function setTakeArchived_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
-  const lineId = data.takes.find((t) => t.id === str(form, "takeId"))?.dialogueLineId;
-  if (!lineId) throw new Error("Take not found");
+  const take = data.takes.find((t) => t.id === str(form, "takeId"));
+  if (!take) throw new UserFacingError("That take no longer exists.");
+  const archived = str(form, "archived") === "true";
+  await repo.upsert(data.project.id, "takes", {
+    ...take,
+    archived,
+    selected: archived ? false : take.selected,
+  });
+  refresh(slug);
+}
+
+async function selectTake_impl(form: FormData) {
+  const { data, repo, slug } = await load(form);
+  const target = data.takes.find((t) => t.id === str(form, "takeId"));
+  if (!target) throw new UserFacingError("That take no longer exists.");
+  if (target.archived) throw new UserFacingError("Restore this take before selecting it.");
+  const lineId = target.dialogueLineId;
   const updated = selectTakeDomain(data.takes, str(form, "takeId")).filter(
     (t) => t.dialogueLineId === lineId,
   );
@@ -753,10 +930,10 @@ export async function selectTake(form: FormData) {
   refresh(slug);
 }
 
-export async function rateTake(form: FormData) {
+async function rateTake_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const take = data.takes.find((t) => t.id === str(form, "takeId"));
-  if (!take) throw new Error("Take not found");
+  if (!take) throw new UserFacingError("Take not found");
   await repo.upsert(data.project.id, "takes", {
     ...take,
     rating: Math.max(0, Math.min(5, int(form, "rating", 0))),
@@ -767,57 +944,83 @@ export async function rateTake(form: FormData) {
 
 // ───────────────────────── Storyboard ─────────────────────────
 
-export async function addStoryboardFrame(form: FormData) {
+async function addStoryboardFrame_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const shotId = str(form, "shotId");
-  if (!data.shots.some((s) => s.id === shotId)) throw new Error("Shot not found");
+  if (!data.shots.some((s) => s.id === shotId)) throw new UserFacingError("Shot not found");
   const file = hasFile(form, "file");
   let assetId: string | null = null;
   const sourceRaw = str(form, "source");
   const source =
     (["upload", "generated", "3d_preview", "sketch"] as const).find((s) => s === sourceRaw) ?? "upload";
+  let uploaded: Asset | null = null;
   if (file) {
-    const asset = await storeFile(
-      data.project.id,
-      file,
-      "image",
-      source === "upload" ? "upload" : source === "sketch" ? "sketch" : source,
-    );
-    await repo.upsert(data.project.id, "assets", { ...asset, tags: ["storyboard"] });
+    const { asset } = await ingestUpload(data, repo.currentUserId(), file, {
+      allowed: ["image"],
+      purpose: "storyboard",
+      source: source === "upload" ? "storyboard" : source === "sketch" ? "sketch" : source,
+      tags: ["storyboard"],
+    });
+    uploaded = asset;
     assetId = asset.id;
   }
   const version =
     data.frames.filter((f) => f.shotId === shotId).reduce((m, f) => Math.max(m, f.version), 0) + 1;
-  await repo.upsert(
-    data.project.id,
-    "frames",
-    storyboardFrameSchema.parse({
-      id: randomUUID(),
-      projectId: data.project.id,
-      shotId,
-      assetId,
-      version,
-      source,
-      notes: str(form, "notes"),
-      approved: false,
-      createdAt: now(),
-    }),
-  );
+  try {
+    if (uploaded) await repo.upsert(data.project.id, "assets", uploaded);
+    await repo.upsert(
+      data.project.id,
+      "frames",
+      storyboardFrameSchema.parse({
+        id: randomUUID(),
+        projectId: data.project.id,
+        shotId,
+        assetId,
+        version,
+        source,
+        notes: str(form, "notes"),
+        approved: false,
+        approvedFingerprint: null,
+        approvedSnapshot: null,
+        approvedAt: null,
+        createdAt: now(),
+      }),
+    );
+  } catch (err) {
+    if (uploaded) await discardUpload(uploaded);
+    throw err;
+  }
   refresh(slug);
 }
 
-export async function setFrameApproved(form: FormData) {
+async function setFrameApproved_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const frame = data.frames.find((f) => f.id === str(form, "frameId"));
-  if (!frame) throw new Error("Frame not found");
+  if (!frame) throw new UserFacingError("Frame not found");
   const approve = str(form, "approved") === "true";
   const siblings = data.frames.filter((f) => f.shotId === frame.shotId);
   // At most one approved frame per shot.
   // Write the target last so the "one approved frame per shot" index is never violated mid-way.
   const ordered = [...siblings.filter((f) => f.id !== frame.id), frame];
+  // Record WHICH shot state this approval is for, so later edits can be flagged as "stale storyboard".
+  const approved_ = approve ? approvalSnapshot(buildShotContext(data, frame.shotId)) : null;
   for (const f of ordered) {
     const approved = f.id === frame.id ? approve : approve ? false : f.approved;
-    if (approved !== f.approved) await repo.upsert(data.project.id, "frames", { ...f, approved });
+    if (approved === f.approved && f.id !== frame.id) continue;
+    await repo.upsert(data.project.id, "frames", {
+      ...f,
+      approved,
+      approvedFingerprint: f.id === frame.id ? (approved_?.fingerprint ?? null) : approved ? f.approvedFingerprint : null,
+      approvedSnapshot:
+        f.id === frame.id
+          ? approved_
+            ? { parts: approved_.snapshot.parts as Record<string, string>, durationMs: approved_.snapshot.durationMs }
+            : null
+          : approved
+            ? f.approvedSnapshot
+            : null,
+      approvedAt: f.id === frame.id ? (approve ? now() : null) : approved ? f.approvedAt : null,
+    });
   }
   const shot = data.shots.find((s) => s.id === frame.shotId);
   if (shot) {
@@ -833,7 +1036,7 @@ export async function setFrameApproved(form: FormData) {
 // ───────────────────────── Generation & continuity ─────────────────────────
 
 /** Records an attempt with a frozen package snapshot. Providers are not integrated yet; attempts are logged manually. */
-export async function logAttempt(form: FormData) {
+async function logAttempt_impl(form: FormData) {
   const { data, shot, repo, slug } = await loadShot(form);
   const pkg = assembleGenerationPackage(buildShotContext(data, shot.id));
   const existing = data.attempts.filter((a) => a.shotId === shot.id);
@@ -851,6 +1054,7 @@ export async function logAttempt(form: FormData) {
     prompt: pkg.prompt.positive,
     negativePrompt: pkg.prompt.negative,
     packageSnapshot: JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>,
+    packageFingerprint: pkg.provenance.fingerprint,
     modelSettings: {},
     inputAssetIds: [],
     outputAssetId: null,
@@ -871,10 +1075,10 @@ export async function logAttempt(form: FormData) {
 }
 
 /** Review fields only; prompt, package snapshot and settings of an attempt are immutable. */
-export async function reviewAttempt(form: FormData) {
+async function reviewAttempt_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const attempt = data.attempts.find((a) => a.id === str(form, "attemptId"));
-  if (!attempt) throw new Error("Attempt not found");
+  if (!attempt) throw new UserFacingError("Attempt not found");
   const status = str(form, "status") || attempt.status;
   const approved = status === "approved";
   if (approved) {
@@ -898,7 +1102,7 @@ export async function reviewAttempt(form: FormData) {
   refresh(slug);
 }
 
-export async function saveContinuityCheck(form: FormData) {
+async function saveContinuityCheck_impl(form: FormData) {
   const { data, shot, repo, slug } = await loadShot(form);
   const scores: Record<string, number | null> = {};
   for (const d of CONTINUITY_DIMENSIONS) {
@@ -929,4 +1133,327 @@ export async function saveContinuityCheck(form: FormData) {
     }),
   );
   refresh(slug);
+}
+
+// ───────── Assets ─────────
+
+/** Library upload: any supported file with an explicit purpose. */
+async function uploadAsset_impl(form: FormData) {
+  const { data, repo, slug } = await load(form);
+  const file = hasFile(form, "file");
+  if (!file) throw new UserFacingError("Choose a file to upload.");
+  const purposeRaw = str(form, "purpose");
+  const purpose = (ASSET_PURPOSES as readonly string[]).includes(purposeRaw)
+    ? (purposeRaw as Asset["purpose"])
+    : "other";
+  const { asset } = await ingestUpload(data, repo.currentUserId(), file, {
+    allowed: ["image", "audio", "video", "document"],
+    purpose,
+    source: "upload",
+    tags: lines(form, "tags").flatMap((l) => l.split(",")).map((t) => t.trim()).filter(Boolean),
+    notes: str(form, "notes"),
+  });
+  try {
+    await repo.upsert(data.project.id, "assets", asset);
+  } catch (err) {
+    await discardUpload(asset);
+    throw err;
+  }
+  refresh(slug);
+}
+
+async function updateAsset_impl(form: FormData) {
+  const { data, repo, slug } = await load(form);
+  const asset = data.assets.find((a) => a.id === str(form, "assetId"));
+  if (!asset) throw new UserFacingError("That asset no longer exists.");
+  const purposeRaw = str(form, "purpose");
+  await repo.upsert(
+    data.project.id,
+    "assets",
+    assetSchema.parse({
+      ...asset,
+      name: str(form, "name") || asset.name,
+      purpose: (ASSET_PURPOSES as readonly string[]).includes(purposeRaw) ? purposeRaw : asset.purpose,
+      notes: str(form, "notes"),
+      tags: str(form, "tags")
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean),
+      updatedAt: now(),
+    }),
+  );
+  refresh(slug);
+}
+
+/** Refuses when anything references the asset; nothing is ever silently orphaned. */
+async function deleteAsset_impl(form: FormData) {
+  const { data, repo, slug } = await load(form);
+  const asset = data.assets.find((a) => a.id === str(form, "assetId"));
+  if (!asset) throw new UserFacingError("That asset no longer exists.");
+  const usage = findAssetUsage(data, asset.id);
+  if (usage.inUse) {
+    throw new UserFacingError(
+      `This asset is in use and can't be deleted: ${usage.direct
+        .slice(0, 3)
+        .map((u) => u.label)
+        .join("; ")}${usage.direct.length > 3 ? ` and ${usage.direct.length - 3} more` : ""}.`,
+    );
+  }
+  await repo.remove(data.project.id, "assets", asset.id);
+  await discardUpload(asset);
+  refresh(slug);
+}
+
+// ───────── Script → shot traceability ─────────
+
+/** Link or unlink one script element (action block / dialogue line) to a shot. */
+async function setShotSource_impl(form: FormData) {
+  const { data, shot, slug } = await loadShot(form);
+  const kind = str(form, "kind");
+  const sourceId = str(form, "sourceId");
+  const link = str(form, "link") !== "false";
+  if (kind !== "action" && kind !== "dialogue") throw new UserFacingError("Unknown source type.");
+  const exists =
+    kind === "action"
+      ? data.actionBlocks.some((b) => b.id === sourceId)
+      : data.dialogueLines.some((l) => l.id === sourceId);
+  if (!exists) throw new UserFacingError("That script element no longer exists.");
+  const key = kind === "action" ? "actionBlockIds" : "dialogueLineIds";
+  const current = shot.scriptSources[key];
+  const next = link ? [...new Set([...current, sourceId])] : current.filter((x) => x !== sourceId);
+  await saveShot(
+    data.project.id,
+    { ...shot, scriptSources: { ...shot.scriptSources, [key]: next } },
+    slug,
+  );
+}
+
+/** Manual shot creation from selected script content. (AI may only propose such selections, never apply them.) */
+async function createShotFromSources_impl(form: FormData) {
+  const { data, repo, slug } = await load(form);
+  const scene = data.scenes.find((s) => s.id === str(form, "sceneId"));
+  if (!scene) throw new UserFacingError("Choose a scene.");
+  const actionBlockIds = form
+    .getAll("actionId")
+    .map(String)
+    .filter((id) => data.actionBlocks.some((b) => b.id === id && b.sceneId === scene.id));
+  const dialogueLineIds = form
+    .getAll("lineId")
+    .map(String)
+    .filter((id) => data.dialogueLines.some((l) => l.id === id && l.sceneId === scene.id));
+  if (actionBlockIds.length + dialogueLineIds.length === 0)
+    throw new UserFacingError("Select at least one action or dialogue line from the script.");
+
+  // Linking to an existing shot instead of creating one.
+  const targetShotId = str(form, "targetShotId");
+  if (targetShotId) {
+    const target = data.shots.find((s) => s.id === targetShotId && s.sceneId === scene.id);
+    if (!target) throw new UserFacingError("That shot is not in this scene.");
+    await repo.upsert(data.project.id, "shots", {
+      ...target,
+      scriptSources: {
+        actionBlockIds: [...new Set([...target.scriptSources.actionBlockIds, ...actionBlockIds])],
+        dialogueLineIds: [...new Set([...target.scriptSources.dialogueLineIds, ...dialogueLineIds])],
+      },
+      updatedAt: now(),
+    });
+    refresh(slug);
+    return;
+  }
+
+  const siblings = data.shots.filter((s) => s.sceneId === scene.id);
+  const letter = String.fromCharCode(65 + siblings.length);
+  const firstText =
+    data.actionBlocks.find((b) => b.id === actionBlockIds[0])?.text ??
+    data.dialogueLines.find((l) => l.id === dialogueLineIds[0])?.originalText ??
+    "";
+  const base = emptyShot({
+    id: randomUUID(),
+    projectId: data.project.id,
+    episodeId: scene.episodeId,
+    sceneId: scene.id,
+    shotCode: str(form, "shotCode") || `${scene.sceneNumber}${letter}`,
+    title: str(form, "title") || (firstText.slice(0, 48) || "Untitled shot"),
+    order: siblings.length,
+  });
+  const shot = shotSchema.parse({
+    ...base,
+    composition: { ...base.composition, aspectRatio: data.bible.aspectRatio },
+    spatial: { ...base.spatial, locationId: scene.locationId },
+    audio: { ...base.audio, dialogueLineIds },
+    scriptSources: { actionBlockIds, dialogueLineIds },
+  });
+  await repo.upsert(data.project.id, "shots", shot);
+  refresh(slug);
+  const episode = data.episodes.find((e) => e.id === scene.episodeId);
+  redirect(`/projects/${slug}/episodes/${episode?.slug}/shots/${shot.id}`);
+}
+
+// ───────── public server actions (every one returns an inline-renderable result) ─────────
+export async function createProject(form: FormData): Promise<ActionResult> {
+  return runAction(() => createProject_impl(form), { name: "createProject" });
+}
+
+export async function saveProject(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveProject_impl(form), { name: "saveProject" });
+}
+
+export async function saveBible(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveBible_impl(form), { name: "saveBible" });
+}
+
+export async function saveCharacter(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveCharacter_impl(form), { name: "saveCharacter" });
+}
+
+export async function saveLook(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveLook_impl(form), { name: "saveLook" });
+}
+
+export async function setLookLocked(form: FormData): Promise<ActionResult> {
+  return runAction(() => setLookLocked_impl(form), { name: "setLookLocked" });
+}
+
+export async function saveVoiceProfile(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveVoiceProfile_impl(form), { name: "saveVoiceProfile" });
+}
+
+export async function setVoiceLocked(form: FormData): Promise<ActionResult> {
+  return runAction(() => setVoiceLocked_impl(form), { name: "setVoiceLocked" });
+}
+
+export async function uploadIdentityRef(form: FormData): Promise<ActionResult> {
+  return runAction(() => uploadIdentityRef_impl(form), { name: "uploadIdentityRef" });
+}
+
+export async function setIdentityLocked(form: FormData): Promise<ActionResult> {
+  return runAction(() => setIdentityLocked_impl(form), { name: "setIdentityLocked" });
+}
+
+export async function saveLocation(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveLocation_impl(form), { name: "saveLocation" });
+}
+
+export async function setLocationLocked(form: FormData): Promise<ActionResult> {
+  return runAction(() => setLocationLocked_impl(form), { name: "setLocationLocked" });
+}
+
+export async function createEpisode(form: FormData): Promise<ActionResult> {
+  return runAction(() => createEpisode_impl(form), { name: "createEpisode" });
+}
+
+export async function saveScript(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveScript_impl(form), { name: "saveScript" });
+}
+
+export async function saveScene(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveScene_impl(form), { name: "saveScene" });
+}
+
+export async function createShot(form: FormData): Promise<ActionResult> {
+  return runAction(() => createShot_impl(form), { name: "createShot" });
+}
+
+export async function saveShotSection(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveShotSection_impl(form), { name: "saveShotSection" });
+}
+
+export async function saveShotCharacters(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveShotCharacters_impl(form), { name: "saveShotCharacters" });
+}
+
+export async function saveShotDialogue(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveShotDialogue_impl(form), { name: "saveShotDialogue" });
+}
+
+export async function saveShotBeats(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveShotBeats_impl(form), { name: "saveShotBeats" });
+}
+
+export async function setShotApproval(form: FormData): Promise<ActionResult> {
+  return runAction(() => setShotApproval_impl(form), { name: "setShotApproval" });
+}
+
+export async function setShotDuration(form: FormData): Promise<ActionResult> {
+  return runAction(() => setShotDuration_impl(form), { name: "setShotDuration" });
+}
+
+export async function saveDialogueLine(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveDialogueLine_impl(form), { name: "saveDialogueLine" });
+}
+
+export async function setLineLocked(form: FormData): Promise<ActionResult> {
+  return runAction(() => setLineLocked_impl(form), { name: "setLineLocked" });
+}
+
+export async function saveDirection(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveDirection_impl(form), { name: "saveDirection" });
+}
+
+export async function addTake(form: FormData): Promise<ActionResult> {
+  return runAction(() => addTake_impl(form), { name: "addTake" });
+}
+
+export async function setTakeArchived(form: FormData): Promise<ActionResult> {
+  return runAction(() => setTakeArchived_impl(form), { name: "setTakeArchived" });
+}
+
+export async function selectTake(form: FormData): Promise<ActionResult> {
+  return runAction(() => selectTake_impl(form), { name: "selectTake" });
+}
+
+export async function rateTake(form: FormData): Promise<ActionResult> {
+  return runAction(() => rateTake_impl(form), { name: "rateTake" });
+}
+
+export async function addStoryboardFrame(form: FormData): Promise<ActionResult> {
+  return runAction(() => addStoryboardFrame_impl(form), { name: "addStoryboardFrame" });
+}
+
+export async function setFrameApproved(form: FormData): Promise<ActionResult> {
+  return runAction(() => setFrameApproved_impl(form), { name: "setFrameApproved" });
+}
+
+export async function logAttempt(form: FormData): Promise<ActionResult> {
+  return runAction(() => logAttempt_impl(form), { name: "logAttempt" });
+}
+
+export async function reviewAttempt(form: FormData): Promise<ActionResult> {
+  return runAction(() => reviewAttempt_impl(form), { name: "reviewAttempt" });
+}
+
+export async function saveContinuityCheck(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveContinuityCheck_impl(form), { name: "saveContinuityCheck" });
+}
+
+export async function uploadAsset(form: FormData): Promise<ActionResult> {
+  return runAction(() => uploadAsset_impl(form), { name: "uploadAsset" });
+}
+
+export async function updateAsset(form: FormData): Promise<ActionResult> {
+  return runAction(() => updateAsset_impl(form), { name: "updateAsset" });
+}
+
+export async function deleteAsset(form: FormData): Promise<ActionResult> {
+  return runAction(() => deleteAsset_impl(form), { name: "deleteAsset" });
+}
+
+export async function setShotSource(form: FormData): Promise<ActionResult> {
+  return runAction(() => setShotSource_impl(form), { name: "setShotSource" });
+}
+
+export async function createShotFromSources(form: FormData): Promise<ActionResult> {
+  return runAction(() => createShotFromSources_impl(form), { name: "createShotFromSources" });
+}
+
+export async function saveShotProps(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveShotProps_impl(form), { name: "saveShotProps" });
+}
+
+export async function reorderShots(
+  sceneId: string,
+  orderedIds: string[],
+  projectSlug: string,
+): Promise<ActionResult> {
+  return runAction(() => reorderShots_impl(sceneId, orderedIds, projectSlug), { name: "reorderShots" });
 }

@@ -27,7 +27,16 @@ export interface FieldSpec {
 }
 
 export type EditableSectionKey =
-  "story" | "set" | "camera" | "blocking" | "continuity" | "audio" | "generation";
+  | "story"
+  | "set"
+  | "lighting"
+  | "camera"
+  | "composition"
+  | "blocking"
+  | "action"
+  | "continuity"
+  | "audio"
+  | "generation";
 
 export interface SectionSpec {
   key: EditableSectionKey;
@@ -61,11 +70,17 @@ export const SHOT_SECTION_SPECS: SectionSpec[] = [
   },
   {
     key: "set",
-    label: "Set & light",
+    label: "Location / set",
     fields: [
       { path: "spatial.locationId", label: "Location / set", kind: "ref:location" },
       { path: "spatial.setZone", label: "Set zone", kind: "text" },
       { path: "spatial.backgroundActivity", label: "Background activity", kind: "textarea", wide: true },
+    ],
+  },
+  {
+    key: "lighting",
+    label: "Lighting",
+    fields: [
       { path: "lighting.keyDirection", label: "Key direction", kind: "text" },
       { path: "lighting.fill", label: "Fill", kind: "text" },
       { path: "lighting.practicals", label: "Practicals", kind: "text" },
@@ -74,12 +89,19 @@ export const SHOT_SECTION_SPECS: SectionSpec[] = [
     ],
   },
   {
-    key: "camera",
-    label: "Camera",
+    key: "composition",
+    label: "Composition",
     fields: [
       { path: "composition.framing", label: "Framing", kind: "text" },
       { path: "composition.shotSize", label: "Shot size", kind: "text" },
       { path: "composition.aspectRatio", label: "Aspect ratio", kind: "text" },
+      { path: "composition.notes", label: "Composition notes", kind: "textarea", wide: true },
+    ],
+  },
+  {
+    key: "camera",
+    label: "Camera",
+    fields: [
       { path: "composition.cameraPosition", label: "Camera position", kind: "text" },
       { path: "composition.cameraHeight", label: "Camera height", kind: "text" },
       { path: "composition.cameraAngle", label: "Camera angle", kind: "text" },
@@ -87,12 +109,11 @@ export const SHOT_SECTION_SPECS: SectionSpec[] = [
       { path: "composition.aperture", label: "Aperture / DoF intent", kind: "text" },
       { path: "composition.movement", label: "Movement", kind: "text" },
       { path: "composition.movementSpeed", label: "Movement speed", kind: "text" },
-      { path: "composition.notes", label: "Composition notes", kind: "textarea", wide: true },
     ],
   },
   {
     key: "blocking",
-    label: "Blocking & action",
+    label: "Blocking",
     fields: [
       { path: "spatial.subjectBlocking", label: "Subject blocking", kind: "textarea", wide: true },
       { path: "spatial.facingDirection", label: "Facing direction", kind: "text" },
@@ -100,6 +121,12 @@ export const SHOT_SECTION_SPECS: SectionSpec[] = [
       { path: "spatial.screenDirection", label: "Screen direction", kind: "text" },
       { path: "spatial.entryPoint", label: "Entry point", kind: "text" },
       { path: "spatial.exitPoint", label: "Exit point", kind: "text" },
+    ],
+  },
+  {
+    key: "action",
+    label: "Action timing",
+    fields: [
       { path: "action.beginningPose", label: "Beginning pose", kind: "text" },
       { path: "action.endingPose", label: "Ending pose", kind: "text" },
     ],

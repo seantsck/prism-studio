@@ -13,6 +13,7 @@ import {
   uploadIdentityRef,
 } from "@/server/actions";
 import { requireProject } from "@/server/repo";
+import { ActionForm } from "@/components/action-form";
 
 const join = (xs: string[]) => xs.join("\n");
 
@@ -44,7 +45,7 @@ export default async function CharacterPage({
       />
       <div className="grid gap-4 p-6 xl:grid-cols-2">
         <Panel title="Character">
-          <form action={saveCharacter} className="space-y-3">
+          <ActionForm action={saveCharacter} className="space-y-3">
             {hidden}
             <input type="hidden" name="id" value={c.id} />
             <div className="grid grid-cols-2 gap-3">
@@ -79,20 +80,20 @@ export default async function CharacterPage({
             <Button type="submit" variant="primary">
               Save character
             </Button>
-          </form>
+          </ActionForm>
         </Panel>
 
         <Panel
           title="Identity references"
           actions={
-            <form action={setIdentityLocked}>
+            <ActionForm action={setIdentityLocked}>
               {hidden}
               <input type="hidden" name="characterId" value={c.id} />
               <input type="hidden" name="locked" value={String(!identityLocked)} />
               <Button size="sm" type="submit">
                 {identityLocked ? "Unlock" : "Lock all"}
               </Button>
-            </form>
+            </ActionForm>
           }
         >
           <div className="grid grid-cols-2 gap-3">
@@ -116,7 +117,7 @@ export default async function CharacterPage({
                       className="aspect-[3/4]"
                     />
                   )}
-                  <form action={uploadIdentityRef} className="mt-2 flex gap-1">
+                  <ActionForm action={uploadIdentityRef} className="mt-2 flex gap-1">
                     {hidden}
                     <input type="hidden" name="characterId" value={c.id} />
                     <input type="hidden" name="slot" value={slot} />
@@ -124,7 +125,7 @@ export default async function CharacterPage({
                     <Button size="sm" type="submit">
                       Upload
                     </Button>
-                  </form>
+                  </ActionForm>
                 </div>
               );
             })}
@@ -140,7 +141,7 @@ export default async function CharacterPage({
                   <Badge tone={l.locked ? "pass" : "warn"}>{l.locked ? "locked" : "open"}</Badge>
                 </summary>
                 <div className="border-t border-line p-3">
-                  <form action={saveLook} className="grid grid-cols-2 gap-3">
+                  <ActionForm action={saveLook} className="grid grid-cols-2 gap-3">
                     {hidden}
                     <input type="hidden" name="id" value={l.id} />
                     <input type="hidden" name="characterId" value={c.id} />
@@ -171,19 +172,19 @@ export default async function CharacterPage({
                         </Button>
                       ) : null}
                     </div>
-                  </form>
-                  <form action={setLookLocked} className="mt-2">
+                  </ActionForm>
+                  <ActionForm action={setLookLocked} className="mt-2">
                     {hidden}
                     <input type="hidden" name="id" value={l.id} />
                     <input type="hidden" name="locked" value={String(!l.locked)} />
                     <Button type="submit">{l.locked ? "Unlock look" : "Lock look"}</Button>
-                  </form>
+                  </ActionForm>
                 </div>
               </details>
             ))}
             <details className="border border-dashed border-line2">
               <summary className="px-3 py-2 text-muted">+ New look</summary>
-              <form action={saveLook} className="grid grid-cols-2 gap-3 border-t border-line p-3">
+              <ActionForm action={saveLook} className="grid grid-cols-2 gap-3 border-t border-line p-3">
                 {hidden}
                 <input type="hidden" name="characterId" value={c.id} />
                 <Field label="Name" className="col-span-2">
@@ -219,7 +220,7 @@ export default async function CharacterPage({
                     Create look
                   </Button>
                 </div>
-              </form>
+              </ActionForm>
             </details>
           </div>
         </Panel>
@@ -245,7 +246,7 @@ export default async function CharacterPage({
                   ) : null}
                 </summary>
                 <div className="border-t border-line p-3">
-                  <form action={saveVoiceProfile} className="grid grid-cols-2 gap-3">
+                  <ActionForm action={saveVoiceProfile} className="grid grid-cols-2 gap-3">
                     {hidden}
                     <input type="hidden" name="characterId" value={c.id} />
                     {v ? <input type="hidden" name="id" value={v.id} /> : null}
@@ -318,14 +319,14 @@ export default async function CharacterPage({
                         </Button>
                       </div>
                     ) : null}
-                  </form>
+                  </ActionForm>
                   {v ? (
-                    <form action={setVoiceLocked} className="mt-2">
+                    <ActionForm action={setVoiceLocked} className="mt-2">
                       {hidden}
                       <input type="hidden" name="id" value={v.id} />
                       <input type="hidden" name="locked" value={String(!v.locked)} />
                       <Button type="submit">{v.locked ? "Unlock voice" : "Lock voice"}</Button>
-                    </form>
+                    </ActionForm>
                   ) : null}
                 </div>
               </details>

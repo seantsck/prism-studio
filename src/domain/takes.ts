@@ -8,6 +8,7 @@ import type { PerformanceTake } from "./schemas";
 export function selectTake(takes: readonly PerformanceTake[], takeId: string): PerformanceTake[] {
   const target = takes.find((t) => t.id === takeId);
   if (!target) throw new Error(`Take ${takeId} not found`);
+  if (target.archived) throw new Error(`Take ${takeId} is archived; restore it before selecting`);
   return takes.map((t) =>
     t.dialogueLineId === target.dialogueLineId ? { ...t, selected: t.id === takeId } : t,
   );

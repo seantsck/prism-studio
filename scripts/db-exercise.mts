@@ -1,4 +1,4 @@
-// Exercises the real persistence path (PostgresRepository against the dedicated Prism Studio project).
+// Exercises the real persistence path (AdminRepository against the dedicated Prism Studio project).
 // Run as separate processes so "restart" is genuine (new process, new pool, nothing cached):
 //   npm run db:exercise -- baseline   # seeded project loads and equals buildSeedProject()
 //   npm run db:exercise -- mutate     # shot update, Look, take selection, frame approval, attempt
@@ -12,15 +12,17 @@ import { assignLook } from "../src/domain/looks";
 import { runPreflight } from "../src/domain/preflight";
 import { selectTake } from "../src/domain/takes";
 import type { ProjectData } from "../src/domain/schemas";
-import { PostgresRepository } from "../src/data/postgres-repository";
+import { AdminRepository } from "../src/data/postgres-repository";
 import { buildSeedProject, uid } from "../src/data/seed";
 import { assertDevUserExists, readDevUserEnv } from "./lib/dev-user.mjs";
+import { startScript } from "./lib/safety.mjs";
 
 const phase = process.argv[2];
 if (!["baseline", "mutate", "verify"].includes(phase ?? ""))
   throw new Error("usage: db-exercise.mts baseline|mutate|verify");
 
 const dev = readDevUserEnv();
+startScript({ mode: `exercise:${phase}`, devOwner: dev.id });
 const pool = new pg.Pool({ connectionString: dev.url, ssl: { rejectUnauthorized: false }, max: 2 });
 const checks: Array<[string, boolean, string]> = [];
 const check = (name: string, ok: boolean, detail = "") => checks.push([name, ok, detail]);
@@ -55,7 +57,7 @@ const MUTATION = {
 try {
   await assertDevUserExists(pool, dev);
   const seed = buildSeedProject();
-  const repo = new PostgresRepository(pool, dev.id);
+  const repo = new AdminRepository(pool, dev.id);
   const load = async (): Promise<ProjectData> => {
     const d = await repo.loadProject(seed.project.slug);
     if (!d) throw new Error(`Project ${seed.project.slug} not found; run npm run db:seed first`);
@@ -109,18 +111,29 @@ try {
       await repo.upsert(pid, "assets", {
         id,
         projectId: pid,
+        createdBy: dev.id,
         type: "image",
+        purpose: "generation_input",
+        source: "seed",
         name: `exercise ref ${i}`,
+        originalFilename: "",
+        storageProvider: "none",
+        bucket: null,
+        objectPath: null,
         mime: null,
-        storagePath: null,
+        byteSize: null,
+        checksum: null,
         width: null,
         height: null,
         durationMs: null,
-        checksum: null,
-        source: "seed",
+        frameRate: null,
+        sampleRate: null,
+        channels: null,
         tags: ["exercise"],
+        notes: "",
         metadata: {},
-        uploadedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       });
     }
     const shot3a = data.shots.find((s) => s.shotCode === "3A")!;
@@ -192,6 +205,7 @@ try {
       prompt: pkg.prompt.positive,
       negativePrompt: pkg.prompt.negative,
       packageSnapshot: JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>,
+      packageFingerprint: pkg.provenance.fingerprint,
       modelSettings: {},
       inputAssetIds: [],
       outputAssetId: null,

@@ -113,6 +113,7 @@ describe("postgres mapping", () => {
             props: rows.props,
             lines: rows.lines,
             assets: rows.assets,
+            sources: rows.sources,
           },
         ),
       );
@@ -156,6 +157,7 @@ describe("postgres mapping", () => {
           characters: rows.characters,
           props: rows.props,
           lines: rows.lines,
+          sources: rows.sources,
           assets: [...rows.assets].reverse(),
         },
       ),

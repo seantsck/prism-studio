@@ -2,12 +2,16 @@ import Link from "next/link";
 import { Badge, Button, Field, Panel } from "@/components/ui";
 import { PROJECT_TYPES } from "@/domain/schemas";
 import { createProject } from "@/server/actions";
+import { UserMenu } from "@/components/user-menu";
+import { requireUser } from "@/server/auth";
 import { getRepo } from "@/server/repo";
+import { ActionForm } from "@/components/action-form";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const projects = await getRepo().listProjects();
+  const user = await requireUser();
+  const projects = await (await getRepo()).listProjects();
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
       <div className="mb-8 flex items-baseline justify-between border-b border-line pb-4">
@@ -15,7 +19,9 @@ export default async function HomePage() {
           <div className="text-[11px] uppercase tracking-[0.18em] text-accent">Prism Studio</div>
           <h1 className="mt-1 text-xl font-semibold tracking-tight">Projects</h1>
         </div>
-        <span className="text-muted">Local workspace · in-memory demo data</span>
+        <div className="w-56">
+          <UserMenu user={user} />
+        </div>
       </div>
 
       <div className="grid gap-6 md:grid-cols-[1fr_320px]">
@@ -39,7 +45,7 @@ export default async function HomePage() {
         </div>
 
         <Panel title="New project">
-          <form action={createProject} className="space-y-3">
+          <ActionForm action={createProject} className="space-y-3">
             <Field label="Title">
               <input name="title" required placeholder="Working title" />
             </Field>
@@ -65,7 +71,7 @@ export default async function HomePage() {
             <Button variant="primary" type="submit">
               Create project
             </Button>
-          </form>
+          </ActionForm>
         </Panel>
       </div>
     </main>

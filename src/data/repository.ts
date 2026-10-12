@@ -39,6 +39,7 @@ export const COLLECTION_TABLES: Record<CollectionName, string> = {
   scenes: "scenes",
   shots: "shots",
   dialogueLines: "dialogue_lines",
+  actionBlocks: "action_blocks",
   directions: "performance_directions",
   takes: "performance_takes",
   frames: "storyboard_frames",

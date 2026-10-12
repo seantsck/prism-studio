@@ -8,6 +8,7 @@ import { dialogueSummary, summarizeEpisode, type ShotSummary } from "@/domain/su
 import { shotPath } from "@/lib/paths";
 import { assetUrl } from "@/lib/utils";
 import { addStoryboardFrame, setFrameApproved } from "@/server/actions";
+import { ActionForm } from "@/components/action-form";
 
 function ShotCard({ data, episodeSlug, s }: { data: ProjectData; episodeSlug: string; s: ShotSummary }) {
   const { ctx, report } = s;
@@ -67,7 +68,7 @@ function ShotCard({ data, episodeSlug, s }: { data: ProjectData; episodeSlug: st
           </summary>
           <div className="mt-2 space-y-1.5">
             {ctx.frames.map((f) => (
-              <form
+              <ActionForm
                 key={f.id}
                 action={setFrameApproved}
                 className="flex items-center justify-between gap-2 border border-line px-2 py-1"
@@ -82,9 +83,9 @@ function ShotCard({ data, episodeSlug, s }: { data: ProjectData; episodeSlug: st
                 <Button size="sm" variant={f.approved ? "primary" : "secondary"} type="submit">
                   {f.approved ? "Approved ✓" : "Approve"}
                 </Button>
-              </form>
+              </ActionForm>
             ))}
-            <form action={addStoryboardFrame} className="space-y-1.5 border-t border-line pt-2">
+            <ActionForm action={addStoryboardFrame} className="space-y-1.5 border-t border-line pt-2">
               {hidden}
               <input type="hidden" name="shotId" value={ctx.shot.id} />
               <input type="file" name="file" accept="image/*" className="!p-0.5 text-[11px]" />
@@ -99,7 +100,7 @@ function ShotCard({ data, episodeSlug, s }: { data: ProjectData; episodeSlug: st
               <Button size="sm" type="submit">
                 Add version
               </Button>
-            </form>
+            </ActionForm>
           </div>
         </details>
       </div>

@@ -2,6 +2,7 @@ import { Badge, Button, PageHeader, Panel } from "@/components/ui";
 import type { Episode, ProjectData } from "@/domain/schemas";
 import { parseScreenplay, syncScript } from "@/domain/script";
 import { saveScript } from "@/server/actions";
+import { ActionForm } from "@/components/action-form";
 
 export function ScriptView({ data, episode }: { data: ProjectData; episode: Episode }) {
   const parsed = parseScreenplay(episode.scriptText);
@@ -21,7 +22,7 @@ export function ScriptView({ data, episode }: { data: ProjectData; episode: Epis
       />
       <div className="grid gap-4 p-6 xl:grid-cols-2">
         <Panel title="Screenplay text">
-          <form action={saveScript} className="space-y-3">
+          <ActionForm action={saveScript} className="space-y-3">
             <input type="hidden" name="projectSlug" value={data.project.slug} />
             <input type="hidden" name="episodeId" value={episode.id} />
             <textarea
@@ -40,7 +41,7 @@ export function ScriptView({ data, episode }: { data: ProjectData; episode: Epis
                 dialogue
               </span>
             </div>
-          </form>
+          </ActionForm>
         </Panel>
 
         <div className="space-y-4">

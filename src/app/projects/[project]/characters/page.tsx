@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Badge, Button, Field, PageHeader, Panel } from "@/components/ui";
 import { saveCharacter } from "@/server/actions";
 import { requireProject } from "@/server/repo";
+import { ActionForm } from "@/components/action-form";
 
 export default async function CharactersPage({ params }: { params: Promise<{ project: string }> }) {
   const { project: slug } = await params;
@@ -40,7 +41,7 @@ export default async function CharactersPage({ params }: { params: Promise<{ pro
           })}
         </div>
         <Panel title="New character">
-          <form action={saveCharacter} className="space-y-3">
+          <ActionForm action={saveCharacter} className="space-y-3">
             <input type="hidden" name="projectSlug" value={slug} />
             <Field label="Name">
               <input name="name" required />
@@ -54,7 +55,7 @@ export default async function CharactersPage({ params }: { params: Promise<{ pro
             <Button type="submit" variant="primary">
               Create
             </Button>
-          </form>
+          </ActionForm>
         </Panel>
       </div>
     </div>

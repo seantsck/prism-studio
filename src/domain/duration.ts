@@ -18,7 +18,7 @@ export interface ShotDuration {
 
 /** The single canonical take for a line, if any. */
 export function selectedTake(takes: readonly PerformanceTake[], lineId: string): PerformanceTake | null {
-  return takes.find((t) => t.dialogueLineId === lineId && t.selected) ?? null;
+  return takes.find((t) => t.dialogueLineId === lineId && t.selected && !t.archived) ?? null;
 }
 
 /**

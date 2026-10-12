@@ -1,6 +1,7 @@
 import { Button, Field, PageHeader, Panel } from "@/components/ui";
 import { saveBible } from "@/server/actions";
 import { requireProject } from "@/server/repo";
+import { ActionForm } from "@/components/action-form";
 
 export default async function BiblePage({ params }: { params: Promise<{ project: string }> }) {
   const { project: slug } = await params;
@@ -13,7 +14,7 @@ export default async function BiblePage({ params }: { params: Promise<{ project:
         title="Production Bible"
         subtitle="Structured canon. Guardrails are injected verbatim into every generation package."
       />
-      <form action={saveBible} className="grid gap-4 p-6 xl:grid-cols-2">
+      <ActionForm action={saveBible} className="grid gap-4 p-6 xl:grid-cols-2">
         <input type="hidden" name="projectSlug" value={slug} />
         <Panel title="Identity" className="xl:col-span-2">
           <div className="grid gap-3 md:grid-cols-2">
@@ -97,7 +98,7 @@ export default async function BiblePage({ params }: { params: Promise<{ project:
             Save bible
           </Button>
         </div>
-      </form>
+      </ActionForm>
     </div>
   );
 }

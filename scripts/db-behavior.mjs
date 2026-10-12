@@ -4,9 +4,10 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 
 import { assertDevUserExists, readDevUserEnv } from "./lib/dev-user.mjs";
+import { startScript } from "./lib/safety.mjs";
 
 const dev = readDevUserEnv(); // validates ref + UUID before any query
-const url = dev.url;
+const url = startScript({ mode: "behavior (single transaction, always rolled back)", devOwner: dev.id });
 const owner = dev.id;
 
 const client = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false } });

@@ -5,6 +5,7 @@ import { summarizeEpisode } from "@/domain/summary";
 import { episodePath } from "@/lib/paths";
 import { createEpisode } from "@/server/actions";
 import { requireProject } from "@/server/repo";
+import { ActionForm } from "@/components/action-form";
 
 export default async function EpisodesPage({ params }: { params: Promise<{ project: string }> }) {
   const { project: slug } = await params;
@@ -43,7 +44,7 @@ export default async function EpisodesPage({ params }: { params: Promise<{ proje
           })}
         </div>
         <Panel title="New episode">
-          <form action={createEpisode} className="space-y-3">
+          <ActionForm action={createEpisode} className="space-y-3">
             <input type="hidden" name="projectSlug" value={slug} />
             <Field label="Title">
               <input name="title" required />
@@ -54,7 +55,7 @@ export default async function EpisodesPage({ params }: { params: Promise<{ proje
             <Button type="submit" variant="primary">
               Create episode
             </Button>
-          </form>
+          </ActionForm>
         </Panel>
       </div>
     </div>

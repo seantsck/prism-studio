@@ -1,11 +1,9 @@
 // Read-only: confirms we are connected to the dedicated Prism Studio project and shows what exists.
 import pg from "pg";
 
-const EXPECTED_REF = "lyqdxiyjperhniwhzsvg";
-const url = process.env.SUPABASE_DB_URL;
-if (!url) throw new Error("SUPABASE_DB_URL is not set");
-if (!url.includes(EXPECTED_REF))
-  throw new Error("SUPABASE_DB_URL does not point at the Prism Studio project; refusing.");
+import { startScript } from "./lib/safety.mjs";
+
+const url = startScript({ mode: "inspect (read-only)" });
 
 const client = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
 await client.connect();

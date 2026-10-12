@@ -1,4 +1,4 @@
-import type { DialogueLine, INT_EXT, Scene } from "./schemas";
+import type { ActionBlock, DialogueLine, INT_EXT, Scene } from "./schemas";
 
 /**
  * Screenplay-oriented script model (Fountain-lite):
@@ -12,8 +12,8 @@ import type { DialogueLine, INT_EXT, Scene } from "./schemas";
  */
 
 export type ParsedBlock =
-  | { kind: "action"; text: string; line: number }
-  | { kind: "dialogue"; speaker: string; text: string; parenthetical: string; line: number };
+  | { kind: "action"; text: string; line: number; endLine: number }
+  | { kind: "dialogue"; speaker: string; text: string; parenthetical: string; line: number; endLine: number };
 
 export interface ParsedScene {
   slugline: string;
@@ -46,11 +46,16 @@ export function parseScreenplay(text: string): ParsedScene[] {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const scenes: ParsedScene[] = [];
   let current: ParsedScene | null = null;
-  let actionBuf: { text: string[]; line: number } | null = null;
+  let actionBuf: { text: string[]; line: number; endLine: number } | null = null;
 
   const flushAction = () => {
     if (current && actionBuf && actionBuf.text.length > 0) {
-      current.blocks.push({ kind: "action", text: actionBuf.text.join(" "), line: actionBuf.line });
+      current.blocks.push({
+        kind: "action",
+        text: actionBuf.text.join(" "),
+        line: actionBuf.line,
+        endLine: actionBuf.endLine,
+      });
     }
     actionBuf = null;
   };
@@ -80,6 +85,7 @@ export function parseScreenplay(text: string): ParsedScene[] {
         text: inline[2].trim(),
         parenthetical: "",
         line: lineNo,
+        endLine: lineNo,
       });
       continue;
     }
@@ -101,13 +107,15 @@ export function parseScreenplay(text: string): ParsedScene[] {
         text: dialogue.join("\n"),
         parenthetical,
         line: lineNo,
+        endLine: Math.max(lineNo, j),
       });
       i = j - 1;
       continue;
     }
 
-    if (!actionBuf) actionBuf = { text: [], line: lineNo };
+    if (!actionBuf) actionBuf = { text: [], line: lineNo, endLine: lineNo };
     actionBuf.text.push(raw);
+    actionBuf.endLine = lineNo;
   }
   flushAction();
   if (current) (current as ParsedScene).endLine = lines.length;
@@ -122,15 +130,21 @@ export interface SyncedLine {
   /** Locked dialogue keeps its stored text; the script edit is reported, never applied. */
   lockedConflict: { storedText: string; scriptText: string } | null;
 }
+export interface SyncedAction {
+  parsed: Extract<ParsedBlock, { kind: "action" }>;
+  existingId: string | null;
+}
 export interface SyncedScene {
   parsed: ParsedScene;
   existingId: string | null;
   lines: SyncedLine[];
+  actions: SyncedAction[];
 }
 export interface ScriptSyncResult {
   scenes: SyncedScene[];
   removedSceneIds: string[];
   removedLineIds: string[];
+  removedActionIds: string[];
   lockedConflicts: Array<{ lineId: string; storedText: string; scriptText: string }>;
 }
 
@@ -144,9 +158,11 @@ export function syncScript(
   existingScenes: readonly Scene[],
   existingLines: readonly DialogueLine[],
   speakerNameFor: (line: DialogueLine) => string,
+  existingActions: readonly ActionBlock[] = [],
 ): ScriptSyncResult {
   const usedScenes = new Set<string>();
   const usedLines = new Set<string>();
+  const usedActions = new Set<string>();
   const lockedConflicts: ScriptSyncResult["lockedConflicts"] = [];
 
   const scenes = parsed.map<SyncedScene>((p, index) => {
@@ -178,13 +194,27 @@ export function syncScript(
         if (found && conflict) lockedConflicts.push({ lineId: found.id, ...conflict });
         return { parsed: b, existingId: found?.id ?? null, lockedConflict: conflict };
       });
-    return { parsed: p, existingId: match?.id ?? null, lines };
+    const sceneActions = match
+      ? existingActions.filter((a) => a.sceneId === match.id).sort((a, b) => a.order - b.order)
+      : [];
+    const actions = p.blocks
+      .filter((b): b is Extract<ParsedBlock, { kind: "action" }> => b.kind === "action")
+      .map<SyncedAction>((b) => {
+        // Same text first (survives reordering), then the next unused block by position.
+        const exact = sceneActions.find((a) => !usedActions.has(a.id) && a.text === b.text);
+        const positional = sceneActions.find((a) => !usedActions.has(a.id));
+        const found = exact ?? positional ?? null;
+        if (found) usedActions.add(found.id);
+        return { parsed: b, existingId: found?.id ?? null };
+      });
+    return { parsed: p, existingId: match?.id ?? null, lines, actions };
   });
 
   return {
     scenes,
     removedSceneIds: existingScenes.filter((s) => !usedScenes.has(s.id)).map((s) => s.id),
     removedLineIds: existingLines.filter((l) => !usedLines.has(l.id)).map((l) => l.id),
+    removedActionIds: existingActions.filter((a) => !usedActions.has(a.id)).map((a) => a.id),
     lockedConflicts,
   };
 }

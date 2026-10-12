@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { NavLink } from "@/components/nav";
-import { getRepo } from "@/server/repo";
+import { UserMenu } from "@/components/user-menu";
+import { getCurrentUser } from "@/server/auth";
+import { loadProjectCached } from "@/server/repo";
 
 export const dynamic = "force-dynamic";
 
@@ -10,12 +12,14 @@ const NAV = [
   ["/bible", "Bible"],
   ["/script", "Script"],
   ["/perform", "Perform"],
+  ["/breakdown", "Breakdown"],
   ["/characters", "Characters"],
   ["/locations", "Locations"],
   ["/episodes", "Episodes"],
   ["/storyboard", "Storyboard"],
   ["/animatic", "Animatic"],
   ["/generations", "Generations"],
+  ["/assets", "Assets"],
 ] as const;
 
 export default async function ProjectLayout({
@@ -26,7 +30,7 @@ export default async function ProjectLayout({
   params: Promise<{ project: string }>;
 }) {
   const { project: slug } = await params;
-  const data = await getRepo().loadProject(slug);
+  const [data, user] = await Promise.all([loadProjectCached(slug), getCurrentUser()]);
   if (!data) notFound();
   const base = `/projects/${slug}`;
 
@@ -51,7 +55,7 @@ export default async function ProjectLayout({
             </NavLink>
           ))}
         </nav>
-        <div className="border-t border-line px-4 py-2 text-[10.5px] text-faint">Phase 1 · local data</div>
+        <div className="border-t border-line px-4 py-2">{user ? <UserMenu user={user} /> : null}</div>
       </aside>
       <main className="min-w-0 flex-1">{children}</main>
     </div>

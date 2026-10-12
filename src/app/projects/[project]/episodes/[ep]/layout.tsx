@@ -7,6 +7,7 @@ const TABS = [
   ["scenes", "Scenes"],
   ["shots", "Shots"],
   ["perform", "Perform"],
+  ["breakdown", "Breakdown"],
   ["storyboard", "Storyboard"],
   ["animatic", "Animatic"],
   ["assets", "Assets"],

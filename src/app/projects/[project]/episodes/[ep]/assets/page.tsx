@@ -1,8 +1,7 @@
-import { EpisodeRoutePage } from "@/components/episode-pages";
-import { AssetsView } from "@/components/views/assets-view";
+import { redirect } from "next/navigation";
 
-export default function Page(props: { params: Promise<{ project: string; ep: string }> }) {
-  return (
-    <EpisodeRoutePage {...props} render={(data, episode) => <AssetsView data={data} episode={episode} />} />
-  );
+/** The asset library is project-wide; the episode tab simply opens it. */
+export default async function Page({ params }: { params: Promise<{ project: string; ep: string }> }) {
+  const { project } = await params;
+  redirect(`/projects/${project}/assets`);
 }

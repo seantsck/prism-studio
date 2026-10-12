@@ -6,6 +6,7 @@ import type { Episode, ProjectData } from "@/domain/schemas";
 import { dialogueSummary, summarizeEpisode } from "@/domain/summary";
 import { shotPath } from "@/lib/paths";
 import { createShot } from "@/server/actions";
+import { ActionForm } from "@/components/action-form";
 
 export function ShotsView({ data, episode }: { data: ProjectData; episode: Episode }) {
   const summaries = summarizeEpisode(data, episode);
@@ -28,14 +29,14 @@ export function ShotsView({ data, episode }: { data: ProjectData; episode: Episo
                   <span className="mr-2 font-mono text-muted">{scene.sceneNumber}</span>
                   {scene.slugline}
                 </h2>
-                <form action={createShot} className="flex items-center gap-1">
+                <ActionForm action={createShot} className="flex items-center gap-1">
                   <input type="hidden" name="projectSlug" value={slug} />
                   <input type="hidden" name="sceneId" value={scene.id} />
                   <input name="title" placeholder="New shot title" className="!w-44 !py-0.5" />
                   <Button size="sm" type="submit">
                     + Shot
                   </Button>
-                </form>
+                </ActionForm>
               </div>
               <div className="border border-line">
                 <table className="w-full text-left text-[12px]">
