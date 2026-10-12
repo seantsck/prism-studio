@@ -16,7 +16,7 @@ app/ (routes, thin)            components/ (UI, no business rules)
   `buildShotContext → runPreflight / computeShotDuration / assembleGenerationPackage / buildAnimaticTimeline`.
   This is what the unit tests cover and what a provider adapter or background worker would reuse unchanged.
 - **`data/Repository`** is the only persistence boundary. `MemoryRepository` is the Phase 1 implementation.
-  A Supabase adapter implements the same interface against `supabase/migrations/*`; it owns the
+  `PostgresRepository` (`PRISM_STUDIO_PERSISTENCE=supabase`) implements the same interface against `supabase/migrations/*`; it owns the
   camelCase ↔ snake_case mapping and the normalisation of embedded arrays (shot characters, dialogue links)
   into join tables.
 - **`server/actions.ts`** is the only write path from the UI. Each action: parse `FormData` → load project →
@@ -30,7 +30,7 @@ app/ (routes, thin)            components/ (UI, no business rules)
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Domain independent of AI providers                 | Providers change monthly; the package format must not. Adapters (Phase 2) translate `GenerationPackage` to payloads.                                                                   |
 | Preflight is a rule table, not a function with ifs | Rules are data (`PREFLIGHT_RULES`). AI continuity checks can later be appended as additional rule sources without touching the evaluator.                                              |
-| `ready_to_generate` is derived                     | Computed from required gates; never user-settable, so it cannot drift from reality.                                                                                                    |
+| `ready_to_generate` is derived, not stored         | Computed live from required gates (no `prep_score`/`ready_to_generate` columns since migration 0004), so it cannot drift from reality.                                                 |
 | Shot sections as JSONB, relations as tables        | Sections (camera, blocking, audio…) are edited as units and evolve quickly; characters/looks/dialogue/props are real FKs so integrity is enforced.                                     |
 | Assets are rows, not URLs                          | Everything references `asset.id`. `StorageProvider` hides where bytes live (`LocalDiskStorage` now; Supabase Storage later).                                                           |
 | Append-only generation history                     | Attempts snapshot the full package; DB trigger blocks edits to prompt/snapshot/settings.                                                                                               |
@@ -58,4 +58,4 @@ fixed local user id (`LOCAL_USER_ID`). Collaboration and billing are intentional
 
 ## Not built yet
 
-Provider adapters, queues, auth, Supabase adapter, 3D sets, NLE-grade editing — see [roadmap](roadmap.md).
+Provider adapters, queues, auth, Supabase Storage provider, 3D sets, NLE-grade editing — see [roadmap](roadmap.md).

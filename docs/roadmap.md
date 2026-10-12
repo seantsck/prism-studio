@@ -6,7 +6,7 @@ Implemented locally: projects, Bible, characters (identity, Looks, voice profile
 structure with stable ids, Perform workspace (directions, takes, canonical selection), scenes, shot prep with
 deterministic preflight, storyboard (versions, approval, reorder), animatic (timeline, playback, timing edits),
 generation package + brief, append-only attempt log, manual continuity review, asset abstraction,
-SQL migrations (unapplied), seed project, unit tests.
+SQL migrations (applied to the dedicated project; Phase 1B), seed project, unit tests.
 
 Outstanding before Phase 1 is "done": Supabase repository adapter + auth, real waveform extraction, shot
 creation from script action lines, CRUD for props, asset library upload UI, Playwright coverage of critical flows.

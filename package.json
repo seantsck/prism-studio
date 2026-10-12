@@ -19,7 +19,9 @@
     "db:validate": "node --env-file=.env.local scripts/db-validate.mjs",
     "db:behavior": "node --env-file=.env.local scripts/db-behavior.mjs",
     "db:create-dev-user": "node --env-file=.env.local scripts/create-dev-user.mjs",
-    "db:seed": "tsx --env-file=.env.local scripts/db-seed.ts"
+    "db:seed": "tsx --env-file=.env.local scripts/db-seed.mts",
+    "db:exercise": "tsx --env-file=.env.local scripts/db-exercise.mts",
+    "test:e2e:supabase": "playwright test -c playwright.supabase.config.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

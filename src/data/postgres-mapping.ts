@@ -213,9 +213,11 @@ export function shotToRows(shot: Shot): ShotRows {
   } = shot.generation;
 
   const assets: Row[] = [];
+  // `position` is the 0-based index within (shot, role): generation input order is part of the data.
   const addAsset = (asset_id: string | null, role: string) => {
     if (asset_id && !assets.some((a) => a.asset_id === asset_id && a.role === role)) {
-      assets.push({ shot_id: shot.id, asset_id, role });
+      const position = assets.filter((a) => a.role === role).length;
+      assets.push({ shot_id: shot.id, asset_id, role, position });
     }
   };
   referenceAssetIds.forEach((id) => addAsset(id, "reference"));
@@ -298,7 +300,10 @@ export function shotFromRows(row: Row, joins: ShotJoinRows): Record<string, unkn
     order: Number(row.order),
   });
   const roleAssets = (role: string) =>
-    joins.assets.filter((a) => a.role === role).map((a) => String(a.asset_id));
+    joins.assets
+      .filter((a) => a.role === role)
+      .sort((a, b) => Number(a.position) - Number(b.position))
+      .map((a) => String(a.asset_id));
   const first = (role: string) => roleAssets(role)[0] ?? null;
 
   return {

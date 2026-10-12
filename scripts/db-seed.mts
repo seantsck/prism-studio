@@ -1,20 +1,19 @@
 // Seeds the demo project into the dedicated Prism Studio database, owned by the real dev Auth user.
-//   npx tsx --env-file=.env.local scripts/db-seed.ts            # skip if already seeded
-//   npx tsx --env-file=.env.local scripts/db-seed.ts --reset    # delete the demo project (cascades) and re-seed
+//   npx tsx --env-file=.env.local scripts/db-seed.mts            # skip if already seeded
+//   npx tsx --env-file=.env.local scripts/db-seed.mts --reset    # delete the demo project (cascades) and re-seed
 import pg from "pg";
 import { PostgresRepository } from "../src/data/postgres-repository";
 import { buildSeedProject } from "../src/data/seed";
 
-const REF = "lyqdxiyjperhniwhzsvg";
-const url = process.env.SUPABASE_DB_URL;
-const owner = process.env.PRISM_STUDIO_DEV_USER_ID;
-if (!url?.includes(REF))
-  throw new Error("SUPABASE_DB_URL does not target the Prism Studio project; refusing.");
-if (!owner)
-  throw new Error("PRISM_STUDIO_DEV_USER_ID is not set (create the dev user through Supabase Auth first).");
+import { assertDevUserExists, readDevUserEnv } from "./lib/dev-user.mjs";
+
+const dev = readDevUserEnv(); // validates ref + UUID before any query
+const url = dev.url;
+const owner = dev.id;
 
 const pool = new pg.Pool({ connectionString: url, ssl: { rejectUnauthorized: false }, max: 2 });
 try {
+  await assertDevUserExists(pool, dev);
   const seed = buildSeedProject();
   const repo = new PostgresRepository(pool, owner);
   const reset = process.argv.includes("--reset");

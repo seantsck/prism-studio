@@ -36,7 +36,7 @@ import { emptyShot } from "@/domain/shot-defaults";
 import { SHOT_SECTION_SPECS, applySection } from "@/domain/shot-fields";
 import { validateLookLink } from "@/domain/looks";
 import { nextTakeNumber, selectTake as selectTakeDomain } from "@/domain/takes";
-import { getRepo, requireProject } from "./repo";
+import { getRepo, requireProjectFresh } from "./repo";
 import { checksum, safeFileName, storage } from "./storage";
 
 // ───────────────────────── helpers ─────────────────────────
@@ -60,7 +60,7 @@ const slugify = (s: string) =>
     .replace(/^-+|-+$/g, "") || `project-${randomUUID().slice(0, 8)}`;
 
 async function load(form: FormData) {
-  const data = await requireProject(str(form, "projectSlug"));
+  const data = await requireProjectFresh(str(form, "projectSlug"));
   return { data, repo: getRepo(), slug: data.project.slug };
 }
 
@@ -623,7 +623,7 @@ export async function setShotDuration(form: FormData) {
 }
 
 export async function reorderShots(sceneId: string, orderedIds: string[], projectSlug: string) {
-  const data = await requireProject(projectSlug);
+  const data = await requireProjectFresh(projectSlug);
   const sceneShots = data.shots.filter((s) => s.sceneId === sceneId);
   const byId = new Map(sceneShots.map((s) => [s.id, s]));
   if (orderedIds.length !== sceneShots.length || orderedIds.some((id) => !byId.has(id)))

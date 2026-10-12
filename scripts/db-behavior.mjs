@@ -3,15 +3,15 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 
-const REF = "lyqdxiyjperhniwhzsvg";
-const url = process.env.SUPABASE_DB_URL;
-const owner = process.env.PRISM_STUDIO_DEV_USER_ID;
-if (!url?.includes(REF))
-  throw new Error("SUPABASE_DB_URL does not target the Prism Studio project; refusing.");
-if (!owner) throw new Error("PRISM_STUDIO_DEV_USER_ID is not set.");
+import { assertDevUserExists, readDevUserEnv } from "./lib/dev-user.mjs";
+
+const dev = readDevUserEnv(); // validates ref + UUID before any query
+const url = dev.url;
+const owner = dev.id;
 
 const client = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
 await client.connect();
+await assertDevUserExists(client, dev);
 const results = [];
 const id = () => randomUUID();
 const P = id(),
@@ -154,10 +154,35 @@ try {
   ]);
   await expectError(
     "a Look used by a shot cannot be deleted",
-    "delete from character_looks where id=$1",
-    [LK],
+    `do $$ begin delete from character_looks where id = '${LK}'; set constraints all immediate; end $$`,
+    [],
     /foreign key|violates/,
   );
+  const A_ = [id(), id()];
+  for (const [i, a] of A_.entries())
+    await client.query("insert into assets (id, project_id, type, name) values ($1,$2,'image',$3)", [
+      a,
+      P,
+      `a${i}`,
+    ]);
+  const refInsert =
+    "insert into shot_reference_assets (shot_id, asset_id, role, position) values ($1,$2,'reference',$3)";
+  await client.query(refInsert, [SH, A_[0], 0]);
+  await expectError("two references cannot share a position", refInsert, [SH, A_[1], 0], /unique/);
+  await expectOk("reference order is returned by position", async () => {
+    await client.query(refInsert, [SH, A_[1], 1]);
+    const r = await client.query(
+      "select asset_id from shot_reference_assets where shot_id=$1 and role='reference' order by position",
+      [SH],
+    );
+    return { ok: r.rows.map((x) => x.asset_id).join() === A_.join() };
+  });
+  await expectOk("stale cache columns are gone (prep_score, ready_to_generate)", async () => {
+    const r = await client.query(
+      "select column_name from information_schema.columns where table_name='shots' and column_name in ('prep_score','ready_to_generate')",
+    );
+    return { ok: r.rows.length === 0 };
+  });
   await expectError(
     "invalid shot status is rejected",
     "update shots set status='bogus' where id=$1",
@@ -165,18 +190,17 @@ try {
     /check/,
   );
 
-  await expectOk("deleting a project cascades to children", async () => {
+  await expectOk("deleting a project cascades to children (incl. shot Looks in use)", async () => {
     await client.query("savepoint c");
-    await client.query("delete from shot_characters where shot_id=$1", [SH]);
     await client.query("delete from projects where id=$1", [P]);
     const n = (
       await client.query(
-        "select (select count(*) from shots where project_id=$1)::int s, (select count(*) from dialogue_lines where project_id=$1)::int d",
-        [P],
+        "select (select count(*) from shots where project_id=$1)::int s, (select count(*) from dialogue_lines where project_id=$1)::int d, (select count(*) from shot_characters where shot_id=$2)::int sc, (select count(*) from shot_reference_assets where shot_id=$2)::int sr",
+        [P, SH],
       )
     ).rows[0];
     await client.query("rollback to savepoint c");
-    return { ok: n.s === 0 && n.d === 0, msg: JSON.stringify(n) };
+    return { ok: n.s === 0 && n.d === 0 && n.sc === 0 && n.sr === 0, msg: JSON.stringify(n) };
   });
 
   // ── RLS ──

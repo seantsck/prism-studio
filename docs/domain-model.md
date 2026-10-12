@@ -36,7 +36,8 @@ User
 | Locked dialogue text is never rewritten                             | `syncScript` / `saveDialogueLine`; `guard_locked_dialogue` trigger            |
 | Generation history is immutable                                     | `guard_attempt_history` trigger; `reviewAttempt` touches only review fields   |
 | Locked shots keep their order slot                                  | `reorderShotsInScene()`                                                       |
-| `ready_to_generate` is derived                                      | `runPreflight()` — not a stored input                                         |
+| `ready_to_generate` is derived                                      | `runPreflight()` — not stored (cache columns dropped in migration 0004)       |
+| Reference-asset order is preserved                                  | `shot_reference_assets.position` + unique `(shot_id, role, position)`         |
 
 ## Design notes
 

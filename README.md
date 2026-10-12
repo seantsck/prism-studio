@@ -69,7 +69,7 @@ npm run db:seed         # seed the demo project for the real dev Auth user (--re
 | `src/server/`          | Server-only: repository singleton, storage provider, server actions.                                                       |
 | `src/app/`             | Next.js App Router routes (thin).                                                                                          |
 | `src/components/`      | UI primitives, views, animatic player, sortable storyboard.                                                                |
-| `supabase/migrations/` | SQL migrations **for review — never applied**.                                                                             |
+| `supabase/migrations/` | SQL migrations; applied to the dedicated Prism Studio project via `npm run db:migrate`.                                    |
 | `docs/`                | Architecture, domain model, shot prep, performance, generation package, roadmap.                                           |
 
 ## Safety rails in this repo

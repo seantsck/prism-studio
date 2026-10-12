@@ -127,4 +127,39 @@ describe("postgres mapping", () => {
     expect(rows.lines.map((l) => l.position)).toEqual([0, 1]);
     expect(rows.assets.filter((a) => a.role === "reference")).toHaveLength(1);
   });
+
+  it("preserves reference-asset order through the row shape, even if rows come back shuffled", () => {
+    const shot = structuredClone(data.shots.find((s) => s.shotCode === "5A")!);
+    const ids = [
+      "00000000-0000-4000-8000-0000000000c3",
+      "00000000-0000-4000-8000-0000000000a1",
+      "00000000-0000-4000-8000-0000000000b2",
+    ];
+    shot.generation.referenceAssetIds = ids;
+    const rows = shotToRows(shot);
+    expect(rows.assets.filter((a) => a.role === "reference").map((a) => a.position)).toEqual([0, 1, 2]);
+    const sections = [
+      "composition",
+      "spatial",
+      "characters",
+      "continuity",
+      "action",
+      "audio",
+      "lighting",
+      "constraints",
+      "generation",
+    ];
+    const back = shotSchema.parse(
+      shotFromRows(
+        fromDb({ ...rows.shot, created_at: shot.createdAt, updated_at: shot.updatedAt }, sections),
+        {
+          characters: rows.characters,
+          props: rows.props,
+          lines: rows.lines,
+          assets: [...rows.assets].reverse(),
+        },
+      ),
+    );
+    expect(back.generation.referenceAssetIds).toEqual(ids);
+  });
 });

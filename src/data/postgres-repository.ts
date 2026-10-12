@@ -43,7 +43,7 @@ const BIBLE_SPEC: CollectionSpec = {
   schema: bibleSchema,
   json: [],
   numeric: ["defaultFrameRate"],
-  projectScoped: false,
+  projectScoped: true, // project_id is the PK but the schema also carries projectId
   virtual: [],
 };
 
