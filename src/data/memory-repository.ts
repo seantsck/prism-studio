@@ -1,4 +1,4 @@
-import { buildSeedProject } from "./seed";
+import { LOCAL_USER_ID, buildSeedProject } from "./seed";
 import type { Repository } from "./repository";
 import type {
   Asset,
@@ -18,6 +18,10 @@ export class MemoryRepository implements Repository {
 
   constructor(seed: ProjectData[] = [buildSeedProject()]) {
     for (const p of seed) this.projects.set(p.project.id, clone(p));
+  }
+
+  currentUserId(): string {
+    return LOCAL_USER_ID;
   }
 
   async listProjects(): Promise<Project[]> {

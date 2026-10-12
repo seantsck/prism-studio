@@ -13,6 +13,8 @@ import type {
  * contract against the SQL migrations in /supabase/migrations.
  */
 export interface Repository {
+  /** Owner of every project this repository exposes. */
+  currentUserId(): string;
   listProjects(): Promise<Project[]>;
   loadProject(slug: string): Promise<ProjectData | null>;
   createProject(project: Project, bible: ProjectBible): Promise<void>;

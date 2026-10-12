@@ -3,7 +3,6 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { LOCAL_USER_ID } from "@/data/seed";
 import { buildShotContext } from "@/domain/context";
 import { assembleGenerationPackage } from "@/domain/generation-package";
 import { reorderShotsInScene } from "@/domain/ordering";
@@ -115,7 +114,7 @@ export async function createProject(form: FormData) {
   const id = randomUUID();
   const project = projectSchema.parse({
     id,
-    userId: LOCAL_USER_ID,
+    userId: repo.currentUserId(),
     title,
     slug,
     projectType: str(form, "projectType") || "series",
@@ -814,7 +813,9 @@ export async function setFrameApproved(form: FormData) {
   const approve = str(form, "approved") === "true";
   const siblings = data.frames.filter((f) => f.shotId === frame.shotId);
   // At most one approved frame per shot.
-  for (const f of siblings) {
+  // Write the target last so the "one approved frame per shot" index is never violated mid-way.
+  const ordered = [...siblings.filter((f) => f.id !== frame.id), frame];
+  for (const f of ordered) {
     const approved = f.id === frame.id ? approve : approve ? false : f.approved;
     if (approved !== f.approved) await repo.upsert(data.project.id, "frames", { ...f, approved });
   }

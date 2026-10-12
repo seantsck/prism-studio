@@ -42,6 +42,24 @@ the dev server process; uploaded files are written to `.local-storage/` (git-ign
 | `npm run test:e2e`  | Playwright smoke tests (needs `npx playwright install chromium`) |
 | `npm run format`    | Prettier                                                         |
 
+## Persistence modes
+
+| `PRISM_STUDIO_PERSISTENCE` | Backing store                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------------- |
+| unset / `memory`           | In-memory repository with the demo seed (default; used for tests and demos).       |
+| `supabase`                 | `PostgresRepository` over `SUPABASE_DB_URL`, scoped to `PRISM_STUDIO_DEV_USER_ID`. |
+
+The Postgres adapter refuses to connect unless the connection string contains the dedicated Prism Studio
+project ref (`src/server/db.ts`). See `.env.example`. Database scripts (all ref-guarded):
+
+```bash
+npm run db:inspect      # read-only: what exists in the target database
+npm run db:migrate      # apply supabase/migrations/* in one transaction (tracked in public.prism_migrations)
+npm run db:validate     # structural check: tables, RLS, policies, indexes, triggers
+npm run db:behavior     # constraints/triggers/RLS behaviour, inside a transaction that always rolls back
+npm run db:seed         # seed the demo project for the real dev Auth user (--reset to rebuild)
+```
+
 ## Where to look
 
 | Path                   | What                                                                                                                       |

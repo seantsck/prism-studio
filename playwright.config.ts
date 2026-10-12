@@ -7,7 +7,9 @@ export default defineConfig({
   webServer: {
     command: "npm run build && npx next start -p 3100",
     url: "http://localhost:3100",
-    reuseExistingServer: true,
-    timeout: 240_000,
+    // Always a fresh server in memory mode: e2e must never reach a real database, even if .env.local says otherwise.
+    reuseExistingServer: false,
+    timeout: 300_000,
+    env: { PRISM_STUDIO_PERSISTENCE: "memory", SUPABASE_DB_URL: "" },
   },
 });
