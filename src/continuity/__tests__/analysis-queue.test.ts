@@ -129,7 +129,12 @@ media("continuity analysis jobs (memory store, real ffmpeg, fake provider transp
   const submit = async (
     ctx: Awaited<ReturnType<typeof setup>>,
     provider: ContinuityAnalysisProvider,
-    over: { policy?: AnalysisSpendPolicy; acknowledged?: boolean; nonce?: string } = {},
+    over: {
+      policy?: AnalysisSpendPolicy;
+      acknowledged?: boolean;
+      nonce?: string;
+      limits?: { maxActivePerProject: number; maxJobAttempts: number };
+    } = {},
   ) =>
     submitAnalysis({
       inputs: ctx.inputs,
@@ -140,7 +145,7 @@ media("continuity analysis jobs (memory store, real ffmpeg, fake provider transp
       deps: ctx.deps,
       acknowledged: over.acknowledged ?? true,
       nonce: over.nonce ?? "n1",
-      limits: LIMITS,
+      limits: over.limits ?? LIMITS,
       now: ctx.h.clock.now,
     });
 
@@ -313,22 +318,212 @@ media("continuity analysis jobs (memory store, real ffmpeg, fake provider transp
     expect(g.transport.calls).toBe(1); // terminal: no further spend
   });
 
-  it("a safe provider rate limit before anything was processed is requeued (bounded), then succeeds", async () => {
-    const ctx = await setup();
-    const g = gemini((req, n) =>
-      n < 3
-        ? { kind: "error", error: new GeminiTransportError("rate_limit", 429, "429") }
-        : answerAll("pass")(req),
-    );
-    const { job } = await submit(ctx, g.provider);
-    const { w } = makeWorker(ctx.h, g.provider);
-    await w.tick();
-    const requeued = (await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!;
-    expect(requeued.status).toBe("queued");
-    expect(requeued.providerState).toBe("not_sent");
-    ctx.h.clock.advance(5000);
-    await w.tick();
-    expect((await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!.status).toBe("succeeded");
+  describe("durable provider-overload retry (one request per claim, persisted backoff)", () => {
+    const events = async (ctx: Awaited<ReturnType<typeof setup>>, jobId: string) =>
+      (await ctx.h.repo.mediaQa.listAnalysisEvents(jobId)).map((e) => e.note);
+    // production schedule (no fixed test delay)
+    const live = { retryDelayMs: undefined } as const;
+
+    it("503: ONE call per execution, job requeued with a persisted next-eligible time, nothing sent before it", async () => {
+      const ctx = await setup();
+      const g = gemini((req, n) =>
+        n < 1
+          ? { kind: "error", error: new GeminiTransportError("overloaded", 503, "503") }
+          : answerAll("pass")(req),
+      );
+      const { job } = await submit(ctx, g.provider);
+      const { w } = makeWorker(ctx.h, g.provider, PAID, live);
+      const t0 = ctx.h.clock.now.getTime();
+      await w.tick();
+      expect(g.transport.calls).toBe(1); // no rapid in-process retry
+      const after = (await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!;
+      expect(after.status).toBe("queued");
+      expect(after.leaseToken).toBeNull();
+      expect(after.providerState).toBe("not_sent");
+      expect(after.transportCalls).toBe(1);
+      expect(after.lastErrorCategory).toBe("overloaded");
+      const wait = Date.parse(after.nextRunAt) - t0;
+      expect(wait).toBeGreaterThanOrEqual(13_500); // 15 s ± 10 % jitter
+      expect(wait).toBeLessThanOrEqual(16_500);
+      // a second worker before the eligible time neither claims nor sends
+      const other = makeWorker(ctx.h, g.provider, PAID, { ...live, workerId: "other" }).w;
+      ctx.h.clock.advance(5_000);
+      expect(await other.tick()).toBe(0);
+      expect(g.transport.calls).toBe(1);
+      // after the backoff a later claim sends exactly ONE new request
+      ctx.h.clock.advance(15_000);
+      await other.tick();
+      expect(g.transport.calls).toBe(1 + job.inputSnapshot.plan.batches.length);
+      expect((await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!.status).toBe("succeeded");
+      // auditable, without any raw payload
+      const trail = (await events(ctx, job.id)).join("\n");
+      expect(trail).toMatch(/provider_request_attempt batch=1\/\d kind=analysis transport_call=1\/6/);
+      expect(trail).toMatch(/http=503 overloaded; transport_calls=1\/6; retry_ordinal=1; next_attempt_at=/);
+    });
+
+    it("429 follows the same durable semantics and honours a longer Retry-After", async () => {
+      const ctx = await setup();
+      const g = gemini((req, n) =>
+        n < 1
+          ? { kind: "error", error: new GeminiTransportError("rate_limit", 429, "429", 90_000) }
+          : answerAll("pass")(req),
+      );
+      const { job } = await submit(ctx, g.provider);
+      const { w } = makeWorker(ctx.h, g.provider, PAID, live);
+      const t0 = ctx.h.clock.now.getTime();
+      await w.tick();
+      const after = (await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!;
+      expect(after.status).toBe("queued");
+      expect(after.lastErrorCategory).toBe("rate_limit");
+      expect(Date.parse(after.nextRunAt) - t0).toBeGreaterThanOrEqual(90_000);
+      expect(g.transport.calls).toBe(1);
+      ctx.h.clock.advance(60_000);
+      expect(await w.tick()).toBe(0);
+      ctx.h.clock.advance(31_000);
+      await w.tick();
+      expect((await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!.status).toBe("succeeded");
+    });
+
+    it("backoff grows exponentially across confirmed overloads (15 s, 45 s, 120 s)", async () => {
+      const ctx = await setup();
+      const g = gemini([{ kind: "error", error: new GeminiTransportError("overloaded", 503, "503") }]);
+      const { job } = await submit(ctx, g.provider, {
+        limits: { maxActivePerProject: 3, maxJobAttempts: 6 },
+      });
+      const { w } = makeWorker(ctx.h, g.provider, PAID, live);
+      const waits: number[] = [];
+      for (let i = 0; i < 3; i++) {
+        const t = ctx.h.clock.now.getTime();
+        await w.tick();
+        const j = (await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!;
+        waits.push(Date.parse(j.nextRunAt) - t);
+        ctx.h.clock.advance(Date.parse(j.nextRunAt) - t + 1);
+      }
+      expect(g.transport.calls).toBe(3);
+      expect(waits[0]!).toBeGreaterThan(13_000);
+      expect(waits[0]!).toBeLessThan(17_000);
+      expect(waits[1]!).toBeGreaterThan(40_000);
+      expect(waits[1]!).toBeLessThan(50_000);
+      expect(waits[2]!).toBeGreaterThan(108_000);
+      expect(waits[2]!).toBeLessThan(132_000);
+    });
+
+    it("exhaustion after confirmed 503s is a distinct terminal state, never outcome_unknown; cost stays unknown with its reason", async () => {
+      const ctx = await setup();
+      const g = gemini([{ kind: "error", error: new GeminiTransportError("overloaded", 503, "503") }]);
+      const { job } = await submit(ctx, g.provider, {
+        limits: { maxActivePerProject: 3, maxJobAttempts: 6 },
+      });
+      expect(job.maxAttempts).toBe(6);
+      const { w } = makeWorker(ctx.h, g.provider, PAID, { ...live, maxTransportCalls: 3 });
+      for (let i = 0; i < 8; i++) {
+        await w.tick();
+        ctx.h.clock.advance(20 * 60_000);
+      }
+      const end = (await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!;
+      expect(end.status).toBe("failed");
+      expect(end.lastErrorCategory).toBe("provider_overloaded_retry_exhausted");
+      expect(end.lastErrorCategory).not.toBe("outcome_unknown");
+      expect(end.transportCalls).toBe(3);
+      expect(g.transport.calls).toBe(3); // the ceiling is a hard stop
+      const fin = (await ctx.h.repo.mediaQa.listAnalysisCosts(job.runId)).filter(
+        (c) => c.kind !== "estimated",
+      );
+      expect(fin).toHaveLength(1);
+      expect(fin[0]!.kind).toBe("unknown");
+      expect(fin[0]!.amountUsd).toBeNull();
+      expect(fin[0]!.usage).toMatchObject({ unknownReason: "provider_overloaded", transportCalls: 3 });
+      expect((await ctx.h.repo.mediaQa.getRun(job.runId))!.run.analysisStatus).toBe("failed");
+    });
+
+    it("an ambiguous timeout is outcome_unknown (reason ambiguous_submission) and is never requeued", async () => {
+      const ctx = await setup();
+      const g = gemini([{ kind: "error", error: new GeminiTransportError("timeout", null, "t") }]);
+      const { job } = await submit(ctx, g.provider);
+      const { w } = makeWorker(ctx.h, g.provider, PAID, live);
+      await w.tick();
+      ctx.h.clock.advance(60 * 60_000);
+      await w.tick();
+      const end = (await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!;
+      expect(end.status).toBe("failed");
+      expect(end.lastErrorCategory).toBe("outcome_unknown");
+      expect(g.transport.calls).toBe(1);
+      const fin = (await ctx.h.repo.mediaQa.listAnalysisCosts(job.runId)).find(
+        (c) => c.kind !== "estimated",
+      )!;
+      expect(fin.usage).toMatchObject({ unknownReason: "ambiguous_submission" });
+    });
+
+    it("a local ceiling refusal before send never invokes the transport and is not outcome_unknown", async () => {
+      const ctx = await setup();
+      // the first answer is invalid ⇒ the correction would be call #2, which the ceiling of 1 refuses locally
+      const g = gemini([{ kind: "text", text: "nope" }]);
+      const { job } = await submit(ctx, g.provider);
+      await makeWorker(ctx.h, g.provider, PAID, { maxTransportCalls: 1 }).w.tick();
+      const end = (await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!;
+      expect(end.status).toBe("failed");
+      expect(end.lastErrorCategory).toBe("local_policy_block");
+      expect(end.lastErrorCategory).not.toBe("outcome_unknown");
+      expect(g.transport.calls).toBe(1);
+      expect(end.transportCalls).toBe(1); // the refused call was never counted
+      const trail = await events(ctx, job.id);
+      expect(trail.filter((n) => n.startsWith("provider_request_attempt"))).toHaveLength(1);
+    });
+
+    it("schema correction: allowed once per RUN and it counts against the transport ceiling", async () => {
+      const ctx = await setup();
+      // every first answer is invalid, every correction would be valid
+      const g = gemini((req, n) => (n % 2 === 0 ? { kind: "text", text: "nope" } : answerAll("pass")(req)));
+      const { job } = await submit(ctx, g.provider);
+      expect(job.inputSnapshot.plan.batches.length).toBeGreaterThanOrEqual(2);
+      const { w } = makeWorker(ctx.h, g.provider);
+      await w.tick();
+      const end = (await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!;
+      // batch 1: invalid → correction (call 2, allowed). batch 2: invalid → correction REFUSED (allowance spent)
+      expect(end.status).toBe("failed");
+      expect(end.lastErrorCode).toBe("correction_budget_exhausted");
+      expect(g.transport.calls).toBe(3);
+      expect(end.transportCalls).toBe(3);
+      expect(end.correctionCount).toBe(1);
+    });
+
+    it("answered batches survive a durable retry: a later claim sends ONLY the unfinished batch", async () => {
+      const ctx = await setup();
+      const g = gemini((req, n) =>
+        n === 1
+          ? { kind: "error", error: new GeminiTransportError("overloaded", 503, "503") }
+          : answerAll("pass")(req),
+      );
+      const { job } = await submit(ctx, g.provider);
+      const batches = job.inputSnapshot.plan.batches.length;
+      expect(batches).toBeGreaterThanOrEqual(2);
+      const { w } = makeWorker(ctx.h, g.provider, PAID, { retryDelayMs: 1_000 });
+      await w.tick();
+      const mid = (await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!;
+      expect(mid.status).toBe("queued");
+      expect(mid.batchResults.filter((b) => b.complete)).toHaveLength(1);
+      expect(g.transport.calls).toBe(2);
+      ctx.h.clock.advance(2_000);
+      await w.tick();
+      const end = (await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!;
+      expect(end.status).toBe("succeeded");
+      expect(g.transport.calls).toBe(batches + 1); // batch 1 was NOT re-sent
+      const fin = (await ctx.h.repo.mediaQa.listAnalysisCosts(job.runId)).filter(
+        (c) => c.kind !== "estimated",
+      );
+      expect(fin).toHaveLength(1);
+      expect((fin[0]!.usage as { calls: unknown[] }).calls).toHaveLength(batches);
+    });
+
+    it("two workers racing on an overloaded job: exactly one provider request", async () => {
+      const ctx = await setup();
+      const g = gemini([{ kind: "error", error: new GeminiTransportError("overloaded", 503, "503") }]);
+      await submit(ctx, g.provider);
+      const a = makeWorker(ctx.h, g.provider, PAID, { ...live, workerId: "a" }).w;
+      const b = makeWorker(ctx.h, g.provider, PAID, { ...live, workerId: "b" }).w;
+      await Promise.all([a.tick(), b.tick()]);
+      expect(g.transport.calls).toBe(1);
+    });
   });
 
   it("schema-invalid twice fails visibly; usage of both calls is accounted", async () => {

@@ -33,8 +33,17 @@ unknown and a paid run is blocked.
 ## Actual cost
 
 From authoritative provider `usageMetadata` of every call that returned (including the correction call):
-input, output, thinking tokens → amount. Missing usage ⇒ **unknown** (never invented). A timeout is recorded
-as unknown cost because the request may have been processed.
+input, output, thinking tokens → amount. Missing usage ⇒ **unknown** (never invented). Unknown records say why
+(`usage.unknownReason`):
+
+| Reason                 | Meaning                                                                                              |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `provider_overloaded`  | every request was answered 429/503 and none reported usage (not claimed to be zero: no usage record) |
+| `ambiguous_submission` | a request may have been processed (timeout / connection lost after send)                             |
+| `no_usage_reported`    | a request completed but the provider returned no usage metadata                                      |
+
+`usage.transportCalls` records how many outbound requests were actually made. A call refused locally (ceiling)
+is not a request and is not counted.
 
 ## Accounting (`continuity_analysis_costs`, migration 0023)
 

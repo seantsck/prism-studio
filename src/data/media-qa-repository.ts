@@ -3,6 +3,7 @@ import type { AnalysisJobStatus, ProviderState } from "@/domain/continuity/analy
 import type {
   AnalysisErrorCategory,
   AnalysisUsage,
+  BatchResultEntry,
   ContinuityAnalysisInput,
   ContinuityAnalysisPlan,
   ExternalMediaManifest,
@@ -197,6 +198,10 @@ export interface AnalysisJob {
   batchesTotal: number;
   batchesDone: number;
   correctionCount: number;
+  /** Outbound provider transport invocations made so far (a locally refused call is never counted). */
+  transportCalls: number;
+  /** Batches already answered (or partially spent): a durable retry resumes after them. Normalized only. */
+  batchResults: BatchResultEntry[];
   estimatedCostUsd: number | null;
   actualCostUsd: number | null;
   providerFiles: Array<{ ref: string; state: "uploaded" | "deleted" | "cleanup_failed" }>;
@@ -268,6 +273,8 @@ export interface AnalysisJobPatch {
   batchesTotal?: number;
   batchesDone?: number;
   correctionCount?: number;
+  transportCalls?: number;
+  batchResults?: BatchResultEntry[];
   actualCostUsd?: number | null;
   providerFiles?: AnalysisJob["providerFiles"];
   lastErrorCode?: string | null;
@@ -275,7 +282,10 @@ export interface AnalysisJobPatch {
   lastErrorMessage?: string;
   startedAt?: string | null;
   releaseLease?: boolean;
+  /** Status-change reason (appended to the event trail with the transition). */
   note?: string;
+  /** An audit event WITHOUT a status change (e.g. one provider request attempt). Safe metadata only. */
+  event?: string;
 }
 
 export interface AnalysisCostRecord {

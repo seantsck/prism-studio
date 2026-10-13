@@ -17,7 +17,6 @@ import {
 } from "@/domain/continuity/analysis/schema";
 import {
   DEFAULT_ANALYSIS_BUDGET,
-  SAFE_TO_RETRY,
   type AnalysisBatch,
   type AnalysisMode,
   type ContinuityAnalysisInput,
@@ -62,8 +61,6 @@ const REFUSAL_FINISH = new Set([
   "IMAGE_PROHIBITED_CONTENT",
   "RECITATION",
 ]);
-
-export const MAX_SAFE_RETRIES = 2;
 
 export function maxOutputTokensFor(criteria: number, cap: number): number {
   return Math.min(cap, Math.max(1024, 1024 + 450 * criteria));
@@ -256,54 +253,55 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
   }
 
   /**
-   * One transport call with the bounded retry policy: only responses that prove the provider did NOT process
-   * the request (429 / 503) are retried. A timeout or network failure is ambiguous (the request may have been
-   * processed and billed), so it is never silently re-sent: it surfaces as `outcome_unknown`.
+   * EXACTLY ONE transport invocation. There is no retry loop here: a 429/503 proves the provider processed
+   * nothing, but when to ask again is the durable queue's decision (persisted `next_run_at`, exponential
+   * backoff), never a rapid in-process loop. A timeout or network failure is ambiguous (the request may have been
+   * processed and billed) and surfaces as `outcome_unknown`; it is never re-sent.
+   *
+   * `beforeTransportCall` runs first and may refuse locally (ceiling reached): that throws before the transport
+   * is touched, so a local policy block is never mistaken for a request that left the process.
    */
   private async call(
     req: GeminiRequest,
     ctx: AnalysisContext,
     calls: UsageCall[],
     kind: UsageCall["kind"],
+    batch: AnalysisBatch,
   ): Promise<GeminiResponse> {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const res = await this.transport.generate(req);
-        calls.push({
-          kind,
-          inputTokens: res.usage?.promptTokens ?? null,
-          outputTokens: res.usage?.candidatesTokens ?? null,
-          thoughtsTokens: res.usage?.thoughtsTokens ?? null,
-        });
-        return res;
-      } catch (err) {
-        if (err instanceof AnalysisBatchError) throw err;
-        const e =
-          err instanceof GeminiTransportError
-            ? err
-            : new GeminiTransportError("network", null, "Analysis request failed.");
-        if (SAFE_TO_RETRY.includes(e.category) && attempt < MAX_SAFE_RETRIES) {
-          await ctx.sleep(e.retryAfterMs ?? 1000 * 2 ** attempt);
-          continue;
-        }
-        if (e.category === "timeout" || e.category === "network") {
-          throw new AnalysisBatchError(
-            "outcome_unknown",
-            e.category,
-            "The analysis request did not complete and may have been processed. Prism will not re-send it automatically; start a new analysis if needed.",
-            calls,
-            true,
-          );
-        }
+    await ctx.beforeTransportCall?.({ batch, kind });
+    try {
+      const res = await this.transport.generate(req);
+      calls.push({
+        kind,
+        inputTokens: res.usage?.promptTokens ?? null,
+        outputTokens: res.usage?.candidatesTokens ?? null,
+        thoughtsTokens: res.usage?.thoughtsTokens ?? null,
+      });
+      return res;
+    } catch (err) {
+      if (err instanceof AnalysisBatchError) throw err;
+      const e =
+        err instanceof GeminiTransportError
+          ? err
+          : new GeminiTransportError("network", null, "Analysis request failed.");
+      if (e.category === "timeout" || e.category === "network") {
         throw new AnalysisBatchError(
+          "outcome_unknown",
           e.category,
-          `http_${e.httpStatus ?? "error"}`,
-          e.message,
+          "The analysis request did not complete and may have been processed. Prism will not re-send it automatically; start a new analysis if needed.",
           calls,
-          e.httpStatus != null,
-          e.retryAfterMs ?? undefined,
+          true,
         );
       }
+      throw new AnalysisBatchError(
+        e.category,
+        `http_${e.httpStatus ?? "error"}`,
+        e.message,
+        calls,
+        e.httpStatus != null,
+        e.retryAfterMs ?? undefined,
+        e.httpStatus ?? undefined,
+      );
     }
   }
 
@@ -324,12 +322,12 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
     const userTurn: GeminiTurn = { role: "user", parts: await this.toParts(spec, args.media, ctx) };
     const calls: UsageCall[] = [];
 
-    await ctx.beforeSend?.(batch);
     const first = await this.call(
       this.request(spec, [userTurn], batch.criterionKeys.length, ctx),
       ctx,
       calls,
       "analysis",
+      batch,
     );
 
     const refusal = (res: GeminiResponse): boolean =>
@@ -354,6 +352,16 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
     let last = first;
     let correctionUsed = false;
     if (!outcome.ok) {
+      if (ctx.canCorrect && !ctx.canCorrect()) {
+        // the run's correction allowance is spent: fail visibly instead of exceeding the approved call count
+        throw new AnalysisBatchError(
+          "schema_invalid",
+          "correction_budget_exhausted",
+          `The analyzer's answer was invalid and this run's correction allowance is used up (${outcome.errors.slice(0, 3).join("; ")}).`,
+          calls,
+          true,
+        );
+      }
       // exactly ONE correction request (media is re-sent: continuation is not relied upon)
       correctionUsed = true;
       const correction: GeminiTurn[] = [
@@ -369,6 +377,7 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
         ctx,
         calls,
         "correction",
+        batch,
       );
       if (refusal(last)) return refused(last);
       outcome = validateBatchResponse(last.text, batch, input.media);

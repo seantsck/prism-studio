@@ -26,6 +26,7 @@ const COLUMNS: Record<string, string> = {
   batchesTotal: "batches_total",
   batchesDone: "batches_done",
   correctionCount: "correction_count",
+  transportCalls: "transport_calls",
   actualCostUsd: "actual_cost_usd",
   lastErrorCode: "last_error_code",
   lastErrorCategory: "last_error_category",
@@ -133,6 +134,8 @@ export class PostgresAnalysisWorkerStore implements AnalysisWorkerStore {
       }
       if (patch.providerFiles !== undefined)
         add("provider_files", JSON.stringify(patch.providerFiles), "::jsonb");
+      if (patch.batchResults !== undefined)
+        add("batch_results", JSON.stringify(patch.batchResults), "::jsonb");
       const terminal = patch.status ? isAnalysisTerminal(patch.status) : false;
       if (patch.releaseLease || terminal) {
         sets.push("lease_owner = null", "lease_token = null", "lease_expires_at = null");
@@ -143,11 +146,20 @@ export class PostgresAnalysisWorkerStore implements AnalysisWorkerStore {
         `update continuity_analysis_jobs set ${sets.join(", ")} where id = $${params.length} returning *`,
         params,
       );
-      if (patch.status && patch.status !== job.status) {
+      const transitioned = patch.status && patch.status !== job.status;
+      if (transitioned || patch.event) {
         await c.query(
           `insert into continuity_analysis_events (project_id, job_id, run_id, at, from_status, to_status, note)
            values ($1, $2, $3, $4, $5, $6, $7)`,
-          [job.projectId, job.id, job.runId, now, job.status, patch.status, patch.note ?? ""],
+          [
+            job.projectId,
+            job.id,
+            job.runId,
+            now,
+            job.status,
+            transitioned ? patch.status : job.status,
+            transitioned ? (patch.note ?? "") : (patch.event ?? ""),
+          ],
         );
       }
       return mapAnalysisJob(r.rows[0]);

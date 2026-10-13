@@ -66,6 +66,8 @@ function ensureInlineAnalysisWorker(service: MemoryMediaQaService) {
     processor: getMediaProcessor(),
     logger: consoleLogger,
     paid: cfg.paid,
+    maxTransportCalls: cfg.limits.maxTransportCalls,
+    maxCorrections: cfg.limits.maxCorrections,
     workerId: "inline-demo-continuity-worker",
     idlePollMs:
       Number(process.env.PRISM_STUDIO_WORKER_IDLE_POLL_MS) > 0

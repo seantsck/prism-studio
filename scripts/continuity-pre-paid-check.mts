@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pg from "pg";
 import { analysisSpendBlockers } from "../src/domain/continuity/analysis/cost";
+import { OVERLOAD_BACKOFF_SECONDS } from "../src/domain/continuity/analysis/retry";
 import { MemoryMediaQaService } from "../src/data/media-qa-memory";
 import {
   analyzerStatuses,
@@ -61,6 +62,26 @@ note(
   "enable with …=mock,gemini",
 );
 ok("paid analysis flag is OFF in the real environment", real.paid.enabled === false);
+ok(
+  "retry mode is durable exponential backoff (no in-process 429/503 retry loop)",
+  OVERLOAD_BACKOFF_SECONDS.length >= 3 && OVERLOAD_BACKOFF_SECONDS[0]! < OVERLOAD_BACKOFF_SECONDS[1]!,
+  OVERLOAD_BACKOFF_SECONDS.join(","),
+);
+ok(
+  "maximum provider transport calls per run is 6",
+  real.limits.maxTransportCalls === 6,
+  String(real.limits.maxTransportCalls),
+);
+ok(
+  "schema correction maximum is 1 per run",
+  real.limits.maxCorrections === 1,
+  String(real.limits.maxCorrections),
+);
+ok(
+  "a job may use enough claims to spend the transport ceiling",
+  real.limits.maxJobAttempts >= real.limits.maxTransportCalls,
+  String(real.limits.maxJobAttempts),
+);
 ok("per-run analysis ceiling is set", real.paid.maxUsdPerRun != null, String(real.paid.maxUsdPerRun));
 ok(
   "generation spend is a separate flag (analysis flag is not PAID_GENERATION)",
@@ -165,6 +186,8 @@ try {
     processor,
     logger: silentLogger,
     paid: { enabled: false, maxUsdPerRun: real.paid.maxUsdPerRun, maxUsdPerDay: null }, // the REAL (closed) policy
+    maxTransportCalls: real.limits.maxTransportCalls,
+    maxCorrections: real.limits.maxCorrections,
     heartbeatMs: 0,
   });
   await worker.tick();
@@ -280,6 +303,10 @@ PROPOSED LIVE SMOKE (not executed)
   Est. tokens    : ~${est.tokens.inputTokens} input, ceiling ${est.tokens.maxOutputTokens} output
   Est. cost      : expected ~$${est.expectedUsd} · worst case $${est.maxUsd}
   Spend ceiling  : $${real.paid.maxUsdPerRun ?? "unset"} per run
+  Retry mode     : durable exponential backoff (${OVERLOAD_BACKOFF_SECONDS.join("s, ")}s), ONE request per claim
+  Transport calls: at most ${real.limits.maxTransportCalls} per run (retries + corrections included)
+  Schema fix     : at most ${real.limits.maxCorrections} correction per run (counts as a transport call)
+  Paid analysis  : ${real.paid.enabled ? "ENABLED (!)" : "disabled"}
   Credential     : ${key ? "present, unverified (no zero-cost verification call was made)" : "MISSING"}
 `);
 if (notes.length) console.log(`\nOperator setup still pending: ${notes.join("; ")}`);

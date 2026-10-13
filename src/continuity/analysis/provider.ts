@@ -46,8 +46,15 @@ export interface AnalysisContext {
   now(): Date;
   signal?: AbortSignal;
   sleep(ms: number): Promise<void>;
-  /** Called immediately before the paid request leaves the process (persists "request sent"). */
-  beforeSend?(batch: AnalysisBatch): Promise<void>;
+  /**
+   * Called immediately before EVERY transport invocation (initial or correction), in the same breath as the
+   * call. The worker uses it to enforce the per-run transport ceiling, count the invocation durably and persist
+   * "request sent". It may throw `AnalysisBatchError("local_policy_block")`: the transport is then never invoked
+   * and nothing is counted as sent.
+   */
+  beforeTransportCall?(info: { batch: AnalysisBatch; kind: "analysis" | "correction" }): Promise<void>;
+  /** Whether the run may still spend a schema-correction request (undefined ⇒ allowed). */
+  canCorrect?(): boolean;
   /** A temporary provider-side file now exists (operational metadata only; never canonical media). */
   onProviderFile?(ref: string): void;
 }
@@ -89,6 +96,8 @@ export class AnalysisBatchError extends Error {
     /** true once a request was sent: the outcome of that request may be billed even though we have no result. */
     readonly requestSent = false,
     readonly retryAfterMs?: number,
+    /** The provider's HTTP status when it answered (audit metadata only). */
+    readonly httpStatus?: number,
   ) {
     super(message);
     this.name = "AnalysisBatchError";

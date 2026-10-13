@@ -80,6 +80,9 @@ for (const a of analyzerStatuses(process.env)) {
 }
 console.log(`Paid analysis:     ${config.paid.enabled ? "ENABLED" : "disabled"}`);
 console.log(
+  `Retry policy:      durable backoff, one request per claim; at most ${config.limits.maxTransportCalls} provider requests and ${config.limits.maxCorrections} schema correction per run`,
+);
+console.log(
   `Per-run ceiling:   ${config.paid.maxUsdPerRun == null ? "not set (paid analysis blocked)" : `$${config.paid.maxUsdPerRun.toFixed(4)}`}`,
 );
 console.log(
@@ -118,6 +121,8 @@ const worker = new ContinuityAnalysisWorker({
   processor: new FfmpegMediaProcessor(),
   logger: consoleLogger,
   paid: config.paid,
+  maxTransportCalls: config.limits.maxTransportCalls,
+  maxCorrections: config.limits.maxCorrections,
 });
 const controller = new AbortController();
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

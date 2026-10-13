@@ -86,9 +86,10 @@ Validation rejects unknown/duplicate criterion ids, evidence citing an input tha
 out-of-range values and oversized responses. Criteria the model simply did not answer become **UNCHECKED**
 (`not_returned`): nothing is invented.
 
-- **One correction, then fail.** A structurally invalid answer triggers exactly one correction request
-  (validation errors + the previous answer, media re-sent); a second failure ends the job visibly
-  (`schema_invalid`). Correction usage is tracked separately.
+- **One correction per run, then fail.** A structurally invalid answer triggers one correction request
+  (validation errors + the previous answer, media re-sent); a second failure — or a second batch needing a
+  correction after the run's allowance is spent — ends the job visibly (`schema_invalid`). Correction usage is
+  tracked separately and the correction counts against the transport-call ceiling.
 - **Refusals are not failures.** `promptFeedback.blockReason` or a safety finish reason makes the batch's
   criteria **UNCHECKED** with `provider_refusal`. A continuity failure means a visible conflict with production
   truth, never provider inability.
@@ -99,15 +100,45 @@ out-of-range values and oversized responses. Criteria the model simply did not a
 
 `generateContent` documents **no idempotency key** and no request-dedup mechanism. Therefore:
 
-| Outcome                          | Policy                                                                                                                    |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| 429 / 503                        | provider did not process it: retried with backoff, ≤ 2 in-process, then one job-level requeue (only if nothing was spent) |
-| 500 / 502 / 504                  | not auto-retried; fails with the sanitized status                                                                         |
-| 401/403, 400/404/413/422         | permanent (`auth`, `invalid_input`)                                                                                       |
-| timeout / network                | **ambiguous**: may have been processed and billed ⇒ `outcome_unknown`, **never re-sent**; cost recorded `unknown`         |
-| lease expired after a send began | reclaimed job fails `outcome_unknown` (`provider_state != not_sent`) instead of spending again                            |
+| Outcome                          | Policy                                                                                                                               |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| 429 / 503                        | provider did not process it: **no in-process retry**; the job is released with a persisted, backed-off `next_run_at` (durable retry) |
+| retries exhausted after 429/503  | `provider_overloaded_retry_exhausted` (confirmed, not ambiguous); cost `unknown` with reason `provider_overloaded`                   |
+| 500 / 502 / 504                  | not auto-retried; fails with the sanitized status                                                                                    |
+| 401/403, 400/404/413/422         | permanent (`auth`, `invalid_input`)                                                                                                  |
+| timeout / network                | **ambiguous**: may have been processed and billed ⇒ `outcome_unknown`, **never re-sent**; cost `unknown` (`ambiguous_submission`)    |
+| local ceiling / policy block     | `local_policy_block`: refused BEFORE the transport is invoked; never counted as a request, never `outcome_unknown`                   |
+| lease expired after a send began | reclaimed job (`provider_state = sending`) fails `outcome_unknown` instead of spending again                                         |
 
 SDK retries are disabled (`retryOptions.attempts = 1`) so a hidden retry cannot double-bill.
+
+### Durable overload backoff
+
+Google's guidance for 429/503 is exponential backoff. Prism applies it in the **queue**, not in a loop:
+
+```
+claim → ONE request → 503
+      → persist transport_calls, partial usage, answered batches, next_run_at (+15 s)   [job released]
+later claim → ONE new request → 503 → next_run_at (+45 s) → … (+120 s, +300 s, +600 s; ±10 % deterministic jitter)
+```
+
+A provider `Retry-After` longer than the schedule is honoured (capped at 15 min). No worker sleeps for minutes and
+no database transaction is held while waiting: other workers skip a job whose `next_run_at` has not arrived.
+Batches that already have an answer are stored on the job (`batch_results`, normalized findings + usage only), so a
+later claim re-sends **only** the unfinished batch.
+
+### Request ceiling (separate from batches and corrections)
+
+| Limit                                  | Default | Setting                                     |
+| -------------------------------------- | ------- | ------------------------------------------- |
+| provider transport calls per run       | 6       | `PRISM_STUDIO_ANALYSIS_MAX_TRANSPORT_CALLS` |
+| schema-correction requests per **run** | 1       | `PRISM_STUDIO_ANALYSIS_MAX_CORRECTIONS`     |
+| worker claims per job (`max_attempts`) | 6       | `PRISM_STUDIO_ANALYSIS_MAX_ATTEMPTS`        |
+
+Retries and corrections both count as transport calls. A call is counted only when Prism actually invokes the
+Gemini transport (persisted immediately before the call; a locally refused call is never counted). Each attempt
+is an audit event (`provider_request_attempt batch=1/2 kind=analysis transport_call=3/6`, then `http=503
+overloaded; retry_ordinal=2; next_attempt_at=…`). No raw provider payload is stored.
 
 ## Cost
 

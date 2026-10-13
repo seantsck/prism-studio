@@ -140,6 +140,8 @@ export const mapAnalysisJob = (r: Row): AnalysisJob => ({
   batchesTotal: Number(r.batches_total),
   batchesDone: Number(r.batches_done),
   correctionCount: Number(r.correction_count),
+  transportCalls: Number(r.transport_calls ?? 0),
+  batchResults: ((r.batch_results as AnalysisJob["batchResults"] | null) ?? []).map((b) => ({ ...b })),
   estimatedCostUsd: num(r.estimated_cost_usd),
   actualCostUsd: num(r.actual_cost_usd),
   providerFiles: ((r.provider_files as AnalysisJob["providerFiles"] | null) ?? []).map((f) => ({ ...f })),

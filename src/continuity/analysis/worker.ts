@@ -1,12 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { analysisSpendBlockers, type AnalysisSpendPolicy } from "@/domain/continuity/analysis/cost";
 import { boundedDerivative } from "@/domain/continuity/analysis/plan";
+import {
+  DEFAULT_MAX_CORRECTIONS,
+  DEFAULT_MAX_TRANSPORT_CALLS,
+  overloadBackoffMs,
+} from "@/domain/continuity/analysis/retry";
 import { uncheckedFinding } from "@/domain/continuity/analysis/schema";
 import {
   DEFAULT_ANALYSIS_BUDGET,
   type AnalysisErrorCategory,
   type AnalysisMedia,
+  type BatchResultEntry,
   type NormalizedFinding,
+  type UnknownCostReason,
 } from "@/domain/continuity/analysis/types";
 import {
   AnalysisLeaseLostError,
@@ -54,10 +61,18 @@ export interface AnalysisWorkerOptions {
   heartbeatMs?: number;
   idlePollMs?: number;
   sleep?: (ms: number) => Promise<void>;
-  /** Backoff for the one safe job-level requeue (rate limit before any request was processed). */
+  /**
+   * Fixed delay for a confirmed-overload requeue. Tests only: production uses the deterministic exponential
+   * schedule in `domain/continuity/analysis/retry.ts` (15s, 45s, 120s, 300s, 600s + small jitter).
+   */
   retryDelayMs?: number;
+  /** Hard ceiling on provider transport invocations per run, corrections included (default 6). */
+  maxTransportCalls?: number;
+  /** Schema-correction requests allowed per run (default 1); they also count as transport calls. */
+  maxCorrections?: number;
 }
 
+/** Provider answers that PROVE nothing was processed: the durable queue may ask again later. */
 const SAFE_REQUEUE: readonly AnalysisErrorCategory[] = ["rate_limit", "overloaded"];
 /** Direct-video input ceiling (also bounds what may be uploaded to a provider's temporary file store). */
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
@@ -68,6 +83,8 @@ export class ContinuityAnalysisWorker {
   private readonly leaseMs: number;
   private readonly heartbeatMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly maxTransportCalls: number;
+  private readonly maxCorrections: number;
 
   constructor(private readonly o: AnalysisWorkerOptions) {
     this.workerId = o.workerId ?? `continuity-${randomUUID().slice(0, 8)}`;
@@ -75,6 +92,8 @@ export class ContinuityAnalysisWorker {
     this.leaseMs = o.leaseMs ?? 60_000;
     this.heartbeatMs = o.heartbeatMs ?? 15_000;
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.maxTransportCalls = Math.max(1, o.maxTransportCalls ?? DEFAULT_MAX_TRANSPORT_CALLS);
+    this.maxCorrections = Math.max(0, o.maxCorrections ?? DEFAULT_MAX_CORRECTIONS);
   }
 
   /** One scheduling pass: claim due jobs and run each to a terminal state or a safe requeue. */
@@ -151,7 +170,9 @@ export class ContinuityAnalysisWorker {
     }
 
     // ── reclaim safety: never spend twice on an interaction that may already have been sent ──
-    if (job.attemptCount > 0 && job.providerState !== "not_sent") {
+    // `sending` = a request was in flight when the previous lease ended. `responded` and `not_sent` are safe to
+    // continue: the answered batches are persisted and nothing is outstanding.
+    if (job.attemptCount > 0 && job.providerState === "sending") {
       return fail(
         "outcome_unknown",
         "reclaimed_after_send",
@@ -159,7 +180,11 @@ export class ContinuityAnalysisWorker {
         {
           kind: "unknown",
           amountUsd: null,
-          usage: sumUsage([]),
+          usage: {
+            ...sumUsage(job.batchResults.flatMap((b) => b.calls) as UsageCall[]),
+            unknownReason: "ambiguous_submission",
+            transportCalls: job.transportCalls,
+          },
           pricingVersion: "",
           analyzer: job.analyzer,
           model: job.model,
@@ -206,7 +231,6 @@ export class ContinuityAnalysisWorker {
         void this.o.store.heartbeat(job.id, token, now(), this.leaseMs).catch(() => undefined);
       }, this.heartbeatMs);
     }
-    const calls: UsageCall[] = [];
     const providerFiles: string[] = [];
     let cleaned = false;
     // Temporary provider-side copies are deleted best-effort, BEFORE the lease is released; a failed delete is
@@ -227,21 +251,44 @@ export class ContinuityAnalysisWorker {
         note: `${states.filter((s) => s.state === "deleted").length} deleted`,
       });
     };
-    let correctionCount = 0;
-    let providerRef: string | null = null;
-    const findings: NormalizedFinding[] = [];
+    // Resume state: answered batches (and usage already spent on partially-completed ones) survive a durable
+    // retry, so a later claim never re-sends a batch that has its answer.
+    let results: BatchResultEntry[] = job.batchResults.map((b) => ({ ...b }));
+    const allCalls = (): UsageCall[] => results.flatMap((r) => r.calls as UsageCall[]);
+    const correctionsUsed = () => allCalls().filter((c) => c.kind === "correction").length;
+    let transportCalls = job.transportCalls;
+    let currentBatchId: string | null = null;
+    let batchIndex = 0;
+    const totalBatches = input.plan.batches.length;
+    const mergePartial = (batchId: string, spent: UsageCall[]) => {
+      if (spent.length === 0) return;
+      const prior = results.find((r) => r.batchId === batchId && !r.complete);
+      results = results.filter((r) => r !== prior);
+      results.push({
+        batchId,
+        complete: false,
+        findings: [],
+        calls: [...(prior?.calls ?? []), ...spent],
+        correctionUsed: false,
+        providerRef: null,
+      });
+    };
+    let providerRef: string | null = results.at(-1)?.providerRef ?? null;
+    const findings: NormalizedFinding[] = results.filter((r) => r.complete).flatMap((r) => r.findings);
     try {
-      // 1. load + bound exactly the media the plan SENDS
-      const sendIds = new Set(
-        input.plan.batches.flatMap((b) => [...b.referenceInputIds, ...b.outputInputIds]),
-      );
+      // 1. load + bound exactly the media the plan SENDS (only for batches still to run)
+      const doneIds = new Set(results.filter((r) => r.complete).map((r) => r.batchId));
+      const pending = input.plan.batches.filter((b) => !doneIds.has(b.id));
+      const sendIds = new Set(pending.flatMap((b) => [...b.referenceInputIds, ...b.outputInputIds]));
       const loaded = new Map<string, MediaBytes>();
       for (const m of input.media.filter((x) => sendIds.has(x.inputId))) {
         loaded.set(m.inputId, await this.loadOne(job, m));
       }
 
       // 2. batches, one request each, cancellation checked between requests
-      for (const batch of input.plan.batches) {
+      for (const batch of pending) {
+        currentBatchId = batch.id;
+        batchIndex = input.plan.batches.indexOf(batch) + 1;
         current = await this.o.store.update(job.id, token, {}, now());
         if (current.status === "cancel_requested") {
           await cleanup();
@@ -249,7 +296,7 @@ export class ContinuityAnalysisWorker {
             "cancelled",
             "cancelled",
             "Analysis cancelled.",
-            this.partialCost(provider, calls, job),
+            this.partialCost(provider, allCalls(), job, transportCalls),
             true,
           );
         }
@@ -263,14 +310,41 @@ export class ContinuityAnalysisWorker {
             onProviderFile: (ref) => {
               if (!providerFiles.includes(ref)) providerFiles.push(ref);
             },
-            beforeSend: async () => {
-              await this.o.store.update(job.id, token, { providerState: "sending" }, now());
+            canCorrect: () => correctionsUsed() < this.maxCorrections,
+            beforeTransportCall: async ({ kind }) => {
+              // A LOCAL guard: refusing here means the transport is never invoked and nothing is counted.
+              if (transportCalls >= this.maxTransportCalls) {
+                throw new AnalysisBatchError(
+                  "local_policy_block",
+                  "transport_call_ceiling",
+                  `This analysis reached its limit of ${this.maxTransportCalls} provider requests; nothing further was sent.`,
+                );
+              }
+              transportCalls += 1;
+              await this.o.store.update(
+                job.id,
+                token,
+                {
+                  providerState: "sending",
+                  transportCalls,
+                  event: `provider_request_attempt batch=${batchIndex}/${totalBatches} kind=${kind} transport_call=${transportCalls}/${this.maxTransportCalls}`,
+                },
+                now(),
+              );
             },
           },
         });
-        calls.push(...out.calls);
+        const prior = results.find((r) => r.batchId === batch.id && !r.complete);
+        results = results.filter((r) => r.batchId !== batch.id);
+        results.push({
+          batchId: batch.id,
+          complete: true,
+          findings: out.findings,
+          calls: [...(prior?.calls ?? []), ...out.calls],
+          correctionUsed: out.correctionUsed,
+          providerRef: out.providerRef,
+        });
         findings.push(...out.findings);
-        if (out.correctionUsed) correctionCount += 1;
         providerRef = out.providerRef ?? providerRef;
         await this.o.store.update(
           job.id,
@@ -278,13 +352,16 @@ export class ContinuityAnalysisWorker {
           {
             providerState: "responded",
             providerRef,
-            batchesDone: findings.length > 0 ? input.plan.batches.indexOf(batch) + 1 : 0,
-            correctionCount,
+            batchesDone: results.filter((r) => r.complete).length,
+            correctionCount: correctionsUsed(),
+            batchResults: results,
+            event: `provider_response batch=${batchIndex}/${totalBatches} ok requests=${out.calls.length} correction=${out.correctionUsed}`,
           },
           now(),
         );
         await this.o.store.heartbeat(job.id, token, now(), this.leaseMs);
       }
+      currentBatchId = null;
 
       // 3. criteria nobody analysed stay UNCHECKED, with the reason (never an inferred pass)
       const analysed = new Set(findings.map((f) => f.criterionKey));
@@ -297,7 +374,7 @@ export class ContinuityAnalysisWorker {
 
       // 4. cost from authoritative usage; unknown stays unknown
       await cleanup();
-      const cost = this.partialCost(provider, calls, job)!;
+      const cost = this.partialCost(provider, allCalls(), job, transportCalls)!;
       await this.o.store.finalizeSuccess({
         jobId: job.id,
         leaseToken: token,
@@ -305,7 +382,7 @@ export class ContinuityAnalysisWorker {
         findings,
         cost,
         providerRef,
-        correctionCount,
+        correctionCount: correctionsUsed(),
         note: `${findings.filter((f) => f.result !== "unchecked").length} criteria judged, ${findings.filter((f) => f.result === "unchecked").length} unchecked`,
         now: now(),
       });
@@ -314,44 +391,74 @@ export class ContinuityAnalysisWorker {
       if (err instanceof AnalysisLeaseLostError) throw err;
       await cleanup();
       if (err instanceof AnalysisBatchError) {
-        calls.push(...err.calls);
-        // A rate limit / overload proves the provider processed nothing: ONE safe requeue if nothing was spent.
-        if (
-          SAFE_REQUEUE.includes(err.category) &&
-          calls.length === 0 &&
-          current.attemptCount < job.maxAttempts
-        ) {
-          const delay = err.retryAfterMs ?? this.o.retryDelayMs ?? 30_000;
-          await this.o.store.update(
-            job.id,
-            token,
-            {
-              status: "queued",
-              nextRunAt: new Date(this.clock().getTime() + delay).toISOString(),
-              providerState: "not_sent",
-              lastErrorCode: err.code,
-              lastErrorCategory: err.category,
-              lastErrorMessage: err.message.slice(0, 300),
-              releaseLease: true,
-              note: `Provider busy (${err.category}); retrying`,
-            },
-            now(),
+        if (currentBatchId) mergePartial(currentBatchId, err.calls);
+        // A confirmed 429/503 proves the provider processed nothing. It is NOT retried here: the job is
+        // released with a persisted, exponentially backed-off `next_run_at` and a later claim sends ONE request.
+        if (SAFE_REQUEUE.includes(err.category)) {
+          const exhausted =
+            transportCalls >= this.maxTransportCalls || current.attemptCount >= job.maxAttempts;
+          const fresh = await this.o.store.update(job.id, token, {}, now());
+          if (fresh.status === "cancel_requested") {
+            return await fail("cancelled", "cancelled", "Analysis cancelled.", null, true);
+          }
+          if (!exhausted) {
+            const delay =
+              this.o.retryDelayMs ?? overloadBackoffMs(current.attemptCount, job.id, err.retryAfterMs);
+            const next = new Date(this.clock().getTime() + delay).toISOString();
+            await this.o.store.update(
+              job.id,
+              token,
+              {
+                status: "queued",
+                nextRunAt: next,
+                providerState: "not_sent",
+                transportCalls,
+                batchResults: results,
+                lastErrorCode: err.code,
+                lastErrorCategory: err.category,
+                lastErrorMessage: err.message.slice(0, 300),
+                releaseLease: true,
+                note: `provider_request_attempt batch=${batchIndex}/${totalBatches} http=${err.httpStatus ?? "?"} ${err.category}; transport_calls=${transportCalls}/${this.maxTransportCalls}; retry_ordinal=${current.attemptCount}; next_attempt_at=${next}`,
+              },
+              now(),
+            );
+            log("continuity.requeued", {
+              errorCategory: err.category,
+              retryOrdinal: current.attemptCount,
+              nextAttemptAt: next,
+            });
+            return;
+          }
+          await this.o.store.update(job.id, token, { batchResults: results, transportCalls }, now());
+          return await fail(
+            "provider_overloaded_retry_exhausted",
+            "retry_exhausted",
+            `The provider was overloaded (${err.httpStatus ?? "429/503"}) for every allowed attempt (${transportCalls} request(s), ${current.attemptCount} attempt(s)); the analysis did not complete. Start a new analysis later.`,
+            this.partialCost(provider, allCalls(), job, transportCalls, "provider_overloaded"),
           );
-          log("continuity.requeued", { errorCategory: err.category });
-          return;
         }
-        const spend =
-          err.requestSent || calls.length > 0
-            ? this.partialCost(provider, calls, job, err.category === "outcome_unknown")
+        await this.o.store
+          .update(job.id, token, { batchResults: results, transportCalls }, now())
+          .catch(() => undefined);
+        const spent = allCalls();
+        const cost =
+          err.requestSent || spent.length > 0
+            ? this.partialCost(
+                provider,
+                spent,
+                job,
+                transportCalls,
+                err.category === "outcome_unknown" ? "ambiguous_submission" : undefined,
+              )
             : null;
-        return await fail(err.category, err.code, err.message, spend);
+        return await fail(err.category, err.code, err.message, cost);
       }
       const message = err instanceof Error ? err.message : "Analysis failed";
       return await fail(
         "invalid_input",
         "media",
         message.slice(0, 300),
-        this.partialCost(provider, calls, job),
+        this.partialCost(provider, allCalls(), job, transportCalls),
       );
     } finally {
       if (beating) clearInterval(beating);
@@ -359,20 +466,28 @@ export class ContinuityAnalysisWorker {
     }
   }
 
-  /** Final cost record for the calls that returned; unknown when usage is missing or a request may be in flight. */
+  /**
+   * Final cost record for the calls that returned. UNKNOWN (never zero, never invented) when usage is missing, a
+   * request may still be in flight, or nothing returned; `unknownReason` tells the three apart.
+   */
   private partialCost(
     provider: ContinuityAnalysisProvider,
     calls: UsageCall[],
     job: AnalysisJob,
-    ambiguous = false,
+    transportCalls: number,
+    forcedReason?: UnknownCostReason,
   ): import("@/data/media-qa-repository").AnalysisCostRecord {
     const usage = sumUsage(calls);
     const priced = provider.actualCost(calls, this.clock());
-    const known = !ambiguous && priced.amountUsd != null;
+    const known =
+      forcedReason == null && priced.amountUsd != null && (calls.length > 0 || provider.kind === "mock");
+    const reason: UnknownCostReason | undefined = known
+      ? undefined
+      : (forcedReason ?? (calls.length > 0 ? "no_usage_reported" : "provider_overloaded"));
     return {
       kind: known ? "actual" : "unknown",
       amountUsd: known ? priced.amountUsd : null,
-      usage,
+      usage: { ...usage, ...(reason ? { unknownReason: reason } : {}), transportCalls },
       pricingVersion: priced.pricingVersion,
       analyzer: job.analyzer,
       model: job.model,

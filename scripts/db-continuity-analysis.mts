@@ -441,6 +441,48 @@ try {
     stale === "lease_lost" && !(await worker.heartbeat(a.job.id, token, later, 1000)),
   );
 
+  // ── durable retry state (migration 0025): provider requests are counted and answered batches persisted ──
+  const retryAt = new Date().toISOString();
+  const withState = await worker.update(
+    a.job.id,
+    reclaimed!.job.leaseToken!,
+    {
+      transportCalls: 2,
+      batchResults: [
+        {
+          batchId: "b1",
+          complete: true,
+          findings: [],
+          calls: [{ kind: "analysis", inputTokens: 10, outputTokens: 5, thoughtsTokens: 0 }],
+          correctionUsed: false,
+          providerRef: null,
+        },
+      ],
+      event: "provider_request_attempt batch=1/2 kind=analysis transport_call=2/6",
+    },
+    retryAt,
+  );
+  check(
+    "the worker persists the transport-call count and answered batches (normalized, no raw payload)",
+    withState.transportCalls === 2 &&
+      withState.batchResults.length === 1 &&
+      withState.batchResults[0]!.complete === true,
+  );
+  check(
+    "a request attempt is auditable as an event without a status change",
+    (await owner.listAnalysisEvents(a.job.id)).some(
+      (e) => e.note.startsWith("provider_request_attempt") && e.fromStatus === e.toStatus,
+    ),
+  );
+  check(
+    "the worker cannot rewrite the frozen snapshot while holding the retry state",
+    denied(
+      await workerErr("update continuity_analysis_jobs set input_snapshot = '{}'::jsonb where id = $1", [
+        a.job.id,
+      ]),
+    ),
+  );
+
   // ── final result: one transaction, exactly once ──
   const tok2 = reclaimed!.job.leaseToken!;
   const fin = await worker.finalizeSuccess({

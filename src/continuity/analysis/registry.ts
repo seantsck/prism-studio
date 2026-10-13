@@ -1,4 +1,5 @@
 import type { AnalysisSpendPolicy } from "@/domain/continuity/analysis/cost";
+import { DEFAULT_MAX_CORRECTIONS, DEFAULT_MAX_TRANSPORT_CALLS } from "@/domain/continuity/analysis/retry";
 import { GeminiAnalysisProvider } from "../providers/gemini/analyzer";
 import {
   GEMINI_ANALYZER_ID,
@@ -18,7 +19,15 @@ import type { ContinuityAnalysisProvider } from "./provider";
 export interface AnalysisConfig {
   enabled: string[];
   paid: AnalysisSpendPolicy;
-  limits: { maxActivePerProject: number; maxJobAttempts: number };
+  limits: {
+    maxActivePerProject: number;
+    /** Worker claims a job may use (each claim sends at most one request per batch). */
+    maxJobAttempts: number;
+    /** Hard ceiling on provider transport invocations per run, retries and corrections included. */
+    maxTransportCalls: number;
+    /** Schema-correction requests allowed per RUN (they also count against the transport ceiling). */
+    maxCorrections: number;
+  };
   /** Automatic paid analysis after conform: architecture only, ALWAYS off in Phase 2D. */
   autoRun: false;
   gemini: GeminiConfig;
@@ -46,7 +55,18 @@ export function readAnalysisConfig(env: Record<string, string | undefined>): Ana
         1,
         Math.floor(num(env.PRISM_STUDIO_ANALYSIS_MAX_ACTIVE_PER_PROJECT) ?? 3),
       ),
-      maxJobAttempts: Math.max(1, Math.floor(num(env.PRISM_STUDIO_ANALYSIS_MAX_ATTEMPTS) ?? 3)),
+      maxJobAttempts: Math.max(1, Math.floor(num(env.PRISM_STUDIO_ANALYSIS_MAX_ATTEMPTS) ?? 6)),
+      maxTransportCalls: Math.min(
+        12,
+        Math.max(
+          1,
+          Math.floor(num(env.PRISM_STUDIO_ANALYSIS_MAX_TRANSPORT_CALLS) ?? DEFAULT_MAX_TRANSPORT_CALLS),
+        ),
+      ),
+      maxCorrections: Math.min(
+        2,
+        Math.floor(num(env.PRISM_STUDIO_ANALYSIS_MAX_CORRECTIONS) ?? DEFAULT_MAX_CORRECTIONS),
+      ),
     },
     autoRun: false,
     gemini: readGeminiConfig(env),

@@ -360,6 +360,8 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
       batchesTotal: input.job.snapshot.plan.batches.length,
       batchesDone: 0,
       correctionCount: 0,
+      transportCalls: 0,
+      batchResults: [],
       estimatedCostUsd: input.job.estimate.maxUsd,
       actualCostUsd: null,
       providerFiles: [],
@@ -511,6 +513,8 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
       if (patch.status === "succeeded") j.completedAt = now;
       if (patch.status === "cancelled") j.cancelledAt = now;
       this.addEvent(j, from, patch.status, patch.note ?? "", now);
+    } else if (patch.event) {
+      this.addEvent(j, from, from, patch.event, now);
     }
     const set = <K extends keyof AnalysisJob>(k: K, v: AnalysisJob[K] | undefined) => {
       if (v !== undefined) j[k] = v;
@@ -522,6 +526,8 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
     set("batchesTotal", patch.batchesTotal);
     set("batchesDone", patch.batchesDone);
     set("correctionCount", patch.correctionCount);
+    set("transportCalls", patch.transportCalls);
+    set("batchResults", patch.batchResults === undefined ? undefined : clone(patch.batchResults));
     set("actualCostUsd", patch.actualCostUsd);
     set("providerFiles", patch.providerFiles);
     set("lastErrorCode", patch.lastErrorCode);

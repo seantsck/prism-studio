@@ -337,8 +337,16 @@ export default async function ContinuityPage({
               <div key={j.id} className="flex flex-wrap items-center gap-3">
                 <Badge tone="info">{ANALYSIS_STATUS_LABELS[j.status]}</Badge>
                 <span>
-                  {j.analyzer} · {j.model} · {j.batchesDone}/{j.batchesTotal} requests
+                  {j.analyzer} · {j.model} · {j.batchesDone}/{j.batchesTotal} batches · {j.transportCalls}{" "}
+                  provider request(s)
                 </span>
+                {j.status === "queued" && j.attemptCount > 0 && j.lastErrorCategory ? (
+                  <span className="text-warn" data-testid="retry-scheduled">
+                    Provider busy ({(j.lastErrorCategory ?? "overloaded").replace(/_/g, " ")}): nothing was
+                    processed. Next attempt scheduled automatically at{" "}
+                    {new Date(j.nextRunAt).toISOString().slice(11, 19)} UTC.
+                  </span>
+                ) : null}
                 <ActionForm action={cancelContinuityAnalysis} quiet successMessage="Cancellation requested">
                   {hidden}
                   <input type="hidden" name="jobId" value={j.id} />
@@ -363,6 +371,12 @@ export default async function ContinuityPage({
               Last analysis failed ({j.lastErrorCategory?.replace(/_/g, " ")}): {j.lastErrorMessage}
               {j.lastErrorCategory === "outcome_unknown"
                 ? " Prism does not re-send automatically because the request may already have been processed."
+                : ""}
+              {j.lastErrorCategory === "provider_overloaded_retry_exhausted"
+                ? " Every request was confirmed rejected by the provider, so nothing was analysed. It is safe to start a new analysis later."
+                : ""}
+              {j.lastErrorCategory === "local_policy_block"
+                ? " Prism's own limit stopped the request before it was sent."
                 : ""}
             </div>
           ))}

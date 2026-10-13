@@ -194,11 +194,24 @@ export interface NormalizedFinding {
   limitations: string[];
 }
 
+/**
+ * Why an amount is UNKNOWN (never "zero"): the three situations are operationally different.
+ *  - `provider_overloaded`: every request was answered 429/503 and none reported usage. The provider documents
+ *    that such a request is not processed, but a missing usage record is still not proof of zero cost.
+ *  - `ambiguous_submission`: a request may have been processed (timeout / connection lost after send).
+ *  - `no_usage_reported`: a request completed but the provider returned no usage metadata.
+ */
+export type UnknownCostReason = "provider_overloaded" | "ambiguous_submission" | "no_usage_reported";
+
 export interface AnalysisUsage {
   inputTokens: number | null;
   outputTokens: number | null;
   thoughtsTokens: number | null;
   totalTokens: number | null;
+  /** Set only when the cost record is `unknown`. */
+  unknownReason?: UnknownCostReason;
+  /** Outbound transport invocations actually made (a call a local guard stopped is never counted). */
+  transportCalls?: number;
   /** Per call: [initial, correction?]. */
   calls: Array<{
     kind: "analysis" | "correction";
@@ -222,6 +235,10 @@ export const ANALYSIS_ERROR_CATEGORIES = [
   "config",
   "budget",
   "cancelled",
+  /** Prism's own policy refused the request BEFORE it left the process (nothing was sent). */
+  "local_policy_block",
+  /** Every allowed request was answered 429/503: nothing was analysed (confirmed, not ambiguous). */
+  "provider_overloaded_retry_exhausted",
 ] as const;
 export type AnalysisErrorCategory = (typeof ANALYSIS_ERROR_CATEGORIES)[number];
 
@@ -235,6 +252,20 @@ export class AnalysisError extends Error {
     super(message);
     this.name = "AnalysisError";
   }
+}
+
+/**
+ * One completed (or partially spent) batch, persisted on the job so a durable retry resumes where it stopped and
+ * never re-sends a batch that already has its answer. Normalized findings only: no raw provider payload.
+ */
+export interface BatchResultEntry {
+  batchId: string;
+  /** false = the batch's usage was spent but it has no answer yet (a later request in it was refused 429/503). */
+  complete: boolean;
+  findings: NormalizedFinding[];
+  calls: AnalysisUsage["calls"];
+  correctionUsed: boolean;
+  providerRef: string | null;
 }
 
 /** Categories where the provider rejected the request without processing it: retrying cannot double-bill. */

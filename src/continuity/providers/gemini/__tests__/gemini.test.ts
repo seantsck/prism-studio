@@ -4,7 +4,7 @@ import { ctx, makeInput, mediaFor } from "@/continuity/analysis/__tests__/fixtur
 import { AnalysisBatchError, type ContinuityAnalysisProvider } from "@/continuity/analysis/provider";
 import { MockAnalysisProvider } from "@/continuity/analysis/mock-provider";
 import { GEMINI_PRICING, readGeminiConfig, geminiState } from "../config";
-import { GeminiAnalysisProvider, MAX_SAFE_RETRIES } from "../analyzer";
+import { GeminiAnalysisProvider } from "../analyzer";
 import { FakeGeminiTransport, answerAll, type FakeStep } from "../fake-transport";
 import { GeminiTransportError, type GeminiRequest } from "../transport";
 import { mapSdkError } from "../sdk-transport";
@@ -140,26 +140,83 @@ describe("GeminiAnalysisProvider with a fake transport (no network)", () => {
     }
   });
 
-  it("429 and 503 are retried (bounded) because the provider did not process the request", async () => {
-    const sleep = vi.fn(async () => undefined);
-    const { transport, provider } = make((req, n) =>
-      n < 2
-        ? { kind: "error", error: apiError(n === 0 ? 429 : 503, n === 0 ? "rate_limit" : "overloaded") }
-        : answerAll()(req),
-    );
-    const out = await run(provider, { ctx: { ...ctx(), sleep } });
-    expect(transport.calls).toBe(3);
-    expect(sleep).toHaveBeenCalledTimes(2);
-    expect(out.findings.length).toBe(batch.criterionKeys.length);
-    // only the successful call produced usage
-    expect(out.calls).toHaveLength(1);
+  it("429 and 503 are NOT retried in-process: exactly one transport call, the durable queue decides when", async () => {
+    for (const [status, cat] of [
+      [429, "rate_limit"],
+      [503, "overloaded"],
+    ] as const) {
+      const sleep = vi.fn(async () => undefined);
+      const { transport, provider } = make([{ kind: "error", error: apiError(status, cat) }]);
+      const err = await run(provider, { ctx: { ...ctx(), sleep } }).catch((e) => e);
+      expect(err).toBeInstanceOf(AnalysisBatchError);
+      expect(err.category).toBe(cat);
+      expect(err.httpStatus).toBe(status);
+      expect(err.requestSent).toBe(true);
+      expect(err.calls).toHaveLength(0); // no usage reported: nothing is invented
+      expect(transport.calls).toBe(1);
+      expect(sleep).not.toHaveBeenCalled();
+    }
   });
 
-  it("persistent 429 gives up after the retry bound (no infinite spend)", async () => {
-    const { transport, provider } = make([{ kind: "error", error: apiError(429, "rate_limit") }]);
-    const err = await run(provider).catch((e) => e);
-    expect(err.category).toBe("rate_limit");
-    expect(transport.calls).toBe(MAX_SAFE_RETRIES + 1);
+  it("a local refusal before the transport is NOT a request: the transport is never touched", async () => {
+    const { transport, provider } = make([{ kind: "json", body: { criteria: [] } }]);
+    const block = new AnalysisBatchError(
+      "local_policy_block",
+      "transport_call_ceiling",
+      "ceiling",
+      [],
+      false,
+    );
+    const err = await run(provider, {
+      ctx: {
+        ...ctx(),
+        beforeTransportCall: async () => {
+          throw block;
+        },
+      },
+    }).catch((e) => e);
+    expect(err).toBe(block);
+    expect(err.category).toBe("local_policy_block");
+    expect(err.requestSent).toBe(false);
+    expect(transport.calls).toBe(0);
+  });
+
+  it("the correction counts as a transport call and is refused when the run's allowance is spent", async () => {
+    const seen: string[] = [];
+    const { transport, provider } = make([
+      { kind: "text", text: "not json" },
+      { kind: "json", body: { criteria: batch.criterionKeys.map((k) => answer(k)) } },
+    ]);
+    const err = await run(provider, {
+      ctx: {
+        ...ctx(),
+        beforeTransportCall: async ({ kind }) => {
+          seen.push(kind);
+        },
+        canCorrect: () => false,
+      },
+    }).catch((e) => e);
+    expect(err.category).toBe("schema_invalid");
+    expect(err.code).toBe("correction_budget_exhausted");
+    expect(seen).toEqual(["analysis"]);
+    expect(transport.calls).toBe(1);
+
+    const allowed = make([
+      { kind: "text", text: "not json" },
+      { kind: "json", body: { criteria: batch.criterionKeys.map((k) => answer(k)) } },
+    ]);
+    const kinds: string[] = [];
+    const out = await run(allowed.provider, {
+      ctx: {
+        ...ctx(),
+        beforeTransportCall: async ({ kind }) => {
+          kinds.push(kind);
+        },
+        canCorrect: () => true,
+      },
+    });
+    expect(kinds).toEqual(["analysis", "correction"]);
+    expect(out.correctionUsed).toBe(true);
   });
 
   it("500 is not auto-retried; auth and invalid-input fail permanently", async () => {
