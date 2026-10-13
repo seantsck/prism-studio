@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { fingerprint } from "@/domain/hash";
 import { assetSchema, type GenerationAttempt, type ProjectData } from "@/domain/schemas";
 import {
   assertTransition,
@@ -77,6 +78,21 @@ export class MemoryGenerationService implements GenerationRepository, Generation
 
   // ───────────────────────── GenerationRepository ─────────────────────────
 
+  /** Package inputs only: generation history and generated outputs are not inputs (mirrors Postgres). */
+  private revisionOf(data: ProjectData): string {
+    return fingerprint({
+      ...data,
+      attempts: [],
+      continuityChecks: [],
+      assets: data.assets.filter((a) => a.purpose !== "generation_output"),
+    });
+  }
+
+  async projectRevision(slug: string) {
+    const found = this.access.all().find((p) => p.project.slug === slug);
+    return found ? { projectId: found.project.id, revision: this.revisionOf(found) } : null;
+  }
+
   async createAttemptWithJob(input: CreateAttemptInput) {
     const found = this.projectOf(input.attempt.projectId);
     if (!found) throw new GenerationSubmitError("not_found", "That project no longer exists.");
@@ -96,6 +112,13 @@ export class MemoryGenerationService implements GenerationRepository, Generation
       throw new GenerationSubmitError(
         "stale_shot",
         "This shot changed while you were preparing the generation. Review it and try again.",
+      );
+    }
+
+    if (input.expectedProjectRevision !== null && this.revisionOf(found) !== input.expectedProjectRevision) {
+      throw new GenerationSubmitError(
+        "stale_package",
+        "Something this shot depends on changed while you were preparing the generation. Review the shot and try again.",
       );
     }
 

@@ -26,7 +26,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ project: string
   const gen = await getGenerationRepo();
 
   if (shotId) {
-    const views = await gen.listShotAttempts(shotId);
+    // A shot id of another (own) project must not answer under this project's URL.
+    const views = (await gen.listShotAttempts(shotId)).filter((v) => v.attempt.projectId === found.id);
     const rows = views.map((v) => ({
       attemptId: v.attempt.id,
       jobStatus: v.job?.status ?? null,

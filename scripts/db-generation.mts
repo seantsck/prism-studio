@@ -78,6 +78,21 @@ try {
   const projectId = data.project.id;
   const shot = data.shots.find((s) => s.shotCode === "3A")!;
 
+  // Package-input revision, read BEFORE the data was loaded in production (see startGeneration).
+  const rev = await ownerGen.projectRevision("ojousama");
+  check(
+    "projectRevision() returns a stable digest for the owner",
+    Boolean(rev) && rev!.projectId === projectId,
+  );
+  check(
+    "projectRevision() is deterministic across reads",
+    (await ownerGen.projectRevision("ojousama"))!.revision === rev!.revision,
+  );
+  check(
+    "a stranger cannot read another user's project revision",
+    (await strangerGen.projectRevision("ojousama")) === null,
+  );
+
   const submit = (key: string, modelId = "mock-video-1") => {
     const first = prepareSubmission({
       data,
@@ -89,6 +104,7 @@ try {
       userId: dev.id,
       idempotencyKey: key,
       config,
+      projectRevision: rev!.revision,
     });
     const ack = first.evaluation.compatibility?.ignoredFeatures.map((f) => f.id) ?? [];
     return prepareSubmission({
@@ -101,12 +117,24 @@ try {
       userId: dev.id,
       idempotencyKey: key,
       config,
+      projectRevision: rev!.revision,
     });
   };
 
   // ── 1. submission: atomic attempt + job, idempotency, duplicate, stale, RLS ──
   const p1 = submit(`dbgen-${randomUUID()}`);
   check("gate allows 3A for mock-video-1", Boolean(p1.input), JSON.stringify(p1.evaluation.gate.blockers));
+  let staleCode = "";
+  try {
+    await ownerGen.createAttemptWithJob({
+      ...p1.input!,
+      expectedProjectRevision: "0".repeat(64),
+      job: { ...p1.input!.job, id: randomUUID(), idempotencyKey: `dbgen-${randomUUID()}` },
+    });
+  } catch (e) {
+    staleCode = e instanceof GenerationSubmitError ? e.code : String(e);
+  }
+  check("a changed package dependency is refused (stale_package)", staleCode === "stale_package", staleCode);
   const created = await ownerGen.createAttemptWithJob(p1.input!);
   createdAttemptIds.push(created.attempt.id);
   check(

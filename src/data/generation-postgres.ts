@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { ZodType } from "zod";
 import { assetSchema, generationAttemptSchema, type GenerationAttempt } from "@/domain/schemas";
@@ -82,6 +82,60 @@ const PATCH_COLUMNS: Record<string, string> = {
 };
 
 /**
+ * Everything `loadProject` feeds into a generation package (see buildShotContext). Generation history
+ * (attempts, jobs, costs, outputs) and continuity checks are deliberately absent: they are not package inputs,
+ * and including them would make concurrent generations invalidate each other.
+ */
+const REVISION_SOURCES: Array<{ name: string; sql: string }> = [
+  { name: "projects", sql: "select * from projects where id = $1" },
+  ...[
+    "project_bibles",
+    "characters",
+    "character_identity_refs",
+    "character_looks",
+    "voice_profiles",
+    "locations",
+    "props",
+    "episodes",
+    "scenes",
+    "shots",
+    "dialogue_lines",
+    "action_blocks",
+    "performance_directions",
+    "performance_takes",
+    "storyboard_frames",
+  ].map((t) => ({ name: t, sql: `select * from ${q(t)} where project_id = $1` })),
+  // Generated outputs are new assets created by the worker, not inputs of any package.
+  { name: "assets", sql: "select * from assets where project_id = $1 and purpose <> 'generation_output'" },
+  ...[
+    ["scene_characters", "scenes", "scene_id"],
+    ["scene_props", "scenes", "scene_id"],
+    ["shot_characters", "shots", "shot_id"],
+    ["shot_props", "shots", "shot_id"],
+    ["shot_dialogue_lines", "shots", "shot_id"],
+    ["shot_reference_assets", "shots", "shot_id"],
+    ["shot_script_sources", "shots", "shot_id"],
+  ].map(([t, parent, col]) => ({
+    name: t!,
+    sql: `select j.* from ${q(t!)} j join ${q(parent!)} p on p.id = j.${col} where p.project_id = $1`,
+  })),
+];
+
+/** Row-content digest of all package inputs of one project, computed on `c`. */
+async function readProjectRevision(c: PoolClient, projectId: string): Promise<string> {
+  const h = createHash("sha256");
+  for (const src of REVISION_SOURCES) {
+    const r = await c.query(
+      `select coalesce(md5(string_agg(x::text, E'\\n' order by x::text)), '') as d, count(*)::int as n
+       from (${src.sql}) x`,
+      [projectId],
+    );
+    h.update(`${src.name}:${r.rows[0].n}:${r.rows[0].d}|`);
+  }
+  return h.digest("hex");
+}
+
+/**
  * Postgres generation persistence. `preamble` decides the security context, exactly like the project
  * repositories: an RLS preamble for the application path, a plain `begin` for the worker.
  */
@@ -107,6 +161,16 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
   }
 
   // ───────────────────────── GenerationRepository ─────────────────────────
+
+  async projectRevision(slug: string) {
+    return this.tx(async (c) => {
+      // RLS limits this to the signed-in user's projects.
+      const p = await c.query("select id from projects where slug = $1", [slug]);
+      if (p.rowCount === 0) return null;
+      const projectId = String(p.rows[0].id);
+      return { projectId, revision: await readProjectRevision(c, projectId) };
+    });
+  }
 
   async createAttemptWithJob(input: CreateAttemptInput) {
     const a = input.attempt;
@@ -136,6 +200,19 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
           "stale_shot",
           "This shot changed while you were preparing the generation. Review it and try again.",
         );
+      }
+
+      if (input.expectedProjectRevision !== null) {
+        // Optimistic concurrency over EVERY package input (looks, takes, locations, assets, neighbours...).
+        // The revision was read before the data the package was built from, so equality proves the frozen
+        // package is exactly what is committed now.
+        const current = await readProjectRevision(c, a.projectId);
+        if (current !== input.expectedProjectRevision) {
+          throw new GenerationSubmitError(
+            "stale_package",
+            "Something this shot depends on changed while you were preparing the generation. Review the shot and try again.",
+          );
+        }
       }
 
       const onShot = await c.query(

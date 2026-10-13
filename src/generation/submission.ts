@@ -118,6 +118,8 @@ export function prepareSubmission(args: {
   config: GenerationConfig;
   now?: Date;
   seed?: number | null;
+  /** `GenerationRepository.projectRevision()` captured before `data` was loaded (null = unchecked). */
+  projectRevision?: string | null;
 }): PreparedSubmission {
   const now = args.now ?? new Date();
   const evaluation = evaluateShotForModel({ ...args, now });
@@ -212,6 +214,7 @@ export function prepareSubmission(args: {
       },
       estimate: priced,
       expectedShotUpdatedAt: ctx.shot.updatedAt,
+      expectedProjectRevision: args.projectRevision ?? null,
       limits: {
         maxActivePerProject: args.config.limits.maxActivePerProject,
         maxSubmitsPerMinutePerUser: args.config.limits.maxSubmitsPerMinutePerUser,

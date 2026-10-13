@@ -1,6 +1,7 @@
 import { briefToText, renderGenerationBrief, type GenerationPackage } from "@/domain/generation-package";
 import { getCurrentUser } from "@/server/auth";
 import { getGenerationRepo } from "@/server/generation";
+import { getRepo } from "@/server/repo";
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,80}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -15,8 +16,11 @@ export async function GET(req: Request, ctx: { params: Promise<{ project: string
   if (!SLUG.test(project) || !UUID.test(attemptId)) return new Response("Not found", { status: 404 });
   if (!(await getCurrentUser())) return Response.json({ error: "unauthenticated" }, { status: 401 });
 
+  const owned = (await (await getRepo()).listProjects()).find((p) => p.slug === project);
+  if (!owned) return new Response("Not found", { status: 404 });
   const view = await (await getGenerationRepo()).getAttemptView(attemptId);
-  if (!view) return new Response("Not found", { status: 404 });
+  // The attempt must belong to the project in the URL (not merely to some project this user owns).
+  if (!view || view.attempt.projectId !== owned.id) return new Response("Not found", { status: 404 });
   const pkg = view.attempt.packageSnapshot as unknown as GenerationPackage;
   const name = `attempt-${view.attempt.attemptNumber}-${attemptId.slice(0, 8)}`;
   const brief = new URL(req.url).searchParams.get("format") === "brief";

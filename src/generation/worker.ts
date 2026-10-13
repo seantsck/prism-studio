@@ -50,6 +50,13 @@ const isIllegalTransition = (err: unknown) =>
   err instanceof IllegalTransitionError ||
   (err instanceof Error && /illegal generation job transition/i.test(err.message));
 
+/** Error categories after which a submit call may nevertheless have been accepted by the provider. */
+const AMBIGUOUS_SUBMIT_CATEGORIES: readonly GenerationErrorCategory[] = [
+  "transient",
+  "timeout",
+  "provider_unavailable",
+];
+
 /** A sanitized, user-safe description of a failure. Provider detail is reduced to a stable code. */
 interface Classified {
   category: GenerationErrorCategory;
@@ -221,6 +228,19 @@ export class GenerationWorker {
     }
     const request = generationRequestSchema.parse(attempt.request);
 
+    // Kill switch: a provider that was disabled or lost its configuration after the job was queued must not
+    // receive NEW work. (Jobs already submitted keep being polled/ingested so their results are not lost.)
+    if (
+      (job.status === "queued" || job.status === "submitting") &&
+      !this.registry.availabilityOf(model).available
+    ) {
+      throw new GenerationProviderError(
+        "permanent",
+        "provider_unavailable",
+        "This provider/model is disabled or not configured in this deployment.",
+      );
+    }
+
     switch (job.status) {
       case "cancel_requested":
         return this.cancel(claimed, job);
@@ -249,6 +269,26 @@ export class GenerationWorker {
         "missing_prompt_plan",
         "Attempt has no prompt plan.",
       );
+
+    // A second remote submission is only safe when the provider de-duplicates on our idempotency key, or when
+    // the previous try was definitely refused (rate limit, quota, invalid). An interrupted or ambiguous try
+    // (lease expired mid-submit, network error, timeout) may have been accepted: without provider idempotency
+    // re-submitting could bill twice, so Prism stops and says so instead of guessing.
+    const model0 = this.registry.model(job.provider, job.model)!;
+    const resubmission = job.attemptCount > 0 && !job.providerJobId;
+    if (resubmission && !model0.capabilities.operational.idempotency) {
+      const ambiguous =
+        job.status === "submitting" ||
+        job.lastErrorCategory === null ||
+        AMBIGUOUS_SUBMIT_CATEGORIES.includes(job.lastErrorCategory);
+      if (ambiguous) {
+        throw new GenerationProviderError(
+          "permanent",
+          "submission_outcome_unknown",
+          "An earlier submission may have reached the provider and this provider cannot de-duplicate requests. Check the provider account, then generate again if nothing was created.",
+        );
+      }
+    }
 
     let current = job;
     if (job.status === "queued") {
@@ -284,23 +324,43 @@ export class GenerationWorker {
           : "submitted";
     const model = this.registry.model(job.provider, job.model)!;
     const interval = model.capabilities.operational.recommendedPollIntervalMs;
-    await this.store.update(
-      current.id,
-      token,
-      {
-        status: next,
-        providerJobId: submission.providerJobId,
-        providerStatus: submission.providerStatus,
-        submittedAt: accepted,
-        nextRunAt: new Date(this.now().getTime() + (next === "ingesting" ? 0 : interval)).toISOString(),
-        releaseLease: true,
-        lastErrorCode: null,
-        lastErrorCategory: null,
-        lastErrorMessage: "",
-        note: `Accepted by provider (${submission.providerStatus})`,
-      },
-      accepted,
-    );
+    try {
+      await this.store.update(
+        current.id,
+        token,
+        {
+          status: next,
+          providerJobId: submission.providerJobId,
+          providerStatus: submission.providerStatus,
+          submittedAt: accepted,
+          nextRunAt: new Date(this.now().getTime() + (next === "ingesting" ? 0 : interval)).toISOString(),
+          releaseLease: true,
+          lastErrorCode: null,
+          lastErrorCategory: null,
+          lastErrorMessage: "",
+          note: `Accepted by provider (${submission.providerStatus})`,
+        },
+        accepted,
+      );
+    } catch (err) {
+      if (isIllegalTransition(err)) {
+        // Cancellation arrived while the provider call was in flight. The provider HAS accepted the request:
+        // keep its id (no status change) so the cancel path can ask it to stop and records billing honestly,
+        // instead of reporting "cancelled before it was sent".
+        await this.store.update(
+          current.id,
+          token,
+          {
+            providerJobId: submission.providerJobId,
+            providerStatus: submission.providerStatus,
+            submittedAt: accepted,
+            note: "Provider accepted the request while cancellation was pending",
+          },
+          accepted,
+        );
+      }
+      throw err;
+    }
   }
 
   private ref(job: GenerationJob, request: GenerationRequest): ProviderJobRef {
@@ -442,6 +502,10 @@ export class GenerationWorker {
     const token = claimed.job.leaseToken!;
     const now = this.now().toISOString();
     let outcome: "local_only" | "confirmed" | "not_supported" | "failed" = "local_only";
+    // A submit was started but no provider id was recorded: the provider may hold a request we cannot name.
+    // That is NOT "cancelled before it was sent".
+    const maybeSubmitted = !job.providerJobId && job.attemptCount > 0;
+    if (maybeSubmitted) outcome = "failed";
     if (job.providerJobId) {
       const adapter = this.registry.adapter(job.provider);
       const model = this.registry.model(job.provider, job.model);
@@ -470,11 +534,13 @@ export class GenerationWorker {
             ? "Cancelled; provider confirmed"
             : outcome === "local_only"
               ? "Cancelled before submission"
-              : "Cancelled in Prism; the provider did not confirm and may still complete",
+              : maybeSubmitted
+                ? "Cancelled in Prism; an earlier submission may have reached the provider"
+                : "Cancelled in Prism; the provider did not confirm and may still complete",
       },
       now,
     );
-    if (job.providerJobId && outcome !== "confirmed") {
+    if ((job.providerJobId || maybeSubmitted) && outcome !== "confirmed") {
       await this.store.recordUnknownCost({
         jobId: job.id,
         attemptId: job.attemptId,
@@ -551,7 +617,7 @@ export class GenerationWorker {
       },
       now.toISOString(),
     );
-    if (fresh.providerJobId) {
+    if (fresh.providerJobId || c.code === "submission_outcome_unknown") {
       await this.store.recordUnknownCost({
         jobId: job.id,
         attemptId: job.attemptId,

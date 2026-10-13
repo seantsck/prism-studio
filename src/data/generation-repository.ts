@@ -26,7 +26,8 @@ import type {
 
 export class GenerationSubmitError extends Error {
   constructor(
-    readonly code: "duplicate_active" | "project_busy" | "throttled" | "stale_shot" | "not_found",
+    readonly code:
+      "duplicate_active" | "project_busy" | "throttled" | "stale_shot" | "stale_package" | "not_found",
     message: string,
   ) {
     super(message);
@@ -98,6 +99,12 @@ export interface CreateAttemptInput {
   estimate: CostEstimate;
   /** The shot revision the package was built from; submission is refused if the shot moved since. */
   expectedShotUpdatedAt: string;
+  /**
+   * `projectRevision()` read BEFORE the project data the package was built from. Submission is refused when
+   * any package dependency (looks, takes, locations, assets, other shots...) changed since. `null` opts out of
+   * the check (tests/scripts only; the server action always supplies it).
+   */
+  expectedProjectRevision: string | null;
   limits: {
     maxActivePerProject: number;
     maxSubmitsPerMinutePerUser: number;
@@ -114,6 +121,12 @@ export interface ReviewInput {
 }
 
 export interface GenerationRepository {
+  /**
+   * Opaque revision of every row a generation package can depend on (generation history excluded). Read it
+   * BEFORE loading the project, then pass it as `expectedProjectRevision`: any change committed in between
+   * makes the submission fail with `stale_package` instead of freezing a package nobody validated.
+   */
+  projectRevision(slug: string): Promise<{ projectId: string; revision: string } | null>;
   /** Atomic: validates, then writes attempt + job + estimated cost + first event in ONE transaction. */
   createAttemptWithJob(
     input: CreateAttemptInput,

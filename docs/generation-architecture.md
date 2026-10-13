@@ -73,7 +73,9 @@ state machines (`domain/generation/lifecycle.ts`):
 6. in one transaction: lock the project row, replay-by-idempotency-key, refuse a second active generation for
    the shot, enforce the project's active cap and per-user submit rate, assign the attempt number, insert
    attempt + job + estimated cost + first event;
-7. a shot that changed after the package was built (`shots.updated_at`) is refused (`stale_shot`).
+7. a shot that changed after the package was built (`shots.updated_at`) is refused (`stale_shot`), and so is ANY
+   change to another package input (Look, take, location, asset, neighbouring shot...): the action reads
+   `projectRevision()` before loading the project and the transaction compares it again (`stale_package`).
 
 No job is created if any step fails. Double clicks replay (same key) or are refused (shot already active).
 

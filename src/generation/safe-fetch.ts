@@ -13,7 +13,8 @@ import { isIP } from "node:net";
  *   3. DNS is validated AT CONNECT TIME through the socket's `lookup` hook (defeats DNS rebinding):
  *      every resolved address must be public.
  *   4. Redirects are followed manually (bounded) and each hop goes through 1-3 again.
- *   5. Hard byte cap while streaming, overall timeout, no cookies, no forwarded credentials.
+ *   5. Hard byte cap while streaming, an idle timeout PLUS an overall deadline for the whole download (a
+ *      trickling server cannot hold a worker open), no cookies, no forwarded credentials.
  * Callers still validate the bytes (magic sniffing, size, kind) through the shared upload policy.
  */
 
@@ -219,11 +220,32 @@ function once(
   url: URL,
   policy: UrlPolicy,
   limits: FetchLimits,
+  /** Absolute epoch-ms deadline for the WHOLE download (all hops): `timeout` below is only an idle timeout. */
+  deadlineAt: number,
 ): Promise<
   { kind: "body"; bytes: Uint8Array; contentType: string | null } | { kind: "redirect"; location: string }
 > {
   return new Promise((resolve, reject) => {
     const lib = url.protocol === "http:" ? http : https;
+    let settled = false;
+    const done =
+      <T>(fn: (v: T) => void) =>
+      (v: T) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(overall);
+        fn(v);
+      };
+    const resolveOnce = done(resolve);
+    const rejectOnce = done(reject);
+    // A server that trickles one byte per idle-timeout would otherwise hold the worker (and its lease) open.
+    const overall = setTimeout(
+      () => {
+        req.destroy();
+        rejectOnce(new UnsafeUrlError("timeout", "Output download exceeded the time limit."));
+      },
+      Math.max(1, deadlineAt - Date.now()),
+    );
     const req = lib.request(
       url,
       {
@@ -236,16 +258,16 @@ function once(
         const status = res.statusCode ?? 0;
         if ([301, 302, 303, 307, 308].includes(status) && res.headers.location) {
           res.resume();
-          return resolve({ kind: "redirect", location: res.headers.location });
+          return resolveOnce({ kind: "redirect", location: res.headers.location });
         }
         if (status < 200 || status >= 300) {
           res.resume();
-          return reject(new UnsafeUrlError("http_error", `Output download failed with HTTP ${status}.`));
+          return rejectOnce(new UnsafeUrlError("http_error", `Output download failed with HTTP ${status}.`));
         }
         const declared = Number(res.headers["content-length"] ?? NaN);
         if (Number.isFinite(declared) && declared > limits.maxBytes) {
           res.destroy();
-          return reject(new UnsafeUrlError("too_large", "Output is larger than the allowed size."));
+          return rejectOnce(new UnsafeUrlError("too_large", "Output is larger than the allowed size."));
         }
         const chunks: Buffer[] = [];
         let total = 0;
@@ -253,29 +275,29 @@ function once(
           total += chunk.length;
           if (total > limits.maxBytes) {
             res.destroy();
-            reject(new UnsafeUrlError("too_large", "Output is larger than the allowed size."));
+            rejectOnce(new UnsafeUrlError("too_large", "Output is larger than the allowed size."));
             return;
           }
           chunks.push(chunk);
         });
         res.on("end", () =>
-          resolve({
+          resolveOnce({
             kind: "body",
             bytes: new Uint8Array(Buffer.concat(chunks)),
             contentType: (res.headers["content-type"] as string | undefined) ?? null,
           }),
         );
-        res.on("error", () => reject(new UnsafeUrlError("network", "Output download was interrupted.")));
+        res.on("error", () => rejectOnce(new UnsafeUrlError("network", "Output download was interrupted.")));
       },
     );
     req.on("timeout", () => {
       req.destroy();
-      reject(new UnsafeUrlError("timeout", "Output download timed out."));
+      rejectOnce(new UnsafeUrlError("timeout", "Output download timed out."));
     });
     req.on("error", (e: NodeJS.ErrnoException) => {
       if (e.code === "EPRISM_PRIVATE_ADDRESS") {
-        reject(new UnsafeUrlError("private_address", "Output URL resolved to a non-public address."));
-      } else reject(new UnsafeUrlError("network", "Output download failed."));
+        rejectOnce(new UnsafeUrlError("private_address", "Output URL resolved to a non-public address."));
+      } else rejectOnce(new UnsafeUrlError("network", "Output download failed."));
     });
     req.end();
   });
@@ -287,8 +309,9 @@ export async function safeFetch(
   limits: FetchLimits,
 ): Promise<FetchedOutput> {
   let url = assertSafeUrl(rawUrl, policy);
+  const deadlineAt = Date.now() + limits.timeoutMs;
   for (let hop = 0; ; hop++) {
-    const result = await once(url, policy, limits);
+    const result = await once(url, policy, limits, deadlineAt);
     if (result.kind === "body") {
       return { bytes: result.bytes, contentType: result.contentType, host: url.hostname, redirects: hop };
     }

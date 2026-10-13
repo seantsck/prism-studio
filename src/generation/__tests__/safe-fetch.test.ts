@@ -141,6 +141,11 @@ describe("safeFetch against a local server (loopback allowed for tests only)", (
         res.end();
       } else if (req.url === "/slow") {
         setTimeout(() => res.end("late"), 5000).unref();
+      } else if (req.url === "/trickle") {
+        // One byte every 30 ms: never idle, never over the byte cap: only an overall deadline stops it.
+        res.writeHead(200);
+        const t = setInterval(() => res.write("x"), 30);
+        res.on("close", () => clearInterval(t));
       } else if (req.url === "/500") {
         res.writeHead(500);
         res.end();
@@ -183,6 +188,14 @@ describe("safeFetch against a local server (loopback allowed for tests only)", (
       code: "timeout",
     });
     await expect(safeFetch(`${base}/500`, policy, limits)).rejects.toMatchObject({ code: "http_error" });
+  });
+
+  it("an overall deadline stops a slow trickle that never hits the idle timeout", async () => {
+    const started = Date.now();
+    await expect(
+      safeFetch(`${base}/trickle`, policy, { maxBytes: 1_000_000, timeoutMs: 400, maxRedirects: 1 }),
+    ).rejects.toMatchObject({ code: "timeout" });
+    expect(Date.now() - started).toBeLessThan(2000);
   });
 
   it("without the test override, loopback is refused at the URL policy", async () => {

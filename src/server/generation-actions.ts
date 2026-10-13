@@ -27,6 +27,11 @@ async function startGeneration_impl(form: FormData) {
   if (!provider || !modelId) throw new UserFacingError("Choose a generation model.");
 
   const user = await requireUser();
+  const repo = await getGenerationRepo();
+  // Read the revision of every package input BEFORE loading the data the package is built from: the commit
+  // re-checks it, so the frozen package is exactly the one that was validated (no Look/take/asset can slip in).
+  const revision = await repo.projectRevision(slug);
+  if (!revision) throw new UserFacingError("That project no longer exists.");
   const data = await requireProjectFresh(slug);
   const shot = data.shots.find((s) => s.id === shotId);
   if (!shot) throw new UserFacingError("That shot no longer exists.");
@@ -34,7 +39,6 @@ async function startGeneration_impl(form: FormData) {
   const registry = getRegistry();
   const config = getGenerationConfig();
   const acknowledged = form.getAll("ack").map((v) => String(v));
-  const repo = await getGenerationRepo();
 
   const existing = (await repo.listShotAttempts(shotId)).map((v) => v.attempt.attemptNumber);
   const nextNumber = Math.max(0, ...existing) + 1;
@@ -68,6 +72,7 @@ async function startGeneration_impl(form: FormData) {
     userId: user.kind === "supabase" ? user.id : null,
     idempotencyKey: key,
     config,
+    projectRevision: revision.revision,
   });
   if (!prepared.input) {
     const g = prepared.evaluation.gate;
@@ -95,10 +100,12 @@ export async function startGeneration(form: FormData): Promise<ActionResult> {
 
 async function cancelGeneration_impl(form: FormData) {
   const slug = str(form, "projectSlug");
-  await requireProjectFresh(slug); // authorises the slug for this user (RLS)
+  const data = await requireProjectFresh(slug); // authorises the slug for this user (RLS)
   const repo = await getGenerationRepo();
   const job = await repo.getJob(str(form, "jobId"));
-  if (!job) throw new UserFacingError("That generation no longer exists.");
+  // The job must belong to THIS project, not merely to some project the user owns.
+  if (!job || job.projectId !== data.project.id)
+    throw new UserFacingError("That generation no longer exists.");
   await repo.requestCancel(job.id, new Date().toISOString());
   refresh(slug);
 }
@@ -109,14 +116,15 @@ export async function cancelGeneration(form: FormData): Promise<ActionResult> {
 
 async function reviewGeneration_impl(form: FormData) {
   const slug = str(form, "projectSlug");
-  await requireProjectFresh(slug);
+  const data = await requireProjectFresh(slug);
   const repo = await getGenerationRepo();
   const decision = str(form, "decision");
   if (decision !== "approve" && decision !== "reject" && decision !== "clear" && decision !== "notes") {
     throw new UserFacingError("Unknown review decision.");
   }
   const view = await repo.getAttemptView(str(form, "attemptId"));
-  if (!view) throw new UserFacingError("That attempt no longer exists.");
+  if (!view || view.attempt.projectId !== data.project.id)
+    throw new UserFacingError("That attempt no longer exists.");
   if (decision === "approve" && view.attempt.status !== "succeeded") {
     throw new UserFacingError("Only a completed generation can be approved.");
   }

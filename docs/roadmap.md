@@ -65,9 +65,16 @@ webhook endpoints (architecture only); realtime push instead of status polling; 
   the dev test-credential path; production needs `PRISM_STUDIO_WORKER_SERVICE_KEY` on the worker host.
 - **Status updates poll** Prism's own endpoint (1.5 s while active); no push.
 - **`maxConcurrency` per model is declared but only advisory**; the worker bounds total concurrency.
-- **Submission TOCTOU window**: the package is built from a fresh read and `shots.updated_at` is verified inside
-  the transaction, but changes to a Look/take/location between read and insert are not re-verified (the frozen
-  package and fingerprint still describe exactly what was sent).
+- ~~Submission TOCTOU window~~ **Closed (post-review).** `projectRevision()` (a digest of every package input row)
+  is read before the project is loaded and re-verified inside the submit transaction (`stale_package`).
+- **Worker DB role is broad.** The worker connects with the project's database credential (bypasses RLS). It
+  derives all authority from queued jobs, but a dedicated least-privilege Postgres role should replace it before
+  the first paid provider.
+- **Ingestion is not fully crash-idempotent.** A crash between Storage upload and `finalizeSuccess` can leave an
+  orphaned object (`npm run db:generation:cleanup` removes them); deterministic object paths would remove this.
+- **Exactly-once remote submission is not guaranteed.** Providers that declare `idempotency` receive the same key
+  on every re-submit. For providers that do not, an ambiguous failure fails the job (`submission_outcome_unknown`)
+  rather than risk a second paid generation.
 - **Memory mode** runs the worker in-process; there is no cross-process queue without Postgres.
 - **Mock outputs are fixtures** (a 5 s 192×108 clip regardless of requested duration).
 
