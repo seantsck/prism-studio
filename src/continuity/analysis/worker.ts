@@ -411,7 +411,8 @@ export class ContinuityAnalysisWorker {
               {
                 status: "queued",
                 nextRunAt: next,
-                providerState: "not_sent",
+                // the provider answered definitively (429/503): nothing is in flight
+                providerState: "responded",
                 transportCalls,
                 batchResults: results,
                 lastErrorCode: err.code,
@@ -429,7 +430,12 @@ export class ContinuityAnalysisWorker {
             });
             return;
           }
-          await this.o.store.update(job.id, token, { batchResults: results, transportCalls }, now());
+          await this.o.store.update(
+            job.id,
+            token,
+            { batchResults: results, transportCalls, providerState: "responded" },
+            now(),
+          );
           return await fail(
             "provider_overloaded_retry_exhausted",
             "retry_exhausted",
@@ -437,8 +443,21 @@ export class ContinuityAnalysisWorker {
             this.partialCost(provider, allCalls(), job, transportCalls, "provider_overloaded"),
           );
         }
+        // A confirmed provider answer (401/400/500/schema…) leaves nothing in flight; only an ambiguous
+        // outcome legitimately stays `sending`.
         await this.o.store
-          .update(job.id, token, { batchResults: results, transportCalls }, now())
+          .update(
+            job.id,
+            token,
+            {
+              batchResults: results,
+              transportCalls,
+              ...(err.category !== "outcome_unknown" && err.requestSent
+                ? { providerState: "responded" as const }
+                : {}),
+            },
+            now(),
+          )
           .catch(() => undefined);
         const spent = allCalls();
         const cost =

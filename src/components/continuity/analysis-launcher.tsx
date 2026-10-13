@@ -12,7 +12,7 @@ export interface AnalyzerPreview {
   label: string;
   model: string;
   kind: "mock" | "model";
-  /** configured | missing_credential | disabled */
+  /** configured | missing_credential | disabled | unsupported_model */
   state: string;
   spend: "free" | "enabled" | "disabled";
   usable: boolean;

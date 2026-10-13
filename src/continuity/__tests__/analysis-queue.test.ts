@@ -339,7 +339,8 @@ media("continuity analysis jobs (memory store, real ffmpeg, fake provider transp
       const after = (await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!;
       expect(after.status).toBe("queued");
       expect(after.leaseToken).toBeNull();
-      expect(after.providerState).toBe("not_sent");
+      // the provider answered definitively: nothing may be represented as still in flight
+      expect(after.providerState).toBe("responded");
       expect(after.transportCalls).toBe(1);
       expect(after.lastErrorCategory).toBe("overloaded");
       const wait = Date.parse(after.nextRunAt) - t0;
@@ -424,6 +425,9 @@ media("continuity analysis jobs (memory store, real ffmpeg, fake provider transp
       expect(end.status).toBe("failed");
       expect(end.lastErrorCategory).toBe("provider_overloaded_retry_exhausted");
       expect(end.lastErrorCategory).not.toBe("outcome_unknown");
+      // every request got a confirmed 503: the terminal job must not look like a request is outstanding
+      expect(end.providerState).toBe("responded");
+      expect(end.providerState).not.toBe("sending");
       expect(end.transportCalls).toBe(3);
       expect(g.transport.calls).toBe(3); // the ceiling is a hard stop
       const fin = (await ctx.h.repo.mediaQa.listAnalysisCosts(job.runId)).filter(
@@ -434,6 +438,48 @@ media("continuity analysis jobs (memory store, real ffmpeg, fake provider transp
       expect(fin[0]!.amountUsd).toBeNull();
       expect(fin[0]!.usage).toMatchObject({ unknownReason: "provider_overloaded", transportCalls: 3 });
       expect((await ctx.h.repo.mediaQa.getRun(job.runId))!.run.analysisStatus).toBe("failed");
+    });
+
+    it("a confirmed non-overload answer (auth) also ends with provider_state responded; an ambiguous timeout stays sending", async () => {
+      const ctx = await setup();
+      const bad = gemini([{ kind: "error", error: new GeminiTransportError("auth", 401, "401") }]);
+      const { job } = await submit(ctx, bad.provider);
+      await makeWorker(ctx.h, bad.provider).w.tick();
+      const end = (await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!;
+      expect(end.status).toBe("failed");
+      expect(end.lastErrorCategory).toBe("auth");
+      expect(end.providerState).toBe("responded");
+
+      const ctx2 = await setup();
+      const t = gemini([{ kind: "error", error: new GeminiTransportError("timeout", null, "t") }]);
+      const { job: j2 } = await submit(ctx2, t.provider);
+      await makeWorker(ctx2.h, t.provider).w.tick();
+      const amb = (await ctx2.h.repo.mediaQa.getAnalysisJob(j2.id))!;
+      expect(amb.lastErrorCategory).toBe("outcome_unknown");
+      expect(amb.providerState).toBe("sending"); // may genuinely be in flight / billed
+    });
+
+    it("the model is frozen on the run and job at submission (3.6 control model)", async () => {
+      const ctx = await setup();
+      const cfg36 = readGeminiConfig({
+        PRISM_STUDIO_CONTINUITY_ANALYZERS: "gemini",
+        GEMINI_API_KEY: "test-key-not-real",
+        PRISM_STUDIO_GEMINI_ANALYSIS_MODEL: "gemini-3.6-flash",
+      });
+      const transport = new FakeGeminiTransport(answerAll("pass"));
+      const provider = new GeminiAnalysisProvider({
+        config: cfg36,
+        transport,
+      }) as ContinuityAnalysisProvider;
+      const { job, run } = await submit(ctx, provider);
+      expect(job.model).toBe("gemini-3.6-flash");
+      expect(run.run.model).toBe("gemini-3.6-flash");
+      expect(job.inputSnapshot.plan.model).toBe("gemini-3.6-flash");
+      await makeWorker(ctx.h, provider).w.tick();
+      expect(transport.requests.every((r) => r.model === "gemini-3.6-flash")).toBe(true);
+      const after = (await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!;
+      expect(after.model).toBe("gemini-3.6-flash");
+      expect((await ctx.h.repo.mediaQa.getRun(job.runId))!.run.model).toBe("gemini-3.6-flash");
     });
 
     it("an ambiguous timeout is outcome_unknown (reason ambiguous_submission) and is never requeued", async () => {

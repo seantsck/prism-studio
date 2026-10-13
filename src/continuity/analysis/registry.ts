@@ -3,6 +3,7 @@ import { DEFAULT_MAX_CORRECTIONS, DEFAULT_MAX_TRANSPORT_CALLS } from "@/domain/c
 import { GeminiAnalysisProvider } from "../providers/gemini/analyzer";
 import {
   GEMINI_ANALYZER_ID,
+  geminiModelBlocker,
   geminiState,
   readGeminiConfig,
   type GeminiConfig,
@@ -105,7 +106,8 @@ export function createAnalysisProviders(
   const cfg = readAnalysisConfig(env);
   const out = new Map<string, ContinuityAnalysisProvider>();
   if (cfg.enabled.includes("mock")) out.set(MOCK_PROVIDER_ID, new MockAnalysisProvider());
-  if (cfg.gemini.enabled && (cfg.gemini.apiKey || opts.transport)) {
+  // an unlisted model never gets an executable provider (it cannot be priced, so it must not be sent)
+  if (cfg.gemini.enabled && !geminiModelBlocker(cfg.gemini.model) && (cfg.gemini.apiKey || opts.transport)) {
     out.set(
       GEMINI_ANALYZER_ID,
       new GeminiAnalysisProvider({
@@ -189,7 +191,9 @@ export function analyzerStatuses(env: Record<string, string | undefined>): Analy
         ? ["GEMINI_API_KEY"]
         : state === "disabled"
           ? ["PRISM_STUDIO_CONTINUITY_ANALYZERS=…,gemini"]
-          : [],
+          : state === "unsupported_model"
+            ? [`PRISM_STUDIO_GEMINI_ANALYSIS_MODEL (unsupported: ${g.model})`]
+            : [],
     usable: state === "configured" && spendOn,
     modes: g.directVideo ? ["image_set", "direct_video"] : ["image_set"],
   });

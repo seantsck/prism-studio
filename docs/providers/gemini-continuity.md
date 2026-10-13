@@ -21,6 +21,21 @@ criteria, plans, findings, the queue or the UI: it lives in `src/continuity/prov
 Pricing is versioned configuration (`gemini-2026-10-13`), never scraped at runtime; the rate is selected by the
 analysis date (the 2027 step is encoded). An unknown model has **no** price ⇒ cost unknown ⇒ the spend gate blocks.
 
+### Model selection (one analyzer, several models)
+
+`PRISM_STUDIO_GEMINI_ANALYSIS_MODEL` selects the model; the default stays `gemini-3.8-flash`. The same
+`GeminiAnalysisProvider` serves every listed model; a model carries its own capability record and price in
+`GEMINI_MODELS` / `GEMINI_PRICING`.
+
+| Model              | Status (docs, 2026-10-13)        | Inputs                         | Output | Structured outputs | Price (≤ 2026-12-31 → 2027-01-01) |
+| ------------------ | -------------------------------- | ------------------------------ | ------ | ------------------ | --------------------------------- |
+| `gemini-3.8-flash` | Stable                           | text, image, video, audio, pdf | text   | supported          | $0.75/$3.75 → $1.50/$7.50 per 1M  |
+| `gemini-3.6-flash` | Stable (latest update July 2026) | text, image, video, audio, pdf | text   | supported          | $0.75/$3.75 → $1.50/$7.50 per 1M  |
+
+A model that is not listed (or lacks image input, structured output, a stable status or a price) is **blocked**:
+state `unsupported_model`, no executable provider, never priced and never sent. The model id is frozen on the run
+and the job at submission; changing the environment later never rewrites a stored run.
+
 ## Environment
 
 ```

@@ -3,7 +3,7 @@ import { encodeMockPng } from "@/generation/providers/mock-image";
 import { ctx, makeInput, mediaFor } from "@/continuity/analysis/__tests__/fixtures";
 import { AnalysisBatchError, type ContinuityAnalysisProvider } from "@/continuity/analysis/provider";
 import { MockAnalysisProvider } from "@/continuity/analysis/mock-provider";
-import { GEMINI_PRICING, readGeminiConfig, geminiState } from "../config";
+import { GEMINI_MODELS, GEMINI_PRICING, geminiModelBlocker, readGeminiConfig, geminiState } from "../config";
 import { GeminiAnalysisProvider } from "../analyzer";
 import { FakeGeminiTransport, answerAll, type FakeStep } from "../fake-transport";
 import { GeminiTransportError, type GeminiRequest } from "../transport";
@@ -313,6 +313,79 @@ describe("GeminiAnalysisProvider with a fake transport (no network)", () => {
       "missing_credential",
     );
     expect(geminiState(cfg)).toBe("configured");
+  });
+});
+
+describe("model selection (one analyzer, model-specific capability and price)", () => {
+  const withModel = (model?: string) =>
+    readGeminiConfig({
+      PRISM_STUDIO_CONTINUITY_ANALYZERS: "mock,gemini",
+      GEMINI_API_KEY: "AIza-test-key-should-never-leak",
+      ...(model ? { PRISM_STUDIO_GEMINI_ANALYSIS_MODEL: model } : {}),
+    });
+
+  it("gemini-3.8-flash stays the default and gemini-3.6-flash is selectable by id", () => {
+    expect(withModel().model).toBe("gemini-3.8-flash");
+    expect(withModel("gemini-3.6-flash").model).toBe("gemini-3.6-flash");
+    for (const m of ["gemini-3.8-flash", "gemini-3.6-flash"]) {
+      expect(geminiModelBlocker(m)).toBeNull();
+      expect(geminiState(withModel(m))).toBe("configured");
+    }
+    const spec = GEMINI_MODELS.find((m) => m.id === "gemini-3.6-flash")!;
+    expect(spec.status).toBe("stable");
+    expect(spec.inputs).toContain("image");
+    expect(spec.structuredOutputs).toBe(true);
+  });
+
+  it("both models run through the SAME analyzer class and send their own model id", async () => {
+    for (const model of ["gemini-3.8-flash", "gemini-3.6-flash"]) {
+      const transport = new FakeGeminiTransport(answerAll("pass"));
+      const provider = new GeminiAnalysisProvider({ config: withModel(model), transport });
+      expect(provider.id).toBe("gemini");
+      expect(provider.model).toBe(model);
+      await run(provider);
+      expect(transport.requests.every((r) => r.model === model)).toBe(true);
+    }
+  });
+
+  it("pricing is selected by model and by date (the 2027 step applies to both)", () => {
+    for (const model of ["gemini-3.8-flash", "gemini-3.6-flash"]) {
+      const provider = new GeminiAnalysisProvider({
+        config: withModel(model),
+        transport: new FakeGeminiTransport([]),
+      });
+      const usage = [
+        { kind: "analysis" as const, inputTokens: 1_000_000, outputTokens: 1_000_000, thoughtsTokens: 0 },
+      ];
+      expect(provider.actualCost(usage, new Date("2026-11-01")).amountUsd).toBeCloseTo(0.75 + 3.75, 6);
+      expect(provider.actualCost(usage, new Date("2027-02-01")).amountUsd).toBeCloseTo(1.5 + 7.5, 6);
+      expect(provider.actualCost(usage, new Date("2026-11-01")).pricingVersion).toBe(GEMINI_PRICING.version);
+      expect(provider.estimate(input, new Date("2026-11-01")).maxUsd).toBeGreaterThan(0);
+    }
+  });
+
+  it("an unlisted model is blocked: unsupported state, no price, no executable provider", async () => {
+    const cfg2 = withModel("gemini-9.9-ultra");
+    expect(geminiModelBlocker("gemini-9.9-ultra")).toMatch(/not a verified/);
+    expect(geminiState(cfg2)).toBe("unsupported_model");
+    const { createAnalysisProviders, analyzerStatuses } = await import("@/continuity/analysis/registry");
+    const env = {
+      PRISM_STUDIO_CONTINUITY_ANALYZERS: "mock,gemini",
+      GEMINI_API_KEY: "AIza-test-key-should-never-leak",
+      PRISM_STUDIO_GEMINI_ANALYSIS_MODEL: "gemini-9.9-ultra",
+      PRISM_STUDIO_ALLOW_PAID_ANALYSIS: "true",
+      PRISM_STUDIO_MAX_ANALYSIS_USD_PER_RUN: "0.10",
+    };
+    expect(createAnalysisProviders(env).has("gemini")).toBe(false);
+    const status = analyzerStatuses(env).find((s) => s.id === "gemini")!;
+    expect(status.state).toBe("unsupported_model");
+    expect(status.usable).toBe(false);
+    const provider = new GeminiAnalysisProvider({
+      config: cfg2,
+      transport: new FakeGeminiTransport([]),
+    });
+    expect(provider.pricing()).toBeNull();
+    expect(Number.isNaN(provider.estimate(input, new Date("2026-11-01")).maxUsd)).toBe(true);
   });
 });
 

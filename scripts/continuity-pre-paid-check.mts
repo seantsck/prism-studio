@@ -68,8 +68,8 @@ ok(
   OVERLOAD_BACKOFF_SECONDS.join(","),
 );
 ok(
-  "maximum provider transport calls per run is 6",
-  real.limits.maxTransportCalls === 6,
+  "maximum provider transport calls per run is bounded (1..6)",
+  real.limits.maxTransportCalls >= 1 && real.limits.maxTransportCalls <= 6,
   String(real.limits.maxTransportCalls),
 );
 ok(

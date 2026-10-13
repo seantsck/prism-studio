@@ -4,20 +4,73 @@ import type { PricingTable } from "@/domain/continuity/analysis/cost";
  * Gemini continuity analyzer configuration: the ONLY place the model id, SDK pin and pricing live.
  *
  * Verified against the official documentation on 2026-10-13:
- *   - models:   https://ai.google.dev/gemini-api/docs/models        gemini-3.8-flash (stable)
- *   - pricing:  https://ai.google.dev/gemini-api/docs/pricing       page last updated 2026-10-09
+ *   - models:   https://ai.google.dev/gemini-api/docs/models        gemini-3.8-flash and gemini-3.6-flash (both Stable)
+ *   - model pg: https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash  inputs Text/Image/Video/Audio/PDF,
+ *               output Text, Structured outputs Supported, Thinking Supported (latest update July 2026)
+ *   - pricing:  https://ai.google.dev/gemini-api/docs/pricing       page last updated 2026-10-13
  *   - SDK:      @google/genai 2.29.0 (npm `latest`), `ai.models.generateContent`
  * Pricing is configuration, not scraped at runtime: when it changes, bump `version` here.
+ *
+ * ONE analyzer implementation serves every listed model; a model is selected by id and carries its own
+ * capability record and price. A model that is not listed here is BLOCKED (never silently priced or sent).
  */
 export const GEMINI_ANALYZER_ID = "gemini";
 export const GEMINI_ANALYZER_VERSION = "1";
 export const GEMINI_SDK = "@google/genai@2.29.0";
 export const GEMINI_DEFAULT_MODEL = "gemini-3.8-flash";
 
+export interface GeminiModelSpec {
+  id: string;
+  /** Official lifecycle status at `verifiedAt`. Only stable models may be used for analysis. */
+  status: "stable";
+  inputs: ReadonlyArray<"text" | "image" | "video" | "audio" | "pdf">;
+  outputs: ReadonlyArray<"text">;
+  structuredOutputs: boolean;
+  thinking: boolean;
+  verifiedAt: string;
+  source: string;
+}
+
+/** Models Prism is willing to send continuity analysis to. Same analyzer, model-specific capability + price. */
+export const GEMINI_MODELS: readonly GeminiModelSpec[] = [
+  {
+    id: "gemini-3.8-flash",
+    status: "stable",
+    inputs: ["text", "image", "video", "audio", "pdf"],
+    outputs: ["text"],
+    structuredOutputs: true,
+    thinking: true,
+    verifiedAt: "2026-10-13",
+    source: "https://ai.google.dev/gemini-api/docs/models (Stable, New Stable)",
+  },
+  {
+    id: "gemini-3.6-flash",
+    status: "stable",
+    inputs: ["text", "image", "video", "audio", "pdf"],
+    outputs: ["text"],
+    structuredOutputs: true,
+    thinking: true,
+    verifiedAt: "2026-10-13",
+    source: "https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash (Stable; July 2026)",
+  },
+];
+
+/** Why a model may not be used (null = supported): needs listing, image input, structured output, a price. */
+export function geminiModelBlocker(model: string): string | null {
+  const spec = GEMINI_MODELS.find((m) => m.id === model);
+  if (!spec) return `Model "${model}" is not a verified continuity-analysis model.`;
+  if (spec.status !== "stable") return `Model "${model}" is not a stable release.`;
+  if (!spec.inputs.includes("image")) return `Model "${model}" does not accept image input.`;
+  if (!spec.structuredOutputs) return `Model "${model}" does not support structured outputs.`;
+  if (!GEMINI_PRICING.models.some((m) => m.provider === "gemini" && m.model === model))
+    return `Model "${model}" has no verified price.`;
+  return null;
+}
+
 export const GEMINI_PRICING: PricingTable = {
   version: "gemini-2026-10-13",
   source:
-    "https://ai.google.dev/gemini-api/docs/pricing (standard paid tier, per 1M tokens; updated 2026-10-09)",
+    "https://ai.google.dev/gemini-api/docs/pricing (standard paid tier, per 1M tokens; page updated 2026-10-13)",
   checkedAt: "2026-10-13",
   models: [
     {
@@ -34,6 +87,7 @@ export const GEMINI_PRICING: PricingTable = {
     {
       provider: "gemini",
       model: "gemini-3.6-flash",
+      // Documented (pricing page, 2026-10-13): identical to gemini-3.8-flash.
       rates: [
         { from: "2026-01-01", inputPerMillionUsd: 0.75, outputPerMillionUsd: 3.75 },
         { from: "2027-01-01", inputPerMillionUsd: 1.5, outputPerMillionUsd: 7.5 },
@@ -43,7 +97,7 @@ export const GEMINI_PRICING: PricingTable = {
   ],
 };
 
-export type GeminiState = "configured" | "missing_credential" | "disabled";
+export type GeminiState = "configured" | "missing_credential" | "disabled" | "unsupported_model";
 
 export interface GeminiConfig {
   enabled: boolean;
@@ -80,4 +134,10 @@ export function readGeminiConfig(env: Record<string, string | undefined>): Gemin
 }
 
 export const geminiState = (c: GeminiConfig): GeminiState =>
-  !c.enabled ? "disabled" : c.apiKey ? "configured" : "missing_credential";
+  !c.enabled
+    ? "disabled"
+    : geminiModelBlocker(c.model)
+      ? "unsupported_model"
+      : c.apiKey
+        ? "configured"
+        : "missing_credential";
