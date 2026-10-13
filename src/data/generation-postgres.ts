@@ -598,16 +598,20 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
       if (patch.releaseLease || terminal) {
         sets.push("lease_owner = null", "lease_token = null", "lease_expires_at = null");
       }
-      params.push(jobId);
-      const r = await c.query(
-        `update generation_jobs set ${sets.length ? sets.join(", ") : "updated_at = now()"} where id = $${params.length} returning *`,
-        params,
-      );
+      // Attempt first, job second: while the job is still active the attempt stays visible to the worker role
+      // (RLS follows active jobs), and both writes are one transaction anyway.
       if (nextStatus) {
         await c.query("update generation_attempts set status = $2 where id = $1", [
           job.attemptId,
           attemptStatusForJob(nextStatus),
         ]);
+      }
+      params.push(jobId);
+      const r = await c.query(
+        `update generation_jobs set ${sets.length ? sets.join(", ") : "status = status"} where id = $${params.length} returning *`,
+        params,
+      );
+      if (nextStatus) {
         await this.event(c, job, job.status, nextStatus, patch.note ?? "", now);
       } else if (patch.note) {
         await this.event(c, job, job.status, job.status, patch.note, now);
@@ -626,10 +630,15 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
 
       for (const o of input.outputs) {
         const asset = assetSchema.parse(o.asset);
-        await upsertRow(c, "assets", {
-          ...flatToRow(asset, COLLECTIONS.assets),
-          project_id: job.projectId,
-        });
+        // INSERT-only: the worker role has no UPDATE on assets (least privilege), and generated assets are
+        // immutable facts. A replay of the same asset id is a no-op.
+        const assetRow: Row = { ...flatToRow(asset, COLLECTIONS.assets), project_id: job.projectId };
+        const assetCols = Object.keys(assetRow);
+        await c.query(
+          `insert into assets (${assetCols.map(q).join(", ")}) values (${assetCols.map((_, i) => `$${i + 1}`).join(", ")})
+           on conflict (id) do nothing`,
+          assetCols.map((k) => assetRow[k]),
+        );
         await c.query(
           `insert into generation_outputs (project_id, attempt_id, asset_id, role, position, provenance, created_at)
            values ($1, $2, $3, $4, $5, $6, $7)`,
@@ -692,11 +701,13 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
     currency: string;
     basis: string;
     now: string;
+    amount?: number | null;
   }) {
     await this.tx(async (c) => {
+      const known = args.amount != null;
       await c.query(
         `insert into generation_costs (id, project_id, attempt_id, job_id, provider, model, kind, amount, currency, basis, recorded_at)
-         values ($1, $2, $3, $4, $5, $6, 'unknown', null, $7, $8, $9) on conflict do nothing`,
+         values ($1, $2, $3, $4, $5, $6, $10, $11, $7, $8, $9) on conflict do nothing`,
         [
           randomUUID(),
           args.projectId,
@@ -707,8 +718,44 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
           args.currency,
           args.basis,
           args.now,
+          known ? "actual" : "unknown",
+          known ? args.amount : null,
         ],
       );
+    });
+  }
+
+  async findInputAsset(attemptId: string, assetId: string) {
+    return this.tx(async (c) => {
+      // RLS (worker role) already limits this to inputs of active attempts; the join makes it explicit.
+      const r = await c.query(
+        `select s.id, s.object_path, s.bucket, s.storage_provider, s.mime, s.byte_size, s.checksum
+         from assets s join generation_attempts t on t.project_id = s.project_id
+         where t.id = $1 and s.id = $2 and s.id = any (t.input_asset_ids)`,
+        [attemptId, assetId],
+      );
+      const row = r.rows[0];
+      if (!row) return null;
+      return {
+        assetId: String(row.id),
+        objectPath: row.object_path ?? null,
+        bucket: row.bucket ?? null,
+        storageProvider: String(row.storage_provider),
+        mime: row.mime ?? null,
+        byteSize: row.byte_size == null ? null : Number(row.byte_size),
+        checksum: row.checksum ?? null,
+      };
+    });
+  }
+
+  async countProviderActive(provider: string, model: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        `select count(*)::int as n from generation_jobs
+         where provider = $1 and model = $2 and status in ('submitting', 'submitted', 'processing')`,
+        [provider, model],
+      );
+      return r.rows[0].n as number;
     });
   }
 }

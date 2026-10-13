@@ -49,7 +49,9 @@ export async function GenerateWorkspace({ data, shotId }: { data: ProjectData; s
           ? `not configured (${a.missingConfig.join(", ")})`
           : a.lifecycle === "retired"
             ? "retired"
-            : null,
+            : !a.paidGenerationEnabled
+              ? "paid generation is switched off"
+              : null,
       modality: c.modality,
       compatible: c.compatible,
       errors: c.errors.map((x) => x.message),

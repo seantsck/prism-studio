@@ -105,6 +105,9 @@ Generation limits and worker tuning: `PRISM_STUDIO_GENERATION_*`, `PRISM_STUDIO_
 | `npm run db:exercise -- <phase>`  | `baseline`, `mutate`, `verify` persistence round-trip across separate processes              |
 | `npm run db:generation`           | Live generation integration: queue, worker + Mock provider, RLS, state machine, invariants   |
 | `npm run worker:generation`       | The generation worker (`-- --until-idle`, `--once`, `--dry-run`)                             |
+| `npm run worker:db:provision`     | Enable LOGIN for the least-privilege worker DB role (password from env; `-- --rotate`)       |
+| `npm run worker:db:check`         | Audit the worker role's privileges (and connect-as-worker when `PRISM_STUDIO_WORKER_DB_URL`) |
+| `npm run db:worker-role`          | Live can/cannot tests as the real worker role + a full flow under it                         |
 
 Every `db:*` script prints a banner (project ref, safe host, mode, dev owner) before mutating, redacts
 secrets from output and refuses a connection string without the dedicated project ref.

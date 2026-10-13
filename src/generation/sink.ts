@@ -8,11 +8,13 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
  *
  *   LocalDiskSink              memory/demo mode and tests: `.local-storage/<objectPath>`, served by the same
  *                              authorised route as every other asset.
- *   SupabaseServiceKeySink     PRODUCTION worker: a server-only key (PRISM_STUDIO_WORKER_SERVICE_KEY) that
- *                              exists ONLY in the worker's environment. Never in the Next.js app, never in the
- *                              browser, never in a snapshot.
- *   SupabaseUserSessionSink    DEV/TEST ONLY: the worker signs in as the project owner with the existing test
- *                              credentials so Storage RLS itself authorises the upload. Refused in production.
+ *   SupabaseServiceKeySink     PRODUCTION worker: a server-only secret key that exists ONLY in the worker's
+ *                              environment: PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY (preferred), or the legacy
+ *                              PRISM_STUDIO_WORKER_SERVICE_KEY. Never in the Next.js app, never in the browser,
+ *                              never in a snapshot. Fails closed when absent or when it is not a secret key.
+ *   SupabaseUserSessionSink    DEV/TEST ONLY, opt-in (PRISM_STUDIO_WORKER_DEV_STORAGE=1): the worker signs in
+ *                              as the project owner with the test credentials so Storage RLS itself authorises
+ *                              the upload. Refused in production.
  *
  * Object keys are always <project_id>/<asset_id>/<filename>, built by buildObjectPath, so Storage RLS and
  * project-scoped cleanup keep working.
@@ -23,6 +25,11 @@ export interface OutputSink {
   put(objectPath: string, bytes: Uint8Array, contentType: string): Promise<void>;
   get(objectPath: string): Promise<Uint8Array | null>;
   remove(objectPath: string): Promise<void>;
+  /**
+   * A SHORT-LIVED URL a provider can fetch an input from. Execution transport only: never logged, stored,
+   * or placed in a package. `null` when this sink cannot sign (local disk).
+   */
+  signedUrl?(objectPath: string, ttlSeconds: number): Promise<string | null>;
 }
 
 export const LOCAL_ROOT = path.join(process.cwd(), ".local-storage");
@@ -76,6 +83,12 @@ class SupabaseSink implements OutputSink {
     const { error } = await this.files.remove([objectPath]);
     if (error) throw new Error(`Storage delete failed: ${error.message}`);
   }
+  async signedUrl(objectPath: string, ttlSeconds: number): Promise<string | null> {
+    const ttl = Math.max(30, Math.min(ttlSeconds, 900));
+    const { data, error } = await this.files.createSignedUrl(objectPath, ttl);
+    if (error || !data?.signedUrl) return null;
+    return data.signedUrl;
+  }
 }
 
 type Env = Record<string, string | undefined>;
@@ -103,20 +116,47 @@ export async function createOutputSink(
   if (!url || !url.includes("lyqdxiyjperhniwhzsvg")) {
     throw new SinkConfigError("NEXT_PUBLIC_SUPABASE_URL must target the Prism Studio project.");
   }
-  const serviceKey = env.PRISM_STUDIO_WORKER_SERVICE_KEY;
-  if (serviceKey) {
-    return new SupabaseSink(createClient(url, serviceKey, { auth: { persistSession: false } }), bucket);
+  const secret =
+    env.PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY?.trim() || env.PRISM_STUDIO_WORKER_SERVICE_KEY?.trim();
+  if (secret) {
+    if (!isServerSecretKey(secret) || (publishable && secret === publishable)) {
+      throw new SinkConfigError(
+        "The worker Storage credential is not a server secret key (a publishable/anon key was supplied).",
+      );
+    }
+    return new SupabaseSink(createClient(url, secret, { auth: { persistSession: false } }), bucket);
   }
   const email = env.PRISM_STUDIO_TEST_EMAIL;
   const password = env.PRISM_STUDIO_TEST_PASSWORD;
-  if (env.NODE_ENV !== "production" && publishable && email && password) {
+  if (
+    env.NODE_ENV !== "production" &&
+    env.PRISM_STUDIO_WORKER_DEV_STORAGE === "1" &&
+    publishable &&
+    email &&
+    password
+  ) {
     const client = createClient(url, publishable, { auth: { persistSession: false } });
     const { error } = await client.auth.signInWithPassword({ email, password });
     if (error) throw new SinkConfigError("Worker could not sign in with the test credentials.");
     return new SupabaseSink(client, bucket);
   }
   throw new SinkConfigError(
-    "The worker has no way to write Supabase Storage. Set PRISM_STUDIO_WORKER_SERVICE_KEY (production worker) " +
-      "or, for local development only, PRISM_STUDIO_TEST_EMAIL/PASSWORD.",
+    "The worker has no way to write Supabase Storage. Set PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY " +
+      "(or the legacy PRISM_STUDIO_WORKER_SERVICE_KEY) on the worker host. For local development only: " +
+      "PRISM_STUDIO_WORKER_DEV_STORAGE=1 with PRISM_STUDIO_TEST_EMAIL/PASSWORD.",
   );
+}
+
+/** `sb_secret_...` keys, or the legacy service_role JWT. A publishable/anon key must never be accepted. */
+export function isServerSecretKey(key: string): boolean {
+  if (key.startsWith("sb_secret_")) return true;
+  if (key.startsWith("sb_publishable_")) return false;
+  const parts = key.split(".");
+  if (parts.length !== 3) return false;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as { role?: string };
+    return payload.role === "service_role";
+  } catch {
+    return false;
+  }
 }

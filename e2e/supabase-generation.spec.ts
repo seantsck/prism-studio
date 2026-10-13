@@ -20,6 +20,10 @@ const tsx = (script: string, args: string[]) =>
       PRISM_STUDIO_PERSISTENCE: "supabase",
       PRISM_STUDIO_MOCK_STAGE_DELAY_MS: "0",
       NODE_ENV: "test",
+      // Dev-only, explicit: the test worker signs in as the test user instead of holding a secret key,
+      // and runs through the least-privilege DB role (SET ROLE on the admin connection, no password).
+      PRISM_STUDIO_WORKER_DEV_STORAGE: "1",
+      PRISM_STUDIO_WORKER_DEV_ASSUME_ROLE: "1",
     },
     encoding: "utf8",
     timeout: 240_000,

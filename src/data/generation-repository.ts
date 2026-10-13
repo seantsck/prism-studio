@@ -218,5 +218,24 @@ export interface GenerationStore {
     currency: string;
     basis: string;
     now: string;
+    /** When the provider DID report what a non-successful task cost, it is recorded as `actual`. */
+    amount?: number | null;
   }): Promise<void>;
+  /**
+   * Storage reference of an asset that is an INPUT of this attempt (null for anything else, so a worker can
+   * only ever hand a provider the inputs the frozen attempt names).
+   */
+  findInputAsset(attemptId: string, assetId: string): Promise<InputAssetRef | null>;
+  /** Jobs of this provider/model in flight at the provider (submitting/submitted/processing). */
+  countProviderActive(provider: string, model: string): Promise<number>;
+}
+
+export interface InputAssetRef {
+  assetId: string;
+  objectPath: string | null;
+  bucket: string | null;
+  storageProvider: string;
+  mime: string | null;
+  byteSize: number | null;
+  checksum: string | null;
 }

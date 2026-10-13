@@ -45,6 +45,7 @@ if (assets.length) {
   try {
     const sinkEnv = { ...process.env };
     sinkEnv.PRISM_STUDIO_TEST_EMAIL ??= process.env.PRISM_STUDIO_DEV_USER_EMAIL;
+    sinkEnv.PRISM_STUDIO_WORKER_DEV_STORAGE ??= "1"; // maintenance tool, development only
     const sink = await createOutputSink(sinkEnv, "supabase");
     for (const a of assets)
       if (a.object_path) await sink.remove(String(a.object_path)).catch(() => undefined);

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   GenerationRepository,
   GenerationStore,
@@ -13,6 +13,7 @@ import {
   USER_ERROR_MESSAGES,
   type RetryPolicy,
 } from "@/domain/generation/errors";
+import { spendBlockers } from "@/domain/generation/gate";
 import { IllegalTransitionError } from "@/domain/generation/job-state";
 import {
   generationRequestSchema,
@@ -112,6 +113,8 @@ export class GenerationWorker {
   private readonly random: () => number;
   private readonly heartbeatMs: number;
   private readonly unsafeLoopback: boolean;
+  /** provider/model → submissions of this process between the capacity check and the `submitting` write. */
+  private readonly reserving = new Map<string, number>();
 
   constructor(deps: WorkerDeps) {
     this.store = deps.store;
@@ -203,8 +206,35 @@ export class GenerationWorker {
     return () => clearInterval(timer);
   }
 
-  private ctx(): ProviderContext {
-    const assets: AssetAccess = { read: async () => null };
+  /**
+   * Provider context for ONE attempt. Asset access is limited to the inputs the frozen attempt names, read
+   * back through the store (and therefore through the worker role's RLS) and checksum-verified.
+   */
+  private ctx(attemptId: string): ProviderContext {
+    const sink = this.sink;
+    const resolve = async (assetId: string) => {
+      const ref = await this.store.findInputAsset(attemptId, assetId);
+      if (!ref?.objectPath) return null;
+      if (ref.bucket && sink.bucket && ref.bucket !== sink.bucket) return null;
+      return ref;
+    };
+    const assets: AssetAccess = {
+      read: async (assetId) => {
+        const ref = await resolve(assetId);
+        if (!ref?.objectPath) return null;
+        const bytes = await sink.get(ref.objectPath);
+        if (!bytes) return null;
+        if (ref.byteSize != null && bytes.length !== ref.byteSize) return null;
+        if (ref.checksum && createHash("sha256").update(bytes).digest("hex") !== ref.checksum) return null;
+        return { bytes, mime: ref.mime, filename: ref.objectPath.split("/").pop() ?? "input" };
+      },
+      signedUrl: sink.signedUrl
+        ? async (assetId, ttlSeconds) => {
+            const ref = await resolve(assetId);
+            return ref?.objectPath ? sink.signedUrl!(ref.objectPath, ttlSeconds) : null;
+          }
+        : undefined,
+    };
     return { now: this.now, assets };
   }
 
@@ -290,19 +320,67 @@ export class GenerationWorker {
       }
     }
 
+    let reservedKey: string | null = null;
+    // Live-spend gate, enforced where money is actually spent (the queue may predate a config change).
+    if (this.registry.billsMoney(model0)) {
+      const policy = this.registry.spendPolicy();
+      const blocked = spendBlockers({
+        paidEnabled: policy.enabled,
+        maxUsd: policy.maxUsd,
+        estimate: { amount: job.estimatedCost, currency: job.currency },
+      });
+      if (blocked.length > 0) {
+        throw new GenerationProviderError("permanent", "spend_gate_blocked", blocked[0]!.message, {
+          retryable: false,
+        });
+      }
+      // Respect the provider's concurrency: do not flood it. Waiting does not consume an attempt.
+      if (job.status === "queued") {
+        const key = `${job.provider}/${job.model}`;
+        const active = await this.store.countProviderActive(job.provider, job.model);
+        // Jobs of THIS process that passed the check but are not yet visible as `submitting` in the store.
+        const local = this.reserving.get(key) ?? 0;
+        if (active + local >= model0.capabilities.operational.maxConcurrency) {
+          const first = job.providerStatus !== "waiting_for_capacity";
+          await this.store.update(
+            job.id,
+            token,
+            {
+              providerStatus: "waiting_for_capacity",
+              nextRunAt: new Date(
+                now.getTime() + model0.capabilities.operational.recommendedPollIntervalMs,
+              ).toISOString(),
+              releaseLease: true,
+              note: first ? "Waiting for provider capacity" : undefined,
+            },
+            now.toISOString(),
+          );
+          return;
+        }
+        this.reserving.set(key, local + 1);
+        reservedKey = key;
+      }
+    }
+
     let current = job;
     if (job.status === "queued") {
-      current = await this.store.update(
-        job.id,
-        token,
-        {
-          status: "submitting",
-          attemptCount: job.attemptCount + 1,
-          startedAt: job.startedAt ?? now.toISOString(),
-          note: `Submitting (try ${job.attemptCount + 1})`,
-        },
-        now.toISOString(),
-      );
+      try {
+        current = await this.store.update(
+          job.id,
+          token,
+          {
+            status: "submitting",
+            attemptCount: job.attemptCount + 1,
+            startedAt: job.startedAt ?? now.toISOString(),
+            note: `Submitting (try ${job.attemptCount + 1})`,
+          },
+          now.toISOString(),
+        );
+      } finally {
+        // From here on the store itself counts this job as in flight.
+        if (reservedKey)
+          this.reserving.set(reservedKey, Math.max(0, (this.reserving.get(reservedKey) ?? 1) - 1));
+      }
     } else {
       // Lease expired mid-submit: the provider may or may not have accepted. The idempotency key lets the
       // provider de-duplicate; we still count it as an attempt.
@@ -314,7 +392,7 @@ export class GenerationWorker {
       );
     }
 
-    const submission = await adapter.submit(request, plan, this.ctx());
+    const submission = await adapter.submit(request, plan, this.ctx(job.attemptId));
     const accepted = this.now().toISOString();
     const next =
       submission.state === "succeeded"
@@ -387,7 +465,7 @@ export class GenerationWorker {
       job.submittedAt &&
       now.getTime() - Date.parse(job.submittedAt) > model.capabilities.operational.jobTimeoutMs
     ) {
-      await adapter.cancel?.(this.ref(job, request), this.ctx()).catch(() => undefined);
+      await adapter.cancel?.(this.ref(job, request), this.ctx(job.attemptId)).catch(() => undefined);
       throw new GenerationProviderError("timeout", "job_timeout", "The provider did not finish in time.", {
         retryable: false,
       });
@@ -400,7 +478,10 @@ export class GenerationWorker {
       { pollCount: job.pollCount + 1, lastPolledAt: now.toISOString() },
       now.toISOString(),
     );
-    const status = await adapter.poll({ ...this.ref(job, request), pollCount: job.pollCount }, this.ctx());
+    const status = await adapter.poll(
+      { ...this.ref(job, request), pollCount: job.pollCount },
+      this.ctx(job.attemptId),
+    );
     const at = this.now();
     const interval = Math.max(
       250,
@@ -424,10 +505,13 @@ export class GenerationWorker {
       return this.ingest({ ...claimed, job: { ...fresh, leaseToken: token } }, adapter, request);
     }
     if (status.state === "failed" || status.state === "cancelled") {
+      // A task the provider itself ended is final: re-polling or re-submitting would not change that.
+      const f = status.failure;
       throw new GenerationProviderError(
-        "permanent",
-        status.state === "failed" ? "provider_failed" : "provider_cancelled",
-        `Provider ended the job as ${status.state}.`,
+        f?.category ?? "permanent",
+        f?.code ?? (status.state === "failed" ? "provider_failed" : "provider_cancelled"),
+        f?.message ?? `Provider ended the job as ${status.state}.`,
+        { retryable: false },
       );
     }
     await this.store.update(
@@ -449,7 +533,7 @@ export class GenerationWorker {
   private async ingest(claimed: ClaimedJob, adapter: GenerationProviderAdapter, request: GenerationRequest) {
     const { job, attempt, ownerUserId } = claimed;
     const token = job.leaseToken!;
-    const result = await adapter.fetchResult(this.ref(job, request), request, this.ctx());
+    const result = await adapter.fetchResult(this.ref(job, request), request, this.ctx(job.attemptId));
     const { outputs } = await ingestOutputs(result, {
       projectId: job.projectId,
       attemptId: attempt.id,
@@ -490,10 +574,10 @@ export class GenerationWorker {
         now,
       });
     } catch (err) {
-      // The database write failed after the upload: do not leave orphaned objects behind.
-      await Promise.allSettled(
-        outputs.map((o) => (o.asset.objectPath ? this.sink.remove(o.asset.objectPath) : null)),
-      );
+      // The database write failed after the upload. The objects are deliberately KEPT: their paths are
+      // deterministic, so the retry finds and reuses them instead of re-downloading from a provider URL that
+      // may have expired (and instead of uploading duplicates). A job that ultimately fails leaves them for
+      // `npm run db:generation:cleanup`.
       throw err;
     }
   }
@@ -502,6 +586,7 @@ export class GenerationWorker {
     const token = claimed.job.leaseToken!;
     const now = this.now().toISOString();
     let outcome: "local_only" | "confirmed" | "not_supported" | "failed" = "local_only";
+    let completedFirst = false;
     // A submit was started but no provider id was recorded: the provider may hold a request we cannot name.
     // That is NOT "cancelled before it was sent".
     const maybeSubmitted = !job.providerJobId && job.attemptCount > 0;
@@ -514,12 +599,31 @@ export class GenerationWorker {
       } else {
         try {
           const request = generationRequestSchema.parse(claimed.attempt.request);
-          const res = await adapter.cancel(this.ref(job, request), this.ctx());
-          outcome = res.confirmed ? "confirmed" : "failed";
+          const res = await adapter.cancel(this.ref(job, request), this.ctx(job.attemptId));
+          if (res.completed) completedFirst = true;
+          else outcome = res.confirmed ? "confirmed" : "failed";
         } catch {
           outcome = "failed";
         }
       }
+    }
+    if (completedFirst) {
+      // Lost the race: the provider finished (and billed) first. Keep the paid output and say so honestly.
+      const adapter = this.registry.adapter(job.provider)!;
+      const request = generationRequestSchema.parse(claimed.attempt.request);
+      await this.store.update(
+        job.id,
+        token,
+        {
+          status: "ingesting",
+          providerStatus: "succeeded",
+          nextRunAt: now,
+          note: "Provider finished before the cancellation took effect; keeping the output",
+        },
+        now,
+      );
+      const fresh = (await this.store.getJob(job.id))!;
+      return this.ingest({ ...claimed, job: { ...fresh, leaseToken: token } }, adapter, request);
     }
     await this.store.update(
       job.id,

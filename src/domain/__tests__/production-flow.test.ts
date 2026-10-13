@@ -132,13 +132,16 @@ describe("environment safety", () => {
   });
 
   it("no source file reads a service-role / secret key", () => {
+    // The ONLY modules that may name a server secret key: the worker's Storage sink (validates + uses it,
+    // worker process only) and the log redactor (masks it). The Next.js app never imports the sink.
+    const SECRET_HANDLING = new Set(["sink.ts", "redact.ts"]);
     const root = path.join(process.cwd(), "src");
     const offenders: string[] = [];
     const walk = (dir: string) => {
       for (const f of readdirSync(dir)) {
         const p = path.join(dir, f);
         if (statSync(p).isDirectory()) walk(p);
-        else if (/\.(ts|tsx)$/.test(f) && !p.includes("__tests__")) {
+        else if (/\.(ts|tsx)$/.test(f) && !p.includes("__tests__") && !SECRET_HANDLING.has(f)) {
           const text = readFileSync(p, "utf8");
           if (/SERVICE_ROLE|service_role|SUPABASE_SECRET|sb_secret_/.test(text)) offenders.push(p);
         }

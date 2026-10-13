@@ -30,6 +30,15 @@ export interface GenerationConfig {
     /** Simulated provider latency. 0 = completes on the first poll (used by tests). */
     stageDelayMs: number;
   };
+  /**
+   * The live-spend gate. Providers that bill (Provider.billing === "paid") are refused unless `enabled` AND the
+   * estimate is within `maxUsd`. Having a provider API key configured is never enough.
+   */
+  paid: {
+    enabled: boolean;
+    /** Per-generation ceiling in USD. null = no ceiling configured (which BLOCKS paid generation). */
+    maxUsd: number | null;
+  };
 }
 
 type Env = Record<string, string | undefined>;
@@ -38,6 +47,12 @@ const intFrom = (raw: string | undefined, fallback: number, min = 0, max = Numbe
   const n = Number.parseInt(raw ?? "", 10);
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
 };
+
+/** A finite number > 0, or null (unset/garbage/zero/negative are all "no ceiling"). */
+function positiveNumber(raw: string | undefined): number | null {
+  const n = Number.parseFloat((raw ?? "").trim());
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 export function readGenerationConfig(env: Env = process.env): GenerationConfig {
   const production = env.NODE_ENV === "production";
@@ -68,6 +83,10 @@ export function readGenerationConfig(env: Env = process.env): GenerationConfig {
       maxRedirects: intFrom(env.PRISM_STUDIO_GENERATION_MAX_REDIRECTS, 3, 0, 10),
     },
     mock: { stageDelayMs: intFrom(env.PRISM_STUDIO_MOCK_STAGE_DELAY_MS, 1_500, 0, 60_000) },
+    paid: {
+      enabled: ["1", "true"].includes((env.PRISM_STUDIO_ALLOW_PAID_GENERATION ?? "").trim().toLowerCase()),
+      maxUsd: positiveNumber(env.PRISM_STUDIO_MAX_GENERATION_USD),
+    },
   };
 }
 

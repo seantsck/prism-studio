@@ -64,19 +64,30 @@ webhook endpoints (architecture only); realtime push instead of status polling; 
 - **Worker storage credential for Supabase is not provisioned.** Live ingestion into Storage was verified through
   the dev test-credential path; production needs `PRISM_STUDIO_WORKER_SERVICE_KEY` on the worker host.
 - **Status updates poll** Prism's own endpoint (1.5 s while active); no push.
-- **`maxConcurrency` per model is declared but only advisory**; the worker bounds total concurrency.
+- ~~`maxConcurrency` per model is advisory.~~ **Enforced for billing models in Phase 2B** (see known gaps).
 - ~~Submission TOCTOU window~~ **Closed (post-review).** `projectRevision()` (a digest of every package input row)
   is read before the project is loaded and re-verified inside the submit transaction (`stale_package`).
-- **Worker DB role is broad.** The worker connects with the project's database credential (bypasses RLS). It
-  derives all authority from queued jobs, but a dedicated least-privilege Postgres role should replace it before
-  the first paid provider.
-- **Ingestion is not fully crash-idempotent.** A crash between Storage upload and `finalizeSuccess` can leave an
-  orphaned object (`npm run db:generation:cleanup` removes them); deterministic object paths would remove this.
+- ~~Worker DB role is broad.~~ **Closed in Phase 2B:** least-privilege role, see docs/generation-jobs.md.
+- ~~Ingestion not crash-idempotent.~~ **Closed in Phase 2B:** deterministic output ids/paths; a retry reuses the
+  object already uploaded (see docs/providers/runway.md, `ingest-crash.test.ts`).
 - **Exactly-once remote submission is not guaranteed.** Providers that declare `idempotency` receive the same key
   on every re-submit. For providers that do not, an ambiguous failure fails the job (`submission_outcome_unknown`)
   rather than risk a second paid generation.
 - **Memory mode** runs the worker in-process; there is no cross-process queue without Postgres.
 - **Mock outputs are fixtures** (a 5 s 192×108 clip regardless of requested duration).
+
+### Known gaps (Phase 2B)
+
+- **No live Runway call has been made.** Everything is verified against the SDK types and a fake at the SDK
+  boundary; the first paid smoke test needs explicit approval of the spend (docs/providers/runway.md).
+- **Failed/cancelled Runway tasks record cost as unknown** even when Runway returns credits.
+- **Per-model concurrency across several worker processes is best effort** (single process is exact; Runway
+  `THROTTLED` is the backstop).
+- **Runway output host allow-list uses `*.cloudfront.net`**; extend/tighten with `PRISM_STUDIO_RUNWAY_OUTPUT_HOSTS`
+  once the live output host is observed.
+- **Provider-confirmed cancellation still has a look-then-delete window** (Runway offers no conditional delete).
+- **Worker DB credential must be provisioned per environment** (`worker:db:provision`); `db:worker-role` proves the
+  role with SET ROLE, the connect-as-worker section of `worker:db:check` needs `PRISM_STUDIO_WORKER_DB_URL`.
 
 ## Phase 3 — continuity vision QA
 

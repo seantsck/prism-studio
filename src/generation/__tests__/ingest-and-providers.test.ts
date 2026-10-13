@@ -64,7 +64,8 @@ describe("output ingestion", () => {
   const PROJECT = "11111111-1111-4111-8111-111111111111";
   const ctx = (over = {}) => ({
     projectId: PROJECT,
-    attemptId: "22222222-2222-4222-8222-222222222222",
+    // unique per call: output identity is deterministic per (attempt, provider job, position)
+    attemptId: crypto.randomUUID(),
     ownerUserId: "33333333-3333-4333-8333-333333333333",
     provider: "mock",
     model: "m",
@@ -389,7 +390,10 @@ describe("registry and configuration", () => {
     const secret = "sk-test-SUPER-SECRET-VALUE";
     const noKey = new ModelRegistry(
       [fake],
-      readGenerationConfig({ PRISM_STUDIO_GENERATION_PROVIDERS: "acme" }),
+      readGenerationConfig({
+        PRISM_STUDIO_GENERATION_PROVIDERS: "acme",
+        PRISM_STUDIO_ALLOW_PAID_GENERATION: "true",
+      }),
       {},
     );
     const a = noKey.availability()[0]!;
@@ -399,7 +403,10 @@ describe("registry and configuration", () => {
 
     const withKey = new ModelRegistry(
       [fake],
-      readGenerationConfig({ PRISM_STUDIO_GENERATION_PROVIDERS: "acme" }),
+      readGenerationConfig({
+        PRISM_STUDIO_GENERATION_PROVIDERS: "acme",
+        PRISM_STUDIO_ALLOW_PAID_GENERATION: "true",
+      }),
       {
         PRISM_STUDIO_PROVIDER_ACME_API_KEY: secret,
       },
@@ -410,10 +417,18 @@ describe("registry and configuration", () => {
     expect(missingConfig(["PRISM_STUDIO_PROVIDER_ACME_API_KEY"], {})).toHaveLength(1);
   });
 
-  it("default registry exposes the mock models and nothing real", () => {
+  it("default registry lists real models but only the free mock models are usable", () => {
     const r = createRegistry({ NODE_ENV: "development" });
-    expect(r.models().every((m) => m.kind === "mock")).toBe(true);
+    expect(r.models().map((m) => m.provider)).toContain("runway");
+    expect(r.usable().every((m) => m.kind === "mock")).toBe(true);
     expect(r.usable().map((m) => m.modelId)).toContain("mock-video-1");
+    // credentials alone are not enough: provider enabled + configured + paid generation switched on
+    const configured = createRegistry({
+      NODE_ENV: "development",
+      PRISM_STUDIO_GENERATION_PROVIDERS: "runway",
+      RUNWAYML_API_SECRET: "key_x",
+    });
+    expect(configured.usable().some((m) => m.provider === "runway")).toBe(false);
   });
 });
 

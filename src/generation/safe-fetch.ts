@@ -33,6 +33,8 @@ export class UnsafeUrlError extends Error {
       | "http_error"
       | "network",
     message: string,
+    /** HTTP status for `http_error`. */
+    readonly status?: number,
   ) {
     super(message);
     this.name = "UnsafeUrlError";
@@ -262,7 +264,9 @@ function once(
         }
         if (status < 200 || status >= 300) {
           res.resume();
-          return rejectOnce(new UnsafeUrlError("http_error", `Output download failed with HTTP ${status}.`));
+          return rejectOnce(
+            new UnsafeUrlError("http_error", `Output download failed with HTTP ${status}.`, status),
+          );
         }
         const declared = Number(res.headers["content-length"] ?? NaN);
         if (Number.isFinite(declared) && declared > limits.maxBytes) {

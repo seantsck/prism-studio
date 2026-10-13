@@ -5,7 +5,8 @@ import { MemoryRepository } from "@/data/memory-repository";
 import type { ProjectData } from "@/domain/schemas";
 import { readGenerationConfig, type GenerationConfig } from "../config";
 import { silentLogger } from "../log";
-import { createRegistry, type ModelRegistry } from "../registry";
+import type { GenerationProviderAdapter } from "../provider";
+import { createRegistry, ModelRegistry } from "../registry";
 import { LocalDiskSink } from "../sink";
 import { prepareSubmission } from "../submission";
 import { GenerationWorker } from "../worker";
@@ -22,7 +23,7 @@ export interface Harness {
   submit(
     code: string,
     modelId?: string,
-    opts?: { acknowledge?: boolean; key?: string; userId?: string | null },
+    opts?: { acknowledge?: boolean; key?: string; userId?: string | null; provider?: string },
   ): Promise<{
     prepared: ReturnType<typeof prepareSubmission>;
     attemptId: string | null;
@@ -31,7 +32,10 @@ export interface Harness {
 }
 
 /** Fresh in-memory project + mock provider with zero latency and a controllable clock. */
-export function makeHarness(env: Record<string, string> = {}): Harness {
+export function makeHarness(
+  env: Record<string, string> = {},
+  opts: { extraAdapters?: GenerationProviderAdapter[]; replaceRegistry?: boolean } = {},
+): Harness {
   const fullEnv = {
     NODE_ENV: "test",
     PRISM_STUDIO_MOCK_STAGE_DELAY_MS: "0",
@@ -39,7 +43,14 @@ export function makeHarness(env: Record<string, string> = {}): Harness {
     ...env,
   };
   const config = readGenerationConfig(fullEnv);
-  const registry = createRegistry(fullEnv, config);
+  const base = createRegistry(fullEnv, config);
+  const registry = opts.extraAdapters
+    ? new ModelRegistry(
+        [...(opts.replaceRegistry ? [] : base.adapters()), ...opts.extraAdapters],
+        config,
+        fullEnv,
+      )
+    : base;
   const repo = new MemoryRepository();
   const sink = new LocalDiskSink(mkdtempSync(path.join(tmpdir(), "prism-gen-")));
   const clock = {
@@ -84,7 +95,7 @@ export function makeHarness(env: Record<string, string> = {}): Harness {
         data,
         shotId: shot.id,
         registry,
-        provider: "mock",
+        provider: opts.provider ?? "mock",
         modelId,
         acknowledged: opts.acknowledge === false ? [] : ["__all__"],
         userId: opts.userId ?? null,
@@ -101,7 +112,7 @@ export function makeHarness(env: Record<string, string> = {}): Harness {
               data,
               shotId: shot.id,
               registry,
-              provider: "mock",
+              provider: opts.provider ?? "mock",
               modelId,
               acknowledged: ignored,
               userId: opts.userId ?? null,

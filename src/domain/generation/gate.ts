@@ -16,7 +16,7 @@ import {
  */
 export interface GateBlocker {
   code: string;
-  source: "preflight" | "freshness" | "model" | "compatibility" | "submission";
+  source: "preflight" | "freshness" | "model" | "compatibility" | "submission" | "spend";
   message: string;
 }
 
@@ -34,6 +34,47 @@ export interface GateInput {
   availability: ModelAvailability | null;
   compatibility: CompatibilityReport | null;
   acknowledged: readonly string[];
+  /** Live-spend gate inputs. Omitted for free (mock) models. */
+  spend?: SpendGateInput | null;
+}
+
+export interface SpendGateInput {
+  paidEnabled: boolean;
+  maxUsd: number | null;
+  /** `undefined`: not computable yet (e.g. the request is incompatible); `null`/amount null: cost unknown. */
+  estimate?: { amount: number | null; currency: string } | null;
+}
+
+/** Why a BILLING generation may not be submitted. Empty = within the configured spend limits. */
+export function spendBlockers(s: SpendGateInput): GateBlocker[] {
+  const out: GateBlocker[] = [];
+  const block = (code: string, message: string) => out.push({ code, source: "spend", message });
+  if (!s.paidEnabled) {
+    block(
+      "spend.disabled",
+      "Paid generation is switched off on this server (PRISM_STUDIO_ALLOW_PAID_GENERATION).",
+    );
+    return out;
+  }
+  if (s.maxUsd == null) {
+    block("spend.no_limit", "No per-generation spend limit is configured (PRISM_STUDIO_MAX_GENERATION_USD).");
+    return out;
+  }
+  if (s.estimate === undefined) return out;
+  if (s.estimate?.amount == null) {
+    block(
+      "spend.unknown_cost",
+      "The cost of this generation is unknown, so it cannot be checked against the limit.",
+    );
+  } else if (s.estimate.currency !== "USD") {
+    block("spend.currency", `Estimated cost is in ${s.estimate.currency}; only USD limits are supported.`);
+  } else if (s.estimate.amount > s.maxUsd) {
+    block(
+      "spend.over_limit",
+      `Estimated cost $${s.estimate.amount.toFixed(2)} exceeds the per-generation limit of $${s.maxUsd.toFixed(2)}.`,
+    );
+  }
+  return out;
 }
 
 export function evaluateGate(input: GateInput): GenerationGate {
@@ -84,6 +125,8 @@ export function evaluateGate(input: GateInput): GenerationGate {
   for (const e of input.compatibility?.errors ?? []) {
     blockers.push({ code: `compatibility.${e.id}`, source: "compatibility", message: e.message });
   }
+
+  if (input.spend) blockers.push(...spendBlockers(input.spend));
 
   const ack = new Set(input.acknowledged);
   const unacknowledged = (input.compatibility?.ignoredFeatures ?? []).filter((f) => !ack.has(f.id));

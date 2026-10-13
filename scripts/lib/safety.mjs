@@ -26,8 +26,9 @@ export function redact(input, env = process.env) {
 
 function secretValues(env) {
   const values = new Set();
-  const url = env.SUPABASE_DB_URL;
-  if (url) {
+  for (const urlKey of ["SUPABASE_DB_URL", "PRISM_STUDIO_WORKER_DB_URL"]) {
+    const url = env[urlKey];
+    if (!url) continue;
     try {
       const u = new URL(url);
       if (u.password) {
@@ -46,6 +47,10 @@ function secretValues(env) {
     "SUPABASE_SERVICE_ROLE_KEY",
     "PRISM_STUDIO_TEST_PASSWORD",
     "PRISM_STUDIO_DEV_USER_PASSWORD",
+    "PRISM_STUDIO_WORKER_DB_PASSWORD",
+    "PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY",
+    "PRISM_STUDIO_WORKER_SERVICE_KEY",
+    "RUNWAYML_API_SECRET",
   ]) {
     const v = env[key];
     if (v && v.length >= 6) values.add(v);

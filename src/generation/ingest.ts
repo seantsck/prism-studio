@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import { parseBuffer } from "music-metadata";
 import { assetSchema, type Asset } from "@/domain/schemas";
@@ -45,6 +44,35 @@ export interface IngestContext {
 
 const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 
+/**
+ * Deterministic identity of one ingested output: the same (attempt, provider task, position) always maps to
+ * the same Asset id and therefore the same Storage object path. A worker that crashed after the upload and
+ * before the database commit finds its own object on the next run instead of uploading a duplicate.
+ */
+export function deterministicOutputId(attemptId: string, providerJobId: string, position: number): string {
+  const h = createHash("sha256")
+    .update(`prism-generation-output|${attemptId}|${providerJobId}|${position}`)
+    .digest();
+  h[6] = (h[6]! & 0x0f) | 0x50; // version 5 layout
+  h[8] = (h[8]! & 0x3f) | 0x80; // RFC 4122 variant
+  const x = h.subarray(0, 16).toString("hex");
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20, 32)}`;
+}
+
+/**
+ * Which download failures are worth retrying. Bounded by the job's attempt budget either way; this keeps
+ * deterministic 4xx answers from consuming it.
+ *   408/425/429/5xx  transient
+ *   403/404          may be an expired/not-yet-propagated signed URL: the next try re-fetches the task for a
+ *                    fresh URL, so a bounded retry is right
+ *   any other 4xx    the request itself is wrong (400/401/410/415/...): permanent
+ */
+export function isRetryableDownloadStatus(status: number | undefined): boolean {
+  if (status == null) return true;
+  if (status >= 500) return true;
+  return [403, 404, 408, 425, 429].includes(status);
+}
+
 async function obtainBytes(out: ProviderOutput, ctx: IngestContext): Promise<Uint8Array> {
   if (out.source.type === "bytes") {
     const bytes = new Uint8Array(Buffer.from(out.source.base64, "base64"));
@@ -62,7 +90,10 @@ async function obtainBytes(out: ProviderOutput, ctx: IngestContext): Promise<Uin
     return fetched.bytes;
   } catch (err) {
     if (err instanceof UnsafeUrlError) {
-      const transient = err.code === "timeout" || err.code === "network" || err.code === "http_error";
+      const transient =
+        err.code === "timeout" ||
+        err.code === "network" ||
+        (err.code === "http_error" && isRetryableDownloadStatus(err.status));
       throw new IngestError(transient ? "retryable" : "permanent", `download_${err.code}`, err.message);
     }
     throw new IngestError("retryable", "download_failed", "Output download failed.");
@@ -139,10 +170,26 @@ export async function ingestOutputs(result: GenerationResult, ctx: IngestContext
   const ordered = [...result.outputs].sort((a, b) => a.position - b.position);
   try {
     for (const out of ordered) {
-      const bytes = await obtainBytes(out, ctx);
-      const check = checkUpload({ name: out.filename, size: bytes.length, claimedMime: out.mime }, bytes, [
-        out.kind,
-      ]);
+      const id = deterministicOutputId(ctx.attemptId, ctx.providerJobId, out.position);
+      const objectPath = buildObjectPath(ctx.projectId, id, out.filename);
+      const accept = (b: Uint8Array) =>
+        checkUpload({ name: out.filename, size: b.length, claimedMime: out.mime }, b, [out.kind]);
+
+      // Crash recovery: our own object from an earlier, interrupted run. Prefer it over a (possibly expired)
+      // provider URL, and never upload a second copy.
+      let bytes: Uint8Array | null = null;
+      let reused = false;
+      const prior = await ctx.sink.get(objectPath).catch(() => null);
+      if (prior) {
+        if (accept(prior).ok) {
+          bytes = prior;
+          reused = true;
+        } else {
+          await ctx.sink.remove(objectPath).catch(() => undefined); // partial/corrupt: start over
+        }
+      }
+      if (!bytes) bytes = await obtainBytes(out, ctx);
+      const check = accept(bytes);
       if (!check.ok || !check.kind || !check.mime) {
         throw new IngestError(
           "permanent",
@@ -151,10 +198,10 @@ export async function ingestOutputs(result: GenerationResult, ctx: IngestContext
         );
       }
       const info = await inspect(check.kind, bytes, out.reported);
-      const id = randomUUID();
-      const objectPath = buildObjectPath(ctx.projectId, id, out.filename);
-      await ctx.sink.put(objectPath, bytes, check.mime);
-      uploaded.push(objectPath);
+      if (!reused) {
+        await ctx.sink.put(objectPath, bytes, check.mime);
+        uploaded.push(objectPath);
+      }
 
       const stamp = ctx.now().toISOString();
       const asset: Asset = assetSchema.parse({

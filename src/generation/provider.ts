@@ -1,3 +1,4 @@
+import type { IgnoredFeature } from "@/domain/generation/compatibility";
 import type {
   CostEstimate,
   GenerationModel,
@@ -29,7 +30,16 @@ export interface AssetBytes {
 
 /** How an adapter may read Prism assets it needs to upload to the provider (frames, references, audio). */
 export interface AssetAccess {
+  /**
+   * Bytes of an input asset of THIS attempt (checksum-verified against the Asset row). null when the asset is
+   * not an input of the running attempt or cannot be read.
+   */
   read(assetId: string): Promise<AssetBytes | null>;
+  /**
+   * A short-lived URL a provider can fetch the asset from, when the byte path is unsuitable (large inputs).
+   * Execution transport only: never log it, never store it, never put it in a package.
+   */
+  signedUrl?(assetId: string, ttlSeconds: number): Promise<string | null>;
 }
 
 export interface ProviderContext {
@@ -78,7 +88,25 @@ export interface GenerationProviderAdapter {
   submit(request: GenerationRequest, plan: PromptPlan, ctx: ProviderContext): Promise<GenerationSubmission>;
   poll(ref: ProviderJobRef, ctx: ProviderContext): Promise<GenerationStatus>;
   /** Only when capabilities.operational.cancellation is true. Resolves true when the provider confirmed. */
-  cancel?(ref: ProviderJobRef, ctx: ProviderContext): Promise<{ confirmed: boolean }>;
+  cancel?(
+    ref: ProviderJobRef,
+    ctx: ProviderContext,
+  ): Promise<{
+    /** The provider confirmed the task is cancelled (or no longer running). */
+    confirmed: boolean;
+    /** The task had ALREADY completed successfully: its output must be kept, not discarded. */
+    completed?: boolean;
+  }>;
+  /**
+   * Production intent this adapter cannot honour even though the generic compatibility engine accepted the
+   * request (e.g. a prompt longer than the provider's limit). Returned items are acknowledged like any other
+   * ignored feature, so nothing is ever dropped silently.
+   */
+  additionalIgnoredFeatures?(
+    request: GenerationRequest,
+    plan: PromptPlan,
+    model: GenerationModel,
+  ): IgnoredFeature[];
   /** Normalized outputs + provenance + cost of a SUCCEEDED job. Output URLs must come from the provider. */
   fetchResult(
     ref: ProviderJobRef,

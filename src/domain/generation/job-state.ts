@@ -8,6 +8,7 @@ import type { JobStatus } from "./schemas";
  *      ▲            │              │            │             │
  *      └─ retry ────┘              └────────────┴──► failed ◄─┘
  *   any active ──► cancel_requested ──► cancelled
+ *                                   └──► ingesting (provider completed first: output is preserved)
  *   queued ──► cancelled (never reached a provider)
  */
 const TRANSITIONS: Record<JobStatus, readonly JobStatus[]> = {
@@ -20,7 +21,8 @@ const TRANSITIONS: Record<JobStatus, readonly JobStatus[]> = {
   ingesting: ["succeeded", "failed", "cancel_requested"],
   succeeded: [],
   failed: [],
-  cancel_requested: ["cancelled", "failed"],
+  // "ingesting": the provider finished before the cancellation took effect; the paid output is kept.
+  cancel_requested: ["cancelled", "failed", "ingesting"],
   cancelled: [],
 };
 

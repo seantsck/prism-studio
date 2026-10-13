@@ -474,6 +474,31 @@ export class MemoryGenerationService implements GenerationRepository, Generation
     return clone(job);
   }
 
+  async findInputAsset(attemptId: string, assetId: string) {
+    const found = this.findAttempt(attemptId);
+    if (!found || !found.attempt.inputAssetIds.includes(assetId)) return null;
+    const a = found.project.assets.find((x) => x.id === assetId);
+    if (!a) return null;
+    return {
+      assetId: a.id,
+      objectPath: a.objectPath ?? null,
+      bucket: a.bucket ?? null,
+      storageProvider: a.storageProvider,
+      mime: a.mime ?? null,
+      byteSize: a.byteSize ?? null,
+      checksum: a.checksum ?? null,
+    };
+  }
+
+  async countProviderActive(provider: string, model: string) {
+    return [...this.jobs.values()].filter(
+      (j) =>
+        j.provider === provider &&
+        j.model === model &&
+        (j.status === "submitting" || j.status === "submitted" || j.status === "processing"),
+    ).length;
+  }
+
   async recordUnknownCost(args: {
     jobId: string;
     attemptId: string;
@@ -483,8 +508,10 @@ export class MemoryGenerationService implements GenerationRepository, Generation
     currency: string;
     basis: string;
     now: string;
+    amount?: number | null;
   }) {
     if (this.costs.some((c) => c.attemptId === args.attemptId && c.kind !== "estimated")) return;
+    const known = args.amount != null;
     this.costs.push({
       id: randomUUID(),
       projectId: args.projectId,
@@ -492,8 +519,8 @@ export class MemoryGenerationService implements GenerationRepository, Generation
       jobId: args.jobId,
       provider: args.provider,
       model: args.model,
-      kind: "unknown",
-      amount: null,
+      kind: known ? "actual" : "unknown",
+      amount: known ? args.amount! : null,
       currency: args.currency,
       basis: args.basis,
       units: null,

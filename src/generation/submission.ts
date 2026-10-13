@@ -7,7 +7,9 @@ import {
   buildGenerationRequest,
   evaluateGate,
   extendPreflightWithCompatibility,
+  type GateBlocker,
   type GenerationGate,
+  type SpendGateInput,
 } from "@/domain/generation/gate";
 import { buildPromptPlan } from "@/domain/generation/prompt-plan";
 import type { CostEstimate, GenerationModel, ModelAvailability } from "@/domain/generation/schemas";
@@ -58,10 +60,10 @@ export function evaluateShotForModel(args: {
   const { ctx, pkg, basePreflight } = shared;
   const model = args.registry.model(args.provider, args.modelId);
   const availability = model ? args.registry.availabilityOf(model) : null;
-  const compatibility = model ? evaluateCompatibility(pkg, model) : null;
-  const report = extendPreflightWithCompatibility(basePreflight, compatibility);
+  let compatibility = model ? evaluateCompatibility(pkg, model) : null;
   const adapter = model ? args.registry.adapter(model.provider) : null;
   let estimate: CostEstimate | null = null;
+  const adapterBlockers: GateBlocker[] = [];
   if (model && adapter && compatibility?.compatible && compatibility.modality) {
     try {
       const plan = buildPromptPlan(pkg);
@@ -72,19 +74,46 @@ export function evaluateShotForModel(args: {
         plan,
         idempotencyKey: "estimate-only-key",
       });
+      // Provider-specific limits the generic engine cannot know (e.g. prompt length) surface as explicit
+      // ignored features: acknowledged by the user, recorded in the attempt, never silently dropped.
+      const extra = adapter.additionalIgnoredFeatures?.(req, plan, model) ?? [];
+      if (extra.length > 0) {
+        compatibility = { ...compatibility, ignoredFeatures: [...compatibility.ignoredFeatures, ...extra] };
+      }
+      const check = adapter.validateRequest(req, model);
+      if (!check.ok) {
+        check.errors.forEach((message, i) =>
+          adapterBlockers.push({ code: `adapter.invalid.${i}`, source: "model", message }),
+        );
+      }
       estimate = adapter.estimateCost(req, model);
     } catch {
       estimate = null;
     }
   }
-  const gate = evaluateGate({
+  const report = extendPreflightWithCompatibility(basePreflight, compatibility);
+  const policy = args.registry.spendPolicy();
+  const spend: SpendGateInput | null =
+    model && args.registry.billsMoney(model)
+      ? {
+          paidEnabled: policy.enabled,
+          maxUsd: policy.maxUsd,
+          estimate: compatibility?.compatible ? estimate : undefined,
+        }
+      : null;
+  const baseGate = evaluateGate({
     preflight: basePreflight,
     pkg,
     model,
     availability,
     compatibility,
     acknowledged: args.acknowledged ?? [],
+    spend,
   });
+  const gate: GenerationGate =
+    adapterBlockers.length > 0
+      ? { ...baseGate, allowed: false, blockers: [...baseGate.blockers, ...adapterBlockers] }
+      : baseGate;
   return { ctx, pkg, report, model, availability, compatibility, estimate, gate };
 }
 

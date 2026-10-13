@@ -169,6 +169,8 @@ export const modelAvailabilitySchema = z.object({
   configured: z.boolean(),
   /** Names of missing configuration entries (never their values). */
   missingConfig: z.array(z.string()),
+  /** false only for billing models while the live-spend gate (PRISM_STUDIO_ALLOW_PAID_GENERATION) is closed. */
+  paidGenerationEnabled: z.boolean(),
   available: z.boolean(),
   lifecycle: z.enum(["active", "deprecated", "retired"]),
 });
@@ -287,6 +289,25 @@ export const generationStatusSchema = z.object({
   progress: z.number().min(0).max(1).nullable(),
   /** Hint for when to poll next. */
   retryAfterMs: z.number().int().positive().nullable(),
+  /** Sanitized provider failure (only when state is "failed"): safe code + user-safe message. */
+  failure: z
+    .object({
+      category: z.enum([
+        "transient",
+        "rate_limit",
+        "provider_unavailable",
+        "timeout",
+        "invalid_request",
+        "content_rejected",
+        "auth",
+        "quota",
+        "permanent",
+      ]),
+      code: z.string(),
+      message: z.string(),
+    })
+    .nullable()
+    .optional(),
 });
 export type GenerationStatus = z.infer<typeof generationStatusSchema>;
 

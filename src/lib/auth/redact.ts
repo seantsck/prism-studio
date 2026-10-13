@@ -21,7 +21,51 @@ const SENSITIVE_PARAMS = new Set([
   "secret",
   "client_secret",
   "code_verifier",
+  // signed media URLs (provider outputs, Storage)
+  "signature",
+  "sig",
+  "jwt",
+  "x-amz-signature",
+  "x-amz-credential",
+  "x-amz-security-token",
+  "x-goog-signature",
+  "x-goog-credential",
+  "googleaccessid",
+  "policy",
+  "keypairid",
 ]);
+
+/** Environment variables whose VALUES must never appear in logs, even when they match no pattern. */
+const SECRET_ENV_NAMES = [
+  "PRISM_STUDIO_WORKER_DB_URL",
+  "PRISM_STUDIO_WORKER_DB_PASSWORD",
+  "PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY",
+  "PRISM_STUDIO_WORKER_SERVICE_KEY",
+  "RUNWAYML_API_SECRET",
+  "SUPABASE_DB_URL",
+  "SUPABASE_SERVICE_ROLE_KEY",
+] as const;
+
+function literalSecrets(): string[] {
+  const out = new Set<string>();
+  for (const name of SECRET_ENV_NAMES) {
+    const v = process.env[name];
+    if (!v || v.length < 8) continue;
+    out.add(v);
+    if (name.endsWith("_URL")) {
+      try {
+        const pw = new URL(v).password;
+        if (pw.length >= 6) {
+          out.add(pw);
+          out.add(decodeURIComponent(pw));
+        }
+      } catch {
+        /* not a URL */
+      }
+    }
+  }
+  return [...out].filter((v) => v.length >= 6);
+}
 
 const MASK = "[redacted]";
 
@@ -66,6 +110,8 @@ export function redactText(input: unknown): string {
   text = text.replace(/\bsb_(?:secret|publishable)_[A-Za-z0-9_-]{8,}\b/g, MASK);
   // Any fragment that looks like it carries tokens.
   text = text.replace(/#[^\s]*(?:access_token|refresh_token|type=recovery)[^\s]*/gi, `#${MASK}`);
+  // Literal values of known secret environment variables.
+  for (const secret of literalSecrets()) text = text.split(secret).join(MASK);
   return text;
 }
 

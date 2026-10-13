@@ -188,9 +188,42 @@ export function GeneratePanel({
         </fieldset>
       ) : null}
 
+      {option.kind === "real" ? (
+        <div className="border border-line bg-bg p-2.5 text-[12px]" data-testid="spend-summary">
+          <div className="mb-1 text-[10.5px] uppercase tracking-wide text-muted">This will spend money</div>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+            <dt className="text-muted">Provider</dt>
+            <dd>{option.providerName}</dd>
+            <dt className="text-muted">Model</dt>
+            <dd>{option.label}</dd>
+            <dt className="text-muted">Production duration</dt>
+            <dd>{option.duration ? secs(option.duration.productionMs) : "—"}</dd>
+            <dt className="text-muted">Provider-compatible duration</dt>
+            <dd>
+              {option.duration
+                ? `${option.duration.supported} ${option.duration.ok ? "✓" : "✕ (not rounded)"}`
+                : "—"}
+            </dd>
+            <dt className="text-muted">Estimated cost</dt>
+            <dd>{option.estimate ? money(option.estimate.amount, option.estimate.currency) : "—"}</dd>
+            <dt className="text-muted">Inputs used</dt>
+            <dd>
+              {option.inputs
+                .filter((i) => i.used)
+                .map((i) => i.label)
+                .join(", ") || "none"}
+            </dd>
+            <dt className="text-muted">Not used</dt>
+            <dd>{option.ignored.map((f) => f.label).join(", ") || "nothing"}</dd>
+          </dl>
+        </div>
+      ) : null}
+
       <div className="flex items-center gap-3">
         <Button type="submit" variant="primary" disabled={!canSubmit} data-testid="generate-button">
-          Generate
+          {option.kind === "real" && option.estimate
+            ? `Generate — estimated ${money(option.estimate.amount, option.estimate.currency)}`
+            : "Generate"}
         </Button>
         {activeJob ? (
           <span className="text-[11px] text-muted">A generation is already running for this shot.</span>

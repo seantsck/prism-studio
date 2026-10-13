@@ -111,3 +111,40 @@ Structured JSON logs with an allow-list of fields (job/attempt ids, provider, mo
 counts, error category/code). Prompts, dialogue, base64 payloads, signed URLs, cookies and headers are never
 logged; unknown fields are dropped, not redacted. The per-job **event timeline** (`generation_job_events`) is
 shown on the attempt page.
+
+## The worker's trust boundary (Phase 2B)
+
+```
+Browser / user ──► authenticated submission (RLS, spend gate) ──► frozen Attempt + authorised Job
+                                                                   │
+                                      queue (Postgres) ◄───────────┘
+                                          │
+                              Generation Worker  ── role prism_generation_worker (no password in git)
+```
+
+The worker takes **no** project/user id from any request. Everything it does is derived from persisted jobs it
+claimed, and its database role can do nothing else:
+
+- Role `prism_generation_worker` (migrations 0015–0017): NOLOGIN until `npm run worker:db:provision` sets a login
+  password from `PRISM_STUDIO_WORKER_DB_PASSWORD`. Not superuser, **not BYPASSRLS**, no role/db creation, owns
+  nothing, member of no role.
+- `SELECT` on jobs; `UPDATE` only execution columns of jobs (status, lease, provider ids, errors, actual cost) and
+  of attempts (status, output, duration, cost). Identity, frozen request, review fields: no privilege.
+- Row visibility follows **active jobs**: an attempt, its project owner id and its INPUT assets are visible only
+  while a job is in flight; finished history is out of reach.
+- `INSERT` only: generated assets (purpose `generation_output`, source `provider_output`, only while a job is
+  `ingesting`), outputs, `actual`/`unknown` costs, job events. No `DELETE`/`TRUNCATE` anywhere.
+- No access to characters, Looks, dialogue, scripts, shots, bible, auth schema, Storage metadata or the migration
+  ledger. `npm run worker:db:check` audits every column privilege against `scripts/lib/worker-role-spec.mjs`;
+  `npm run db:worker-role` proves the can/cannot list as the real role, plus a full queue → worker → Mock → ingest
+  flow under it.
+- `PRISM_STUDIO_WORKER_DB_URL` is required. The worker verifies at startup that it really is that role and never
+  falls back to the admin credential (development opt-in only: `PRISM_STUDIO_WORKER_DEV_ASSUME_ROLE=1`).
+- Residual PUBLIC privileges (Supabase-managed, deliberately not revoked): schema `public` USAGE, EXECUTE on public
+  functions (`is_project_owner`, `rls_auto_enable`), `TEMPORARY` on the database, SELECT on the `pg_stat_statements`
+  views (statistics; query text is hidden from non-privileged roles). None grants table data.
+
+Storage: the worker needs a **secret** key to write the private bucket (`PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY`,
+legacy `PRISM_STUDIO_WORKER_SERVICE_KEY`). It exists only on the worker host, a publishable/anon key is refused,
+and with no key the worker refuses to start in production. A narrower mechanism (per-object signed upload URLs
+minted by the app) is possible future hardening.
