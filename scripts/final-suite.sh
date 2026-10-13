@@ -19,7 +19,8 @@ run "seed --reset (restore)"                 npm run db:seed --silent -- --reset
 run "db structural validation"               npm run db:validate --silent
 run "db behavioral tests"                    npm run db:behavior --silent
 run "app RLS + storage policy tests"         npm run db:rls --silent
-run "storage API smoke (anon part)"          npm run db:storage:smoke --silent
+run "generation integration (queue+worker)" npm run db:generation --silent
+run "storage API smoke"                     npm run db:storage:smoke --silent
 run "unit tests"                             npm run test --silent
 run "typecheck"                              npm run typecheck --silent
 run "eslint"                                 npm run lint --silent

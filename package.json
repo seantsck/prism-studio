@@ -24,7 +24,10 @@
     "db:storage:smoke": "node --env-file=.env.local scripts/db-storage-smoke.mjs",
     "db:rls": "tsx --env-file=.env.local scripts/db-rls.mts",
     "db:exercise": "tsx --env-file=.env.local scripts/db-exercise.mts",
-    "test:e2e:supabase": "playwright test -c playwright.supabase.config.ts"
+    "test:e2e:supabase": "playwright test -c playwright.supabase.config.ts",
+    "worker:generation": "tsx --env-file=.env.local scripts/generation-worker.mts",
+    "db:generation": "tsx --env-file=.env.local scripts/db-generation.mts",
+    "db:generation:cleanup": "tsx --env-file=.env.local scripts/generation-cleanup.mts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

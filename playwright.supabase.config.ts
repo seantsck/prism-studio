@@ -24,6 +24,10 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 300_000,
     // SUPABASE_DB_URL / NEXT_PUBLIC_* come from .env.local (loaded by Next).
-    env: { PRISM_STUDIO_PERSISTENCE: "supabase", NEXT_PUBLIC_SITE_URL: "http://localhost:3101" },
+    env: {
+      PRISM_STUDIO_PERSISTENCE: "supabase",
+      NEXT_PUBLIC_SITE_URL: "http://localhost:3101",
+      PRISM_STUDIO_ENABLE_MOCK_PROVIDER: "1",
+    },
   },
 });

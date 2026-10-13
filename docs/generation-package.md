@@ -75,8 +75,17 @@ Hard constraints, Negative constraints, Project guardrails, References, Target, 
 
 ## Attempts
 
-`logAttempt` snapshots the package into `generation_attempts.package_snapshot` and stores
-`package_fingerprint`. Attempts are append-only: review fields (status, rejection reason, notes, approved) can
-change; prompt, negative prompt, snapshot, fingerprint, model settings, input assets, shot id and attempt number
-cannot (`guard_attempt_history`). Only one attempt per shot may be approved. No attempt is ever executed: there
-is no provider integration.
+`startGeneration` freezes the package into `generation_attempts.package_snapshot` (and its
+`package_fingerprint`) together with the **PromptPlan**, the normalized **request**, the **compatibility
+report** and the acknowledged ignored features, then queues a job. `logAttempt` still exists for attempts made
+**outside** Prism (no job, no output).
+
+Attempts are append-only: execution result (status, output, cost, duration) and review fields can change; the
+package, plan, request, compatibility, provider/model, prompt, settings, input assets, shot id and attempt
+number cannot (`guard_attempt_history`). One approved attempt per shot at most.
+
+The three layers are kept apart: the **package** is what the filmmaker decided, the **PromptPlan** is a
+provider-independent sectioning of it, and the **provider request** is whatever an adapter builds. The Prompt
+Inspector shows all three, for the current shot and for any historical attempt
+([generation-architecture](generation-architecture.md)). A past attempt's brief is always reachable at
+`/projects/<slug>/generations/<attemptId>` and `/api/projects/<slug>/generations/<attemptId>/package`.

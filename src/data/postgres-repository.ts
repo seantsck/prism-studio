@@ -67,7 +67,7 @@ const FLAG_KEYS: Partial<Record<CollectionName, string>> = {
   attempts: "approved",
 };
 
-async function upsertRow(
+export async function upsertRow(
   db: Pool | PoolClient,
   table: string,
   row: Row,

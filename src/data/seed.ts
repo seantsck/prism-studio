@@ -1293,22 +1293,42 @@ export function buildSeedProject(): ProjectData {
     costUsd: null,
     durationMs: 3000,
     status,
+    reviewStatus: "unreviewed",
+    rejectionCategories: [],
+    reviewedAt: null,
     rejectionReason: "",
     notes: "",
     approved: false,
+    requestModality: null,
+    promptPlan: null,
+    request: null,
+    compatibility: null,
+    acknowledgedIgnored: [],
+    createdBy: null,
     createdAt: T0,
     ...extra,
   });
   data.attempts = [
-    attempt(1, "rejected", {
+    attempt(1, "succeeded", {
+      reviewStatus: "rejected",
+      rejectionCategories: ["wrong_set"],
+      reviewedAt: T0,
       rejectionReason: "Wrong car door — opened on the road side.",
       notes: "Vehicle orientation not respected.",
     }),
-    attempt(2, "rejected", {
+    attempt(2, "succeeded", {
+      reviewStatus: "rejected",
+      rejectionCategories: ["extra_person"],
+      reviewedAt: T0,
       rejectionReason: "Extra woman appeared in frame.",
       notes: "Added a companion.",
     }),
-    attempt(3, "approved", { approved: true, notes: "Correct door, single subject." }),
+    attempt(3, "succeeded", {
+      reviewStatus: "approved",
+      reviewedAt: T0,
+      approved: true,
+      notes: "Correct door, single subject.",
+    }),
   ];
   const check: ContinuityCheck = {
     id: uid("continuity:2B:3"),

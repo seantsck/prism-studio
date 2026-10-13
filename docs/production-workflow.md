@@ -89,6 +89,21 @@ not block generation. Shot Prep, Storyboard and Animatic show the same messages.
 - Shot Prep compares the latest attempt's fingerprint with the current package's; a mismatch shows "this shot
   has changed since generation attempt N". The attempt itself stays interpretable.
 
+## Generate (Phase 2A)
+
+Shot Prep section **19 · Generate**. A shot may be sent to a model only when **all** of these hold (same gate in
+the UI and the server action):
+
+1. every required preflight rule passes (the shot is READY);
+2. the approved storyboard is not **stale** (unknown/changed-timing only warn);
+3. the model is enabled, configured and not retired;
+4. the model is compatible: duration unchanged, aspect ratio, reference limits, required start frame;
+5. every feature the model would ignore (end frame, performed audio, style references, …) is **acknowledged**.
+
+Then an immutable attempt is created and a job queued. The shot's generation state is derived (READY → QUEUED →
+GENERATING → READY FOR REVIEW → APPROVED / NEEDS REDO); reviewing never edits the storyboard or the shot.
+Details: [generation-architecture](generation-architecture.md), [generation-review](generation-review.md).
+
 ## Manual continuity review
 
 Continuity checks (`continuity_checks`, kind `manual`) are recorded from Shot Prep → Preflight; the continuity

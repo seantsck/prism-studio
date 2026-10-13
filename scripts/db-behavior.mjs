@@ -50,8 +50,8 @@ async function expectOk(name, fn) {
 
 const EMPTY_JSON = "{}";
 const attemptInsert =
-  "insert into generation_attempts (id, project_id, shot_id, attempt_number, provider, model, modality, package_snapshot, approved, status) " +
-  "values ($1,$2,$3,$4,'p','m','video',$5,$6,$7)";
+  "insert into generation_attempts (id, project_id, shot_id, attempt_number, provider, model, modality, package_snapshot, approved, status, review_status) " +
+  "values ($1,$2,$3,$4,'p','m','video',$5,$6::boolean,$7,case when $6::boolean then 'approved' else 'unreviewed' end)";
 
 try {
   await client.query("begin");
@@ -136,15 +136,15 @@ try {
   );
   await expectOk("attempt review fields can change", async () => {
     await client.query(
-      "update generation_attempts set status='rejected', rejection_reason='wrong door', notes='n' where id=$1",
+      "update generation_attempts set status='succeeded', review_status='rejected', rejection_categories='{wrong_set}', rejection_reason='wrong door', notes='n' where id=$1",
       [A1],
     );
   });
-  await client.query(attemptInsert, [id(), P, SH, 2, EMPTY_JSON, true, "approved"]);
+  await client.query(attemptInsert, [id(), P, SH, 2, EMPTY_JSON, true, "succeeded"]);
   await expectError(
     "second approved attempt for a shot is rejected",
     attemptInsert,
-    [id(), P, SH, 3, EMPTY_JSON, true, "approved"],
+    [id(), P, SH, 3, EMPTY_JSON, true, "succeeded"],
     /unique/,
   );
 

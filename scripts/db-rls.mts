@@ -169,6 +169,10 @@ try {
     "shots",
     "storyboard_frames",
     "generation_attempts",
+    "generation_jobs",
+    "generation_job_events",
+    "generation_outputs",
+    "generation_costs",
     "continuity_checks",
   ];
   for (const table of scoped) {

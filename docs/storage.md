@@ -83,3 +83,12 @@ object removal can leave an orphaned object that nothing references.
 
 No virus scanning, no image re-encoding/EXIF stripping, no per-user quotas, no CDN, no resumable uploads
 (single server-action request, 55 MB cap). See [security-model](security-model.md) and [roadmap](roadmap.md).
+
+## Generated outputs (Phase 2A)
+
+Provider output never stays at the provider. The worker downloads/receives bytes, validates them with the
+upload policy, writes them to `prism-assets/<project_id>/<asset_id>/<filename>` (same key convention, same RLS
+policies for reads) and creates `assets` rows with `purpose = generation_output`, `source = provider_output`
+and provenance in `metadata.generation`. `generation_outputs` links attempt → asset with role and position.
+Outputs of an attempt cannot be deleted from the library while that attempt exists (history stays
+interpretable). How the worker is authorised to write: [security-model](security-model.md#generation-and-outputs).

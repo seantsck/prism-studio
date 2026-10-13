@@ -76,3 +76,16 @@ Assets are rows; bytes live behind `StorageProvider`. See [storage](storage.md).
 
 Migrations `0001`–`0011` in `supabase/migrations/`; policy and history in [migration-policy](migration-policy.md).
 Entity-to-table mapping in [domain-model](domain-model.md).
+
+## Generation persistence (Phase 2A)
+
+Generation does not go through `Repository.loadProject`. Two narrow interfaces
+(`src/data/generation-repository.ts`) with memory and Postgres implementations:
+
+- `GenerationRepository` — application path: `createAttemptWithJob` (one transaction), `listShotAttempts`,
+  `listActiveProjectJobs`, `listProjectGenerations`, `getJob`, `requestCancel`, `reviewAttempt`. In supabase
+  mode it runs under the same RLS preamble as the project repository.
+- `GenerationStore` — worker path: `claim` (`FOR UPDATE SKIP LOCKED` + lease), `heartbeat`, `update`,
+  `finalizeSuccess` (assets + outputs + attempt result + cost + job, atomic), `recordUnknownCost`.
+
+Status refreshes use only these (never a whole-project load).

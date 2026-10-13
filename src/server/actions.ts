@@ -1045,14 +1045,19 @@ async function setFrameApproved_impl(form: FormData) {
 
 // ───────────────────────── Generation & continuity ─────────────────────────
 
-/** Records an attempt with a frozen package snapshot. Providers are not integrated yet; attempts are logged manually. */
+/**
+ * Logs an attempt made OUTSIDE Prism (another tool). It snapshots the package like any attempt, but there is
+ * no job and no output. Attempts created by Prism's own generation pipeline use startGeneration instead.
+ */
 async function logAttempt_impl(form: FormData) {
   const { data, shot, repo, slug } = await loadShot(form);
   const pkg = assembleGenerationPackage(buildShotContext(data, shot.id));
   const existing = data.attempts.filter((a) => a.shotId === shot.id);
   const attemptNumber = existing.reduce((m, a) => Math.max(m, a.attemptNumber), 0) + 1;
-  const status = str(form, "status") || "rejected";
-  const approved = status === "approved";
+  const outcome = str(form, "outcome") || "rejected";
+  const reviewStatus =
+    outcome === "approved" ? "approved" : outcome === "unreviewed" ? "unreviewed" : "rejected";
+  const approved = reviewStatus === "approved";
   const attempt = generationAttemptSchema.parse({
     id: randomUUID(),
     projectId: data.project.id,
@@ -1070,45 +1075,26 @@ async function logAttempt_impl(form: FormData) {
     outputAssetId: null,
     costUsd: str(form, "costUsd") ? Number(str(form, "costUsd")) : null,
     durationMs: pkg.timing.durationMs || null,
-    status,
+    status: "succeeded",
+    reviewStatus,
+    reviewedAt: reviewStatus === "unreviewed" ? null : now(),
+    rejectionCategories: [],
     rejectionReason: str(form, "rejectionReason"),
     notes: str(form, "notes"),
     approved,
+    requestModality: null,
+    promptPlan: null,
+    request: null,
+    compatibility: null,
+    acknowledgedIgnored: [],
+    createdBy: repo.currentUserId(),
     createdAt: now(),
   });
   if (approved) {
     for (const a of existing.filter((x) => x.approved))
-      await repo.upsert(data.project.id, "attempts", { ...a, approved: false });
+      await repo.upsert(data.project.id, "attempts", { ...a, approved: false, reviewStatus: "unreviewed" });
   }
   await repo.upsert(data.project.id, "attempts", attempt);
-  refresh(slug);
-}
-
-/** Review fields only; prompt, package snapshot and settings of an attempt are immutable. */
-async function reviewAttempt_impl(form: FormData) {
-  const { data, repo, slug } = await load(form);
-  const attempt = data.attempts.find((a) => a.id === str(form, "attemptId"));
-  if (!attempt) throw new UserFacingError("Attempt not found");
-  const status = str(form, "status") || attempt.status;
-  const approved = status === "approved";
-  if (approved) {
-    for (const a of data.attempts.filter(
-      (x) => x.shotId === attempt.shotId && x.approved && x.id !== attempt.id,
-    )) {
-      await repo.upsert(data.project.id, "attempts", { ...a, approved: false });
-    }
-  }
-  await repo.upsert(
-    data.project.id,
-    "attempts",
-    generationAttemptSchema.parse({
-      ...attempt,
-      status,
-      approved,
-      rejectionReason: str(form, "rejectionReason"),
-      notes: str(form, "notes"),
-    }),
-  );
   refresh(slug);
 }
 
@@ -1425,10 +1411,6 @@ export async function setFrameApproved(form: FormData): Promise<ActionResult> {
 
 export async function logAttempt(form: FormData): Promise<ActionResult> {
   return runAction(() => logAttempt_impl(form), { name: "logAttempt" });
-}
-
-export async function reviewAttempt(form: FormData): Promise<ActionResult> {
-  return runAction(() => reviewAttempt_impl(form), { name: "reviewAttempt" });
 }
 
 export async function saveContinuityCheck(form: FormData): Promise<ActionResult> {

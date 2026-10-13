@@ -8,6 +8,7 @@ import { shotSourceContent } from "@/domain/coverage";
 import { formatSeconds } from "@/domain/duration";
 import { PART_LABELS, storyboardFreshness } from "@/domain/fingerprint";
 import { assembleGenerationPackage, renderGenerationBrief } from "@/domain/generation-package";
+import { GenerateWorkspace } from "@/components/generation/generate-workspace";
 import {
   itemsBySection,
   runPreflight,
@@ -172,6 +173,7 @@ const SECTION_ORDER: Array<{ key: string; label: string; preflight: PreflightSec
   { key: "generation", label: "16 · Generation intent", preflight: ["generation"] },
   { key: "preflight", label: "17 · Preflight", preflight: [] },
   { key: "brief", label: "18 · Generation brief", preflight: [] },
+  { key: "generate", label: "19 · Generate", preflight: ["generation"] },
 ];
 
 function SectionChrome({
@@ -1027,6 +1029,11 @@ export function ShotPrepView({
                 </div>
               ))}
             </div>
+          </SectionChrome>
+
+          {/* 19 Generate */}
+          <SectionChrome {...sectionProps("generate")}>
+            <GenerateWorkspace data={data} shotId={shot.id} />
           </SectionChrome>
         </div>
 

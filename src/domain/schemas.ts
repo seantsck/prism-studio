@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  GENERATION_MODALITIES,
+  REJECTION_CATEGORIES,
+  REVIEW_STATUSES,
+  promptPlanSchema,
+} from "./generation/schemas";
 
 /**
  * Prism Studio domain schemas. Provider-agnostic and storage-agnostic.
@@ -68,7 +74,8 @@ export const SHOT_STATUSES = [
 ] as const;
 export const FRAME_SOURCES = ["upload", "generated", "3d_preview", "sketch"] as const;
 export const MODALITIES = ["video", "image", "image_to_video", "audio"] as const;
-export const ATTEMPT_STATUSES = ["queued", "running", "succeeded", "failed", "rejected", "approved"] as const;
+/** EXECUTION outcome of an attempt (mirrors its job). Review is a separate field: see REVIEW_STATUSES. */
+export const ATTEMPT_STATUSES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
 export const INT_EXT = ["INT", "EXT", "INT/EXT"] as const;
 export const PACES = ["very_slow", "slow", "natural", "fast", "very_fast"] as const;
 export const VOLUMES = ["whisper", "quiet", "normal", "loud", "shout"] as const;
@@ -568,9 +575,23 @@ export const generationAttemptSchema = z.object({
   costUsd: z.number().min(0).nullable(),
   durationMs: z.number().int().nullable(),
   status: z.enum(ATTEMPT_STATUSES),
+  /** Review is independent of execution: a successful generation is not an approved shot. */
+  reviewStatus: z.enum(REVIEW_STATUSES).default("unreviewed"),
+  rejectionCategories: z.array(z.enum(REJECTION_CATEGORIES)).default([]),
+  reviewedAt: iso.nullable().default(null),
   rejectionReason: text,
   notes: text,
+  /** Equals reviewStatus === "approved" (enforced by a DB check). At most one per shot. */
   approved: z.boolean(),
+  /** New-taxonomy modality the request was compiled for (null for manually logged legacy attempts). */
+  requestModality: z.enum(GENERATION_MODALITIES).nullable().default(null),
+  /** Frozen PromptPlan / normalized request / compatibility report at submission. Immutable. */
+  promptPlan: promptPlanSchema.nullable().default(null),
+  request: z.record(z.string(), z.unknown()).nullable().default(null),
+  compatibility: z.record(z.string(), z.unknown()).nullable().default(null),
+  /** Ignored-feature ids the user explicitly acknowledged before submitting. */
+  acknowledgedIgnored: z.array(text).default([]),
+  createdBy: nullableId.default(null),
   createdAt: iso,
 });
 export type GenerationAttempt = z.infer<typeof generationAttemptSchema>;

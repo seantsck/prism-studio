@@ -84,4 +84,13 @@ Server actions are wrapped in `runAction` and return an `ActionResult`
 
 ## Not built yet
 
-Provider adapters, queues, collaboration, 3D sets, NLE export. See [roadmap](roadmap.md).
+Real provider adapters (the contract, queue, worker and a Mock provider exist: see
+[generation-architecture](generation-architecture.md)), automated continuity QA, model routing, budgets,
+collaboration, 3D sets, NLE export. See [roadmap](roadmap.md).
+
+## Generation (Phase 2A)
+
+Generation is a separate runtime concern: pure vocabulary in `src/domain/generation`, adapters/worker in
+`src/generation` (no Next.js, no React), persistence behind `GenerationRepository` (user path, RLS) and
+`GenerationStore` (worker path). The web app only enqueues and observes; `npm run worker:generation`
+executes. See [generation-architecture](generation-architecture.md).

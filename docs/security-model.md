@@ -62,6 +62,25 @@ Asset responses add `nosniff`, a safe `Content-Disposition` (inline only for ima
 | Signed URL lifetime | 300 s                                                     |
 | DB pool             | max 10 connections; project load uses up to 5 in parallel |
 
+## Generation and outputs
+
+| Threat                                                | Control                                                                                                                                                                                        |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider credential leaks to browser / snapshot / log | Credentials only in the server/worker environment; `ModelAvailability` carries missing-config **names**; snapshots hold the normalized request only; log fields are allow-listed               |
+| Output URL points inside our network (SSRF)           | Adapter-returned URLs only; https; host allow-list per adapter; IP classification at **connect time** (DNS-rebinding safe); bounded redirects re-validated per hop; byte cap; timeout          |
+| Hostile / mislabelled output                          | Magic-byte sniffing through the shared upload policy, size caps, extension block-list, declared-kind must match; inspected metadata wins over provider claims; partial ingests are rolled back |
+| Another user's job or output                          | RLS on jobs/events/outputs/costs through the project; composite same-project foreign keys; worker acts only on already-queued jobs                                                             |
+| Double submit / runaway spend                         | Idempotency key per (shot, attempt, package, model), one active job per shot/attempt, per-project active cap, per-user submit rate                                                             |
+| Replayed / forged webhooks                            | No endpoint exists until a provider needs one; contract requires signature verification before parsing and idempotency on the event id                                                         |
+| Worker storage credential                             | See below                                                                                                                                                                                      |
+
+**Worker storage credential.** A worker has no browser session, so writing to the private bucket needs a server
+credential. The production worker uses `PRISM_STUDIO_WORKER_SERVICE_KEY`, which exists **only** in the worker's
+environment (never the Next.js app, never the browser, never the database, never a snapshot). For local
+development the worker can instead sign in as the project owner with the test credentials so Storage RLS itself
+authorises the upload; that path is refused in production builds. Until the production key is provisioned the
+worker refuses to start against Supabase rather than falling back to anything weaker.
+
 ## Residual risks and gaps
 
 These are known and unmitigated unless noted.
@@ -72,7 +91,7 @@ These are known and unmitigated unless noted.
    coverage of the exact preamble. There is no separate low-privilege database role for the app.
 2. **Database TLS is not verified.** The pool uses `ssl: { rejectUnauthorized: false }` (as do the scripts):
    traffic is encrypted but the server certificate is not validated.
-3. **No rate limiting** beyond Supabase Auth's own limits. Uploads, exports and server actions are unthrottled.
+3. **Limited rate limiting.** Generation submission is throttled (per user per minute, active jobs per project); uploads, exports and other server actions are still unthrottled beyond Supabase Auth's limits.
 4. **Signed URLs are bearer links** valid for 5 minutes; anyone holding one can read that object until it expires.
 5. **Local-disk storage is dev-only.** It lives in the app's working directory, is not access-scoped beyond
    the repository check, and must not be used in a deployed environment.
@@ -87,3 +106,6 @@ These are known and unmitigated unless noted.
 11. **Browser-supplied duration hint** is stored but never trusted; server metadata wins ([asset-lifecycle](asset-lifecycle.md)).
 12. **Storage policy tested at SQL level.** See Known gaps in the [roadmap](roadmap.md).
 13. **Migration history before checksums** (0001–0005) is baselined, not proven ([migration-policy](migration-policy.md)).
+14. **Worker holds a storage-write key** (production) with project-wide Storage access; scope it to the worker host and rotate it.
+15. **Output downloads rely on provider hosts' TLS and the allow-list**; a compromised provider CDN host on the allow-list can serve hostile bytes (validated by type/size, never executed).
+16. **Provider-side idempotency** is only as good as the provider: a crash between "provider accepted" and "Prism recorded it" can, for providers without idempotency keys, produce a second paid generation.

@@ -140,6 +140,23 @@ export function findAssetUsage(data: ProjectData, assetId: string): AssetUsageRe
         shotId: a.shotId,
       });
   }
+  // Secondary outputs (previews, variants) are linked by generation_outputs; their asset metadata names the
+  // attempt, so they are never silently deletable while that attempt's history exists.
+  const self = data.assets.find((x) => x.id === assetId);
+  const generatedBy = (self?.metadata as { generation?: { attemptId?: string; role?: string } } | undefined)
+    ?.generation;
+  if (generatedBy?.attemptId) {
+    const attempt = data.attempts.find((x) => x.id === generatedBy.attemptId);
+    if (attempt && !direct.some((d) => d.kind === "attempt_output" && d.entityId === attempt.id)) {
+      direct.push({
+        kind: "attempt_output",
+        label: `Shot ${shotCode(attempt.shotId)} · attempt ${attempt.attemptNumber} ${generatedBy.role ?? "output"}`,
+        entityId: attempt.id,
+        shotId: attempt.shotId,
+      });
+      affected.add(attempt.shotId);
+    }
+  }
 
   const shots = [...affected]
     .map((id) => ({ id, code: shotCode(id) }))

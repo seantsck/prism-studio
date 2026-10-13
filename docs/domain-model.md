@@ -75,3 +75,17 @@ User (auth.users)
 | `Scene.scriptRange`                                                                | `scenes.script_start_line/end_line`                                              |
 | `PerformanceTake.waveform`                                                         | `performance_takes.waveform` (JSONB `{version, sampleCount, peaks, durationMs}`) |
 | `StoryboardFrame.approvedSnapshot`                                                 | `storyboard_frames.approved_snapshot` (JSONB `{parts, durationMs}`)              |
+
+## Generation entities (Phase 2A)
+
+| Entity             | Table                   | Nature                                                                                      |
+| ------------------ | ----------------------- | ------------------------------------------------------------------------------------------- |
+| GenerationAttempt  | `generation_attempts`   | Immutable creative record (package, plan, request, compatibility) + execution/review result |
+| GenerationJob      | `generation_jobs`       | Mutable execution state: provider job id, lease, retries, sanitized error                   |
+| GenerationJobEvent | `generation_job_events` | Append-only status timeline                                                                 |
+| GenerationOutput   | `generation_outputs`    | Ordered, role-tagged link attempt → Asset (primary, variant, preview, …)                    |
+| GenerationCost     | `generation_costs`      | Estimated / actual / unknown, append-only                                                   |
+
+Invariants: attempt ↔ job ↔ output ↔ cost always share a project (composite foreign keys); at most one active
+job per attempt; at most one approved attempt per shot; `approved = (review_status = 'approved')`; outputs have
+unique positions and at most one `primary`. See [generation-architecture](generation-architecture.md).

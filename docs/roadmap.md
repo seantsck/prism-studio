@@ -36,21 +36,40 @@ Stated plainly; none of these are implied to exist elsewhere in the docs.
 - **Account management** (sign-up, reset, MFA) is outside the app.
 - **Script coverage is link-based** and does not gate preflight ([script-coverage](script-coverage.md)).
 - **Animatic**: no export, no motion/ambience/music playback ([animatic](animatic.md)).
-- **No provider is integrated**; `generation.provider` / `model` are descriptive fields and attempts are logged,
-  never executed.
+- **No real provider is integrated** (Phase 2A adds the infrastructure and a Mock provider; see below).
 - **Playwright coverage** is a smoke + workflow set (memory mode) plus one signed-in flow, not exhaustive.
 - **No server action exists to create or edit a Prop's own record** (only shot-level prop selection,
   `saveShotProps`); props come from the seed.
 
-## Phase 2 — provider adapters + generation queue + cost tracking
+## Phase 2 — generation
 
-- `ProviderAdapter` interface: `GenerationPackage → provider request`, status polling, result ingestion
-  (no provider is integrated yet).
-- Queue + worker, retries, rate limits; attempts move `queued → running → succeeded/failed`.
-- Generation outputs stored in Supabase Storage (`generation_output` assets) with package fingerprint linkage.
-- Cost tracking per attempt/shot/episode against budgets.
-- Voice provider adapters populate `performance_takes` (`generated_voice`).
-- Collaboration and sharing (roles, invitations, policies beyond single owner).
+| Slice  | Scope                                                                                                                                                                                       | Status      |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| **2A** | Provider-independent generation domain, capability + compatibility engine, PromptPlan, attempt/job split, Postgres queue + worker, output ingestion, review, cost records, **MockProvider** | implemented |
+| 2B     | First production image / video / voice adapters (official APIs only, verified against current docs, opt-in live tests)                                                                      | next        |
+| 2C     | Automated continuity QA on outputs (vision checks linked to `attempt_id`)                                                                                                                   | hooks only  |
+| 2D     | Model routing / recommendations (capability + cost + history aware)                                                                                                                         | —           |
+| 2E     | Cost and budget intelligence (per shot / episode / project)                                                                                                                                 | —           |
+
+Phase 2A details: [generation-architecture](generation-architecture.md), [generation-jobs](generation-jobs.md),
+[provider-contract](provider-contract.md), [adding-a-provider](providers/adding-a-provider.md),
+[generation-review](generation-review.md).
+
+Still open in Phase 2 scope: voice adapters populate `performance_takes` (`generated_voice`); provider
+webhook endpoints (architecture only); realtime push instead of status polling; collaboration and sharing.
+
+### Known gaps (Phase 2A)
+
+- **No real provider adapter.** Only the Mock provider executes; nothing here has been exercised against a paid API.
+- **Worker storage credential for Supabase is not provisioned.** Live ingestion into Storage was verified through
+  the dev test-credential path; production needs `PRISM_STUDIO_WORKER_SERVICE_KEY` on the worker host.
+- **Status updates poll** Prism's own endpoint (1.5 s while active); no push.
+- **`maxConcurrency` per model is declared but only advisory**; the worker bounds total concurrency.
+- **Submission TOCTOU window**: the package is built from a fresh read and `shots.updated_at` is verified inside
+  the transaction, but changes to a Look/take/location between read and insert are not re-verified (the frozen
+  package and fingerprint still describe exactly what was sent).
+- **Memory mode** runs the worker in-process; there is no cross-process queue without Postgres.
+- **Mock outputs are fixtures** (a 5 s 192×108 clip regardless of requested duration).
 
 ## Phase 3 — continuity vision QA
 

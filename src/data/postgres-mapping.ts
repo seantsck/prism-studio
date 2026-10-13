@@ -77,7 +77,7 @@ export const COLLECTIONS: Record<CollectionName, CollectionSpec> = {
   takes: spec("performance_takes", performanceTakeSchema, { json: ["waveform"] }),
   frames: spec("storyboard_frames", storyboardFrameSchema, { json: ["approvedSnapshot"] }),
   attempts: spec("generation_attempts", generationAttemptSchema, {
-    json: ["packageSnapshot", "modelSettings"],
+    json: ["packageSnapshot", "modelSettings", "promptPlan", "request", "compatibility"],
     numeric: ["costUsd"],
   }),
   continuityChecks: spec("continuity_checks", continuityCheckSchema, {

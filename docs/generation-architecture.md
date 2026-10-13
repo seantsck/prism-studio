@@ -1,0 +1,100 @@
+# Generation architecture (Phase 2A)
+
+Prism Studio's generation system is a durable, provider-independent pipeline. Providers will change often; the
+filmmaking domain, the history of what was attempted, and the user's approval must not.
+
+```
+ Shot (live, editable)
+   │  preflight + freshness + compatibility gate        (domain/generation/gate.ts)
+   ▼
+ GenerationPackage  ── frozen by value ──►  GenerationAttempt   immutable creative record
+   │                                           │  promptPlan, request, compatibility, acknowledgements
+   │ PromptPlan (sectioned intent)             ▼
+   ▼                                        GenerationJob       mutable execution state (Postgres queue)
+ GenerationRequest ── adapter compiles ──►  provider payload   private to src/generation/providers/*
+                                              │
+                          worker: submit → poll → fetch → validate → store → finalize
+                                              ▼
+                      Prism private Storage  ◄── GenerationOutput (ordered, role-tagged) → Asset rows
+```
+
+## The three layers that stay separate
+
+| Layer               | What it is                                                         | Where it lives                                            | Changes?               |
+| ------------------- | ------------------------------------------------------------------ | --------------------------------------------------------- | ---------------------- |
+| `GenerationPackage` | What the filmmaker decided (characters, Looks, set, timing, audio) | `domain/generation-package.ts`, frozen in the attempt     | Never after submission |
+| `PromptPlan`        | Provider-independent, sectioned statement of intent                | `domain/generation/prompt-plan.ts`, frozen in the attempt | Never after submission |
+| `GenerationRequest` | Package + chosen model + normalized settings                       | `domain/generation/schemas.ts`, frozen in the attempt     | Never after submission |
+| provider payload    | Whatever the provider's API wants                                  | Inside one adapter module                                 | Per provider           |
+
+A provider adapter never sees loose UI state or a live `Shot`. The domain never sees a provider request body.
+
+## Attempt ≠ Job
+
+|           | `GenerationAttempt` (`generation_attempts`)                                    | `GenerationJob` (`generation_jobs`)                        |
+| --------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| Meaning   | "This exact brief, sent to this model, on this date" — historical evidence     | "The work of getting that attempt executed"                |
+| Mutable?  | Creative request: **never**. Only execution result + review fields             | Constantly: status, lease, retry counters, provider job id |
+| Contains  | frozen package, plan, request, compatibility, acknowledged ignored features    | provider job id, retry/lease/poll state, sanitized error   |
+| Survives? | Forever (even if the model is retired, the character changes, pricing changes) | As operational record; events and costs are append-only    |
+
+One attempt normally has one job. The schema allows several jobs per attempt (e.g. re-executing the **same frozen**
+attempt after a provider outage) but a partial unique index guarantees at most one **active** job per attempt.
+Operational retry reuses the same job and never alters creative intent. **"Generate again" creates a new
+attempt** (new package, new fingerprint, new number).
+
+Execution status (`attempt.status`: queued, running, succeeded, failed, cancelled) mirrors the job. **Review**
+(`review_status`: unreviewed, approved, rejected, plus structured `rejection_categories`) is a separate column:
+a successful generation is not an approved shot, and a rejected generation did execute.
+
+## Derived shot lifecycle
+
+Nothing about "where is this shot in generation" is stored on the shot. It is derived from three independent
+state machines (`domain/generation/lifecycle.ts`):
+
+| Derived state     | Source                                                        |
+| ----------------- | ------------------------------------------------------------- |
+| NOT READY / READY | preflight (prep state)                                        |
+| QUEUED            | an attempt's job is `queued`                                  |
+| GENERATING        | a job is submitting/submitted/processing/ingesting/cancelling |
+| READY FOR REVIEW  | latest attempt succeeded and is unreviewed                    |
+| NEEDS REDO        | latest attempt rejected, failed or cancelled (none approved)  |
+| APPROVED          | one attempt approved (its output is the canonical result)     |
+
+## Submission (atomic)
+
+`startGeneration` (server action) → `prepareSubmission` (pure) → `createAttemptWithJob` (one transaction):
+
+1. authorise (verified session; RLS) and load fresh project data;
+2. preflight must be ready; approved storyboard must not be stale;
+3. model must be enabled and configured; compatibility errors block;
+4. every ignored feature must be **acknowledged** by id;
+5. build package, plan, request; adapter-level validation; cost estimate;
+6. in one transaction: lock the project row, replay-by-idempotency-key, refuse a second active generation for
+   the shot, enforce the project's active cap and per-user submit rate, assign the attempt number, insert
+   attempt + job + estimated cost + first event;
+7. a shot that changed after the package was built (`shots.updated_at`) is refused (`stale_shot`).
+
+No job is created if any step fails. Double clicks replay (same key) or are refused (shot already active).
+
+## Where the code lives
+
+| Concern                       | Path                                                                |
+| ----------------------------- | ------------------------------------------------------------------- |
+| Pure domain (Zod, no I/O)     | `src/domain/generation/*`                                           |
+| Provider contract, registry   | `src/generation/provider.ts`, `registry.ts`, `config.ts`            |
+| Mock provider                 | `src/generation/providers/mock*.ts`                                 |
+| Worker, ingestion, SSRF fetch | `src/generation/worker.ts`, `ingest.ts`, `safe-fetch.ts`, `sink.ts` |
+| Persistence                   | `src/data/generation-{repository,memory,postgres}.ts`               |
+| App integration               | `src/server/generation*.ts`, `src/components/generation/*`          |
+| Worker process                | `scripts/generation-worker.mts` (`npm run worker:generation`)       |
+
+See also: [generation-jobs](generation-jobs.md), [provider-contract](provider-contract.md),
+[generation-review](generation-review.md), [providers/adding-a-provider](providers/adding-a-provider.md).
+
+## Continuity QA hooks (not implemented)
+
+Outputs are linked to attempts and attempts to the frozen package, so a later automated check has everything it
+needs: expected identity/wardrobe/hair/set/props/lighting/character count/camera/action (package) and the output
+asset. `continuity_checks.attempt_id` and `kind: "automated"` already exist. Phase 2C will add checks; no vision
+model is called today.

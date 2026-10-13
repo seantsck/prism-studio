@@ -34,6 +34,10 @@ const expectedTables = [
   "shot_script_sources",
   "storyboard_frames",
   "generation_attempts",
+  "generation_jobs",
+  "generation_job_events",
+  "generation_outputs",
+  "generation_costs",
   "continuity_checks",
 ];
 const tables = (await rows("select tablename, rowsecurity from pg_tables where schemaname='public'")).filter(
@@ -62,6 +66,12 @@ const must = {
     "assets_object_uq",
     "shot_script_sources_action_uq",
     "shot_script_sources_dialogue_uq",
+    "generation_jobs_one_active_per_attempt",
+    "generation_jobs_claim_idx",
+    "generation_outputs_one_primary",
+    "generation_costs_one_estimate",
+    "generation_costs_one_final",
+    "attempts_project_review_idx",
   ],
   triggers: [
     "dialogue_locked_guard",
@@ -70,17 +80,20 @@ const must = {
     "projects_updated",
     "assets_updated",
     "action_blocks_updated",
+    "generation_jobs_guard",
+    "generation_jobs_updated",
+    "generation_costs_guard",
   ],
 };
 const missingIdx = must.indexes.filter((i) => !idx.some((x) => x.indexname === i));
 const missingTrig = must.triggers.filter((t) => !trig.some((x) => x.tgname === t));
 const fn = await rows(
-  "select proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and proname in ('is_project_owner','set_updated_at','guard_locked_dialogue','guard_attempt_history','storage_object_project_id')",
+  "select proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and proname in ('is_project_owner','set_updated_at','guard_locked_dialogue','guard_attempt_history','storage_object_project_id','guard_generation_job','guard_generation_cost')",
 );
 
 // ── column-level + storage + migration-ledger checks ──
 const columns = await rows(
-  "select table_name, column_name from information_schema.columns where table_schema='public' and table_name in ('assets','shots','performance_takes','storyboard_frames','generation_attempts','dialogue_lines','shot_reference_assets')",
+  "select table_name, column_name from information_schema.columns where table_schema='public' and table_name in ('assets','shots','performance_takes','storyboard_frames','generation_attempts','dialogue_lines','shot_reference_assets','generation_jobs','generation_outputs','generation_costs')",
 );
 const hasCol = (t, c) => columns.some((x) => x.table_name === t && x.column_name === c);
 const columnProblems = [
@@ -96,6 +109,17 @@ const columnProblems = [
     ["performance_takes", "duration_source"],
     ["storyboard_frames", "approved_snapshot"],
     ["generation_attempts", "package_fingerprint"],
+    ["generation_attempts", "review_status"],
+    ["generation_attempts", "rejection_categories"],
+    ["generation_attempts", "prompt_plan"],
+    ["generation_attempts", "request"],
+    ["generation_attempts", "compatibility"],
+    ["generation_attempts", "acknowledged_ignored"],
+    ["generation_jobs", "lease_token"],
+    ["generation_jobs", "idempotency_key"],
+    ["generation_jobs", "cancel_outcome"],
+    ["generation_outputs", "position"],
+    ["generation_costs", "kind"],
     ["dialogue_lines", "source_start_line"],
     ["shot_reference_assets", "position"],
   ]
@@ -179,7 +203,7 @@ const ok =
   !columnProblems.length &&
   !storageProblems.length &&
   !ledgerProblems.length &&
-  fn.length === 5;
+  fn.length === 7;
 console.log(ok ? "STRUCTURE OK" : "STRUCTURE PROBLEMS");
 await client.end();
 process.exitCode = ok ? 0 : 1;

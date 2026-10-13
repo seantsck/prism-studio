@@ -1,4 +1,5 @@
 import { LOCAL_USER_ID, buildSeedProject } from "./seed";
+import { MemoryGenerationService } from "./generation-memory";
 import type { Repository } from "./repository";
 import type {
   Asset,
@@ -15,6 +16,16 @@ const clone = <T>(v: T): T => structuredClone(v);
 
 export class MemoryRepository implements Repository {
   private projects = new Map<string, ProjectData>();
+  private generationService: MemoryGenerationService | undefined;
+
+  /** Jobs, outputs, costs and events for this in-process repository (same semantics as Postgres). */
+  get generation(): MemoryGenerationService {
+    this.generationService ??= new MemoryGenerationService({
+      all: () => [...this.projects.values()],
+      ownerUserId: () => LOCAL_USER_ID,
+    });
+    return this.generationService;
+  }
 
   constructor(seed: ProjectData[] = [buildSeedProject()]) {
     for (const p of seed) this.projects.set(p.project.id, clone(p));
