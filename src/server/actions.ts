@@ -45,6 +45,7 @@ import { readImageSize } from "@/lib/image-size";
 import { buildObjectPath } from "@/lib/storage-paths";
 import { checkUpload, type UploadKind } from "@/lib/upload-policy";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
+import { getMediaQaRepo } from "./media-qa";
 import { getRepo, requireProjectFresh } from "./repo";
 import { checksum, getUploadStorage, storageForAsset } from "./storage";
 import type { ProjectData } from "@/domain/schemas";
@@ -262,6 +263,7 @@ async function saveBible_impl(form: FormData) {
     colorLanguage: str(form, "colorLanguage"),
     aspectRatio: str(form, "aspectRatio") || "16:9",
     defaultFrameRate: Number(str(form, "defaultFrameRate")) || 24,
+    ...deliverySize(form),
     dialogueLanguageStrategy: str(form, "dialogueLanguageStrategy"),
     subtitleStrategy: str(form, "subtitleStrategy"),
     audioPhilosophy: str(form, "audioPhilosophy"),
@@ -272,6 +274,20 @@ async function saveBible_impl(form: FormData) {
   });
   await repo.saveBible(bible);
   refresh(slug);
+}
+
+/** Optional production pixel size: both or neither (a width without a height is not a format). */
+function deliverySize(form: FormData): { deliveryWidth: number | null; deliveryHeight: number | null } {
+  const dim = (k: string) => {
+    const n = Number(str(form, k));
+    return n > 0 ? Math.round(n) : null;
+  };
+  const deliveryWidth = dim("deliveryWidth");
+  const deliveryHeight = dim("deliveryHeight");
+  if ((deliveryWidth === null) !== (deliveryHeight === null)) {
+    throw new UserFacingError("Set both delivery width and height, or leave both empty.");
+  }
+  return { deliveryWidth, deliveryHeight };
 }
 
 // ───────────────────────── Characters / looks / voices ─────────────────────────
@@ -1087,6 +1103,7 @@ async function logAttempt_impl(form: FormData) {
     request: null,
     compatibility: null,
     acknowledgedIgnored: [],
+    adaptationPlan: null,
     createdBy: repo.currentUserId(),
     createdAt: now(),
   });
@@ -1197,6 +1214,11 @@ async function deleteAsset_impl(form: FormData) {
         .map((u) => u.label)
         .join("; ")}${usage.direct.length > 3 ? ` and ${usage.direct.length - 3} more` : ""}.`,
     );
+  }
+  // Derived-media lineage and QA history also pin an asset: nothing is orphaned silently.
+  const pins = await (await getMediaQaRepo()).assetPins(asset.id);
+  if (pins.length > 0) {
+    throw new UserFacingError(`This asset can't be deleted: ${pins.join("; ")}.`);
   }
   await repo.remove(data.project.id, "assets", asset.id);
   await discardUpload(asset);

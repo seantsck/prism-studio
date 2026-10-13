@@ -40,6 +40,7 @@ export const ASSET_SOURCES = [
   "3d_render",
   "storyboard",
   "provider_output",
+  "derived",
 ] as const;
 /** What an asset is FOR (type says what it is). Drives the library filters and storage conventions. */
 export const ASSET_PURPOSES = [
@@ -115,6 +116,14 @@ export const bibleSchema = z.object({
   continuityRules: z.array(text),
   /** Forbidden changes / generator guardrails. Injected verbatim into every generation package. */
   guardrails: z.array(text),
+  /**
+   * Optional explicit production format. `aspectRatio` remains the canonical statement of the frame; pixel
+   * dimensions are only recorded when someone decides them (never invented). All null by default.
+   */
+  deliveryWidth: z.number().int().positive().nullable().default(null),
+  deliveryHeight: z.number().int().positive().nullable().default(null),
+  targetCodec: text.nullable().default(null),
+  audioSampleRate: z.number().int().positive().nullable().default(null),
   updatedAt: iso,
 });
 export type ProjectBible = z.infer<typeof bibleSchema>;
@@ -491,6 +500,11 @@ const generationPrefsSchema = z.object({
   referenceAudioAssetId: nullableId,
   resolution: text,
   fps: z.number().positive(),
+  /**
+   * Manual production intent about the FINAL frame: what must survive a crop ("Yumeko's eyes inside the crop",
+   * "keep the doorway fully visible"). Not part of any freshness part: it informs the adaptation plan only.
+   */
+  protectedComposition: z.array(text).default([]),
 });
 
 const scriptSourcesSchema = z.object({
@@ -591,6 +605,11 @@ export const generationAttemptSchema = z.object({
   compatibility: z.record(z.string(), z.unknown()).nullable().default(null),
   /** Ignored-feature ids the user explicitly acknowledged before submitting. */
   acknowledgedIgnored: z.array(text).default([]),
+  /**
+   * Frozen GenerationAdaptationPlan (Phase 2C): how production framing/duration were adapted to this
+   * provider. Null for attempts created before it existed ("No adaptation plan recorded"): never back-filled.
+   */
+  adaptationPlan: z.record(z.string(), z.unknown()).nullable().default(null),
   createdBy: nullableId.default(null),
   createdAt: iso,
 });

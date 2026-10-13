@@ -43,13 +43,14 @@ Stated plainly; none of these are implied to exist elsewhere in the docs.
 
 ## Phase 2 — generation
 
-| Slice  | Scope                                                                                                                                                                                       | Status      |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| **2A** | Provider-independent generation domain, capability + compatibility engine, PromptPlan, attempt/job split, Postgres queue + worker, output ingestion, review, cost records, **MockProvider** | implemented |
-| 2B     | First production image / video / voice adapters (official APIs only, verified against current docs, opt-in live tests)                                                                      | next        |
-| 2C     | Automated continuity QA on outputs (vision checks linked to `attempt_id`)                                                                                                                   | hooks only  |
-| 2D     | Model routing / recommendations (capability + cost + history aware)                                                                                                                         | —           |
-| 2E     | Cost and budget intelligence (per shot / episode / project)                                                                                                                                 | —           |
+| Slice  | Scope                                                                                                                                                                                        | Status      |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| **2A** | Provider-independent generation domain, capability + compatibility engine, PromptPlan, attempt/job split, Postgres queue + worker, output ingestion, review, cost records, **MockProvider**  | implemented |
+| 2B     | Least-privilege worker + first real provider (Runway Gen-4.5), live-spend gate; live smoke test passed                                                                                       | implemented |
+| **2C** | Framing adaptation plan, provider-canvas planning + crop overlay, deterministic delivery conform (ffmpeg), derived-asset lineage, delivery masters, continuity QA foundation + Mock analyzer | implemented |
+| 2D     | First real multimodal continuity analyzer (behind the analyzer contract); frame/contact-sheet prompts, thresholds, cost recording                                                            | next        |
+| 2E     | Model routing / comparison (capability + cost + history + continuity results aware)                                                                                                          | —           |
+| 2F     | Cost and budget intelligence (per shot / episode / project, generation + analysis + processing)                                                                                              | —           |
 
 Phase 2A details: [generation-architecture](generation-architecture.md), [generation-jobs](generation-jobs.md),
 [provider-contract](provider-contract.md), [adding-a-provider](providers/adding-a-provider.md),
@@ -89,12 +90,27 @@ webhook endpoints (architecture only); realtime push instead of status polling; 
 - **Worker DB credential must be provisioned per environment** (`worker:db:provision`); `db:worker-role` proves the
   role with SET ROLE, the connect-as-worker section of `worker:db:check` needs `PRISM_STUDIO_WORKER_DB_URL`.
 
-## Phase 3 — continuity vision QA
+### Known gaps (Phase 2C)
 
-- Automated continuity QA: vision-model checks compare outputs to identity refs, Looks, set references and
-  previous shots.
-- Results stored as `continuity_checks(kind='automated')`, scores per dimension, issues with frame timestamps.
-- Preflight gains post-generation rules; rejection reasons auto-suggested.
+- **No real semantic analyzer.** Only the deterministic checks and the clearly-labelled Mock analyzer exist;
+  identity/wardrobe/set/props/lighting remain `unchecked` until Phase 2D. Nothing calls an external AI.
+- **ffmpeg is a runtime dependency** of the app server for conform and review frames (documented, detected,
+  optional). Conform is synchronous and bounded; a long-running job queue/role is not built.
+- **Only centre crops.** No subject-aware reframing; protected composition is manual notes, not computer vision.
+- **No duration extension** (`generate_shorter_and_extend` is declared but unavailable); a provider output
+  shorter than the trim target is reported, never stretched.
+- **Mock outputs are a fixed 192×108 / 5 s fixture**, so conform math is exercised on that, not on a real 16:9
+  1280×720 render (the unit tests cover the arithmetic at real sizes).
+- **Delivery masters are selected per attempt, not yet consumed** by an editor/animatic (Phase 5).
+- **QA staleness is computed on read** (per attempt page); the shot list shows the latest run's status, not its
+  staleness.
+- **One QA run's analysis is synchronous** in the server action; the schema supports queued/running/failed for
+  a future background analyzer.
+
+## Phase 3 — vision QA at scale (after 2D)
+
+- Real analyzers (Gemini / OpenAI / Claude vision, face-identity, embedding models) behind the 2C contract.
+- Preflight gains post-generation rules; rejection reasons auto-suggested from findings.
 
 ## Phase 4 — persistent 3D sets + virtual cameras + blocking
 

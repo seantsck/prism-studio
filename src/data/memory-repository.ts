@@ -1,5 +1,6 @@
 import { LOCAL_USER_ID, buildSeedProject } from "./seed";
 import { MemoryGenerationService } from "./generation-memory";
+import { MemoryMediaQaService } from "./media-qa-memory";
 import type { Repository } from "./repository";
 import type {
   Asset,
@@ -17,6 +18,16 @@ const clone = <T>(v: T): T => structuredClone(v);
 export class MemoryRepository implements Repository {
   private projects = new Map<string, ProjectData>();
   private generationService: MemoryGenerationService | undefined;
+  private mediaQaService: MemoryMediaQaService | undefined;
+
+  /** Derived-media lineage, delivery masters and continuity QA runs (same semantics as Postgres). */
+  get mediaQa(): MemoryMediaQaService {
+    this.mediaQaService ??= new MemoryMediaQaService({
+      all: () => [...this.projects.values()],
+      ownerUserId: () => LOCAL_USER_ID,
+    });
+    return this.mediaQaService;
+  }
 
   /** Jobs, outputs, costs and events for this in-process repository (same semantics as Postgres). */
   get generation(): MemoryGenerationService {

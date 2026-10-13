@@ -174,6 +174,12 @@ try {
     "generation_outputs",
     "generation_costs",
     "continuity_checks",
+    // Phase 2C
+    "asset_derivations",
+    "attempt_deliveries",
+    "continuity_runs",
+    "continuity_findings",
+    "continuity_overrides",
   ];
   for (const table of scoped) {
     const mine = await raw(

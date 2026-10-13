@@ -192,6 +192,8 @@ export const PROMPT_SECTIONS = [
   "continuity",
   "hard_constraints",
   "negative_constraints",
+  /** Provider-canvas guidance from the adaptation plan; never changes the production camera intent above. */
+  "provider_adaptation",
 ] as const;
 export type PromptSectionKey = (typeof PROMPT_SECTIONS)[number];
 

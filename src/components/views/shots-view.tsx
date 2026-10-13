@@ -4,12 +4,15 @@ import { Badge, Button, PageHeader, STATUS_TONE } from "@/components/ui";
 import { formatSeconds } from "@/domain/duration";
 import type { Episode, ProjectData } from "@/domain/schemas";
 import { dialogueSummary, summarizeEpisode } from "@/domain/summary";
+import { QA_STATUS_LABELS } from "@/domain/continuity/status";
 import { shotPath } from "@/lib/paths";
+import { loadPipeline } from "@/server/pipeline";
 import { createShot } from "@/server/actions";
 import { ActionForm } from "@/components/action-form";
 
-export function ShotsView({ data, episode }: { data: ProjectData; episode: Episode }) {
+export async function ShotsView({ data, episode }: { data: ProjectData; episode: Episode }) {
   const summaries = summarizeEpisode(data, episode);
+  const pipeline = await loadPipeline(data);
   const scenes = data.scenes.filter((s) => s.episodeId === episode.id).sort((a, b) => a.order - b.order);
   const slug = data.project.slug;
 
@@ -51,6 +54,7 @@ export function ShotsView({ data, episode }: { data: ProjectData; episode: Episo
                       <th className="font-medium">Status</th>
                       <th className="font-medium">Prep</th>
                       <th className="font-medium">Preflight</th>
+                      <th className="font-medium">Pipeline</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -93,11 +97,42 @@ export function ShotsView({ data, episode }: { data: ProjectData; episode: Episo
                         <td>
                           <ReadinessBadge report={report} />
                         </td>
+                        <td data-testid="shot-pipeline" data-shot={ctx.shot.shotCode}>
+                          {(() => {
+                            const p = pipeline.shots.get(ctx.shot.id);
+                            return (
+                              <div className="flex flex-wrap gap-1">
+                                <Badge tone={report.ready ? "pass" : "warn"}>
+                                  {report.ready ? "PREP READY" : "PREP"}
+                                </Badge>
+                                <Badge tone={p?.generated ? "info" : "neutral"}>
+                                  {p?.generated ? "GENERATED" : "NOT GENERATED"}
+                                </Badge>
+                                <Badge
+                                  tone={
+                                    p?.qaStatus === "failed"
+                                      ? "fail"
+                                      : p?.qaStatus === "passed"
+                                        ? "pass"
+                                        : p?.qaStatus === "passed_with_warnings"
+                                          ? "warn"
+                                          : "neutral"
+                                  }
+                                >
+                                  {QA_STATUS_LABELS[p?.qaStatus ?? "not_started"].replace(/^QA /, "QA ")}
+                                </Badge>
+                                <Badge tone={p?.approved ? "pass" : "neutral"}>
+                                  {p?.approved ? "APPROVED" : "NOT APPROVED"}
+                                </Badge>
+                              </div>
+                            );
+                          })()}
+                        </td>
                       </tr>
                     ))}
                     {items.length === 0 ? (
                       <tr>
-                        <td colSpan={9} className="px-3 py-3 text-muted">
+                        <td colSpan={10} className="px-3 py-3 text-muted">
                           No shots in this scene yet.
                         </td>
                       </tr>

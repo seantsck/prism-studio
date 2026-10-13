@@ -8,6 +8,7 @@ import { formatSeconds } from "@/domain/duration";
 import { ASSET_PURPOSES, type Asset, type ProjectData } from "@/domain/schemas";
 import { assetUrl, cn } from "@/lib/utils";
 import { deleteAsset, updateAsset, uploadAsset } from "@/server/actions";
+import { getMediaQaRepo } from "@/server/media-qa";
 
 const bytesLabel = (n: number | null) =>
   n == null ? "—" : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
@@ -46,7 +47,29 @@ function Preview({ asset, data }: { asset: Asset; data: ProjectData }) {
   );
 }
 
-function Detail({ asset, data, base }: { asset: Asset; data: ProjectData; base: string }) {
+interface Lineage {
+  derivedFrom: {
+    parentName: string;
+    parentId: string;
+    operation: string;
+    processor: string;
+    version: number;
+  } | null;
+  derivatives: Array<{ id: string; name: string; operation: string; slot: string }>;
+  pins: string[];
+}
+
+function Detail({
+  asset,
+  data,
+  base,
+  lineage,
+}: {
+  asset: Asset;
+  data: ProjectData;
+  base: string;
+  lineage: Lineage;
+}) {
   const usage = findAssetUsage(data, asset.id);
   const rows: Array<[string, string]> = [
     ["Type / purpose", `${asset.type} · ${asset.purpose.replace(/_/g, " ")}`],
@@ -104,6 +127,44 @@ function Detail({ asset, data, base }: { asset: Asset; data: ProjectData; base: 
         )}
       </Panel>
 
+      {lineage.derivedFrom || lineage.derivatives.length > 0 || lineage.pins.length > 0 ? (
+        <Panel title="Lineage">
+          <div className="space-y-1.5 text-[12px]" data-testid="asset-lineage">
+            {lineage.derivedFrom ? (
+              <p>
+                Derived from{" "}
+                <Link
+                  className="text-accent hover:underline"
+                  href={`${base}?asset=${lineage.derivedFrom.parentId}`}
+                >
+                  {lineage.derivedFrom.parentName}
+                </Link>{" "}
+                by <span className="font-mono">{lineage.derivedFrom.operation}</span> (
+                {lineage.derivedFrom.processor}, v{lineage.derivedFrom.version}). The original is never
+                replaced.
+              </p>
+            ) : null}
+            {lineage.derivatives.length > 0 ? (
+              <ul className="space-y-0.5">
+                {lineage.derivatives.map((d) => (
+                  <li key={d.id}>
+                    <Badge className="mr-1.5">{d.operation.replace(/_/g, " ")}</Badge>
+                    <Link className="text-accent hover:underline" href={`${base}?asset=${d.id}`}>
+                      {d.name}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {lineage.pins.map((p) => (
+              <p key={p} className="text-muted">
+                Kept because {p}.
+              </p>
+            ))}
+          </div>
+        </Panel>
+      ) : null}
+
       <Panel title="Edit">
         <ActionForm action={updateAsset} className="space-y-2">
           <input type="hidden" name="projectSlug" value={data.project.slug} />
@@ -133,10 +194,10 @@ function Detail({ asset, data, base }: { asset: Asset; data: ProjectData; base: 
       </Panel>
 
       <Panel title="Delete">
-        {usage.inUse ? (
+        {usage.inUse || lineage.pins.length > 0 ? (
           <p className="text-muted">
-            In use — remove its references first. (Assets referenced by Looks, takes, storyboard frames or
-            generation history are never deleted silently.)
+            In use — remove its references first. (Assets referenced by Looks, takes, storyboard frames,
+            generation history or derived media are never deleted silently.)
           </p>
         ) : (
           <ActionForm
@@ -155,7 +216,7 @@ function Detail({ asset, data, base }: { asset: Asset; data: ProjectData; base: 
   );
 }
 
-export function AssetLibraryView({
+export async function AssetLibraryView({
   data,
   base,
   searchParams,
@@ -170,6 +231,32 @@ export function AssetLibraryView({
   const usage = indexAssetUsage(data);
   const assets = filterAssets(data, usage, { filter, q });
   const selected = data.assets.find((a) => a.id === searchParams.asset) ?? null;
+  const lineage: Lineage = { derivedFrom: null, derivatives: [], pins: [] };
+  if (selected) {
+    const qa = await getMediaQaRepo();
+    const [own, children, pins] = await Promise.all([
+      qa.getDerivationOfAsset(selected.id),
+      qa.listDerivationsByParent(selected.id),
+      qa.assetPins(selected.id),
+    ]);
+    if (own) {
+      const parent = data.assets.find((a) => a.id === own.parentAssetId);
+      lineage.derivedFrom = {
+        parentName: parent?.name ?? "original asset",
+        parentId: own.parentAssetId,
+        operation: own.operation,
+        processor: `${own.processor} ${own.processorVersion}`,
+        version: own.version,
+      };
+    }
+    lineage.derivatives = children.map((c) => ({
+      id: c.asset.id,
+      name: c.asset.name,
+      operation: c.derivation.operation,
+      slot: c.derivation.slot,
+    }));
+    lineage.pins = pins;
+  }
   const href = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
     const next = { filter: filter === "all" ? undefined : filter, q: q || undefined, ...over };
@@ -330,7 +417,7 @@ export function AssetLibraryView({
         </div>
 
         {selected ? (
-          <Detail asset={selected} data={data} base={href({ asset: undefined })} />
+          <Detail asset={selected} data={data} base={href({ asset: undefined })} lineage={lineage} />
         ) : (
           <aside className="text-muted">
             Select an asset to see its preview, metadata and where it is used.

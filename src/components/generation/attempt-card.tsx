@@ -3,6 +3,8 @@ import { ActionForm } from "@/components/action-form";
 import { Badge, Button } from "@/components/ui";
 import type { AttemptView } from "@/data/generation-repository";
 import { isActive } from "@/domain/generation/job-state";
+import type { AttemptMedia } from "@/server/attempt-media";
+import { AttemptMediaPanel, StageChips } from "./attempt-media-panel";
 import { REJECTION_CATEGORIES, REJECTION_LABELS, USER_ERROR_NOTE } from "./constants";
 import {
   AttemptStatusBadge,
@@ -19,9 +21,12 @@ export function AttemptCard({
   view,
   projectSlug,
   compareWith,
+  media = null,
 }: {
   view: AttemptView;
   projectSlug: string;
+  /** Media + continuity QA for this attempt (derived delivery, plan, QA status). */
+  media?: AttemptMedia | null;
   /** Previous attempt id, for the "compare with attempt N-1" link. */
   compareWith?: { id: string; number: number };
 }) {
@@ -68,6 +73,24 @@ export function AttemptCard({
           {attempt.approved ? <Badge tone="pass">canonical</Badge> : null}
         </div>
       </header>
+
+      {media ? (
+        <div className="border-b border-line px-3 py-1.5">
+          <StageChips
+            attempt={attempt}
+            generated={
+              job
+                ? {
+                    label: job.status.replace(/_/g, " "),
+                    tone: job.status === "succeeded" ? "pass" : job.status === "failed" ? "fail" : "neutral",
+                  }
+                : { label: attempt.status, tone: attempt.status === "succeeded" ? "pass" : "neutral" }
+            }
+            qaStatus={media.qaStatus}
+            qaStale={media.qaStale}
+          />
+        </div>
+      ) : null}
 
       <div className="grid gap-3 p-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         <div className="min-w-0 space-y-1.5 text-[12px]">
@@ -177,6 +200,17 @@ export function AttemptCard({
         </div>
       </div>
 
+      {media && canReview ? (
+        <div className="border-t border-line p-3">
+          <AttemptMediaPanel
+            projectSlug={projectSlug}
+            attemptId={attempt.id}
+            media={media}
+            succeeded={canReview}
+          />
+        </div>
+      ) : null}
+
       <footer className="flex flex-wrap items-start gap-3 border-t border-line px-3 py-2">
         {active && job && job.status !== "cancel_requested" ? (
           <ActionForm action={cancelGeneration} successMessage="Cancellation requested" quiet>
@@ -188,6 +222,11 @@ export function AttemptCard({
           </ActionForm>
         ) : null}
 
+        {canReview && media && media.advisories.length > 0 && attempt.reviewStatus !== "approved" ? (
+          <p className="basis-full text-[11px] text-warn" data-testid="approval-advisory">
+            Before approving: {media.advisories.join(" ")}
+          </p>
+        ) : null}
         {canReview ? (
           <>
             {attempt.reviewStatus !== "approved" ? (

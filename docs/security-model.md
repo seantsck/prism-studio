@@ -109,3 +109,10 @@ These are known and unmitigated unless noted.
 14. **Worker holds a storage-write key** (production) with project-wide Storage access; scope it to the worker host and rotate it.
 15. **Output downloads rely on provider hosts' TLS and the allow-list**; a compromised provider CDN host on the allow-list can serve hostile bytes (validated by type/size, never executed).
 16. **Provider-side idempotency** is only as good as the provider: a crash between "provider accepted" and "Prism recorded it" can, for providers without idempotency keys, produce a second paid generation.
+17. **Media processing runs untrusted bytes through ffmpeg** in the app server. Mitigated by magic-byte
+    allow-listing + forced demuxer (no HLS/concat/SDP), `-protocol_whitelist file`, no shell, size/pixel/duration
+    limits, hard timeouts, private temp directories and a credential-free child environment
+    ([media-processing](media-processing.md)). A codec/decoder vulnerability in ffmpeg itself is out of scope:
+    keep ffmpeg patched and consider a separate low-privilege processing host for hostile-input deployments.
+18. **QA rows are owner-scoped like everything else** (RLS on `asset_derivations`, `attempt_deliveries`,
+    `continuity_*`); the generation worker role has no privileges on them (`db:media-qa`, `db:worker-role`).

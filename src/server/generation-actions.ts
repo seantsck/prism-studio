@@ -2,6 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { GenerationSubmitError } from "@/data/generation-repository";
+import {
+  DURATION_STRATEGIES,
+  FRAMING_STRATEGIES,
+  type DurationStrategy,
+  type FramingStrategy,
+} from "@/domain/framing/adaptation";
 import { REJECTION_CATEGORIES, type RejectionCategory } from "@/domain/generation/schemas";
 import { prepareSubmission, submissionKey } from "@/generation/submission";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
@@ -39,6 +45,17 @@ async function startGeneration_impl(form: FormData) {
   const registry = getRegistry();
   const config = getGenerationConfig();
   const acknowledged = form.getAll("ack").map((v) => String(v));
+  // Adaptation is always an explicit choice made in the Generate panel; absent = nothing is adapted.
+  const framingRaw = str(form, "framing");
+  const durationRaw = str(form, "durationStrategy");
+  const adaptation = {
+    framing: (FRAMING_STRATEGIES as readonly string[]).includes(framingRaw)
+      ? (framingRaw as FramingStrategy)
+      : null,
+    duration: (DURATION_STRATEGIES as readonly string[]).includes(durationRaw)
+      ? (durationRaw as DurationStrategy)
+      : null,
+  };
 
   const existing = (await repo.listShotAttempts(shotId)).map((v) => v.attempt.attemptNumber);
   const nextNumber = Math.max(0, ...existing) + 1;
@@ -51,6 +68,7 @@ async function startGeneration_impl(form: FormData) {
     provider,
     modelId,
     acknowledged,
+    adaptation,
     userId: user.kind === "supabase" ? user.id : null,
     idempotencyKey: "probe-key-not-submitted",
     config,
@@ -69,6 +87,7 @@ async function startGeneration_impl(form: FormData) {
     provider,
     modelId,
     acknowledged,
+    adaptation,
     userId: user.kind === "supabase" ? user.id : null,
     idempotencyKey: key,
     config,

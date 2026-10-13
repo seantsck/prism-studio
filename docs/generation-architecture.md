@@ -94,9 +94,14 @@ No job is created if any step fails. Double clicks replay (same key) or are refu
 See also: [generation-jobs](generation-jobs.md), [provider-contract](provider-contract.md),
 [generation-review](generation-review.md), [providers/adding-a-provider](providers/adding-a-provider.md).
 
-## Continuity QA hooks (not implemented)
+## Adaptation, conform and continuity QA (Phase 2C)
 
-Outputs are linked to attempts and attempts to the frozen package, so a later automated check has everything it
-needs: expected identity/wardrobe/hair/set/props/lighting/character count/camera/action (package) and the output
-asset. `continuity_checks.attempt_id` and `kind: "automated"` already exist. Phase 2C will add checks; no vision
-model is called today.
+The compatibility engine now also builds a **GenerationAdaptationPlan** per model: when a provider cannot offer
+the production ratio/duration the plan lists the usable strategies and recommends one, but the model stays
+incompatible until the user explicitly chooses (and acknowledges) one. The chosen plan is frozen on the attempt
+(`adaptation_plan`), the request carries the **provider canvas/duration** (`modelSettings.aspectRatio/durationMs`)
+while the package snapshot keeps the **production** values. Provider-side prompt guidance lives in its own
+PromptPlan section (`provider_adaptation`). After ingestion, an optional **delivery conform** (app server, ffmpeg)
+creates a derived delivery master; **continuity QA** judges it. None of this touches the worker: see
+[framing-adaptation](framing-adaptation.md), [delivery-conform](delivery-conform.md),
+[continuity-qa](continuity-qa.md), [media-processing](media-processing.md).

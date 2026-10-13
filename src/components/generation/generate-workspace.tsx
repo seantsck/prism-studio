@@ -1,3 +1,4 @@
+import { DURATION_LABELS, FRAMING_LABELS, type FramingStrategy } from "@/domain/framing/adaptation";
 import { buildGenerationRequest } from "@/domain/generation/gate";
 import { isActive } from "@/domain/generation/job-state";
 import { deriveShotGenerationState } from "@/domain/generation/lifecycle";
@@ -7,8 +8,17 @@ import { renderGenerationBrief } from "@/domain/generation-package";
 import type { ProjectData } from "@/domain/schemas";
 import type { CompiledRequestSummary } from "@/generation/provider";
 import { buildSharedEvaluation, evaluateShotForModel } from "@/generation/submission";
+import { loadAttemptMedia } from "@/server/attempt-media";
 import { getGenerationRepo, getRegistry } from "@/server/generation";
 import { AttemptCard } from "./attempt-card";
+import { assetUrl } from "@/lib/utils";
+import {
+  summarizeEvaluation,
+  summarizePlan,
+  variantKey,
+  type AdaptationOptions,
+  type VariantEvaluation,
+} from "./adaptation-summary";
 import { GeneratePanel, type ModelOption } from "./generate-panel";
 import { LifecycleBadge } from "./parts";
 import { GenerationPoller } from "./poller";
@@ -30,11 +40,76 @@ export async function GenerateWorkspace({ data, shotId }: { data: ProjectData; s
     evaluateShotForModel({ data, shotId, registry, provider: m.provider, modelId: m.modelId, shared }),
   );
 
+  /**
+   * Adaptation is an explicit user choice, so every reachable choice is evaluated up front (cheap, pure) and the
+   * client panel just selects among the results: the server action re-evaluates the chosen one from fresh data.
+   */
+  const adaptationFor = (i: number): AdaptationOptions | null => {
+    const m = models[i]!;
+    const plan = evaluations[i]!.compatibility?.adaptation;
+    if (!plan) return null;
+    const needsFraming = plan.framing.status === "needs_choice" || plan.framing.status === "blocked";
+    const needsDuration = plan.duration.status === "needs_choice" || plan.duration.status === "blocked";
+    if (!needsFraming && !needsDuration) return null;
+    const framings: string[] = needsFraming
+      ? ["", ...plan.framing.options.filter((o) => o.usable).map((o) => o.strategy)]
+      : [""];
+    const durations: string[] = needsDuration
+      ? [
+          "",
+          ...(plan.duration.recommended === "generate_longer_then_trim" ? ["generate_longer_then_trim"] : []),
+        ]
+      : [""];
+    const variants: Record<string, VariantEvaluation> = {};
+    for (const f of framings) {
+      for (const d of durations) {
+        const ev = evaluateShotForModel({
+          data,
+          shotId,
+          registry,
+          provider: m.provider,
+          modelId: m.modelId,
+          shared,
+          adaptation: {
+            framing: (f || null) as FramingStrategy | null,
+            duration: (d || null) as "generate_longer_then_trim" | null,
+          },
+        });
+        variants[variantKey(f, d)] = summarizeEvaluation(ev);
+      }
+    }
+    return {
+      needsFraming,
+      needsDuration,
+      framing: plan.framing.options.map((o) => ({
+        strategy: o.strategy,
+        label: FRAMING_LABELS[o.strategy],
+        usable: o.usable,
+        reason: o.reason,
+        recommended: plan.framing.recommended === o.strategy,
+      })),
+      duration: needsDuration
+        ? [
+            {
+              strategy: "generate_longer_then_trim",
+              label: DURATION_LABELS.generate_longer_then_trim,
+              usable: plan.duration.recommended === "generate_longer_then_trim",
+              reason: plan.duration.reason,
+              recommended: plan.duration.recommended === "generate_longer_then_trim",
+            },
+          ]
+        : [],
+      variants,
+    };
+  };
+
   const options: ModelOption[] = evaluations.map((e, i) => {
     const m = models[i]!;
     const a = e.availability!;
     const c = e.compatibility!;
     return {
+      adaptation: adaptationFor(i),
+      basePlan: summarizePlan(c.adaptation),
       key: `${m.provider}/${m.modelId}`,
       provider: m.provider,
       providerName: a.providerName,
@@ -116,8 +191,12 @@ export async function GenerateWorkspace({ data, shotId }: { data: ProjectData; s
     }
   }
 
+  const storyboardUrl = assetUrl(data.assets.find((x) => x.id === shared.ctx.approvedFrame?.assetId));
   const slug = data.project.slug;
   const sorted = [...views].sort((a, b) => b.attempt.attemptNumber - a.attempt.attemptNumber);
+  const mediaByAttempt = new Map(
+    await Promise.all(sorted.map(async (v) => [v.attempt.id, await loadAttemptMedia(data, v)] as const)),
+  );
 
   return (
     <div className="space-y-4" data-testid="generate-workspace">
@@ -135,6 +214,8 @@ export async function GenerateWorkspace({ data, shotId }: { data: ProjectData; s
         options={options}
         defaultKey={defaultOption?.key ?? null}
         activeJob={activeJob}
+        storyboardUrl={storyboardUrl}
+        protectedNotes={shot.generation.protectedComposition}
       />
 
       <PromptInspector
@@ -156,6 +237,7 @@ export async function GenerateWorkspace({ data, shotId }: { data: ProjectData; s
                 key={v.attempt.id}
                 view={v}
                 projectSlug={slug}
+                media={mediaByAttempt.get(v.attempt.id) ?? null}
                 compareWith={prev ? { id: prev.attempt.id, number: prev.attempt.attemptNumber } : undefined}
               />
             );

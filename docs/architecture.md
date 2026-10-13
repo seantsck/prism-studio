@@ -94,3 +94,18 @@ Generation is a separate runtime concern: pure vocabulary in `src/domain/generat
 `src/generation` (no Next.js, no React), persistence behind `GenerationRepository` (user path, RLS) and
 `GenerationStore` (worker path). The web app only enqueues and observes; `npm run worker:generation`
 executes. See [generation-architecture](generation-architecture.md).
+
+## Framing, conform and continuity QA (Phase 2C)
+
+Three more pure/bounded layers, all outside React and outside the worker:
+
+- `src/domain/framing/*`: aspect-ratio parsing, integer-safe crop/pad math, the GenerationAdaptationPlan and the
+  DeliveryConformPlan. Pure. Consumed by the compatibility engine; the plan is frozen on the attempt.
+- `src/media/*`: the `MediaProcessor` interface, the FFmpeg adapter (no shell, magic-byte allow-list, limits,
+  timeouts, temp cleanup) and the delivery/derivation orchestration (idempotent, crash-safe).
+- `src/domain/continuity/*` + `src/continuity/service.ts`: criteria from production truth, reference sets,
+  deterministic checks, the analyzer contract (+ Mock), aggregation/status/staleness; persistence behind
+  `MediaQaRepository` (memory + Postgres, RLS-bound).
+
+Production frame ≠ provider canvas ≠ delivery frame: see [framing-adaptation](framing-adaptation.md).
+Media runs in the app server under the user's session; the worker role gained **no** privileges.

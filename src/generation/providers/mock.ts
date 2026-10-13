@@ -160,6 +160,31 @@ const defs: MockModelDef[] = [
     },
   },
   {
+    scenario: "success",
+    model: {
+      provider: MOCK_PROVIDER_ID,
+      modelId: "mock-video-169",
+      displayName: "Mock Video 16:9",
+      description:
+        "Adaptation test model: 16:9 and 9:16 only, 5 s or 10 s only. Exercises framing/duration adaptation (crop, trim). Free.",
+      kind: "mock",
+      lifecycle: "active",
+      capabilities: baseCaps({
+        video: {
+          minDurationMs: 5000,
+          maxDurationMs: 10_000,
+          durationStepMs: null,
+          allowedDurationsMs: [5000, 10_000],
+          cameraControl: true,
+          motionPrompting: true,
+          maxResolution: { width: 1280, height: 720 },
+          aspectRatios: ["16:9", "9:16"],
+          fps: [],
+        },
+      }),
+    },
+  },
+  {
     scenario: "transient_poll",
     model: {
       provider: MOCK_PROVIDER_ID,

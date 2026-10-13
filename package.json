@@ -31,6 +31,7 @@
     "worker:db:provision": "tsx --env-file=.env.local scripts/worker-db-provision.mts",
     "worker:db:check": "tsx --env-file=.env.local scripts/worker-db-check.mts",
     "db:worker-role": "tsx --env-file=.env.local scripts/db-worker-role.mts",
+    "db:media-qa": "tsx --env-file=.env.local scripts/db-media-qa.mts",
     "pre-paid:check": "tsx --env-file=.env.local scripts/pre-paid-check.mts",
     "runway:fixture": "tsx --env-file=.env.local scripts/runway-smoke-fixture.mts"
   },

@@ -15,6 +15,7 @@ const TITLES: Record<PromptSectionKey, string> = {
   continuity: "Continuity",
   hard_constraints: "Hard constraints",
   negative_constraints: "Negative constraints",
+  provider_adaptation: "Provider adaptation",
 };
 
 const clean = (xs: Array<string | null | undefined | false>): string[] =>
@@ -27,7 +28,14 @@ const seconds = (ms: number) => `${(ms / 1000).toFixed(2).replace(/\.?0+$/, "")}
  * decides how to render sections for its model (one paragraph, tagged fields, multiple inputs...).
  * Pure and deterministic: the same package always yields the same plan.
  */
-export function buildPromptPlan(pkg: GenerationPackage): PromptPlan {
+export function buildPromptPlan(
+  pkg: GenerationPackage,
+  /**
+   * Provider-canvas guidance from the adaptation plan. Rendered as its OWN section so the production camera /
+   * composition lines are never rewritten and the Prompt Inspector can show the two separately.
+   */
+  adaptation?: { provider: string[] } | null,
+): PromptPlan {
   const names = pkg.characters.map((c) => c.name);
   const cam = pkg.camera;
   const blk = pkg.blocking;
@@ -143,6 +151,7 @@ export function buildPromptPlan(pkg: GenerationPackage): PromptPlan {
       pkg.constraints.generatorNotes,
     ]),
     negative_constraints: clean(pkg.constraints.negative),
+    provider_adaptation: clean(adaptation?.provider ?? []),
   };
 
   return {

@@ -1,5 +1,12 @@
 import type { GenerationPackage } from "../generation-package";
 import {
+  buildAdaptationPlan,
+  type DurationStrategy,
+  type FramingStrategy,
+  type GenerationAdaptationPlan,
+} from "../framing/adaptation";
+import { parseAspectRatio, sameRatio } from "../framing/ratio";
+import {
   GENERATION_MODALITIES,
   type GenerationModality,
   type GenerationModel,
@@ -64,6 +71,18 @@ export interface CompatibilityReport {
   };
   /** Human summary of the duration comparison, always present for video modalities. */
   duration: { productionMs: number; supported: string; ok: boolean } | null;
+  /**
+   * How production intent is adapted to this model (framing + duration). Always built for a model; `native`
+   * when nothing changes. `used.*` already reflects the provider canvas/duration when the plan is `adapted`.
+   * Not recorded on attempts logged before Phase 2C.
+   */
+  adaptation: GenerationAdaptationPlan | null;
+}
+
+/** The user's explicit adaptation choices (never defaulted by the engine). */
+export interface AdaptationChoice {
+  framing?: FramingStrategy | null;
+  duration?: DurationStrategy | null;
 }
 
 const seconds = (ms: number) => `${Number((ms / 1000).toFixed(3))}s`;
@@ -150,7 +169,12 @@ function durationSupported(v: NonNullable<GenerationModel["capabilities"]["video
 export function evaluateCompatibility(
   pkg: GenerationPackage,
   model: GenerationModel,
-  opts: { modality?: GenerationModality } = {},
+  opts: {
+    modality?: GenerationModality;
+    adaptation?: AdaptationChoice;
+    /** Shot-level protected composition notes (manual production intent). */
+    protectedNotes?: string[];
+  } = {},
 ): CompatibilityReport {
   const caps = model.capabilities;
   const errors: CompatibilityIssue[] = [];
@@ -168,11 +192,57 @@ export function evaluateCompatibility(
   }
   const video = modality ? isVideoModality(modality) : false;
 
+  // ── resolution (clamped, but loudly) — resolved first: the adaptation plan sizes the provider canvas from it ──
+  let resolution = parseResolution(pkg.generation.resolution);
+  const max = video ? caps.video?.maxResolution : caps.image?.resolutions.at(-1);
+  if (resolution && max && (resolution.width > max.width || resolution.height > max.height)) {
+    ignored.push({
+      id: "resolution",
+      feature: "resolution",
+      label: `Resolution ${resolution.width}×${resolution.height}`,
+      impact: `Model maximum is ${max.width}×${max.height}; output will be smaller than the shot's requested resolution.`,
+    });
+    resolution = {
+      width: Math.min(resolution.width, max.width),
+      height: Math.min(resolution.height, max.height),
+    };
+  }
+
+  // ── adaptation: production intent → provider canvas/duration (explicit, never silent) ──
+  const aspect = pkg.style.aspectRatio || null;
+  const ratios = (video ? caps.video?.aspectRatios : caps.image?.aspectRatios) ?? [];
+  const production = pkg.timing.durationMs;
+  const adaptation = buildAdaptationPlan({
+    video,
+    production: {
+      aspectRatio: aspect,
+      durationMs: video && production > 0 ? production : null,
+      fps: pkg.generation.fps || null,
+    },
+    provider: {
+      provider: model.provider,
+      modelId: model.modelId,
+      aspectRatios: ratios,
+      requestedResolution: resolution,
+      maxResolution: max ?? null,
+      duration:
+        video && caps.video
+          ? {
+              minMs: caps.video.minDurationMs,
+              maxMs: caps.video.maxDurationMs,
+              stepMs: caps.video.durationStepMs,
+              allowedMs: caps.video.allowedDurationsMs,
+            }
+          : null,
+    },
+    choice: opts.adaptation,
+    protectedNotes: opts.protectedNotes,
+  });
+
   // ── duration (never rounded) ──
   let durationMs: number | null = null;
   let duration: CompatibilityReport["duration"] = null;
   if (video) {
-    const production = pkg.timing.durationMs;
     if (!caps.video) {
       errors.push({
         id: "duration.unsupported",
@@ -190,7 +260,11 @@ export function evaluateCompatibility(
       const supported = describeSupportedDurations(caps.video);
       duration = { productionMs: production, supported, ok };
       if (ok) durationMs = production;
-      else {
+      else if (adaptation.duration.status === "adapted" && adaptation.duration.providerMs != null) {
+        // The user explicitly chose "generate longer, then trim": the provider is asked for a supported
+        // duration; the production duration is untouched and recorded in the plan.
+        durationMs = adaptation.duration.providerMs;
+      } else {
         errors.push({
           id: "duration.unsupported",
           feature: "duration",
@@ -201,31 +275,27 @@ export function evaluateCompatibility(
   }
 
   // ── aspect ratio ──
-  const aspect = pkg.style.aspectRatio || null;
-  const ratios = (video ? caps.video?.aspectRatios : caps.image?.aspectRatios) ?? [];
-  if (aspect && ratios.length > 0 && !ratios.includes(aspect)) {
-    errors.push({
-      id: "aspect_ratio.unsupported",
-      feature: "aspect_ratio",
-      message: `Aspect ratio ${aspect} is not supported (model offers ${ratios.join(", ")}).`,
+  const framingAdapted = adaptation.framing.status === "adapted";
+  if (aspect && ratios.length > 0 && !framingAdapted) {
+    const parsed = parseAspectRatio(aspect);
+    const offered = ratios.some((r) => {
+      const pr = parseAspectRatio(r);
+      return r === aspect || (parsed && pr && sameRatio(pr.value, parsed.value));
     });
+    if (!offered) {
+      errors.push({
+        id: "aspect_ratio.unsupported",
+        feature: "aspect_ratio",
+        message: `Aspect ratio ${aspect} is not supported (model offers ${ratios.join(", ")}).`,
+      });
+    }
+  }
+  // Non-native adaptation is production intent that execution changes: it is acknowledged like any other
+  // "will not be honoured as designed" item, and recorded on the attempt.
+  for (const a of adaptation.acknowledgements) {
+    ignored.push({ id: a.id, feature: "adaptation", label: a.label, impact: a.impact });
   }
 
-  // ── resolution / fps (clamped, but loudly) ──
-  let resolution = parseResolution(pkg.generation.resolution);
-  const max = video ? caps.video?.maxResolution : caps.image?.resolutions.at(-1);
-  if (resolution && max && (resolution.width > max.width || resolution.height > max.height)) {
-    ignored.push({
-      id: "resolution",
-      feature: "resolution",
-      label: `Resolution ${resolution.width}×${resolution.height}`,
-      impact: `Model maximum is ${max.width}×${max.height}; output will be smaller than the shot's requested resolution.`,
-    });
-    resolution = {
-      width: Math.min(resolution.width, max.width),
-      height: Math.min(resolution.height, max.height),
-    };
-  }
   let fps: number | null = pkg.generation.fps || null;
   if (video && fps && caps.video && caps.video.fps.length > 0 && !caps.video.fps.includes(fps)) {
     const nearest = [...caps.video.fps].sort((a, b) => Math.abs(a - fps!) - Math.abs(b - fps!))[0]!;
@@ -418,8 +488,8 @@ export function evaluateCompatibility(
     inputs,
     used: {
       durationMs,
-      resolution,
-      aspectRatio: aspect,
+      resolution: framingAdapted ? (adaptation.framing.providerCanvas ?? resolution) : resolution,
+      aspectRatio: framingAdapted ? (adaptation.framing.providerLabel ?? aspect) : aspect,
       fps,
       references: accepted.slice(0, caps.references.maxReferences),
       startFrameAssetId: startUsed,
@@ -427,6 +497,7 @@ export function evaluateCompatibility(
       audioAssetIds,
     },
     duration,
+    adaptation,
   };
 }
 

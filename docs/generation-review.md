@@ -42,6 +42,14 @@ request summary, which features were ignored and acknowledged, every status chan
 actual (or unknown) cost, and every output with its role and provenance. Two attempts can be compared side by
 side, including which production parts (Look, set, camera, timing, …) differed between their packages.
 
-## Automated continuity QA
+## Generated · Continuity · Creative (Phase 2C)
 
-Not implemented. Outputs are linked so Phase 2C checks can attach to `attempt_id` ([roadmap](roadmap.md)).
+An attempt card shows three **separate** chips: _Generated_ (job status), _Continuity_ (QA status of the latest
+run, with "stale" when production truth or the output changed) and _Creative_ (your review). One overloaded
+green check no longer exists. Approving is still entirely yours: Prism lists advisories next to **Approve**
+(QA not run, QA stale, critical failure recorded, review not closed) but never blocks or auto-decides.
+
+The attempt review also shows **provider original / production target / conform**, an original ↔ final-crop ↔
+split player, the delivery versions (each conform version kept, one selected master), the contact sheet and the
+frozen adaptation plan. Compare shows, per attempt: provider/model, cost, prompt-plan, adaptation plan, original
+and delivery output, contact sheet, continuity summary and review status. See [continuity-qa](continuity-qa.md).

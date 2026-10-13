@@ -104,7 +104,18 @@ Then an immutable attempt is created and a job queued. The shot's generation sta
 GENERATING → READY FOR REVIEW → APPROVED / NEEDS REDO); reviewing never edits the storyboard or the shot.
 Details: [generation-architecture](generation-architecture.md), [generation-review](generation-review.md).
 
-## Manual continuity review
+## Framing adaptation and conform (Phase 2C)
 
-Continuity checks (`continuity_checks`, kind `manual`) are recorded from Shot Prep → Preflight; the continuity
-approval gate is separate. Automated checking is not built ([roadmap](roadmap.md)).
+When a model cannot generate the production frame/duration, Generate shows the choice (nothing preselected), the
+crop overlay on the approved storyboard frame (full provider canvas, protected crop, discarded regions, safe
+guides) and the acknowledgements, **before any spend**. The attempt records the plan; after the output arrives
+you can **create a delivery conform** (crop/pad/trim → a new derived asset, original kept) and preview
+original vs final. The animatic and every production-facing view keep the production frame and timing.
+[framing-adaptation](framing-adaptation.md), [delivery-conform](delivery-conform.md).
+
+## Continuity review
+
+Two layers, both advisory: the legacy manual `continuity_checks` (Shot Prep → Preflight; the continuity approval
+gate is separate) and the Phase 2C **continuity review** of a generated attempt (criteria from production
+truth, deterministic checks, review frames + contact sheet, reference set, human overrides, optional Mock
+analysis). See [continuity-qa](continuity-qa.md).

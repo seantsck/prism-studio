@@ -39,6 +39,12 @@ const expectedTables = [
   "generation_outputs",
   "generation_costs",
   "continuity_checks",
+  // Phase 2C
+  "asset_derivations",
+  "attempt_deliveries",
+  "continuity_runs",
+  "continuity_findings",
+  "continuity_overrides",
 ];
 const tables = (await rows("select tablename, rowsecurity from pg_tables where schemaname='public'")).filter(
   (t) => t.tablename !== "prism_migrations",
@@ -72,6 +78,9 @@ const must = {
     "generation_costs_one_estimate",
     "generation_costs_one_final",
     "attempts_project_review_idx",
+    "asset_derivations_attempt_slot_version",
+    "continuity_runs_attempt_idx",
+    "continuity_findings_run_idx",
   ],
   triggers: [
     "dialogue_locked_guard",
@@ -83,6 +92,10 @@ const must = {
     "generation_jobs_guard",
     "generation_jobs_updated",
     "generation_costs_guard",
+    "asset_derivations_guard",
+    "continuity_runs_guard",
+    "continuity_findings_guard",
+    "continuity_overrides_guard",
   ],
 };
 const missingIdx = must.indexes.filter((i) => !idx.some((x) => x.indexname === i));
@@ -93,7 +106,7 @@ const fn = await rows(
 
 // ── column-level + storage + migration-ledger checks ──
 const columns = await rows(
-  "select table_name, column_name from information_schema.columns where table_schema='public' and table_name in ('assets','shots','performance_takes','storyboard_frames','generation_attempts','dialogue_lines','shot_reference_assets','generation_jobs','generation_outputs','generation_costs')",
+  "select table_name, column_name from information_schema.columns where table_schema='public' and table_name in ('assets','shots','performance_takes','storyboard_frames','generation_attempts','dialogue_lines','shot_reference_assets','generation_jobs','generation_outputs','generation_costs','project_bibles','continuity_runs')",
 );
 const hasCol = (t, c) => columns.some((x) => x.table_name === t && x.column_name === c);
 const columnProblems = [
@@ -115,6 +128,9 @@ const columnProblems = [
     ["generation_attempts", "request"],
     ["generation_attempts", "compatibility"],
     ["generation_attempts", "acknowledged_ignored"],
+    ["generation_attempts", "adaptation_plan"],
+    ["project_bibles", "delivery_width"],
+    ["continuity_runs", "criteria_fingerprint"],
     ["generation_jobs", "lease_token"],
     ["generation_jobs", "idempotency_key"],
     ["generation_jobs", "cancel_outcome"],

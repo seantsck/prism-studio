@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { MemoryRepository } from "@/data/memory-repository";
+import type { AdaptationChoice } from "@/domain/generation/compatibility";
 import type { ProjectData } from "@/domain/schemas";
 import { readGenerationConfig, type GenerationConfig } from "../config";
 import { silentLogger } from "../log";
@@ -23,7 +24,13 @@ export interface Harness {
   submit(
     code: string,
     modelId?: string,
-    opts?: { acknowledge?: boolean; key?: string; userId?: string | null; provider?: string },
+    opts?: {
+      acknowledge?: boolean;
+      key?: string;
+      userId?: string | null;
+      provider?: string;
+      adaptation?: AdaptationChoice;
+    },
   ): Promise<{
     prepared: ReturnType<typeof prepareSubmission>;
     attemptId: string | null;
@@ -98,6 +105,7 @@ export function makeHarness(
         provider: opts.provider ?? "mock",
         modelId,
         acknowledged: opts.acknowledge === false ? [] : ["__all__"],
+        adaptation: opts.adaptation,
         userId: opts.userId ?? null,
         idempotencyKey: opts.key ?? `test-key-${code}-${next}-${modelId}`,
         config,
@@ -115,6 +123,7 @@ export function makeHarness(
               provider: opts.provider ?? "mock",
               modelId,
               acknowledged: ignored,
+              adaptation: opts.adaptation,
               userId: opts.userId ?? null,
               idempotencyKey: opts.key ?? `test-key-${code}-${next}-${modelId}`,
               config,

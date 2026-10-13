@@ -17,7 +17,7 @@ Two principles drive the design:
 
 Production domain: `studio.prismsuite.io` (not deployed). Standalone repo, separate from PrismSuite.
 
-## Status (Phase 2A)
+## Status (Phase 2C)
 
 Planning, performance, storyboard and animatic are implemented, on two persistence backends:
 
@@ -26,8 +26,19 @@ Planning, performance, storyboard and animatic are implemented, on two persisten
 
 **Generation infrastructure (Phase 2A)**: a durable, provider-independent pipeline (frozen attempts, Postgres
 job queue, worker process, output ingestion into private Storage, review) with a free **MockProvider**. No real
-provider is integrated yet and the app is not deployed. See [docs/generation-architecture.md](docs/generation-architecture.md)
+provider is integrated in 2A; 2B added the least-privilege worker and the first real provider (Runway Gen-4.5,
+live-spend gated). The app is not deployed. See [docs/generation-architecture.md](docs/generation-architecture.md)
 and [docs/roadmap.md](docs/roadmap.md) (including "Known gaps").
+
+**Framing, conform and continuity QA (Phase 2C)**: a production shot (e.g. 2.39:1 / 4.5 s) is never silently
+changed to fit a provider (16:9 / 5 s). The user chooses and acknowledges an explicit **adaptation plan**
+(frozen on the attempt), the provider original stays immutable, a deterministic **delivery conform** produces a
+separate derived asset (crop / pad / trim with ffmpeg), and **continuity QA** (deterministic checks, review
+frames, contact sheet, reference sets, human overrides, a clearly-labelled Mock analyzer) advises while a person
+approves. See [framing-adaptation](docs/framing-adaptation.md), [media-processing](docs/media-processing.md),
+[delivery-conform](docs/delivery-conform.md), [continuity-qa](docs/continuity-qa.md) and
+[continuity-analyzer-contract](docs/continuity-analyzer-contract.md). Conform/review frames need **ffmpeg** on
+the app server's PATH (optional: everything else works without it).
 
 ## Quick start: memory mode
 

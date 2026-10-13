@@ -53,6 +53,17 @@ export default async function BiblePage({ params }: { params: Promise<{ project:
                   defaultValue={bible.defaultFrameRate}
                 />
               </Field>
+              <Field label="Delivery width (px)" hint="Optional. The aspect ratio is the production format.">
+                <input name="deliveryWidth" type="number" min="2" defaultValue={bible.deliveryWidth ?? ""} />
+              </Field>
+              <Field label="Delivery height (px)" hint="Both or neither">
+                <input
+                  name="deliveryHeight"
+                  type="number"
+                  min="2"
+                  defaultValue={bible.deliveryHeight ?? ""}
+                />
+              </Field>
             </div>
           </div>
         </Panel>

@@ -2,7 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import type { CreateAttemptInput } from "@/data/generation-repository";
 import { buildShotContext, type ShotContext } from "@/domain/context";
 import { assembleGenerationPackage, type GenerationPackage } from "@/domain/generation-package";
-import { evaluateCompatibility, type CompatibilityReport } from "@/domain/generation/compatibility";
+import {
+  evaluateCompatibility,
+  type AdaptationChoice,
+  type CompatibilityReport,
+} from "@/domain/generation/compatibility";
 import {
   buildGenerationRequest,
   evaluateGate,
@@ -52,6 +56,8 @@ export function evaluateShotForModel(args: {
   provider: string;
   modelId: string;
   acknowledged?: readonly string[];
+  /** The user's explicit adaptation choices; absent = nothing is adapted (incompatibilities stay blockers). */
+  adaptation?: AdaptationChoice;
   now?: Date;
   /** Reuse an already built context/package when evaluating several models for one shot. */
   shared?: SharedShotEvaluation;
@@ -60,13 +66,18 @@ export function evaluateShotForModel(args: {
   const { ctx, pkg, basePreflight } = shared;
   const model = args.registry.model(args.provider, args.modelId);
   const availability = model ? args.registry.availabilityOf(model) : null;
-  let compatibility = model ? evaluateCompatibility(pkg, model) : null;
+  let compatibility = model
+    ? evaluateCompatibility(pkg, model, {
+        adaptation: args.adaptation,
+        protectedNotes: ctx.shot.generation.protectedComposition,
+      })
+    : null;
   const adapter = model ? args.registry.adapter(model.provider) : null;
   let estimate: CostEstimate | null = null;
   const adapterBlockers: GateBlocker[] = [];
   if (model && adapter && compatibility?.compatible && compatibility.modality) {
     try {
-      const plan = buildPromptPlan(pkg);
+      const plan = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation);
       const req = buildGenerationRequest({
         pkg,
         model,
@@ -142,6 +153,7 @@ export function prepareSubmission(args: {
   provider: string;
   modelId: string;
   acknowledged: string[];
+  adaptation?: AdaptationChoice;
   userId: string | null;
   idempotencyKey: string;
   config: GenerationConfig;
@@ -157,7 +169,7 @@ export function prepareSubmission(args: {
     return { evaluation, input: null };
 
   const adapter = args.registry.adapter(model.provider)!;
-  const plan = buildPromptPlan(pkg);
+  const plan = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation);
   const request = buildGenerationRequest({
     pkg,
     model,
@@ -227,6 +239,9 @@ export function prepareSubmission(args: {
     request: JSON.parse(JSON.stringify(request)) as Record<string, unknown>,
     compatibility: JSON.parse(JSON.stringify(compatibility)) as Record<string, unknown>,
     acknowledgedIgnored: [...args.acknowledged].sort(),
+    adaptationPlan: compatibility.adaptation
+      ? (JSON.parse(JSON.stringify(compatibility.adaptation)) as Record<string, unknown>)
+      : null,
     createdBy: args.userId,
     createdAt: stamp,
   };

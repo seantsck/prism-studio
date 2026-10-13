@@ -6,6 +6,7 @@ import { PRODUCTION_STATUSES, PROJECT_TYPES } from "@/domain/schemas";
 import { summarizeEpisode } from "@/domain/summary";
 import { episodePath } from "@/lib/paths";
 import { saveProject } from "@/server/actions";
+import { loadPipeline } from "@/server/pipeline";
 import { requireProject } from "@/server/repo";
 import { ActionForm } from "@/components/action-form";
 
@@ -23,6 +24,7 @@ export default async function OverviewPage({ params }: { params: Promise<{ proje
     data.takes.some((t) => t.dialogueLineId === l.id && t.selected),
   ).length;
 
+  const pipeline = await loadPipeline(data);
   const stats: Array<[string, string, string?]> = [
     ["Episodes", String(data.episodes.length)],
     ["Shots", String(allShots.length), `${ready} ready to generate`],
@@ -50,6 +52,34 @@ export default async function OverviewPage({ params }: { params: Promise<{ proje
             </div>
           ))}
         </div>
+
+        <Panel title="Production pipeline">
+          <div
+            className="grid grid-cols-2 gap-px border border-line bg-line md:grid-cols-5"
+            data-testid="pipeline-dashboard"
+          >
+            {(
+              [
+                ["Shots", pipeline.totals.shots, "in this project"],
+                ["Generated", pipeline.totals.generated, "with a completed attempt"],
+                ["Continuity reviewed", pipeline.totals.continuityReviewed, "QA review closed"],
+                ["Critical failures", pipeline.totals.criticalFailures, "unresolved in latest QA"],
+                ["Creative approved", pipeline.totals.creativeApproved, "approved by a person"],
+              ] as const
+            ).map(([label, value, sub]) => (
+              <div key={label} className="bg-panel px-3 py-2.5">
+                <div className="text-[10.5px] uppercase tracking-wide text-muted">{label}</div>
+                <div
+                  className="mt-0.5 font-mono text-[18px]"
+                  data-testid={`pipeline-${label.toLowerCase().replace(/ /g, "-")}`}
+                >
+                  {value}
+                </div>
+                <div className="text-[10.5px] text-faint">{sub}</div>
+              </div>
+            ))}
+          </div>
+        </Panel>
 
         <Panel title="Episodes">
           <table className="w-full text-left text-[12px]">
