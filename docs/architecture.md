@@ -109,3 +109,22 @@ Three more pure/bounded layers, all outside React and outside the worker:
 
 Production frame ≠ provider canvas ≠ delivery frame: see [framing-adaptation](framing-adaptation.md).
 Media runs in the app server under the user's session; the worker role gained **no** privileges.
+
+## Continuity analysis (Phase 2D)
+
+```
+Continuity page ──server action──► plan + frozen input + manifest + estimate + spend gate
+                                      │ one transaction
+                                      ▼
+            continuity_runs (immutable) + findings + continuity_analysis_jobs (queued) + estimated cost
+                                      │
+        npm run continuity:worker  ◄──┘   role prism_continuity_worker (claim · lease · fenced writes)
+                 │ ContinuityAnalysisProvider (mock | gemini) ── transport (SDK | fake) ── network
+                 ▼
+   normalized findings + evidence ── final cost ── events        (humans override; nothing auto-approves)
+```
+
+Pure domain in `src/domain/continuity/analysis/` (plan, schema, prompt, cost, job state); provider contract and
+worker in `src/continuity/analysis/`; Gemini adapter in `src/continuity/providers/gemini/` (the SDK is imported
+only by `sdk-transport.ts`, lazily). Persistence via `MediaQaRepository` (user path) and `AnalysisWorkerStore`
+(worker path), memory + Postgres. See [continuity-analysis-jobs](continuity-analysis-jobs.md).

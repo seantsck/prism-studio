@@ -180,6 +180,10 @@ try {
     "continuity_runs",
     "continuity_findings",
     "continuity_overrides",
+    // Phase 2D
+    "continuity_analysis_jobs",
+    "continuity_analysis_costs",
+    "continuity_analysis_events",
   ];
   for (const table of scoped) {
     const mine = await raw(

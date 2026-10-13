@@ -1,9 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { assetSchema, type Asset } from "@/domain/schemas";
+import {
+  ANALYSIS_ACTIVE,
+  assertAnalysisTransition,
+  isAnalysisTerminal,
+} from "@/domain/continuity/analysis/job-state";
 import type { MemoryProjectsAccess } from "./generation-memory";
 import {
+  AnalysisLeaseLostError,
   MediaQaError,
+  type AnalysisCost,
+  type AnalysisEvent,
+  type AnalysisJob,
+  type AnalysisJobPatch,
   type AnalysisStatus,
+  type AnalysisWorkerStore,
+  type ClaimedAnalysisJob,
+  type FinalizeAnalysisFailure,
+  type FinalizeAnalysisSuccess,
+  type InputAssetRef,
+  type NewAnalysisRun,
   type AssetDerivation,
   type AttemptDelivery,
   type ContinuityFinding,
@@ -23,7 +39,11 @@ const clone = <T>(v: T): T => structuredClone(v);
  * In-process implementation (memory/demo mode and fast tests). Mirrors the Postgres rules: derivation
  * idempotency by key, append-only overrides, frozen run snapshots, atomic run numbering.
  */
-export class MemoryMediaQaService implements MediaQaRepository {
+export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerStore {
+  private jobs = new Map<string, AnalysisJob>();
+  private costs: AnalysisCost[] = [];
+  private events: AnalysisEvent[] = [];
+
   private derivations: AssetDerivation[] = [];
   private deliveries = new Map<string, AttemptDelivery>();
   private runs: ContinuityRun[] = [];
@@ -171,11 +191,20 @@ export class MemoryMediaQaService implements MediaQaRepository {
   }
 
   async createRun(input: NewRun, findings: NewFinding[]) {
-    const { now, ...rest } = input;
+    const { now, ...withPhase2d } = input;
+    const rest: Omit<
+      typeof withPhase2d,
+      "analysisPlan" | "externalManifest" | "promptVersion" | "rubricVersion" | "model"
+    > = withPhase2d;
     const runNumber =
       Math.max(0, ...this.runs.filter((r) => r.attemptId === input.attemptId).map((r) => r.runNumber)) + 1;
     const run: ContinuityRun = {
       ...rest,
+      analysisPlan: input.analysisPlan ?? null,
+      externalManifest: input.externalManifest ?? null,
+      promptVersion: input.promptVersion ?? null,
+      rubricVersion: input.rubricVersion ?? null,
+      model: input.model ?? null,
       id: randomUUID(),
       runNumber,
       analysisError: "",
@@ -273,5 +302,355 @@ export class MemoryMediaQaService implements MediaQaRepository {
     r.finalizedBy = input.by;
     r.finalizeNote = input.note;
     return clone(r);
+  }
+
+  // ───────────────────────── analysis jobs (user path) ─────────────────────────
+
+  private addEvent(job: AnalysisJob, from: string | null, to: string, note: string, at: string) {
+    this.events.push({
+      id: randomUUID(),
+      jobId: job.id,
+      runId: job.runId,
+      at,
+      fromStatus: from,
+      toStatus: to,
+      note,
+    });
+  }
+
+  async createAnalysisRunWithJob(input: NewAnalysisRun) {
+    const replay = [...this.jobs.values()].find(
+      (j) => j.projectId === input.run.projectId && j.idempotencyKey === input.job.idempotencyKey,
+    );
+    if (replay) {
+      const view = await this.getRun(replay.runId);
+      return { run: view!, job: clone(replay), duplicate: true };
+    }
+    const active = [...this.jobs.values()].filter(
+      (j) => j.projectId === input.run.projectId && ANALYSIS_ACTIVE.includes(j.status),
+    ).length;
+    if (active >= input.limits.maxActivePerProject) {
+      throw new MediaQaError(
+        "invalid",
+        `This project already has ${active} analyses in progress (limit ${input.limits.maxActivePerProject}).`,
+      );
+    }
+    const run = await this.createRun(input.run, input.findings);
+    const now = input.run.now;
+    const job: AnalysisJob = {
+      id: randomUUID(),
+      projectId: run.run.projectId,
+      runId: run.run.id,
+      attemptId: run.run.attemptId,
+      analyzer: input.job.analyzer,
+      model: input.job.model,
+      status: "queued",
+      inputSnapshot: clone(input.job.snapshot),
+      inputAssetIds: [...input.job.inputAssetIds],
+      idempotencyKey: input.job.idempotencyKey,
+      nextRunAt: now,
+      attemptCount: 0,
+      maxAttempts: input.job.maxAttempts,
+      leaseOwner: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      heartbeatAt: null,
+      providerState: "not_sent",
+      providerRef: null,
+      batchesTotal: input.job.snapshot.plan.batches.length,
+      batchesDone: 0,
+      correctionCount: 0,
+      estimatedCostUsd: input.job.estimate.maxUsd,
+      actualCostUsd: null,
+      providerFiles: [],
+      lastErrorCode: null,
+      lastErrorCategory: null,
+      lastErrorMessage: "",
+      cancelRequestedAt: null,
+      startedAt: null,
+      completedAt: null,
+      failedAt: null,
+      cancelledAt: null,
+      createdBy: input.run.createdBy,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.jobs.set(job.id, job);
+    this.costs.push({
+      id: randomUUID(),
+      projectId: job.projectId,
+      runId: job.runId,
+      jobId: job.id,
+      analyzer: job.analyzer,
+      model: job.model,
+      kind: "estimated",
+      amountUsd: input.job.estimate.maxUsd,
+      expectedUsd: input.job.estimate.expectedUsd,
+      currency: "USD",
+      usage: clone(input.job.estimate.usage),
+      pricingVersion: input.job.estimate.pricingVersion,
+      recordedAt: now,
+    });
+    this.addEvent(job, null, "queued", "Submitted by user", now);
+    return { run, job: clone(job), duplicate: false };
+  }
+
+  async getAnalysisJob(jobId: string) {
+    const j = this.jobs.get(jobId);
+    return j ? clone(j) : null;
+  }
+
+  async listAttemptAnalysisJobs(attemptId: string) {
+    return [...this.jobs.values()]
+      .filter((j) => j.attemptId === attemptId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(clone);
+  }
+
+  async listActiveProjectAnalysisJobs(projectId: string) {
+    return [...this.jobs.values()]
+      .filter((j) => j.projectId === projectId && ANALYSIS_ACTIVE.includes(j.status))
+      .map(clone);
+  }
+
+  async listAnalysisCosts(runId: string) {
+    return this.costs.filter((c) => c.runId === runId).map(clone);
+  }
+
+  async listAnalysisEvents(jobId: string) {
+    return this.events.filter((e) => e.jobId === jobId).map(clone);
+  }
+
+  async requestAnalysisCancel(jobId: string, now: string) {
+    const job = this.jobs.get(jobId);
+    if (!job) return null;
+    if (isAnalysisTerminal(job.status) || job.status === "cancel_requested") return clone(job);
+    const from = job.status;
+    if (job.status === "queued") {
+      assertAnalysisTransition("queued", "cancelled");
+      job.status = "cancelled";
+      job.cancelledAt = now;
+      job.cancelRequestedAt = now;
+      job.leaseToken = null;
+      await this.setAnalysisStatus(job.runId, "failed", now, "Analysis cancelled before it started.");
+      this.addEvent(job, from, "cancelled", "Cancelled before it started", now);
+    } else {
+      assertAnalysisTransition(job.status, "cancel_requested");
+      job.status = "cancel_requested";
+      job.cancelRequestedAt = now;
+      this.addEvent(job, from, "cancel_requested", "Cancellation requested", now);
+    }
+    job.updatedAt = now;
+    return clone(job);
+  }
+
+  async analysisSpentSince(projectId: string | null, sinceIso: string) {
+    const jobs = [...this.jobs.values()].filter((j) => projectId == null || j.projectId === projectId);
+    let total = 0;
+    for (const j of jobs) {
+      const cs = this.costs.filter((c) => c.jobId === j.id && c.recordedAt >= sinceIso);
+      const fin = cs.find((c) => c.kind !== "estimated");
+      const est = cs.find((c) => c.kind === "estimated");
+      total += fin?.kind === "actual" ? (fin.amountUsd ?? 0) : (est?.amountUsd ?? 0);
+    }
+    return total;
+  }
+
+  // ───────────────────────── worker path ─────────────────────────
+
+  async claim(opts: {
+    workerId: string;
+    now: string;
+    leaseMs: number;
+    limit: number;
+  }): Promise<ClaimedAnalysisJob[]> {
+    const nowMs = Date.parse(opts.now);
+    const due = [...this.jobs.values()]
+      .filter(
+        (j) =>
+          ANALYSIS_ACTIVE.includes(j.status) &&
+          Date.parse(j.nextRunAt) <= nowMs &&
+          (j.leaseToken == null || (j.leaseExpiresAt != null && Date.parse(j.leaseExpiresAt) <= nowMs)),
+      )
+      .sort((a, b) => a.nextRunAt.localeCompare(b.nextRunAt))
+      .slice(0, opts.limit);
+    return due.map((j) => {
+      if (j.status === "queued") {
+        assertAnalysisTransition("queued", "claimed");
+        j.status = "claimed";
+      }
+      j.leaseOwner = opts.workerId;
+      j.leaseToken = randomUUID();
+      j.leaseExpiresAt = new Date(nowMs + opts.leaseMs).toISOString();
+      j.heartbeatAt = opts.now;
+      return { job: clone(j) };
+    });
+  }
+
+  private leased(jobId: string, token: string): AnalysisJob {
+    const j = this.jobs.get(jobId);
+    if (!j || j.leaseToken !== token) throw new AnalysisLeaseLostError(jobId);
+    return j;
+  }
+
+  async heartbeat(jobId: string, leaseToken: string, now: string, leaseMs: number) {
+    const j = this.jobs.get(jobId);
+    if (!j || j.leaseToken !== leaseToken) return false;
+    j.heartbeatAt = now;
+    j.leaseExpiresAt = new Date(Date.parse(now) + leaseMs).toISOString();
+    return true;
+  }
+
+  async update(jobId: string, leaseToken: string, patch: AnalysisJobPatch, now: string) {
+    const j = this.leased(jobId, leaseToken);
+    const from = j.status;
+    if (patch.status && patch.status !== j.status) {
+      assertAnalysisTransition(j.status, patch.status);
+      j.status = patch.status;
+      if (patch.status === "failed") j.failedAt = now;
+      if (patch.status === "succeeded") j.completedAt = now;
+      if (patch.status === "cancelled") j.cancelledAt = now;
+      this.addEvent(j, from, patch.status, patch.note ?? "", now);
+    }
+    const set = <K extends keyof AnalysisJob>(k: K, v: AnalysisJob[K] | undefined) => {
+      if (v !== undefined) j[k] = v;
+    };
+    set("nextRunAt", patch.nextRunAt);
+    set("attemptCount", patch.attemptCount);
+    set("providerState", patch.providerState);
+    set("providerRef", patch.providerRef);
+    set("batchesTotal", patch.batchesTotal);
+    set("batchesDone", patch.batchesDone);
+    set("correctionCount", patch.correctionCount);
+    set("actualCostUsd", patch.actualCostUsd);
+    set("providerFiles", patch.providerFiles);
+    set("lastErrorCode", patch.lastErrorCode);
+    set("lastErrorCategory", patch.lastErrorCategory);
+    set("lastErrorMessage", patch.lastErrorMessage);
+    set("startedAt", patch.startedAt);
+    if (patch.releaseLease || isAnalysisTerminal(j.status)) {
+      j.leaseOwner = null;
+      j.leaseToken = null;
+      j.leaseExpiresAt = null;
+    }
+    j.updatedAt = now;
+    return clone(j);
+  }
+
+  async startRun(runId: string, now: string) {
+    const r = this.runs.find((x) => x.id === runId);
+    if (r && r.analysisStatus === "queued") {
+      r.analysisStatus = "running";
+      void now;
+    }
+  }
+
+  async findInputAsset(jobId: string, assetId: string): Promise<InputAssetRef | null> {
+    const j = this.jobs.get(jobId);
+    if (!j || !j.inputAssetIds.includes(assetId)) return null;
+    const a = this.assetById(assetId);
+    if (!a) return null;
+    return {
+      assetId: a.id,
+      objectPath: a.objectPath,
+      bucket: a.bucket,
+      storageProvider: a.storageProvider,
+      mime: a.mime,
+      byteSize: a.byteSize,
+      checksum: a.checksum,
+      width: a.width,
+      height: a.height,
+    };
+  }
+
+  private writeCost(job: AnalysisJob, c: FinalizeAnalysisSuccess["cost"], now: string) {
+    this.costs.push({
+      id: randomUUID(),
+      projectId: job.projectId,
+      runId: job.runId,
+      jobId: job.id,
+      analyzer: c.analyzer,
+      model: c.model,
+      kind: c.kind,
+      amountUsd: c.kind === "actual" ? c.amountUsd : null,
+      expectedUsd: null,
+      currency: "USD",
+      usage: clone(c.usage) as unknown as Record<string, unknown>,
+      pricingVersion: c.pricingVersion,
+      recordedAt: now,
+    });
+  }
+
+  async finalizeSuccess(input: FinalizeAnalysisSuccess) {
+    const job = this.leased(input.jobId, input.leaseToken);
+    if (this.costs.some((c) => c.jobId === job.id && c.kind !== "estimated")) {
+      // exactly one final result per job: a duplicate worker finishing late changes nothing
+      return clone(job);
+    }
+    const run = this.runs.find((r) => r.id === input.runId);
+    if (!run || run.analysisStatus === "complete")
+      throw new MediaQaError("run_closed", "The run is already complete.");
+    await this.applyAnalysis(
+      input.runId,
+      input.findings.map((f) => ({
+        criterionKey: f.criterionKey,
+        result: f.result,
+        actual: f.summary,
+        confidence: f.confidence,
+        notes: f.limitations.join("; "),
+        evidence: {
+          items: f.evidence,
+          contradictions: f.contradictions,
+          limitations: f.limitations,
+          analyzer: job.analyzer,
+          model: job.model,
+        },
+      })),
+    );
+    await this.setAnalysisStatus(input.runId, "complete", input.now);
+    this.writeCost(job, input.cost, input.now);
+    const from = job.status;
+    assertAnalysisTransition(job.status, "succeeded");
+    job.status = "succeeded";
+    job.completedAt = input.now;
+    job.providerRef = input.providerRef;
+    job.providerState = "responded";
+    job.correctionCount = input.correctionCount;
+    job.actualCostUsd = input.cost.kind === "actual" ? input.cost.amountUsd : null;
+    job.batchesDone = job.batchesTotal;
+    job.leaseOwner = null;
+    job.leaseToken = null;
+    job.leaseExpiresAt = null;
+    job.updatedAt = input.now;
+    this.addEvent(job, from, "succeeded", input.note, input.now);
+    return clone(job);
+  }
+
+  async finalizeFailure(input: FinalizeAnalysisFailure) {
+    const job = this.leased(input.jobId, input.leaseToken);
+    const from = job.status;
+    const to = input.cancelled ? "cancelled" : "failed";
+    assertAnalysisTransition(job.status, to);
+    await this.setAnalysisStatus(input.runId, "failed", input.now, input.errorMessage);
+    if (input.cost && !this.costs.some((c) => c.jobId === job.id && c.kind !== "estimated")) {
+      this.writeCost(job, input.cost, input.now);
+      job.actualCostUsd = input.cost.kind === "actual" ? input.cost.amountUsd : null;
+    }
+    job.status = to;
+    if (input.cancelled) job.cancelledAt = input.now;
+    else job.failedAt = input.now;
+    job.lastErrorCode = input.errorCode;
+    job.lastErrorCategory = input.errorCategory;
+    job.lastErrorMessage = input.errorMessage;
+    job.leaseOwner = null;
+    job.leaseToken = null;
+    job.leaseExpiresAt = null;
+    job.updatedAt = input.now;
+    this.addEvent(job, from, to, input.errorMessage, input.now);
+    return clone(job);
+  }
+
+  async spentSince(sinceIso: string) {
+    return this.analysisSpentSince(null, sinceIso);
   }
 }

@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { AnalysisSubmitError, submitAnalysis } from "@/continuity/analysis/submit";
 import { computeQaInputs, runContinuityReview } from "@/continuity/service";
 import { CONTINUITY_RESULTS, type ContinuityResult } from "@/domain/continuity/model";
 import { parseAdaptationPlan } from "@/domain/framing/adaptation";
@@ -10,7 +11,13 @@ import { MediaQaError } from "@/data/media-qa-repository";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { requireUser } from "./auth";
 import { getGenerationRepo } from "./generation";
-import { getContinuityAnalyzer, getDeliveryDeps, getMediaQaRepo } from "./media-qa";
+import {
+  getAnalysisConfig,
+  getAnalysisProviders,
+  getContinuityAnalyzer,
+  getDeliveryDeps,
+  getMediaQaRepo,
+} from "./media-qa";
 import { requireProjectFresh, getRepo } from "./repo";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
@@ -144,6 +151,63 @@ async function startContinuityReview_impl(form: FormData) {
 
 export async function startContinuityReview(form: FormData): Promise<ActionResult> {
   return runAction(() => startContinuityReview_impl(form), { name: "startContinuityReview" });
+}
+
+/**
+ * Queues an automated analysis. The server action never calls an analyzer: it freezes the plan/input/manifest,
+ * applies the SERVER-SIDE spend policy (a number from the client is never trusted), and enqueues a job for the
+ * continuity worker.
+ */
+async function startContinuityAnalysis_impl(form: FormData) {
+  const { slug, data, view, userId } = await loadAttempt(form);
+  if (view.attempt.status !== "succeeded") {
+    throw new UserFacingError("Automated analysis needs a completed generation.");
+  }
+  const providerId = str(form, "analyzer");
+  const provider = getAnalysisProviders().get(providerId);
+  if (!provider) throw new UserFacingError("That analyzer is not available on this server.");
+  const qa = await getMediaQaRepo();
+  const delivery = await qa.getDelivery(view.attempt.id);
+  const inputs = computeQaInputs({ data, view, delivery });
+  if (!inputs?.subject) throw new UserFacingError("This attempt has no output to analyse.");
+  const config = getAnalysisConfig();
+  try {
+    await guard(async () => {
+      const deps = await getDeliveryDeps(userId);
+      await submitAnalysis({
+        inputs,
+        view,
+        assets: data.assets,
+        provider,
+        policy: config.paid,
+        deps,
+        acknowledged: str(form, "ackSpend") === "1",
+        nonce: str(form, "nonce") || new Date().toISOString(),
+        limits: config.limits,
+      });
+    });
+  } catch (err) {
+    if (err instanceof AnalysisSubmitError) throw new UserFacingError(err.message);
+    throw err;
+  }
+  refresh(slug);
+}
+
+export async function startContinuityAnalysis(form: FormData): Promise<ActionResult> {
+  return runAction(() => startContinuityAnalysis_impl(form), { name: "startContinuityAnalysis" });
+}
+
+async function cancelContinuityAnalysis_impl(form: FormData) {
+  const { slug, view } = await loadAttempt(form);
+  const qa = await getMediaQaRepo();
+  const job = await qa.getAnalysisJob(str(form, "jobId"));
+  if (!job || job.attemptId !== view.attempt.id) throw new UserFacingError("That analysis no longer exists.");
+  await qa.requestAnalysisCancel(job.id, new Date().toISOString());
+  refresh(slug);
+}
+
+export async function cancelContinuityAnalysis(form: FormData): Promise<ActionResult> {
+  return runAction(() => cancelContinuityAnalysis_impl(form), { name: "cancelContinuityAnalysis" });
 }
 
 async function overrideFinding_impl(form: FormData) {

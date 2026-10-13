@@ -2,8 +2,13 @@ import type { Pool, PoolClient } from "pg";
 import { assetSchema } from "@/domain/schemas";
 import { COLLECTIONS, flatFromRow, flatToRow, type Row } from "./postgres-mapping";
 import { upsertRow } from "./postgres-repository";
+import { ANALYSIS_ACTIVE, assertAnalysisTransition } from "@/domain/continuity/analysis/job-state";
 import {
   MediaQaError,
+  type AnalysisCost,
+  type AnalysisEvent,
+  type AnalysisJob,
+  type NewAnalysisRun,
   type AnalysisStatus,
   type AssetDerivation,
   type AttemptDelivery,
@@ -68,6 +73,11 @@ const mapRun = (r: Row): ContinuityRun => ({
   criteriaFingerprint: String(r.criteria_fingerprint),
   referenceFingerprint: String(r.reference_fingerprint),
   referenceSet: json(r.reference_set),
+  analysisPlan: (r.analysis_plan as ContinuityRun["analysisPlan"]) ?? null,
+  externalManifest: (r.external_manifest as ContinuityRun["externalManifest"]) ?? null,
+  promptVersion: r.prompt_version ? String(r.prompt_version) : null,
+  rubricVersion: r.rubric_version ? String(r.rubric_version) : null,
+  model: r.model ? String(r.model) : null,
   createdBy: r.created_by ? String(r.created_by) : null,
   createdAt: iso(r.created_at)!,
   completedAt: iso(r.completed_at),
@@ -106,6 +116,63 @@ const mapOverride = (r: Row): ContinuityOverride => ({
   createdBy: r.created_by ? String(r.created_by) : null,
   createdAt: iso(r.created_at)!,
 });
+
+export const mapAnalysisJob = (r: Row): AnalysisJob => ({
+  id: String(r.id),
+  projectId: String(r.project_id),
+  runId: String(r.run_id),
+  attemptId: String(r.attempt_id),
+  analyzer: String(r.analyzer),
+  model: String(r.model),
+  status: r.status as AnalysisJob["status"],
+  inputSnapshot: r.input_snapshot as AnalysisJob["inputSnapshot"],
+  inputAssetIds: ((r.input_asset_ids as string[] | null) ?? []).map(String),
+  idempotencyKey: String(r.idempotency_key),
+  nextRunAt: iso(r.next_run_at)!,
+  attemptCount: Number(r.attempt_count),
+  maxAttempts: Number(r.max_attempts),
+  leaseOwner: r.lease_owner ? String(r.lease_owner) : null,
+  leaseToken: r.lease_token ? String(r.lease_token) : null,
+  leaseExpiresAt: iso(r.lease_expires_at),
+  heartbeatAt: iso(r.heartbeat_at),
+  providerState: r.provider_state as AnalysisJob["providerState"],
+  providerRef: r.provider_ref ? String(r.provider_ref) : null,
+  batchesTotal: Number(r.batches_total),
+  batchesDone: Number(r.batches_done),
+  correctionCount: Number(r.correction_count),
+  estimatedCostUsd: num(r.estimated_cost_usd),
+  actualCostUsd: num(r.actual_cost_usd),
+  providerFiles: ((r.provider_files as AnalysisJob["providerFiles"] | null) ?? []).map((f) => ({ ...f })),
+  lastErrorCode: r.last_error_code ? String(r.last_error_code) : null,
+  lastErrorCategory: (r.last_error_category as AnalysisJob["lastErrorCategory"]) ?? null,
+  lastErrorMessage: String(r.last_error_message ?? ""),
+  cancelRequestedAt: iso(r.cancel_requested_at),
+  startedAt: iso(r.started_at),
+  completedAt: iso(r.completed_at),
+  failedAt: iso(r.failed_at),
+  cancelledAt: iso(r.cancelled_at),
+  createdBy: r.created_by ? String(r.created_by) : null,
+  createdAt: iso(r.created_at)!,
+  updatedAt: iso(r.updated_at)!,
+});
+
+export const mapAnalysisCost = (r: Row): AnalysisCost => ({
+  id: String(r.id),
+  projectId: String(r.project_id),
+  runId: String(r.run_id),
+  jobId: String(r.job_id),
+  analyzer: String(r.analyzer),
+  model: String(r.model),
+  kind: r.kind as AnalysisCost["kind"],
+  amountUsd: num(r.amount_usd),
+  expectedUsd: num(r.expected_usd),
+  currency: String(r.currency),
+  usage: json(r.usage),
+  pricingVersion: String(r.pricing_version ?? ""),
+  recordedAt: iso(r.recorded_at)!,
+});
+
+const activeList = ANALYSIS_ACTIVE.map((s) => `'${s}'`).join(", ");
 
 const parseAsset = (r: Row) => assetSchema.parse(flatFromRow(r, COLLECTIONS.assets));
 
@@ -337,8 +404,10 @@ export class PostgresMediaQaData implements MediaQaRepository {
         `insert into continuity_runs
            (project_id, attempt_id, run_number, subject_asset_id, original_asset_id, analyzer, analyzer_version,
             analyzer_kind, rules_version, analysis_status, package_fingerprint, subject_fingerprint,
-            criteria_fingerprint, reference_fingerprint, reference_set, created_by, created_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17)
+            criteria_fingerprint, reference_fingerprint, reference_set, created_by, created_at,
+            analysis_plan, external_manifest, prompt_version, rubric_version, model)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17,
+                 $18::jsonb, $19::jsonb, $20, $21, $22)
          returning *`,
         [
           input.projectId,
@@ -358,6 +427,11 @@ export class PostgresMediaQaData implements MediaQaRepository {
           JSON.stringify(input.referenceSet),
           input.createdBy,
           input.now,
+          input.analysisPlan ? JSON.stringify(input.analysisPlan) : null,
+          input.externalManifest ? JSON.stringify(input.externalManifest) : null,
+          input.promptVersion ?? null,
+          input.rubricVersion ?? null,
+          input.model ?? null,
         ],
       );
       const run = r.rows[0] as Row;
@@ -496,6 +570,267 @@ export class PostgresMediaQaData implements MediaQaRepository {
         [runId, input.now, input.by, input.note],
       );
       return mapRun(r.rows[0]);
+    });
+  }
+
+  // ───────────────────────── analysis jobs (user path) ─────────────────────────
+
+  async createAnalysisRunWithJob(input: NewAnalysisRun) {
+    return this.tx(async (c) => {
+      const r = input.run;
+      const project = await c.query("select id from projects where id = $1 for update", [r.projectId]);
+      if (project.rowCount === 0) throw new MediaQaError("not_found", "That project no longer exists.");
+
+      const replay = await c.query(
+        "select * from continuity_analysis_jobs where project_id = $1 and idempotency_key = $2",
+        [r.projectId, input.job.idempotencyKey],
+      );
+      if (replay.rows[0]) {
+        const run = await c.query("select * from continuity_runs where id = $1", [replay.rows[0].run_id]);
+        return {
+          run: (await this.views(c, run.rows))[0]!,
+          job: mapAnalysisJob(replay.rows[0]),
+          duplicate: true,
+        };
+      }
+      const open = await c.query(
+        `select count(*)::int as n from continuity_analysis_jobs where project_id = $1 and status in (${activeList})`,
+        [r.projectId],
+      );
+      if (open.rows[0].n >= input.limits.maxActivePerProject) {
+        throw new MediaQaError(
+          "invalid",
+          `This project already has ${open.rows[0].n} analyses in progress (limit ${input.limits.maxActivePerProject}).`,
+        );
+      }
+
+      const lock = await c.query("select id from generation_attempts where id = $1 for update", [
+        r.attemptId,
+      ]);
+      if (lock.rowCount === 0) throw new MediaQaError("not_found", "That attempt no longer exists.");
+      const n = await c.query(
+        "select coalesce(max(run_number), 0) + 1 as n from continuity_runs where attempt_id = $1",
+        [r.attemptId],
+      );
+      const run = (
+        await c.query(
+          `insert into continuity_runs
+             (project_id, attempt_id, run_number, subject_asset_id, original_asset_id, analyzer, analyzer_version,
+              analyzer_kind, rules_version, analysis_status, package_fingerprint, subject_fingerprint,
+              criteria_fingerprint, reference_fingerprint, reference_set, created_by, created_at,
+              analysis_plan, external_manifest, prompt_version, rubric_version, model)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'queued', $10, $11, $12, $13, $14::jsonb, $15, $16,
+                   $17::jsonb, $18::jsonb, $19, $20, $21)
+           returning *`,
+          [
+            r.projectId,
+            r.attemptId,
+            Number(n.rows[0].n),
+            r.subjectAssetId,
+            r.originalAssetId,
+            r.analyzer,
+            r.analyzerVersion,
+            r.analyzerKind,
+            r.rulesVersion,
+            r.packageFingerprint,
+            r.subjectFingerprint,
+            r.criteriaFingerprint,
+            r.referenceFingerprint,
+            JSON.stringify(r.referenceSet),
+            r.createdBy,
+            r.now,
+            r.analysisPlan ? JSON.stringify(r.analysisPlan) : null,
+            r.externalManifest ? JSON.stringify(r.externalManifest) : null,
+            r.promptVersion ?? null,
+            r.rubricVersion ?? null,
+            r.model ?? null,
+          ],
+        )
+      ).rows[0] as Row;
+      for (const f of input.findings) {
+        await c.query(
+          `insert into continuity_findings
+             (project_id, run_id, criterion_key, category, severity, title, source_ref, expected, actual, result,
+              result_source, confidence, notes, evidence, position, created_at)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16)`,
+          [
+            r.projectId,
+            run.id,
+            f.criterionKey,
+            f.category,
+            f.severity,
+            f.title,
+            f.sourceRef,
+            f.expected,
+            f.actual,
+            f.result,
+            f.resultSource,
+            f.confidence,
+            f.notes,
+            JSON.stringify(f.evidence),
+            f.position,
+            r.now,
+          ],
+        );
+      }
+      const job = (
+        await c.query(
+          `insert into continuity_analysis_jobs
+             (project_id, run_id, attempt_id, analyzer, model, status, input_snapshot, input_asset_ids,
+              idempotency_key, next_run_at, max_attempts, batches_total, estimated_cost_usd, created_by, created_at)
+           values ($1, $2, $3, $4, $5, 'queued', $6::jsonb, $7::uuid[], $8, $9, $10, $11, $12, $13, $9)
+           returning *`,
+          [
+            r.projectId,
+            run.id,
+            r.attemptId,
+            input.job.analyzer,
+            input.job.model,
+            JSON.stringify(input.job.snapshot),
+            input.job.inputAssetIds,
+            input.job.idempotencyKey,
+            r.now,
+            input.job.maxAttempts,
+            input.job.snapshot.plan.batches.length,
+            input.job.estimate.maxUsd,
+            r.createdBy,
+          ],
+        )
+      ).rows[0] as Row;
+      await c.query(
+        `insert into continuity_analysis_costs
+           (project_id, run_id, job_id, analyzer, model, kind, amount_usd, expected_usd, usage, pricing_version, recorded_at)
+         values ($1, $2, $3, $4, $5, 'estimated', $6, $7, $8::jsonb, $9, $10)`,
+        [
+          r.projectId,
+          run.id,
+          job.id,
+          input.job.analyzer,
+          input.job.model,
+          input.job.estimate.maxUsd,
+          input.job.estimate.expectedUsd,
+          JSON.stringify(input.job.estimate.usage),
+          input.job.estimate.pricingVersion,
+          r.now,
+        ],
+      );
+      await c.query(
+        `insert into continuity_analysis_events (project_id, job_id, run_id, at, from_status, to_status, note)
+         values ($1, $2, $3, $4, null, 'queued', 'Submitted by user')`,
+        [r.projectId, job.id, run.id, r.now],
+      );
+      return { run: (await this.views(c, [run]))[0]!, job: mapAnalysisJob(job), duplicate: false };
+    });
+  }
+
+  async getAnalysisJob(jobId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query("select * from continuity_analysis_jobs where id = $1", [jobId]);
+      return r.rows[0] ? mapAnalysisJob(r.rows[0]) : null;
+    });
+  }
+
+  async listAttemptAnalysisJobs(attemptId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        "select * from continuity_analysis_jobs where attempt_id = $1 order by created_at desc",
+        [attemptId],
+      );
+      return r.rows.map(mapAnalysisJob);
+    });
+  }
+
+  async listActiveProjectAnalysisJobs(projectId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        `select * from continuity_analysis_jobs where project_id = $1 and status in (${activeList})`,
+        [projectId],
+      );
+      return r.rows.map(mapAnalysisJob);
+    });
+  }
+
+  async listAnalysisCosts(runId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        "select * from continuity_analysis_costs where run_id = $1 order by recorded_at",
+        [runId],
+      );
+      return r.rows.map(mapAnalysisCost);
+    });
+  }
+
+  async listAnalysisEvents(jobId: string): Promise<AnalysisEvent[]> {
+    return this.tx(async (c) => {
+      const r = await c.query("select * from continuity_analysis_events where job_id = $1 order by at, id", [
+        jobId,
+      ]);
+      return r.rows.map((e) => ({
+        id: String(e.id),
+        jobId: String(e.job_id),
+        runId: String(e.run_id),
+        at: iso(e.at)!,
+        fromStatus: e.from_status ? String(e.from_status) : null,
+        toStatus: String(e.to_status),
+        note: String(e.note ?? ""),
+      }));
+    });
+  }
+
+  async requestAnalysisCancel(jobId: string, now: string) {
+    return this.tx(async (c) => {
+      const cur = (await c.query("select * from continuity_analysis_jobs where id = $1 for update", [jobId]))
+        .rows[0];
+      if (!cur) return null;
+      const job = mapAnalysisJob(cur);
+      if (["succeeded", "failed", "cancelled", "cancel_requested"].includes(job.status)) return job;
+      if (job.status === "queued") {
+        assertAnalysisTransition("queued", "cancelled");
+        const r = await c.query(
+          `update continuity_analysis_jobs set status = 'cancelled', cancelled_at = $2, cancel_requested_at = $2,
+             lease_token = null, lease_owner = null, lease_expires_at = null where id = $1 returning *`,
+          [jobId, now],
+        );
+        await c.query(
+          `update continuity_runs set analysis_status = 'failed', analysis_error = 'Analysis cancelled before it started.',
+             completed_at = $2 where id = $1`,
+          [job.runId, now],
+        );
+        await c.query(
+          `insert into continuity_analysis_events (project_id, job_id, run_id, at, from_status, to_status, note)
+           values ($1, $2, $3, $4, 'queued', 'cancelled', 'Cancelled before it started')`,
+          [job.projectId, job.id, job.runId, now],
+        );
+        return mapAnalysisJob(r.rows[0]);
+      }
+      assertAnalysisTransition(job.status, "cancel_requested");
+      const r = await c.query(
+        "update continuity_analysis_jobs set status = 'cancel_requested', cancel_requested_at = $2 where id = $1 returning *",
+        [jobId, now],
+      );
+      await c.query(
+        `insert into continuity_analysis_events (project_id, job_id, run_id, at, from_status, to_status, note)
+         values ($1, $2, $3, $4, $5, 'cancel_requested', 'Cancellation requested')`,
+        [job.projectId, job.id, job.runId, now, job.status],
+      );
+      return mapAnalysisJob(r.rows[0]);
+    });
+  }
+
+  async analysisSpentSince(projectId: string | null, sinceIso: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        `select coalesce(sum(case
+                  when f.kind = 'actual' then f.amount_usd
+                  else e.amount_usd end), 0)::float8 as total
+           from continuity_analysis_costs e
+           left join continuity_analysis_costs f
+             on f.job_id = e.job_id and f.kind in ('actual', 'unknown')
+          where e.kind = 'estimated' and e.recorded_at >= $1::timestamptz
+            and ($2::uuid is null or e.project_id = $2::uuid)`,
+        [sinceIso, projectId],
+      );
+      return Number(r.rows[0].total);
     });
   }
 }

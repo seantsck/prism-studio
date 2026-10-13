@@ -220,6 +220,46 @@ const toFacts = (asset: Asset, p: MediaProbe): MediaFacts => ({
 });
 
 /**
+ * One finding per criterion: deterministic checks answered from probed media facts, everything else
+ * `unchecked` until an analyzer or a person answers. Pure given a probe.
+ */
+export function deterministicFindings(inputs: QaInputs, subject: Asset, probe: MediaProbe): NewFinding[] {
+  const pkg = inputs.pkg;
+  const deterministic = runDeterministicChecks(inputs.criteria, {
+    subject: toFacts(subject, probe),
+    subjectIsOriginal: inputs.subjectIsOriginal,
+    outputCount: inputs.outputCount,
+    adaptation: inputs.adaptation,
+    production: {
+      aspectRatio: pkg.style.aspectRatio || null,
+      durationMs: pkg.timing.durationMs > 0 ? pkg.timing.durationMs : null,
+      fps: pkg.generation.fps || null,
+      deliverySize: inputs.deliverySize,
+      expectsAudio: pkg.performance.some((p) => p.selectedTake?.audioAssetId),
+    },
+  });
+  const byKey = new Map(deterministic.map((r) => [r.criterionKey, r]));
+  return inputs.criteria.map((c) => {
+    const r = byKey.get(c.key);
+    return {
+      criterionKey: c.key,
+      category: c.category,
+      severity: c.severity,
+      title: c.title,
+      sourceRef: c.sourceRef,
+      expected: c.expected,
+      actual: r?.actual ?? "",
+      result: r?.result ?? "unchecked",
+      resultSource: r ? r.source : "none",
+      confidence: r?.confidence ?? null,
+      notes: r?.notes ?? "",
+      evidence: r?.evidence ?? {},
+      position: c.position,
+    };
+  });
+}
+
+/**
  * Creates a QA run: freezes criteria, references and subject; fills in the deterministic results; extracts the
  * review frames and contact sheet; then runs the analyzer (queued → running → complete|failed). Advisory only:
  * nothing here changes creative review state.
@@ -238,40 +278,7 @@ export async function runContinuityReview(args: {
   const bytes = await readVerified(subject, deps.storage);
   const probe = await deps.processor.probe(bytes);
 
-  const pkg = inputs.pkg;
-  const deterministic = runDeterministicChecks(inputs.criteria, {
-    subject: toFacts(subject, probe),
-    subjectIsOriginal: inputs.subjectIsOriginal,
-    outputCount: inputs.outputCount,
-    adaptation: inputs.adaptation,
-    production: {
-      aspectRatio: pkg.style.aspectRatio || null,
-      durationMs: pkg.timing.durationMs > 0 ? pkg.timing.durationMs : null,
-      fps: pkg.generation.fps || null,
-      deliverySize: inputs.deliverySize,
-      expectsAudio: pkg.performance.some((p) => p.selectedTake?.audioAssetId),
-    },
-  });
-  const byKey = new Map(deterministic.map((r) => [r.criterionKey, r]));
-
-  const findings: NewFinding[] = inputs.criteria.map((c) => {
-    const r = byKey.get(c.key);
-    return {
-      criterionKey: c.key,
-      category: c.category,
-      severity: c.severity,
-      title: c.title,
-      sourceRef: c.sourceRef,
-      expected: c.expected,
-      actual: r?.actual ?? "",
-      result: r?.result ?? "unchecked",
-      resultSource: r ? r.source : "none",
-      confidence: r?.confidence ?? null,
-      notes: r?.notes ?? "",
-      evidence: r?.evidence ?? {},
-      position: c.position,
-    };
-  });
+  const findings = deterministicFindings(inputs, subject, probe);
 
   const analyzer = deps.analyzer;
   const run = await deps.qa.createRun(

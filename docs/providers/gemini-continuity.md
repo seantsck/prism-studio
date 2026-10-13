@@ -1,0 +1,131 @@
+# Gemini continuity analyzer (Phase 2D)
+
+First REAL multimodal continuity analyzer, behind the provider-independent contract
+([continuity-analyzer-contract](../continuity-analyzer-contract.md)). Nothing Gemini-specific appears in
+criteria, plans, findings, the queue or the UI: it lives in `src/continuity/providers/gemini/`.
+
+> **The model does not decide what continuity should be.** Prism supplies the expected truth, the references,
+> the criterion, the severity and the media. The analyzer answers one question per criterion: _does this output
+> appear consistent with THIS expectation, based on THESE references?_
+
+## Verified against the official documentation (2026-10-13)
+
+| Item      | Value                                                                                                                                                                                                  |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Model     | `gemini-3.8-flash` — listed **stable** on https://ai.google.dev/gemini-api/docs/models                                                                                                                 |
+| SDK       | `@google/genai` **2.29.0** (npm `latest`, pinned), `ai.models.generateContent`                                                                                                                         |
+| Pricing   | $0.75 / 1M input, $3.75 / 1M output through 2026-12-31; $1.50 / $7.50 from 2027-01-01 (page updated 2026-10-09). Image and video input are billed at the text rate; thinking tokens at the output rate |
+| Config    | `src/continuity/providers/gemini/config.ts` — the only place model id, SDK pin and pricing live                                                                                                        |
+| API shape | The docs now show the newer Interactions API; Prism uses the SDK's stable `generateContent` (documented, `usageMetadata`, `responseJsonSchema`). Re-evaluate when Interactions stabilises              |
+
+Pricing is versioned configuration (`gemini-2026-10-13`), never scraped at runtime; the rate is selected by the
+analysis date (the 2027 step is encoded). An unknown model has **no** price ⇒ cost unknown ⇒ the spend gate blocks.
+
+## Environment
+
+```
+PRISM_STUDIO_CONTINUITY_ANALYZERS=mock,gemini   # which analyzers exist (default: mock)
+GEMINI_API_KEY=...                              # server/worker ONLY (GOOGLE_API_KEY also accepted)
+PRISM_STUDIO_GEMINI_ANALYSIS_MODEL=gemini-3.8-flash
+PRISM_STUDIO_GEMINI_THINKING_LEVEL=LOW          # MINIMAL|LOW|MEDIUM|HIGH (bounds thinking spend)
+PRISM_STUDIO_GEMINI_DIRECT_VIDEO=0              # direct video: architecture only, OFF
+PRISM_STUDIO_ALLOW_PAID_ANALYSIS=false          # the analysis spend gate (separate from PAID_GENERATION)
+PRISM_STUDIO_MAX_ANALYSIS_USD_PER_RUN=0.10      # server-side ceiling; unset = paid analysis blocked
+PRISM_STUDIO_MAX_ANALYSIS_USD_PER_DAY=          # optional global daily ceiling
+```
+
+The key never reaches the browser (a test scans routes/components), a job, a log, a manifest or a snapshot
+(`GEMINI_API_KEY` is in both secret redactors). The UI only receives analyzer **states**: `configured`,
+`missing_credential`, `disabled`, and `spend` on/off.
+
+## What Gemini sees
+
+For each request (batch), exactly:
+
+1. a **static system instruction** (`continuity-gemini-image-v1`): task, rules, injection/data boundaries,
+   result semantics. No project text is ever concatenated into it;
+2. one **DATA** JSON document: for each criterion `criterionId`, category, **expected value**, source — plus
+   the list of inputs (`inputId`, role, label, timestamp). Labelled untrusted data;
+3. the **reference images**, each preceded by its `inputId` label (ranked, see below);
+4. the **output images** (first / 25 % / 50 % / 75 % / last review frames, or the contact sheet if frames do
+   not exist) with timestamps;
+5. a closing instruction to answer every criterionId as JSON.
+
+It never sees: project/episode titles, scripts or dialogue (unless they are a criterion's expected value),
+other criteria, severity, approval state, signed URLs, Prism ids beyond `inputId`/`criterionId`.
+
+### Reference ranking (deterministic, roles matter)
+
+| Criterion                          | References, best first                                                       |
+| ---------------------------------- | ---------------------------------------------------------------------------- |
+| identity / character count         | approved **identity** refs → approved storyboard frame                       |
+| wardrobe / hair / makeup / jewelry | assigned **Look** refs → identity refs → storyboard                          |
+| location / weather / time of day   | **location** refs → (lighting) → storyboard → explicitly included prior shot |
+| lighting                           | lighting ref → location → storyboard → prior shot                            |
+| composition / camera               | storyboard → location (none required)                                        |
+
+Only references that Prism's reference-set builder **explicitly** included are eligible. A generated frame
+(including the output being judged) is never a reference: a bad generation cannot become identity truth. The
+previous approved shot appears only when it was explicitly added as an approved neighbour.
+
+### Batching, budget, bounding
+
+Criteria with identical visual inputs share one request (≤ 8 criteria); results stay per criterion. Per request:
+≤ 6 references and ≤ 5 output images. References that rank but do not fit are **recorded as omitted**
+(`input_budget`) and shown in the UI: never silently dropped. Images are bounded to 1024 px on the long edge
+(and 4 MB) before leaving Prism; the original Asset is untouched and the manifest records the size sent.
+
+## Structured, evidence-based results
+
+Response mode: `responseMimeType: application/json` + `responseJsonSchema`. Per criterion:
+`criterionId`, `result` (`pass|warn|fail|unchecked`), `confidence` (0..1 or null), `summary`,
+`evidence[]` (`input`, `timestampMs`, `observation`), `contradictions[]`, `limitations[]`.
+
+Prism-owned fields cannot come back (`.strict()` schema): severity, expected value, approval, aggregate score.
+Validation rejects unknown/duplicate criterion ids, evidence citing an input that was not in the request,
+out-of-range values and oversized responses. Criteria the model simply did not answer become **UNCHECKED**
+(`not_returned`): nothing is invented.
+
+- **One correction, then fail.** A structurally invalid answer triggers exactly one correction request
+  (validation errors + the previous answer, media re-sent); a second failure ends the job visibly
+  (`schema_invalid`). Correction usage is tracked separately.
+- **Refusals are not failures.** `promptFeedback.blockReason` or a safety finish reason makes the batch's
+  criteria **UNCHECKED** with `provider_refusal`. A continuity failure means a visible conflict with production
+  truth, never provider inability.
+- **Confidence is advisory** ("analysis confidence"), never presented as a calibrated probability.
+- **Identity wording** is about _visual consistency with the designated fictional reference_, not who someone is.
+
+## Retries and idempotency (the honest guarantee)
+
+`generateContent` documents **no idempotency key** and no request-dedup mechanism. Therefore:
+
+| Outcome                          | Policy                                                                                                                    |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| 429 / 503                        | provider did not process it: retried with backoff, ≤ 2 in-process, then one job-level requeue (only if nothing was spent) |
+| 500 / 502 / 504                  | not auto-retried; fails with the sanitized status                                                                         |
+| 401/403, 400/404/413/422         | permanent (`auth`, `invalid_input`)                                                                                       |
+| timeout / network                | **ambiguous**: may have been processed and billed ⇒ `outcome_unknown`, **never re-sent**; cost recorded `unknown`         |
+| lease expired after a send began | reclaimed job fails `outcome_unknown` (`provider_state != not_sent`) instead of spending again                            |
+
+SDK retries are disabled (`retryOptions.attempts = 1`) so a hidden retry cannot double-bill.
+
+## Cost
+
+Estimated before submission (worst case includes one correction per request): image tokens per the documented
+tiling (258 per ≤384 px image, else 258 per tile), prompt text ≈ chars/3, output at the configured ceiling.
+Actual cost is derived from `usageMetadata` (`promptTokenCount`, `candidatesTokenCount`, `thoughtsTokenCount`);
+missing usage ⇒ **unknown**, never guessed. Records live in `continuity_analysis_costs`, separate from
+`generation_costs` ([continuity-costs](../continuity-costs.md)).
+
+## Files API and retention
+
+Direct video (OFF by default) larger than 12 MB goes through the Files API; smaller is inline. Provider files are
+**temporary operational copies**: their names are stored on the job (`provider_files`) and deleted best-effort
+after the analysis (`deleted` / `cleanup_failed`; a failed delete never invalidates the analysis). The provider
+auto-deletes after 48 h; uploaded files cannot be downloaded back. Private Prism assets are never made public.
+Image-set analysis sends bounded inline copies and creates no provider-side file.
+
+## Not yet live
+
+Phase 2D built and tested everything against a **fake transport**; no Gemini request has been made. The first
+live smoke needs explicit approval ([continuity-costs](../continuity-costs.md) → "Live smoke").

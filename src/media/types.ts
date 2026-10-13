@@ -115,6 +115,8 @@ export interface MediaProcessor {
   cropVideo(bytes: Uint8Array, rect: PixelRect): Promise<MediaOutput>;
   trimVideo(bytes: Uint8Array, durationMs: number): Promise<MediaOutput>;
   scaleVideo(bytes: Uint8Array, width: number, height: number): Promise<MediaOutput>;
+  /** Scales a still image to exactly width×height (PNG out). Used to bound analyzer inputs; originals are kept. */
+  scaleImage(bytes: Uint8Array, width: number, height: number): Promise<MediaOutput>;
   /** Crop and/or pad and/or trim in ONE re-encode (a single generation of quality loss). */
   conform(bytes: Uint8Array, spec: ConformSpec): Promise<MediaOutput>;
   generateThumbnail(bytes: Uint8Array, opts?: { atMs?: number; width?: number }): Promise<MediaOutput>;

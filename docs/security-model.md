@@ -116,3 +116,17 @@ These are known and unmitigated unless noted.
     keep ffmpeg patched and consider a separate low-privilege processing host for hostile-input deployments.
 18. **QA rows are owner-scoped like everything else** (RLS on `asset_derivations`, `attempt_deliveries`,
     `continuity_*`); the generation worker role has no privileges on them (`db:media-qa`, `db:worker-role`).
+19. **A second least-privilege role exists** (`prism_continuity_worker`, migrations 0022–0024): no access to
+    creative content, overrides, approvals or generation tables; reads only assets named by an active frozen job;
+    writes execution state, normalized findings and the final cost. Proven with its real login
+    (`db:continuity-analysis`: 72 checks). It uses the same project-wide worker Storage secret as the generation
+    worker for READ access to the private bucket (residual risk; scope it to the worker host).
+20. **External analysis sends private media to a third party** (Gemini) when explicitly enabled and acknowledged:
+    bounded copies of references/output frames and the production criteria text. The manifest records what was
+    sent; nothing is made public; provider-side files (direct video) are deleted best-effort and expire after 48 h.
+    Prompt-injection controls: static system instruction, production text only as clearly bounded DATA, text inside
+    media declared untrusted, strict schema validation, no provider-supplied severity/approval.
+21. **A paid analysis can be ambiguous** (timeout after the request left): Gemini documents no idempotency key,
+    so Prism records `outcome_unknown` and never re-sends automatically; the user can start a new analysis.
+22. **Analysis credentials**: `GEMINI_API_KEY` is server/worker only, redacted from logs, absent from jobs,
+    manifests, snapshots and the browser bundle (tests); a key alone never enables spend.

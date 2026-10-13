@@ -1,4 +1,13 @@
 import type { Asset } from "@/domain/schemas";
+import type { AnalysisJobStatus, ProviderState } from "@/domain/continuity/analysis/job-state";
+import type {
+  AnalysisErrorCategory,
+  AnalysisUsage,
+  ContinuityAnalysisInput,
+  ContinuityAnalysisPlan,
+  ExternalMediaManifest,
+  NormalizedFinding,
+} from "@/domain/continuity/analysis/types";
 import type { ContinuityCategory, ContinuityResult, ContinuitySeverity } from "@/domain/continuity/model";
 
 /**
@@ -87,6 +96,12 @@ export interface ContinuityRun {
   criteriaFingerprint: string;
   referenceFingerprint: string;
   referenceSet: Record<string, unknown>;
+  /** Phase 2D: frozen analysis plan, external-media manifest and prompt/rubric/model identity (null before 2D). */
+  analysisPlan: ContinuityAnalysisPlan | null;
+  externalManifest: ExternalMediaManifest | null;
+  promptVersion: string | null;
+  rubricVersion: string | null;
+  model: string | null;
   createdBy: string | null;
   createdAt: string;
   completedAt: string | null;
@@ -140,10 +155,209 @@ export type NewRun = Omit<
   | "finalizedAt"
   | "finalizedBy"
   | "finalizeNote"
+  | "analysisPlan"
+  | "externalManifest"
+  | "promptVersion"
+  | "rubricVersion"
+  | "model"
   | "analysisError"
-> & { now: string };
+> & {
+  now: string;
+  analysisPlan?: ContinuityAnalysisPlan | null;
+  externalManifest?: ExternalMediaManifest | null;
+  promptVersion?: string | null;
+  rubricVersion?: string | null;
+  model?: string | null;
+};
 
 export type NewFinding = Omit<ContinuityFinding, "id" | "runId" | "projectId" | "createdAt">;
+
+// ───────────────────────── analysis jobs (Phase 2D) ─────────────────────────
+
+export interface AnalysisJob {
+  id: string;
+  projectId: string;
+  runId: string;
+  attemptId: string;
+  analyzer: string;
+  model: string;
+  status: AnalysisJobStatus;
+  inputSnapshot: ContinuityAnalysisInput;
+  inputAssetIds: string[];
+  idempotencyKey: string;
+  nextRunAt: string;
+  attemptCount: number;
+  maxAttempts: number;
+  leaseOwner: string | null;
+  leaseToken: string | null;
+  leaseExpiresAt: string | null;
+  heartbeatAt: string | null;
+  providerState: ProviderState;
+  providerRef: string | null;
+  batchesTotal: number;
+  batchesDone: number;
+  correctionCount: number;
+  estimatedCostUsd: number | null;
+  actualCostUsd: number | null;
+  providerFiles: Array<{ ref: string; state: "uploaded" | "deleted" | "cleanup_failed" }>;
+  lastErrorCode: string | null;
+  lastErrorCategory: AnalysisErrorCategory | null;
+  lastErrorMessage: string;
+  cancelRequestedAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  failedAt: string | null;
+  cancelledAt: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AnalysisCost {
+  id: string;
+  projectId: string;
+  runId: string;
+  jobId: string;
+  analyzer: string;
+  model: string;
+  kind: "estimated" | "actual" | "unknown";
+  amountUsd: number | null;
+  expectedUsd: number | null;
+  currency: string;
+  usage: Record<string, unknown>;
+  pricingVersion: string;
+  recordedAt: string;
+}
+
+export interface AnalysisEvent {
+  id: string;
+  jobId: string;
+  runId: string;
+  at: string;
+  fromStatus: string | null;
+  toStatus: string;
+  note: string;
+}
+
+export interface NewAnalysisRun {
+  run: NewRun;
+  findings: NewFinding[];
+  job: {
+    idempotencyKey: string;
+    analyzer: string;
+    model: string;
+    snapshot: ContinuityAnalysisInput;
+    inputAssetIds: string[];
+    maxAttempts: number;
+    estimate: {
+      maxUsd: number | null;
+      expectedUsd: number | null;
+      usage: Record<string, unknown>;
+      pricingVersion: string;
+    };
+  };
+  limits: { maxActivePerProject: number };
+}
+
+export interface AnalysisJobPatch {
+  status?: AnalysisJobStatus;
+  nextRunAt?: string;
+  attemptCount?: number;
+  providerState?: ProviderState;
+  providerRef?: string | null;
+  batchesTotal?: number;
+  batchesDone?: number;
+  correctionCount?: number;
+  actualCostUsd?: number | null;
+  providerFiles?: AnalysisJob["providerFiles"];
+  lastErrorCode?: string | null;
+  lastErrorCategory?: AnalysisErrorCategory | null;
+  lastErrorMessage?: string;
+  startedAt?: string | null;
+  releaseLease?: boolean;
+  note?: string;
+}
+
+export interface AnalysisCostRecord {
+  kind: "actual" | "unknown";
+  amountUsd: number | null;
+  usage: AnalysisUsage;
+  pricingVersion: string;
+  analyzer: string;
+  model: string;
+}
+
+export interface FinalizeAnalysisSuccess {
+  jobId: string;
+  leaseToken: string;
+  runId: string;
+  /** Every criterion the analysis was asked about, including those it could not judge (as unchecked). */
+  findings: NormalizedFinding[];
+  cost: AnalysisCostRecord;
+  providerRef: string | null;
+  correctionCount: number;
+  note: string;
+  now: string;
+}
+
+export interface FinalizeAnalysisFailure {
+  jobId: string;
+  leaseToken: string;
+  runId: string;
+  errorCode: string;
+  errorCategory: AnalysisErrorCategory;
+  errorMessage: string;
+  /** The user cancelled: the job ends `cancelled` (not `failed`). */
+  cancelled?: boolean;
+  /** Spend that may have occurred before the failure (usage of calls that returned), or unknown. */
+  cost: AnalysisCostRecord | null;
+  now: string;
+}
+
+export interface ClaimedAnalysisJob {
+  job: AnalysisJob;
+}
+
+export interface InputAssetRef {
+  assetId: string;
+  objectPath: string | null;
+  bucket: string | null;
+  storageProvider: string;
+  mime: string | null;
+  byteSize: number | null;
+  checksum: string | null;
+  width: number | null;
+  height: number | null;
+}
+
+/** Worker-side persistence for continuity analysis (narrow authority: see migration 0022). */
+export interface AnalysisWorkerStore {
+  claim(opts: {
+    workerId: string;
+    now: string;
+    leaseMs: number;
+    limit: number;
+  }): Promise<ClaimedAnalysisJob[]>;
+  heartbeat(jobId: string, leaseToken: string, now: string, leaseMs: number): Promise<boolean>;
+  update(jobId: string, leaseToken: string, patch: AnalysisJobPatch, now: string): Promise<AnalysisJob>;
+  /** Marks the run `running` (queued → running). */
+  startRun(runId: string, now: string): Promise<void>;
+  /** The storage reference of an asset named by this job's frozen snapshot (null for anything else). */
+  findInputAsset(jobId: string, assetId: string): Promise<InputAssetRef | null>;
+  /** One transaction: apply findings, run → complete, record the final cost, job → succeeded. */
+  finalizeSuccess(input: FinalizeAnalysisSuccess): Promise<AnalysisJob>;
+  /** One transaction: run → failed, optional cost, job → failed. */
+  finalizeFailure(input: FinalizeAnalysisFailure): Promise<AnalysisJob>;
+  /** Recorded analysis spend since a time (actual where known, else the estimate ceiling): the daily ceiling. */
+  spentSince(sinceIso: string): Promise<number>;
+}
+
+export class AnalysisLeaseLostError extends Error {
+  constructor(jobId: string) {
+    super(`Lease on continuity analysis job ${jobId} was lost`);
+    this.name = "AnalysisLeaseLostError";
+  }
+}
 
 export class MediaQaError extends Error {
   constructor(
@@ -223,4 +437,22 @@ export interface MediaQaRepository {
     runId: string,
     input: { by: string | null; note: string; now: string },
   ): Promise<ContinuityRun | null>;
+
+  // ── analysis jobs ──
+  /**
+   * Atomic: validates limits, then writes the run (frozen plan + manifest) + findings + queued job + estimated
+   * cost + first event in ONE transaction. Idempotent on `job.idempotencyKey`.
+   */
+  createAnalysisRunWithJob(
+    input: NewAnalysisRun,
+  ): Promise<{ run: ContinuityRunView; job: AnalysisJob; duplicate: boolean }>;
+  getAnalysisJob(jobId: string): Promise<AnalysisJob | null>;
+  listAttemptAnalysisJobs(attemptId: string): Promise<AnalysisJob[]>;
+  listActiveProjectAnalysisJobs(projectId: string): Promise<AnalysisJob[]>;
+  listAnalysisCosts(runId: string): Promise<AnalysisCost[]>;
+  listAnalysisEvents(jobId: string): Promise<AnalysisEvent[]>;
+  /** queued → cancelled locally; otherwise cancel_requested (the worker stops before the next request). */
+  requestAnalysisCancel(jobId: string, now: string): Promise<AnalysisJob | null>;
+  /** Analysis spend since a time: actual where known, otherwise the estimate ceiling (never under-counted). */
+  analysisSpentSince(projectId: string | null, sinceIso: string): Promise<number>;
 }

@@ -181,18 +181,19 @@ suite("FfmpegMediaProcessor", () => {
   });
 
   it("rejects corrupt media with a clear error and no leftover temp directories", async () => {
-    const before = readdirSync(tmpdir()).filter(
-      (n) => n.startsWith("prism-media-") && !n.includes("fixtures"),
-    ).length;
-    const junk = new Uint8Array([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, ...new Array(200).fill(0x42)]);
-    await expect(processor.probe(junk)).rejects.toBeInstanceOf(MediaError);
-    await expect(processor.conform(junk, { crop: null, pad: null, trimMs: 500 })).rejects.toBeInstanceOf(
-      MediaError,
-    );
-    const after = readdirSync(tmpdir()).filter(
-      (n) => n.startsWith("prism-media-") && !n.includes("fixtures"),
-    ).length;
-    expect(after).toBe(before);
+    // A private temp root: other test files run ffmpeg concurrently in the shared OS temp directory.
+    const root = mkdtempSync(path.join(tmpdir(), "prism-media-leak-check-"));
+    try {
+      const isolated = new FfmpegMediaProcessor({ tempRoot: root, limits: { timeoutMs: 60_000 } });
+      const junk = new Uint8Array([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, ...new Array(200).fill(0x42)]);
+      await expect(isolated.probe(junk)).rejects.toBeInstanceOf(MediaError);
+      await expect(isolated.conform(junk, { crop: null, pad: null, trimMs: 500 })).rejects.toBeInstanceOf(
+        MediaError,
+      );
+      expect(readdirSync(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("rejects an unsupported container before running any tool", async () => {

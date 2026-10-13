@@ -43,14 +43,15 @@ Stated plainly; none of these are implied to exist elsewhere in the docs.
 
 ## Phase 2 — generation
 
-| Slice  | Scope                                                                                                                                                                                        | Status      |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| **2A** | Provider-independent generation domain, capability + compatibility engine, PromptPlan, attempt/job split, Postgres queue + worker, output ingestion, review, cost records, **MockProvider**  | implemented |
-| 2B     | Least-privilege worker + first real provider (Runway Gen-4.5), live-spend gate; live smoke test passed                                                                                       | implemented |
-| **2C** | Framing adaptation plan, provider-canvas planning + crop overlay, deterministic delivery conform (ffmpeg), derived-asset lineage, delivery masters, continuity QA foundation + Mock analyzer | implemented |
-| 2D     | First real multimodal continuity analyzer (behind the analyzer contract); frame/contact-sheet prompts, thresholds, cost recording                                                            | next        |
-| 2E     | Model routing / comparison (capability + cost + history + continuity results aware)                                                                                                          | —           |
-| 2F     | Cost and budget intelligence (per shot / episode / project, generation + analysis + processing)                                                                                              | —           |
+| Slice  | Scope                                                                                                                                                                                        | Status                     |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| **2A** | Provider-independent generation domain, capability + compatibility engine, PromptPlan, attempt/job split, Postgres queue + worker, output ingestion, review, cost records, **MockProvider**  | implemented                |
+| 2B     | Least-privilege worker + first real provider (Runway Gen-4.5), live-spend gate; live smoke test passed                                                                                       | implemented                |
+| **2C** | Framing adaptation plan, provider-canvas planning + crop overlay, deterministic delivery conform (ffmpeg), derived-asset lineage, delivery masters, continuity QA foundation + Mock analyzer | implemented                |
+| **2D** | Real multimodal continuity analyzer: queued analysis jobs + dedicated worker role, Gemini adapter (fake transport), strict evidence schema, analysis spend gate + ledger, evidence UI        | implemented (no live call) |
+| 2D.1   | Live smoke + direct-video temporal QA refinement, calibration on real runs                                                                                                                   | next                       |
+| 2E     | Multi-model generation routing + attempt comparison (capability + cost + history + continuity aware)                                                                                         | —                          |
+| 2F     | Production editor/timeline; delivery-master consumption; project budgets and cost intelligence                                                                                               | —                          |
 
 Phase 2A details: [generation-architecture](generation-architecture.md), [generation-jobs](generation-jobs.md),
 [provider-contract](provider-contract.md), [adding-a-provider](providers/adding-a-provider.md),
@@ -107,7 +108,23 @@ webhook endpoints (architecture only); realtime push instead of status polling; 
 - **One QA run's analysis is synchronous** in the server action; the schema supports queued/running/failed for
   a future background analyzer.
 
-## Phase 3 — vision QA at scale (after 2D)
+### Known gaps (Phase 2D)
+
+- **No live Gemini request has ever been made.** Everything is verified against the SDK types and a fake
+  transport; the first paid smoke needs explicit approval ([continuity-costs](continuity-costs.md)).
+- **Credential unverified**: no zero-cost verification call is made (none is documented as free).
+- **Direct video is architecture only** (OFF by default; fake-transport tests; no live use). Temporal
+  criteria stay unchecked until it is enabled and calibrated.
+- **Batching is conservative**: criteria with different reference sets get separate requests (identity vs
+  wardrobe), re-sending the output frames; merging would cut cost but blur which references judged which criterion.
+- **Global spend ceilings only**; per-project budgets are a follow-up.
+- **One real analyzer is wired** (Gemini); multi-analyzer comparison is a per-attempt run table, not a benchmark.
+- **The continuity worker shares the project-wide Storage secret** with the generation worker (read-only use).
+- **Auto-run after conform is intentionally absent.**
+- **Mock outputs/frames are fixtures**, so semantic results in demo mode only demonstrate flow, not pictures.
+- **Conform is still synchronous**; the analysis queue shape could carry media jobs later.
+
+## Phase 3 — vision QA at scale (after 2D.1)
 
 - Real analyzers (Gemini / OpenAI / Claude vision, face-identity, embedding models) behind the 2C contract.
 - Preflight gains post-generation rules; rejection reasons auto-suggested from findings.

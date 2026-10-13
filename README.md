@@ -17,7 +17,7 @@ Two principles drive the design:
 
 Production domain: `studio.prismsuite.io` (not deployed). Standalone repo, separate from PrismSuite.
 
-## Status (Phase 2C)
+## Status (Phase 2D)
 
 Planning, performance, storyboard and animatic are implemented, on two persistence backends:
 
@@ -39,6 +39,15 @@ approves. See [framing-adaptation](docs/framing-adaptation.md), [media-processin
 [delivery-conform](docs/delivery-conform.md), [continuity-qa](docs/continuity-qa.md) and
 [continuity-analyzer-contract](docs/continuity-analyzer-contract.md). Conform/review frames need **ffmpeg** on
 the app server's PATH (optional: everything else works without it).
+
+**Real continuity analysis (Phase 2D)**: automated analysis is durable, queued work. A frozen
+`ContinuityAnalysisInput` (criteria with expected values, ranked references, review frames, versions) is executed
+by a dedicated least-privilege **continuity worker**, with a provider-independent analyzer contract, a strict
+evidence-based result schema, a separate analysis spend gate and cost ledger, and a Gemini (`gemini-3.8-flash`)
+adapter built and tested against a fake transport. **No live Gemini request has been made**; paid analysis is
+off by default. The model never decides what continuity should be and never approves anything. See
+[continuity-analysis-jobs](docs/continuity-analysis-jobs.md), [providers/gemini-continuity](docs/providers/gemini-continuity.md)
+and [continuity-costs](docs/continuity-costs.md).
 
 ## Quick start: memory mode
 

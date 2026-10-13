@@ -44,3 +44,21 @@ A real analyzer is a new class registered in `getContinuityAnalyzer()` (server) 
 
 Because runs freeze analyzer id/version, kind and inputs, results from different analyzers remain comparable and
 auditable. Cost of analysis would be recorded separately from generation cost (Phase 2F).
+
+## Phase 2D: the real analyzer contract
+
+`src/continuity/analysis/provider.ts` — `ContinuityAnalysisProvider`: `capabilities()`, `modes()`
+(`image_set`, `direct_video`), `videoCapabilities()`, `plannerView()`, `estimate(input)`, `actualCost(calls)`,
+`analyzeBatch({ batch, input, media, ctx })`, optional `cleanupFiles(refs)`. The Phase 2C `ContinuityAnalyzer`
+remains for simple synchronous analyzers; `MockAnalysisProvider` is the free implementation of the new contract
+and shares the contract suite with `GeminiAnalysisProvider` (one finding per criterion, enums valid, evidence only
+from the request's own inputs, deterministic, estimate non-negative).
+
+Capability vocabulary (unchanged ids → the product's names): `image_identity` = identity visual similarity,
+`wardrobe` = wardrobe/hair/makeup/jewelry, `object_presence` = props, `scene_match` = location/set/weather,
+`character_count`, `composition` = composition/camera, `lighting` = lighting/time of day, `video_temporal` =
+action/screen direction/eyelines over time, `lip_sync`, `audio`. An analyzer lists only what it can really judge.
+
+Result schema (strict): `criterionId`, `result` (pass|warn|fail|unchecked), `confidence`, `summary`,
+`evidence[]`, `contradictions[]`, `limitations[]`. Severity, expected value, approval and aggregate scores are
+Prism-owned and rejected if returned. See [providers/gemini-continuity](providers/gemini-continuity.md).

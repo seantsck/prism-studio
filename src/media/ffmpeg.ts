@@ -615,6 +615,48 @@ export class FfmpegMediaProcessor implements MediaProcessor {
     return { bytes, mime, extension, probe };
   }
 
+  async scaleImage(bytes: Uint8Array, width: number, height: number): Promise<MediaOutput> {
+    if (
+      !Number.isInteger(width) ||
+      !Number.isInteger(height) ||
+      width < 2 ||
+      height < 2 ||
+      width % 2 ||
+      height % 2
+    ) {
+      throw new MediaError("invalid_parameters", "Scale dimensions must be even positive integers.");
+    }
+    if (width * height > this.limits.maxPixels) {
+      throw new MediaError("too_large", "The requested size exceeds the processing limit.");
+    }
+    const format = this.checkInput(bytes);
+    if (format !== "png" && format !== "jpeg" && format !== "webp") {
+      throw new MediaError("unsupported_media", "Only still images can be scaled here.");
+    }
+    return this.withDir(async (dir) => {
+      const inFile = path.join(dir, `in.${EXTENSION[format]}`);
+      await writeFile(inFile, bytes);
+      await this.probeFile(inFile, format, bytes.length, dir);
+      const out = path.join(dir, "out.png");
+      await this.exec(
+        this.ffmpeg,
+        [
+          ...this.baseInput(format, inFile),
+          "-vf",
+          `scale=${width}:${height}:flags=bicubic`,
+          "-frames:v",
+          "1",
+          "-fflags",
+          "+bitexact",
+          "-y",
+          out,
+        ],
+        { cwd: dir, timeoutMs: this.limits.timeoutMs },
+      );
+      return this.finish(dir, out, "png", "image/png", "png");
+    });
+  }
+
   async cropVideo(bytes: Uint8Array, rect: PixelRect): Promise<MediaOutput> {
     return this.conform(bytes, { crop: rect, pad: null, trimMs: null });
   }

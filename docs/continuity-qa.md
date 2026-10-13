@@ -67,3 +67,23 @@ queued analysis, findings, scores, overrides, re-runs and the UI. See [continuit
 
 Project overview: shots, generated, continuity reviewed, critical failures, creative approved. Shot list shows
 `PREP · GENERATED · QA … · APPROVED` as separate badges. One narrow query (latest run per attempt) feeds both.
+
+## Automated analysis (Phase 2D)
+
+Three things are now shown separately: **deterministic QA** (metadata checks), **semantic analysis** (a queued
+job run by a worker; none / queued / analysing / complete / failed) and **human review** (overrides + close-out).
+
+- **Plan first** (`buildAnalysisPlan`): every criterion is routed to analyzer (image set / direct video),
+  deterministic, manual, `unsupported` (analyzer does not declare the capability) or `no_media`. Unsupported and
+  no-media criteria stay **UNCHECKED with the reason**, never PASS.
+- **Findings carry evidence**: observations citing exact inputs (reference image / output frame / contact sheet /
+  video + timestamp), contradictions, limitations, analyzer/model, and "analysis confidence (advisory)".
+  The page shows expected references next to the output evidence frames.
+- **Grouped** by severity (critical / major / minor) then result (fail, warn, pass, unchecked).
+- **The AI result is immutable**; a reviewer appends an override (kept with its note and time). Re-running creates a
+  new run; the run table compares analyzer, model, cost, critical fails, warnings and criteria evaluated.
+- **Freshness** is unchanged (output / criteria / references); a changed prompt or rubric version only
+  recommends a re-run.
+- **Privacy**: the run records an **external media manifest** (which assets, checksums, sizes, sent / not sent
+  and why) and the page states what the external analyzer received.
+  See [continuity-analysis-jobs](continuity-analysis-jobs.md) and [providers/gemini-continuity](providers/gemini-continuity.md).
