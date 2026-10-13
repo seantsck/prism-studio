@@ -35,11 +35,24 @@ await assertDevUserExists(pool, dev);
 // The managed `postgres` role must be allowed to SET ROLE to the worker role to impersonate it in tests
 // (PostgreSQL 16+ creators get ADMIN OPTION only). This grants the admin the ability to act as the worker;
 // it adds no privilege to the worker role itself.
-try {
-  await pool.query(`grant ${WORKER_ROLE} to current_user with set true`);
-} catch {
-  await pool.query(`grant ${WORKER_ROLE} to current_user`);
+// REAL-LOGIN mode (default when PRISM_STUDIO_WORKER_DB_URL is set; force the impersonation path with
+// `--set-role`): every worker statement runs on a genuine connection authenticated AS the worker role, so no
+// SET ROLE and no admin credential is involved in the worker's own operations.
+const workerUrl = process.env.PRISM_STUDIO_WORKER_DB_URL;
+const REAL_LOGIN = Boolean(workerUrl) && !process.argv.includes("--set-role");
+if (!REAL_LOGIN) {
+  try {
+    await pool.query(`grant ${WORKER_ROLE} to current_user with set true`);
+  } catch {
+    await pool.query(`grant ${WORKER_ROLE} to current_user`);
+  }
 }
+const workerPool = REAL_LOGIN
+  ? new pg.Pool({ connectionString: workerUrl, ssl: { rejectUnauthorized: false }, max: 4 })
+  : pool;
+console.log(
+  `worker connection: ${REAL_LOGIN ? "REAL LOGIN (PRISM_STUDIO_WORKER_DB_URL)" : "SET ROLE (impersonation)"}`,
+);
 
 const results: Array<[string, boolean, string]> = [];
 const check = (name: string, ok: boolean, detail = "") => results.push([name, ok, detail]);
@@ -53,8 +66,8 @@ const config = readGenerationConfig(env);
 const registry = createRegistry(env, config);
 const admin = new AdminRepository(pool, dev.id);
 const ownerGen = new PostgresGenerationData(pool, rlsPreamble({ sub: dev.id }));
-const WORKER_PREAMBLE = `begin; set local role ${WORKER_ROLE}`;
-const workerStore = new PostgresGenerationData(pool, WORKER_PREAMBLE);
+const WORKER_PREAMBLE = REAL_LOGIN ? "begin" : `begin; set local role ${WORKER_ROLE}`;
+const workerStore = new PostgresGenerationData(workerPool, WORKER_PREAMBLE);
 
 const sinkRoot = mkdtempSync(path.join(tmpdir(), "prism-wrole-"));
 const sink = new LocalDiskSink(sinkRoot);
@@ -62,7 +75,7 @@ const createdAttemptIds: string[] = [];
 
 /** One statement as the worker role, in its own transaction (always rolled back). */
 async function asWorker(sql: string, params: unknown[] = []) {
-  const c = await pool.connect();
+  const c = await workerPool.connect();
   try {
     await c.query(WORKER_PREAMBLE);
     const r = await c.query(sql, params);
@@ -124,6 +137,14 @@ try {
     "select current_user as u, (select rolbypassrls from pg_roles where rolname = current_user) as bypass, (select rolsuper from pg_roles where rolname = current_user) as su",
   );
   check("runs as the dedicated role", who.rows[0]?.u === WORKER_ROLE, JSON.stringify(who.rows[0]));
+  if (REAL_LOGIN) {
+    const id = await asWorker("select current_user as u, session_user as s");
+    check(
+      "REAL LOGIN: current_user = session_user = prism_generation_worker",
+      id.rows[0]?.u === WORKER_ROLE && id.rows[0]?.s === WORKER_ROLE,
+      JSON.stringify(id.rows[0]),
+    );
+  }
   check(
     "role is not superuser and not BYPASSRLS",
     who.rows[0]?.bypass === false && who.rows[0]?.su === false,
@@ -255,6 +276,36 @@ try {
     [],
     /permission denied/i,
   );
+  await mustFail(
+    "cannot alter storyboard frames (creative truth)",
+    "update storyboard_frames set approved = approved",
+  );
+  // CREATE DATABASE cannot run inside a transaction block: issue it on its own (autocommit).
+  {
+    let denied = "";
+    try {
+      await workerPool.query("create database prism_worker_probe_db");
+    } catch (e) {
+      denied = (e as Error).message;
+    }
+    check(
+      "cannot create a database",
+      /permission denied/i.test(denied),
+      denied || "statement unexpectedly succeeded",
+    );
+  }
+  await mustFail(
+    "cannot drop roles",
+    "drop role prism_worker_probe_role",
+    [],
+    /permission denied|does not exist/i,
+  );
+  await mustFail("cannot truncate generation tables", "truncate generation_jobs", [], /permission denied/i);
+  await mustFail("cannot truncate attempts", "truncate generation_attempts", [], /permission denied/i);
+  await mustFail(
+    "cannot alter the migration ledger",
+    "insert into public.prism_migrations (name) values ('x')",
+  );
   await mustFail("cannot disable RLS", "alter table assets disable row level security");
   await mustFail(
     "cannot insert a non-generated asset",
@@ -347,6 +398,7 @@ try {
     if (assets.length) await pool.query("delete from assets where id = any($1::uuid[])", [assets]);
   }
   rmSync(sinkRoot, { recursive: true, force: true });
+  if (REAL_LOGIN) await workerPool.end();
 }
 
 let failed = 0;

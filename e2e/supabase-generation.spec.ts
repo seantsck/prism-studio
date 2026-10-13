@@ -22,8 +22,11 @@ const tsx = (script: string, args: string[]) =>
       NODE_ENV: "test",
       // Dev-only, explicit: the test worker signs in as the test user instead of holding a secret key,
       // and runs through the least-privilege DB role (SET ROLE on the admin connection, no password).
-      PRISM_STUDIO_WORKER_DEV_STORAGE: "1",
-      PRISM_STUDIO_WORKER_DEV_ASSUME_ROLE: "1",
+      // PRISM_STUDIO_E2E_REAL_WORKER=1 uses the provisioned worker login + worker Storage secret instead
+      // (no SET ROLE, no admin DB URL, no test-user storage).
+      ...(process.env.PRISM_STUDIO_E2E_REAL_WORKER === "1"
+        ? {}
+        : { PRISM_STUDIO_WORKER_DEV_STORAGE: "1", PRISM_STUDIO_WORKER_DEV_ASSUME_ROLE: "1" }),
     },
     encoding: "utf8",
     timeout: 240_000,

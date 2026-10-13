@@ -95,19 +95,17 @@ console.log(`DB role:           ${WORKER_ROLE} — ${dbMode}`);
 console.log(`Supabase project:  ${PRISM_STUDIO_REF}`);
 console.log(`Providers enabled: ${config.enabledProviders.join(", ") || "(none)"}`);
 for (const m of available) {
-  const state = m.available
-    ? "configured"
-    : !m.enabled
-      ? "disabled"
-      : `missing credential (${m.missingConfig.length})`;
-  console.log(`  ${m.provider}/${m.modelId}: ${state}`);
+  const credential =
+    m.kind === "mock" ? "n/a (free)" : m.missingConfig.length === 0 ? "configured" : "MISSING";
+  console.log(
+    `  ${m.provider}/${m.modelId}: ${m.enabled ? "enabled" : "disabled"}, credential ${credential}${
+      m.kind === "real" && !m.paidGenerationEnabled ? ", paid generation OFF" : ""
+    }${m.available ? " → usable" : ""}`,
+  );
 }
+console.log(`Paid generation:   ${config.paid.enabled ? "ENABLED" : "disabled"}`);
 console.log(
-  `Paid generation:   ${config.paid.enabled ? "ENABLED" : "disabled"}${
-    config.paid.enabled
-      ? ` (max $${config.paid.maxUsd ?? "— not set: paid generation is blocked"} per generation)`
-      : ""
-  }`,
+  `Max generation spend: ${config.paid.maxUsd == null ? "not set (paid generation blocked)" : `$${config.paid.maxUsd.toFixed(2)}`}`,
 );
 
 const store = new PostgresGenerationData(pool, preamble);
