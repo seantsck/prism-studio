@@ -29,6 +29,8 @@ export interface UsageCall {
   inputTokens: number | null;
   outputTokens: number | null;
   thoughtsTokens: number | null;
+  /** Subset of inputTokens served from the provider cache (providers that report it). */
+  cachedInputTokens?: number | null;
 }
 
 export interface BatchOutcome {

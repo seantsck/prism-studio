@@ -24,11 +24,16 @@ export default defineConfig({
       PRISM_STUDIO_DEV_GENERATION_TICK: "1",
       // Continuity analysis: the free Mock analyzer runs; Gemini is listed but has NO credential and paid
       // analysis stays off, so no E2E can ever reach an external analyzer even if .env.local holds a key.
-      PRISM_STUDIO_CONTINUITY_ANALYZERS: "mock,gemini",
+      PRISM_STUDIO_CONTINUITY_ANALYZERS: "mock,gemini,openai",
       GEMINI_API_KEY: "",
       GOOGLE_API_KEY: "",
-      PRISM_STUDIO_ALLOW_PAID_ANALYSIS: "false",
-      PRISM_STUDIO_MAX_ANALYSIS_USD_PER_RUN: "",
+      // OpenAI runs against a deterministic in-memory transport (PRISM_STUDIO_ANALYSIS_TRANSPORT=fake, memory
+      // mode only): the placeholder key is not a credential and no request can leave the process. The spend gate
+      // is real: a ceiling is required and the analysis must be acknowledged.
+      OPENAI_API_KEY: "e2e-placeholder-not-a-credential",
+      PRISM_STUDIO_ANALYSIS_TRANSPORT: "fake",
+      PRISM_STUDIO_ALLOW_PAID_ANALYSIS: "true",
+      PRISM_STUDIO_MAX_ANALYSIS_USD_PER_RUN: "0.10",
     },
   },
 });

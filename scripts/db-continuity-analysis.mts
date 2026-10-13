@@ -759,6 +759,60 @@ try {
   });
   check("the worker ends it `cancelled` (not failed)", stopped.status === "cancelled");
 
+  // ── provider independence: an OpenAI job runs on the same tables, role and state machine (no OpenAI columns) ──
+  const attO = await newAttempt(shot.id, 9204);
+  const oa = await owner.createAnalysisRunWithJob({
+    run: {
+      ...newRun(attO, subject!.id, original!.id),
+      analyzer: "openai",
+      model: "gpt-6-luna",
+      promptVersion: "continuity-openai-image-v1",
+      now: new Date().toISOString(),
+    },
+    findings,
+    job: {
+      idempotencyKey: "db-analysis-key-openai-01",
+      analyzer: "openai",
+      model: "gpt-6-luna",
+      snapshot: { ...snap, attemptId: attO, analyzer: "openai", model: "gpt-6-luna" },
+      inputAssetIds: [ref!.id, frame!.id],
+      maxAttempts: 3,
+      estimate: {
+        maxUsd: 0.0065,
+        expectedUsd: 0.0008,
+        usage: { tokens: {} },
+        pricingVersion: "openai-2026-10-13",
+      },
+    },
+    limits: { maxActivePerProject: 50 },
+  });
+  check(
+    "an OpenAI run/job freezes provider, model and its own prompt version",
+    oa.job.analyzer === "openai" &&
+      oa.job.model === "gpt-6-luna" &&
+      oa.run.run.analyzer === "openai" &&
+      oa.run.run.promptVersion === "continuity-openai-image-v1",
+  );
+  const oc = (
+    await worker.claim({ workerId: "w-openai", now: new Date().toISOString(), leaseMs: 30_000, limit: 10 })
+  ).find((c) => c.job.id === oa.job.id);
+  check("the same worker role claims an OpenAI job", Boolean(oc) && oc!.job.analyzer === "openai");
+  if (oc) {
+    await owner.requestAnalysisCancel(oa.job.id, new Date().toISOString());
+    const done = await worker.finalizeFailure({
+      jobId: oa.job.id,
+      leaseToken: oc.job.leaseToken!,
+      runId: oa.run.run.id,
+      errorCode: "cancelled",
+      errorCategory: "cancelled",
+      errorMessage: "Analysis cancelled.",
+      cost: null,
+      cancelled: true,
+      now: new Date().toISOString(),
+    });
+    check("an OpenAI job finishes through the same state machine", done.status === "cancelled");
+  }
+
   // ── failure path: unknown cost recorded, run failed ──
   const att4 = await newAttempt(shot.id, 9203);
   const r4 = await submit("db-analysis-key-0005", att4);

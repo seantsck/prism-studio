@@ -10,6 +10,17 @@ import {
   type GeminiState,
 } from "../providers/gemini/config";
 import type { GeminiRequest, GeminiResponse, GeminiTransport } from "../providers/gemini/transport";
+import { OpenAIContinuityAnalyzer } from "../providers/openai/analyzer";
+import {
+  OPENAI_ANALYZER_ID,
+  openaiModelBlocker,
+  openaiState,
+  readOpenAIConfig,
+  type OpenAIConfig,
+  type OpenAIState,
+} from "../providers/openai/config";
+import type { OpenAIRequest, OpenAIResponse, OpenAITransport } from "../providers/openai/transport";
+import { analyzerModelLabel } from "./models";
 import { MockAnalysisProvider, MOCK_PROVIDER_ID } from "./mock-provider";
 import type { ContinuityAnalysisProvider } from "./provider";
 
@@ -32,6 +43,7 @@ export interface AnalysisConfig {
   /** Automatic paid analysis after conform: architecture only, ALWAYS off in Phase 2D. */
   autoRun: false;
   gemini: GeminiConfig;
+  openai: OpenAIConfig;
 }
 
 const num = (v: string | undefined): number | null => {
@@ -71,6 +83,7 @@ export function readAnalysisConfig(env: Record<string, string | undefined>): Ana
     },
     autoRun: false,
     gemini: readGeminiConfig(env),
+    openai: readOpenAIConfig(env),
   };
 }
 
@@ -99,9 +112,25 @@ class LazyGeminiTransport implements GeminiTransport {
   }
 }
 
+/** Same lazy-load rule as Gemini: the SDK is imported only when a request is actually made. */
+class LazyOpenAITransport implements OpenAITransport {
+  private inner: OpenAITransport | null = null;
+  constructor(
+    private readonly apiKey: string,
+    private readonly fetchImpl?: typeof fetch,
+  ) {}
+  async create(req: OpenAIRequest): Promise<OpenAIResponse> {
+    if (!this.inner) {
+      const { SdkOpenAITransport } = await import("../providers/openai/sdk-transport");
+      this.inner = new SdkOpenAITransport({ apiKey: this.apiKey, fetchImpl: this.fetchImpl });
+    }
+    return this.inner.create(req);
+  }
+}
+
 export function createAnalysisProviders(
   env: Record<string, string | undefined>,
-  opts: { transport?: GeminiTransport; fetchImpl?: typeof fetch } = {},
+  opts: { transport?: GeminiTransport; openaiTransport?: OpenAITransport; fetchImpl?: typeof fetch } = {},
 ): Map<string, ContinuityAnalysisProvider> {
   const cfg = readAnalysisConfig(env);
   const out = new Map<string, ContinuityAnalysisProvider>();
@@ -116,12 +145,31 @@ export function createAnalysisProviders(
       }),
     );
   }
+  if (
+    cfg.openai.enabled &&
+    !openaiModelBlocker(cfg.openai.model) &&
+    (cfg.openai.apiKey || opts.openaiTransport)
+  ) {
+    out.set(
+      OPENAI_ANALYZER_ID,
+      new OpenAIContinuityAnalyzer({
+        config: cfg.openai,
+        transport: opts.openaiTransport ?? new LazyOpenAITransport(cfg.openai.apiKey!, opts.fetchImpl),
+      }),
+    );
+  }
   return out;
 }
 
 /** Throws on use: lets the UI PLAN and ESTIMATE for an analyzer that is not configured, without ever sending. */
 const unavailableTransport: GeminiTransport = {
   async generate() {
+    throw new Error("This analyzer is not configured on this server.");
+  },
+};
+
+const unavailableOpenAITransport: OpenAITransport = {
+  async create() {
     throw new Error("This analyzer is not configured on this server.");
   },
 };
@@ -143,6 +191,12 @@ export function createPreviewProviders(
       new GeminiAnalysisProvider({ config: cfg.gemini, transport: unavailableTransport }),
     );
   }
+  if (!out.has(OPENAI_ANALYZER_ID)) {
+    out.set(
+      OPENAI_ANALYZER_ID,
+      new OpenAIContinuityAnalyzer({ config: cfg.openai, transport: unavailableOpenAITransport }),
+    );
+  }
   return out;
 }
 
@@ -150,9 +204,13 @@ export interface AnalyzerStatus {
   id: string;
   label: string;
   model: string;
+  /** Human label of the model ("GPT-6 Luna"); the raw id stays in `model`. */
+  modelLabel: string;
+  /** Provider display name ("OpenAI"). */
+  providerName: string;
   kind: "mock" | "model";
   /** Safe state only: no key material, ever. */
-  state: GeminiState | "configured";
+  state: GeminiState | OpenAIState | "configured";
   /** Paid analyzers additionally report whether paid analysis is switched on and a ceiling exists. */
   spend: "free" | "enabled" | "disabled";
   missingConfig: string[];
@@ -168,6 +226,8 @@ export function analyzerStatuses(env: Record<string, string | undefined>): Analy
       id: MOCK_PROVIDER_ID,
       label: "Mock analyzer (free, deterministic)",
       model: "mock",
+      modelLabel: "Mock",
+      providerName: "Prism mock",
       kind: "mock",
       state: "configured",
       spend: "free",
@@ -183,6 +243,8 @@ export function analyzerStatuses(env: Record<string, string | undefined>): Analy
     id: GEMINI_ANALYZER_ID,
     label: "Gemini multimodal analyzer",
     model: g.model,
+    modelLabel: analyzerModelLabel("gemini", g.model),
+    providerName: "Gemini",
     kind: "model",
     state,
     spend: spendOn ? "enabled" : "disabled",
@@ -196,6 +258,28 @@ export function analyzerStatuses(env: Record<string, string | undefined>): Analy
             : [],
     usable: state === "configured" && spendOn,
     modes: g.directVideo ? ["image_set", "direct_video"] : ["image_set"],
+  });
+  const o = cfg.openai;
+  const oState = openaiState(o);
+  out.push({
+    id: OPENAI_ANALYZER_ID,
+    label: "OpenAI multimodal analyzer",
+    model: o.model,
+    modelLabel: analyzerModelLabel("openai", o.model),
+    providerName: "OpenAI",
+    kind: "model",
+    state: oState,
+    spend: spendOn ? "enabled" : "disabled",
+    missingConfig:
+      oState === "missing_credential"
+        ? ["OPENAI_API_KEY"]
+        : oState === "disabled"
+          ? ["PRISM_STUDIO_CONTINUITY_ANALYZERS=…,openai"]
+          : oState === "unsupported_model"
+            ? [`PRISM_STUDIO_OPENAI_ANALYSIS_MODEL (unsupported: ${o.model})`]
+            : [],
+    usable: oState === "configured" && spendOn,
+    modes: ["image_set"],
   });
   return out;
 }

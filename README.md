@@ -43,11 +43,12 @@ the app server's PATH (optional: everything else works without it).
 **Real continuity analysis (Phase 2D)**: automated analysis is durable, queued work. A frozen
 `ContinuityAnalysisInput` (criteria with expected values, ranked references, review frames, versions) is executed
 by a dedicated least-privilege **continuity worker**, with a provider-independent analyzer contract, a strict
-evidence-based result schema, a separate analysis spend gate and cost ledger, and a Gemini (`gemini-3.8-flash`)
-adapter built and tested against a fake transport. **No live Gemini request has been made**; paid analysis is
-off by default. The model never decides what continuity should be and never approves anything. See
-[continuity-analysis-jobs](docs/continuity-analysis-jobs.md), [providers/gemini-continuity](docs/providers/gemini-continuity.md)
-and [continuity-costs](docs/continuity-costs.md).
+evidence-based result schema, a separate analysis spend gate and cost ledger, and two provider adapters behind
+the same contract: Gemini (`gemini-3.8-flash`, `gemini-3.6-flash`) and OpenAI (`gpt-6-luna`), the latter tested
+against a fake transport only. **No live analysis has been produced yet** (Gemini's live attempts hit provider
+overload; no live OpenAI request has been made); paid analysis is off by default. The model never decides what continuity should be and never approves anything. See
+[continuity-analysis-jobs](docs/continuity-analysis-jobs.md), [providers/gemini-continuity](docs/providers/gemini-continuity.md),
+[providers/openai-continuity](docs/providers/openai-continuity.md) and [continuity-costs](docs/continuity-costs.md).
 
 ## Quick start: memory mode
 

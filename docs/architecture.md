@@ -119,12 +119,12 @@ Continuity page ──server action──► plan + frozen input + manifest + es
             continuity_runs (immutable) + findings + continuity_analysis_jobs (queued) + estimated cost
                                       │
         npm run continuity:worker  ◄──┘   role prism_continuity_worker (claim · lease · fenced writes)
-                 │ ContinuityAnalysisProvider (mock | gemini) ── transport (SDK | fake) ── network
+                 │ ContinuityAnalysisProvider (mock | gemini | openai) ── transport (SDK | fake) ── network
                  ▼
    normalized findings + evidence ── final cost ── events        (humans override; nothing auto-approves)
 ```
 
 Pure domain in `src/domain/continuity/analysis/` (plan, schema, prompt, cost, job state); provider contract and
-worker in `src/continuity/analysis/`; Gemini adapter in `src/continuity/providers/gemini/` (the SDK is imported
-only by `sdk-transport.ts`, lazily). Persistence via `MediaQaRepository` (user path) and `AnalysisWorkerStore`
+worker in `src/continuity/analysis/`; Gemini and OpenAI adapters in `src/continuity/providers/gemini/` and
+`src/continuity/providers/openai/` (each SDK is imported only by its `sdk-transport.ts`, lazily). Persistence via `MediaQaRepository` (user path) and `AnalysisWorkerStore`
 (worker path), memory + Postgres. See [continuity-analysis-jobs](continuity-analysis-jobs.md).

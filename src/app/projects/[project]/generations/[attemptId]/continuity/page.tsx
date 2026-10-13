@@ -32,6 +32,8 @@ import {
 } from "@/domain/continuity/status";
 import type { AnalysisCost } from "@/data/media-qa-repository";
 import { assetUrl } from "@/lib/utils";
+import { providerHealth } from "@/domain/continuity/analysis/health";
+import { modelDisplay, providerDisplayName } from "@/continuity/analysis/models";
 import { loadAttemptMedia } from "@/server/attempt-media";
 import { getGenerationRepo } from "@/server/generation";
 import {
@@ -184,6 +186,18 @@ export default async function ContinuityPage({
       previews.push({
         id: st.id,
         label: st.label,
+        providerName: st.providerName,
+        modelLabel: st.modelLabel,
+        health: providerHealth({
+          providerId: st.id,
+          configState: st.state,
+          jobs: jobs.map((j) => ({
+            analyzer: j.analyzer,
+            status: j.status,
+            lastErrorCategory: j.lastErrorCategory,
+            finishedAt: j.completedAt ?? j.failedAt ?? j.cancelledAt,
+          })),
+        }),
         model: st.model,
         kind: st.kind,
         state: st.state,
@@ -495,8 +509,8 @@ export default async function ContinuityPage({
                   <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px] text-faint">
                     <dt>Analyzer</dt>
                     <dd>
-                      {run.analyzer} {run.analyzerVersion} ({run.analyzerKind})
-                      {run.model ? ` · ${run.model}` : ""}
+                      {providerDisplayName(run.analyzer)} {run.analyzerVersion} ({run.analyzerKind})
+                      {run.model ? ` · ${modelDisplay(run.analyzer, run.model)}` : ""}
                     </dd>
                     <dt>Prompt / rubric</dt>
                     <dd>
@@ -566,7 +580,7 @@ export default async function ContinuityPage({
                           <p className="text-[12px]">
                             {run.externalManifest!.analyzer === "mock-continuity"
                               ? "Nothing left Prism (mock analyzer)."
-                              : `${sent.filter((e) => e.kind !== "reference").length} output image(s), ${sent.filter((e) => e.kind === "reference").length} reference image(s) and ${run.externalManifest!.criteriaSent} criteria text(s) sent to ${run.externalManifest!.analyzer} (${run.externalManifest!.model}).`}
+                              : `${sent.filter((e) => e.kind !== "reference").length} output image(s), ${sent.filter((e) => e.kind === "reference").length} reference image(s) and ${run.externalManifest!.criteriaSent} criteria text(s) sent to ${providerDisplayName(run.externalManifest!.analyzer)} · ${modelDisplay(run.externalManifest!.analyzer, run.externalManifest!.model)}.`}
                           </p>
                           {omitted.length > 0 ? (
                             <p className="text-[11.5px] text-warn">
@@ -866,7 +880,10 @@ export default async function ContinuityPage({
                           </td>
                           <td>
                             {r.view.run.analyzer}
-                            {r.view.run.model ? ` · ${r.view.run.model}` : ""} v{r.view.run.analyzerVersion}
+                            {r.view.run.model
+                              ? ` · ${modelDisplay(r.view.run.analyzer, r.view.run.model)}`
+                              : ""}{" "}
+                            v{r.view.run.analyzerVersion}
                           </td>
                           <td className="text-faint">{new Date(r.view.run.createdAt).toLocaleString()}</td>
                           <td className="font-mono">

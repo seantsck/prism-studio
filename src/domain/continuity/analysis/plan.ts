@@ -2,7 +2,7 @@ import { fingerprint } from "../../hash";
 import type { AnalyzerCapability, ContinuityCriterion } from "../model";
 import {
   DEFAULT_ANALYSIS_BUDGET,
-  PROMPT_VERSIONS,
+  promptVersionFor,
   type AnalysisBatch,
   type AnalysisBudget,
   type AnalysisCriterion,
@@ -240,7 +240,7 @@ export function buildAnalysisPlan(input: PlanInput): ContinuityAnalysisPlan {
       batches.push({
         id: `b${n}`,
         mode,
-        promptVersion: PROMPT_VERSIONS[mode],
+        promptVersion: promptVersionFor(analyzer.id, mode),
         criterionKeys: slice.map((s) => s.c.key),
         referenceInputIds: slice[0]!.refs.map((r) => r.inputId),
         outputInputIds:

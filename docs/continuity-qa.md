@@ -86,4 +86,8 @@ job run by a worker; none / queued / analysing / complete / failed) and **human 
   recommends a re-run.
 - **Privacy**: the run records an **external media manifest** (which assets, checksums, sizes, sent / not sent
   and why) and the page states what the external analyzer received.
-  See [continuity-analysis-jobs](continuity-analysis-jobs.md) and [providers/gemini-continuity](providers/gemini-continuity.md).
+  The page names the analyzer and model ("OpenAI · GPT-6 Luna (gpt-6-luna)") and shows how many references
+  and frames were sent. A small, informational provider-health line (configured / recent provider failure /
+  available) sits next to the analyzer picker; it never routes or disables anything and history is never erased.
+  See [continuity-analysis-jobs](continuity-analysis-jobs.md), [providers/gemini-continuity](providers/gemini-continuity.md)
+  and [providers/openai-continuity](providers/openai-continuity.md).

@@ -8,6 +8,13 @@ criteria, plans, findings, the queue or the UI: it lives in `src/continuity/prov
 > the criterion, the severity and the media. The analyzer answers one question per criterion: _does this output
 > appear consistent with THIS expectation, based on THESE references?_
 
+> **Status.** Prism-side behaviour is proven; live inference is not. `models.get`, `countTokens` and request/media
+> parsing succeed for both listed models, but `generateContent` returned sustained confirmed 503 (overload) on
+> `gemini-3.8-flash` and `gemini-3.6-flash`, so no live analysis has been produced. Gemini stays implemented and
+> configurable (it is disabled unless listed in `PRISM_STUDIO_CONTINUITY_ANALYZERS`), its retry policy and
+> historical runs are unchanged, and it coexists with the OpenAI adapter behind the same contract
+> ([openai-continuity](openai-continuity.md)). There is no automatic routing between providers.
+
 ## Verified against the official documentation (2026-10-13)
 
 | Item      | Value                                                                                                                                                                                                  |

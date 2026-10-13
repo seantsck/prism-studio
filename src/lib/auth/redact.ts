@@ -44,6 +44,7 @@ const SECRET_ENV_NAMES = [
   "RUNWAYML_API_SECRET",
   "GEMINI_API_KEY",
   "GOOGLE_API_KEY",
+  "OPENAI_API_KEY",
   "PRISM_STUDIO_CONTINUITY_DB_URL",
   "PRISM_STUDIO_CONTINUITY_DB_PASSWORD",
   "SUPABASE_DB_URL",
@@ -112,6 +113,8 @@ export function redactText(input: unknown): string {
   // Bare JWTs and Supabase-style keys.
   text = text.replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b/g, MASK);
   text = text.replace(/\bsb_(?:secret|publishable)_[A-Za-z0-9_-]{8,}\b/g, MASK);
+  // OpenAI-style API keys (sk-..., sk-proj-...).
+  text = text.replace(/\bsk-[A-Za-z0-9_-]{16,}/g, MASK);
   // Any fragment that looks like it carries tokens.
   text = text.replace(/#[^\s]*(?:access_token|refresh_token|type=recovery)[^\s]*/gi, `#${MASK}`);
   // Literal values of known secret environment variables.

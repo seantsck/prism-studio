@@ -13,7 +13,7 @@ import {
 import {
   ANALYSIS_SCHEMA_VERSION,
   DEFAULT_ANALYSIS_BUDGET,
-  PROMPT_VERSIONS,
+  promptVersionFor,
   RUBRIC_VERSION,
   type AnalysisMedia,
   type ContinuityAnalysisInput,
@@ -141,7 +141,10 @@ export function buildAnalysisInput(args: {
     analyzer: provider.id,
     analyzerVersion: provider.version,
     model: provider.model,
-    promptVersions: PROMPT_VERSIONS,
+    promptVersions: {
+      image_set: promptVersionFor(provider.id, "image_set"),
+      direct_video: promptVersionFor(provider.id, "direct_video"),
+    },
     rubricVersion: RUBRIC_VERSION,
     schemaVersion: ANALYSIS_SCHEMA_VERSION,
     plan,

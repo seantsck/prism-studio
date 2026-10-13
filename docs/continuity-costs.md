@@ -59,7 +59,14 @@ wardrobe; no video). `npm run continuity:pre-paid:check` proves, with the networ
 status, the flag is false, the ceiling, the model, the fixture plan and estimate, that submission and the worker
 both refuse while paid analysis is off or over the ceiling, no browser secret exposure, and the worker role.
 
-To run it after explicit approval: set `GEMINI_API_KEY`, `PRISM_STUDIO_CONTINUITY_ANALYZERS=mock,gemini`,
+Both real analyzers share the gate, the ceiling and the ledger. `npm run continuity:pre-paid:check -- --provider
+openai` (or `continuity:pre-paid:check:openai`) runs the same checks for `gpt-6-luna` ($0.10 / $0.50 per 1M
+tokens, cached input $0.01, long-context tier above 272K input tokens; image input is billed as input tokens, the
+pre-request image estimate is a conservative ceiling and actual cost comes only from the response's `usage`, with
+reasoning tokens split out of output so they are not double counted). See
+[providers/openai-continuity](providers/openai-continuity.md).
+
+To run the Gemini smoke after explicit approval: set `GEMINI_API_KEY`, `PRISM_STUDIO_CONTINUITY_ANALYZERS=mock,gemini`,
 `PRISM_STUDIO_ALLOW_PAID_ANALYSIS=true`, `PRISM_STUDIO_MAX_ANALYSIS_USD_PER_RUN=0.10` on the worker/app,
 `npm run continuity:fixture -- --create`, run the analysis from the Continuity page, run
 `npm run continuity:worker -- --until-idle`, then set the flag back to `false` and

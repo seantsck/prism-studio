@@ -53,6 +53,7 @@ function secretValues(env) {
     "RUNWAYML_API_SECRET",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
+    "OPENAI_API_KEY",
     "PRISM_STUDIO_CONTINUITY_DB_PASSWORD",
   ]) {
     const v = env[key];

@@ -10,6 +10,11 @@ import { startContinuityAnalysis } from "@/server/media-actions";
 export interface AnalyzerPreview {
   id: string;
   label: string;
+  /** Provider display name ("OpenAI") and model label ("GPT-6 Luna"); `model` stays the exact id. */
+  providerName: string;
+  modelLabel: string;
+  /** Informational only: never routes or blocks (history of provider-side failures stays visible). */
+  health: { state: string; failures: number; note: string };
   model: string;
   kind: "mock" | "model";
   /** configured | missing_credential | disabled | unsupported_model */
@@ -103,7 +108,7 @@ export function AnalysisLauncher({
         >
           {analyzers.map((x) => (
             <option key={x.id} value={x.id}>
-              {x.label} · {x.model}
+              {x.label} · {x.modelLabel}
               {!x.usable && x.kind === "model"
                 ? ` — ${x.state === "configured" ? "paid analysis off" : x.state.replace("_", " ")}`
                 : ""}
@@ -115,13 +120,22 @@ export function AnalysisLauncher({
         ) : (
           <Badge tone="info">free · local</Badge>
         )}
+        {a.kind === "model" ? (
+          <span
+            className={`text-[11px] ${a.health.state === "recent_provider_failure" ? "text-warn" : "text-faint"}`}
+            data-testid="provider-health"
+            data-health={a.health.state}
+          >
+            {a.providerName} — {a.health.note}
+          </span>
+        ) : null}
       </div>
 
       <div className="grid gap-3 md:grid-cols-4" data-testid="analysis-summary">
         <Stat
           label="Analyzer"
           value={`${a.label}`}
-          sub={`model ${a.model} · mode ${a.mode.replace("_", "-")}`}
+          sub={`${a.providerName} · model ${a.modelLabel} (${a.model}) · mode ${a.mode.replace("_", "-")}`}
         />
         <Stat
           label="Criteria to analyse"
@@ -192,9 +206,11 @@ export function AnalysisLauncher({
 
       {a.kind === "model" ? (
         <p className="text-[11px] text-faint" data-testid="privacy-note">
-          External analyzer receives: {a.counts.outputImagesSent} output image(s), {a.counts.referencesSent}{" "}
-          reference image(s) and the production criteria text (expected values). Private assets are sent as
-          bounded copies for this analysis only; nothing is made public. Estimate: {a.estimate.basis}
+          External analyzer receives: {a.counts.referencesSent} reference image(s),{" "}
+          {a.counts.outputImagesSent} output frame(s) and the production criteria text (expected values).
+          Analyzer: <b data-testid="privacy-provider">{a.providerName}</b> · Model:{" "}
+          <b data-testid="privacy-model">{a.modelLabel}</b>. Private assets are sent as bounded copies for
+          this analysis only; nothing is made public. Estimate: {a.estimate.basis}
         </p>
       ) : null}
 

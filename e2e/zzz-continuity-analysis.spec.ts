@@ -70,12 +70,9 @@ test("preview shows exactly what would be analysed, what stays unchecked and the
   await expect(page.getByTestId("analysis-unsupported")).toContainText("never inferred as pass");
   await expect(page.getByTestId("run-analysis")).toBeEnabled();
 
-  // the real analyzer is visible but NOT runnable: no credential, paid analysis off
+  // Gemini is visible but NOT runnable here: no credential
   await page.getByTestId("analyzer-select").selectOption("gemini");
   await expect(page.getByTestId("analyzer-unavailable")).toContainText("GEMINI_API_KEY");
-  await expect(page.getByTestId("analysis-blockers")).toContainText(
-    "Paid continuity analysis is switched off",
-  );
   await expect(page.getByTestId("run-analysis")).toBeDisabled();
   await expect(page.getByTestId("privacy-note")).toContainText("External analyzer receives");
   await expect(page.getByTestId("estimated-analysis-cost")).not.toHaveText("$0 (free)");
@@ -149,6 +146,58 @@ test("human override is appended; the analyzer finding stays; a re-run is a sepa
   // opening run 1 still shows the override
   await rows.nth(1).getByRole("link").click();
   await expect(page.getByTestId("override-note").first()).toContainText("Human:");
+});
+
+test("OpenAI (gpt-6-luna, fake transport): preview, acknowledged paid submit, findings, cost, override, history", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await page.goto(continuityPath);
+  await page.getByTestId("analyzer-select").selectOption("openai");
+  // provider and model are explicit; health is informational
+  await expect(page.getByTestId("privacy-provider")).toHaveText("OpenAI");
+  await expect(page.getByTestId("privacy-model")).toHaveText("GPT-6 Luna");
+  await expect(page.getByTestId("privacy-note")).toContainText("External analyzer receives");
+  await expect(page.getByTestId("provider-health")).toContainText("OpenAI");
+  await expect(page.getByTestId("analysis-summary")).toContainText("gpt-6-luna");
+  // criteria / cost are previewed before anything is queued (demo fixtures carry no reference images)
+  await expect(page.getByTestId("count-analysed")).not.toHaveText("0");
+  await expect(page.getByTestId("estimated-analysis-cost")).not.toHaveText("$0 (free)");
+  // paid analysis needs an explicit acknowledgement
+  await expect(page.getByTestId("run-analysis")).toBeDisabled();
+  await page.getByTestId("ack-analysis-spend").check();
+  await expect(page.getByTestId("run-analysis")).toBeEnabled();
+  await page.getByTestId("run-analysis").click();
+  await expect(page.getByTestId("status-semantic")).toContainText(/complete/i, { timeout: 90_000 });
+
+  // findings are labelled by provider; cost is the analysis ledger, separate from generation
+  await expect(page.getByTestId("run-cost")).toContainText("actual $");
+  const judged = page
+    .locator('[data-testid="criterion"]:not([data-result="unchecked"]):not([data-result="n_a"])', {
+      hasText: "openai analysis",
+    })
+    .first();
+  await expect(judged).toBeVisible();
+  const system = (await judged.getByTestId("system-result").textContent())!.trim();
+
+  // a human override is separate from the analyzer result and survives a reload
+  await judged.getByRole("combobox").selectOption(system.toLowerCase().startsWith("pass") ? "fail" : "pass");
+  await judged.getByPlaceholder("Note").fill("OpenAI finding reviewed by a person.");
+  await judged.getByTestId("override-submit").click();
+  await expect(judged.getByTestId("override-note")).toContainText("Human:", { timeout: 20_000 });
+  await expect(judged.getByTestId("system-result")).toHaveText(system);
+  await page.reload();
+  const again = page.locator('[data-testid="criterion"]', { hasText: "OpenAI finding reviewed" }).first();
+  await expect(again.getByTestId("system-result")).toHaveText(system);
+
+  // history retains provider + model next to the earlier mock runs
+  const rows = page.locator('[data-testid="history-row"]');
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toContainText("openai");
+  await expect(rows.nth(0)).toContainText("gpt-6-luna");
+  await expect(rows.nth(1)).toContainText("mock-continuity");
+  await expect(page.getByTestId("external-manifest")).toContainText("OpenAI");
+  await expect(page.getByTestId("external-manifest")).toContainText("GPT-6 Luna");
 });
 
 test("the attempt card shows the continuity chip separately from creative approval", async ({ page }) => {

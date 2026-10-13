@@ -12,6 +12,8 @@ export interface RateWindow {
   from: string;
   inputPerMillionUsd: number;
   outputPerMillionUsd: number;
+  /** Rate for input tokens served from the provider cache, where the provider has one. */
+  cachedInputPerMillionUsd?: number;
 }
 
 export interface ModelPricing {
@@ -21,6 +23,11 @@ export interface ModelPricing {
   rates: RateWindow[];
   /** Image/video input is billed at the text input rate for this model. */
   mediaBilledAsText: boolean;
+  /**
+   * A request whose input exceeds `aboveInputTokens` is billed at multiplied rates for the WHOLE request
+   * (documented by some providers). Absent = no long-context tier.
+   */
+  longContext?: { aboveInputTokens: number; inputMultiplier: number; outputMultiplier: number };
 }
 
 export interface PricingTable {
@@ -70,7 +77,10 @@ export function estimateTokens(args: {
   criteria: number;
   maxOutputTokens: number;
   budget: AnalysisBudget;
+  /** Provider-specific image tokenization (defaults to Gemini's documented tiling). */
+  imageTokenFn?: (width: number | null, height: number | null) => number;
 }): TokenEstimate {
+  const imageTokenFn = args.imageTokenFn ?? imageTokens;
   let input = textTokens(args.promptChars) + 600; // system instruction + schema overhead
   for (const m of args.media) {
     if (m.kind === "video") {
@@ -81,7 +91,7 @@ export function estimateTokens(args: {
     // images are bounded before sending: estimate the bounded size
     const long = Math.max(m.width ?? 0, m.height ?? 0);
     const k = long > args.budget.maxImageDimension ? args.budget.maxImageDimension / long : 1;
-    input += imageTokens(
+    input += imageTokenFn(
       m.width ? Math.round(m.width * k) : null,
       m.height ? Math.round(m.height * k) : null,
     );
@@ -93,13 +103,21 @@ export function estimateTokens(args: {
   };
 }
 
+/** Price of ONE request. Applies the cached-input rate and the long-context tier when the price table has them. */
 export function priceTokens(
-  t: { inputTokens: number; outputTokens: number },
+  t: { inputTokens: number; outputTokens: number; cachedInputTokens?: number | null },
   pricing: ModelPricing,
   at: Date,
 ): number {
   const r = rateFor(pricing, at);
-  return (t.inputTokens * r.inputPerMillionUsd + t.outputTokens * r.outputPerMillionUsd) / 1_000_000;
+  const lc =
+    pricing.longContext && t.inputTokens > pricing.longContext.aboveInputTokens ? pricing.longContext : null;
+  const cached = Math.min(Math.max(t.cachedInputTokens ?? 0, 0), t.inputTokens);
+  const cachedRate = r.cachedInputPerMillionUsd ?? r.inputPerMillionUsd;
+  const inputUsd =
+    ((t.inputTokens - cached) * r.inputPerMillionUsd + cached * cachedRate) * (lc?.inputMultiplier ?? 1);
+  const outputUsd = t.outputTokens * r.outputPerMillionUsd * (lc?.outputMultiplier ?? 1);
+  return (inputUsd + outputUsd) / 1_000_000;
 }
 
 export function estimateCost(
@@ -137,11 +155,17 @@ export interface ActualCost {
   outputTokens: number | null;
   thoughtsTokens: number | null;
   pricingVersion: string;
+  cachedInputTokens?: number | null;
 }
 
 /** Thinking tokens are billed at the output rate (documented), so they are added to output. */
 export function actualCost(
-  calls: Array<{ inputTokens: number | null; outputTokens: number | null; thoughtsTokens: number | null }>,
+  calls: Array<{
+    inputTokens: number | null;
+    outputTokens: number | null;
+    thoughtsTokens: number | null;
+    cachedInputTokens?: number | null;
+  }>,
   pricing: ModelPricing,
   table: Pick<PricingTable, "version">,
   at: Date,
@@ -161,12 +185,29 @@ export function actualCost(
   const input = calls.reduce((n, c) => n + (c.inputTokens ?? 0), 0);
   const out = calls.reduce((n, c) => n + (c.outputTokens ?? 0), 0);
   const thoughts = calls.reduce((n, c) => n + (c.thoughtsTokens ?? 0), 0);
+  // priced per request: a long-context tier (where one exists) applies to a single request, not to the sum
+  const amount = calls.reduce(
+    (n, c) =>
+      n +
+      priceTokens(
+        {
+          inputTokens: c.inputTokens ?? 0,
+          outputTokens: (c.outputTokens ?? 0) + (c.thoughtsTokens ?? 0),
+          cachedInputTokens: c.cachedInputTokens ?? null,
+        },
+        pricing,
+        at,
+      ),
+    0,
+  );
+  const cached = calls.reduce((n, c) => n + (c.cachedInputTokens ?? 0), 0);
   return {
-    amountUsd: roundUsd(priceTokens({ inputTokens: input, outputTokens: out + thoughts }, pricing, at)),
+    amountUsd: roundUsd(amount),
     inputTokens: input,
     outputTokens: out,
     thoughtsTokens: thoughts,
     pricingVersion: table.version,
+    ...(cached > 0 ? { cachedInputTokens: cached } : {}),
   };
 }
 

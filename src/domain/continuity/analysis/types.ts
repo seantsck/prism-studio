@@ -19,6 +19,16 @@ export const PROMPT_VERSIONS: Record<AnalysisMode, string> = {
   image_set: "continuity-gemini-image-v1",
   direct_video: "continuity-gemini-video-v1",
 };
+/** OpenAI-adapter prompt identity (same rubric and schema; its own system instruction text). */
+export const OPENAI_PROMPT_VERSIONS: Record<AnalysisMode, string> = {
+  image_set: "continuity-openai-image-v1",
+  direct_video: "continuity-openai-video-v1",
+};
+
+/** The prompt version an analyzer uses for a mode. Stored on every batch/run so history stays interpretable. */
+export function promptVersionFor(analyzerId: string, mode: AnalysisMode): string {
+  return analyzerId === "openai" ? OPENAI_PROMPT_VERSIONS[mode] : PROMPT_VERSIONS[mode];
+}
 export const RUBRIC_VERSION = "continuity-rubric-1";
 export const ANALYSIS_SCHEMA_VERSION = 1;
 
@@ -218,6 +228,8 @@ export interface AnalysisUsage {
     inputTokens: number | null;
     outputTokens: number | null;
     thoughtsTokens: number | null;
+    /** Input tokens served from the provider cache (billed at the cached rate where the price table has one). */
+    cachedInputTokens?: number | null;
   }>;
 }
 

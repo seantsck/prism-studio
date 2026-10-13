@@ -15,6 +15,11 @@ import {
 } from "@/continuity/analysis/registry";
 import type { ContinuityAnalysisProvider } from "@/continuity/analysis/provider";
 import { ContinuityAnalysisWorker } from "@/continuity/analysis/worker";
+import {
+  FakeGeminiTransport,
+  answerAll as geminiAnswerAll,
+} from "@/continuity/providers/gemini/fake-transport";
+import { FakeOpenAITransport, openaiAnswerAll } from "@/continuity/providers/openai/fake-transport";
 import { consoleLogger } from "@/generation/log";
 import { LocalDiskSink } from "@/generation/sink";
 import { FfmpegMediaProcessor } from "@/media/ffmpeg";
@@ -46,8 +51,25 @@ export function getPreviewProviders(): Map<string, ContinuityAnalysisProvider> {
   return createPreviewProviders(process.env);
 }
 
+/**
+ * Deterministic in-memory transports instead of the network, for the acceptance E2E only. Honoured in MEMORY
+ * persistence mode (the local demo, no database) and never otherwise, so a stray variable can never make a
+ * Supabase/production deployment return invented analyses. A fake transport cannot spend anything.
+ */
+function fakeAnalysisTransportsEnabled(): boolean {
+  return process.env.PRISM_STUDIO_ANALYSIS_TRANSPORT === "fake" && persistenceMode() === "memory";
+}
+
 export function getAnalysisProviders(): Map<string, ContinuityAnalysisProvider> {
-  globalThis.__prismAnalysisProviders ??= createAnalysisProviders(process.env);
+  globalThis.__prismAnalysisProviders ??= createAnalysisProviders(
+    process.env,
+    fakeAnalysisTransportsEnabled()
+      ? {
+          transport: new FakeGeminiTransport(geminiAnswerAll("pass")),
+          openaiTransport: new FakeOpenAITransport(openaiAnswerAll("pass")),
+        }
+      : {},
+  );
   return globalThis.__prismAnalysisProviders;
 }
 

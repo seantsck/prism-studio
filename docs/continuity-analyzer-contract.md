@@ -51,8 +51,11 @@ auditable. Cost of analysis would be recorded separately from generation cost (P
 (`image_set`, `direct_video`), `videoCapabilities()`, `plannerView()`, `estimate(input)`, `actualCost(calls)`,
 `analyzeBatch({ batch, input, media, ctx })`, optional `cleanupFiles(refs)`. The Phase 2C `ContinuityAnalyzer`
 remains for simple synchronous analyzers; `MockAnalysisProvider` is the free implementation of the new contract
-and shares the contract suite with `GeminiAnalysisProvider` (one finding per criterion, enums valid, evidence only
-from the request's own inputs, deterministic, estimate non-negative).
+and shares the contract suite with `GeminiAnalysisProvider` and `OpenAIContinuityAnalyzer`
+(`src/continuity/analysis/__tests__/provider-contract.test.ts`: one finding per criterion, enums valid, evidence only
+from the request's own inputs, no provider-supplied severity/approval, refusal ⇒ unchecked, usage absent ⇒ cost
+unknown, estimate non-negative). Provider differences live behind the adapter; **Gemini and OpenAI implement the
+same normalized analyzer contract**, so a finding looks identical whichever produced it.
 
 Capability vocabulary (unchanged ids → the product's names): `image_identity` = identity visual similarity,
 `wardrobe` = wardrobe/hair/makeup/jewelry, `object_presence` = props, `scene_match` = location/set/weather,
@@ -61,4 +64,12 @@ action/screen direction/eyelines over time, `lip_sync`, `audio`. An analyzer lis
 
 Result schema (strict): `criterionId`, `result` (pass|warn|fail|unchecked), `confidence`, `summary`,
 `evidence[]`, `contradictions[]`, `limitations[]`. Severity, expected value, approval and aggregate scores are
-Prism-owned and rejected if returned. See [providers/gemini-continuity](providers/gemini-continuity.md).
+Prism-owned and rejected if returned. See [providers/gemini-continuity](providers/gemini-continuity.md) and
+[providers/openai-continuity](providers/openai-continuity.md).
+
+Adapter obligations (any provider): call `ctx.beforeTransportCall` immediately before **every** outbound request
+(the worker counts it and enforces the ceiling); make exactly one transport invocation per call (no hidden retries,
+SDK retries off); classify failures into the shared taxonomy; treat a timeout as ambiguous (`outcome_unknown`),
+never re-send; map a provider refusal to `unchecked` + `provider_refusal`; report usage only as the provider
+returned it. The analyzer model registry (`src/continuity/analysis/models.ts`) lists every provider/model pair
+Prism will send to; provider capability is never product policy (media budgets come from the plan).
