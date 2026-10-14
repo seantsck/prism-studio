@@ -1,4 +1,5 @@
 import { LOCAL_USER_ID, buildSeedProject } from "./seed";
+import { MemoryCandidateService } from "./candidates-memory";
 import { MemoryGenerationService } from "./generation-memory";
 import { MemoryMediaQaService } from "./media-qa-memory";
 import type { Repository } from "./repository";
@@ -19,6 +20,7 @@ export class MemoryRepository implements Repository {
   private projects = new Map<string, ProjectData>();
   private generationService: MemoryGenerationService | undefined;
   private mediaQaService: MemoryMediaQaService | undefined;
+  private candidateService: MemoryCandidateService | undefined;
 
   /** Derived-media lineage, delivery masters and continuity QA runs (same semantics as Postgres). */
   get mediaQa(): MemoryMediaQaService {
@@ -36,6 +38,15 @@ export class MemoryRepository implements Repository {
       ownerUserId: () => LOCAL_USER_ID,
     });
     return this.generationService;
+  }
+
+  /** Candidate sets and human generation reviews (Phase 2E; same semantics as Postgres). */
+  get candidates(): MemoryCandidateService {
+    this.candidateService ??= new MemoryCandidateService(
+      { all: () => [...this.projects.values()], ownerUserId: () => LOCAL_USER_ID },
+      this.generation,
+    );
+    return this.candidateService;
   }
 
   constructor(seed: ProjectData[] = [buildSeedProject()]) {

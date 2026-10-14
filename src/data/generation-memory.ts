@@ -126,7 +126,7 @@ export class MemoryGenerationService implements GenerationRepository, Generation
     const active = [...this.jobs.values()].filter(
       (j) => j.projectId === found.project.id && ACTIVE_STATUSES.includes(j.status),
     );
-    if (active.some((j) => shotAttemptIds.has(j.attemptId))) {
+    if (!input.allowConcurrentOnShot && active.some((j) => shotAttemptIds.has(j.attemptId))) {
       throw new GenerationSubmitError(
         "duplicate_active",
         "A generation for this shot is already in progress. Wait for it to finish or cancel it first.",

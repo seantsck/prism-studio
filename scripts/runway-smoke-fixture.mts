@@ -266,6 +266,31 @@ console.log(
 console.log(
   `gate allowed: ${ev.gate.allowed}; blockers: ${ev.gate.blockers.map((b) => b.code).join(", ") || "none"}`,
 );
+{
+  // Phase 2E: the proposed FIRST real candidate set, planned in memory (nothing is submitted, nothing is spent).
+  const { planCandidateSet } = await import("../src/generation/candidate-set");
+  const plan = planCandidateSet({
+    data,
+    shotId: SH,
+    registry,
+    config,
+    selections: [
+      { provider: "runway", modelId: "gen4.5" },
+      { provider: "runway", modelId: "gen4_turbo" },
+      { provider: "runway", modelId: "hailuo3", tierId: "768p" },
+    ],
+    outcomes: [],
+  });
+  console.log("proposed candidate set (planning only):");
+  for (const it of plan.items) {
+    console.log(
+      `  ${it.label} ${it.fit.displayName.padEnd(20)} ${it.fit.status.padEnd(20)} ${it.fit.duration.text}  est ${it.estimateUsd == null ? "unknown" : "$" + it.estimateUsd.toFixed(2)}`,
+    );
+  }
+  console.log(
+    `  maximum total: ${plan.spend.totalUsd == null ? "unknown" : "$" + plan.spend.totalUsd.toFixed(2)}; set blockers now: ${plan.blockers.length ? plan.blockers.join(" | ").slice(0, 400) : "none"}`,
+  );
+}
 if (!pre.ready || !ev.compatibility?.compatible) {
   console.error("fixture is NOT ready; nothing written");
   await pool.end();

@@ -215,11 +215,13 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
         }
       }
 
-      const onShot = await c.query(
-        `select 1 from generation_jobs j join generation_attempts t on t.id = j.attempt_id
-         where t.shot_id = $1 and j.status in (${active}) limit 1`,
-        [a.shotId],
-      );
+      const onShot = input.allowConcurrentOnShot
+        ? { rowCount: 0 }
+        : await c.query(
+            `select 1 from generation_jobs j join generation_attempts t on t.id = j.attempt_id
+             where t.shot_id = $1 and j.status in (${active}) limit 1`,
+            [a.shotId],
+          );
       if (onShot.rowCount) {
         throw new GenerationSubmitError(
           "duplicate_active",

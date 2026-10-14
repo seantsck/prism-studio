@@ -119,3 +119,14 @@ Two layers, both advisory: the legacy manual `continuity_checks` (Shot Prep → 
 gate is separate) and the Phase 2C **continuity review** of a generated attempt (criteria from production
 truth, deterministic checks, review frames + contact sheet, reference set, human overrides, optional Mock
 analysis). See [continuity-qa](continuity-qa.md).
+
+## Compare models and review fast (Phase 2E)
+
+The primary quality loop is **human**: prep the shot → compare models → generate a candidate set (explicit spend
+confirmation) → watch them side by side → one-click verdicts with reasons → mark **Best** → **Promote to Shot**
+(explicit). Rejected and losing candidates are kept: they are the project's R&D history (_Experiments_) and the data
+behind model recommendations (_Models_). Automated continuity analysis is an optional, separate action
+("Run AI Continuity Check") for hard cases or unattended batches; it is never required before approval and never
+auto-runs. Details: [human-generation-review](human-generation-review.md),
+[generation-candidate-sets](generation-candidate-sets.md), [model-performance](model-performance.md),
+[model-recommendation-v1](model-recommendation-v1.md).

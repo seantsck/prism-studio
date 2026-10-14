@@ -43,16 +43,18 @@ Stated plainly; none of these are implied to exist elsewhere in the docs.
 
 ## Phase 2 — generation
 
-| Slice    | Scope                                                                                                                                                                                                                                                       | Status                       |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| **2A**   | Provider-independent generation domain, capability + compatibility engine, PromptPlan, attempt/job split, Postgres queue + worker, output ingestion, review, cost records, **MockProvider**                                                                 | implemented                  |
-| 2B       | Least-privilege worker + first real provider (Runway Gen-4.5), live-spend gate; live smoke test passed                                                                                                                                                      | implemented                  |
-| **2C**   | Framing adaptation plan, provider-canvas planning + crop overlay, deterministic delivery conform (ffmpeg), derived-asset lineage, delivery masters, continuity QA foundation + Mock analyzer                                                                | implemented                  |
-| **2D**   | Real multimodal continuity analyzer: queued analysis jobs + dedicated worker role, Gemini adapter, strict evidence schema, analysis spend gate + ledger, evidence UI; live Gemini inference attempts returned sustained provider 503 (no analysis produced) | implemented                  |
-| **2D.1** | Second real analyzer: OpenAI (`gpt-6-luna`, Responses API, Structured Outputs) behind the same provider contract; model registry; informational provider health; no live OpenAI call yet                                                                    | implemented (fake transport) |
-| 2D.2     | Live OpenAI smoke (explicit approval) + direct-video temporal QA refinement, calibration on real runs                                                                                                                                                       | next                         |
-| 2E       | Multi-model generation routing + attempt comparison (capability + cost + history + continuity aware)                                                                                                                                                        | —                            |
-| 2F       | Production editor/timeline; delivery-master consumption; project budgets and cost intelligence                                                                                                                                                              | —                            |
+| Slice    | Scope                                                                                                                                                                                                                                                                                 | Status                       |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| **2A**   | Provider-independent generation domain, capability + compatibility engine, PromptPlan, attempt/job split, Postgres queue + worker, output ingestion, review, cost records, **MockProvider**                                                                                           | implemented                  |
+| 2B       | Least-privilege worker + first real provider (Runway Gen-4.5), live-spend gate; live smoke test passed                                                                                                                                                                                | implemented                  |
+| **2C**   | Framing adaptation plan, provider-canvas planning + crop overlay, deterministic delivery conform (ffmpeg), derived-asset lineage, delivery masters, continuity QA foundation + Mock analyzer                                                                                          | implemented                  |
+| **2D**   | Real multimodal continuity analyzer: queued analysis jobs + dedicated worker role, Gemini adapter, strict evidence schema, analysis spend gate + ledger, evidence UI; live Gemini inference attempts returned sustained provider 503 (no analysis produced)                           | implemented                  |
+| **2D.1** | Second real analyzer: OpenAI (`gpt-6-luna`, Responses API, Structured Outputs) behind the same provider contract; model registry; informational provider health; no live OpenAI call yet                                                                                              | implemented (fake transport) |
+| 2D.2     | Live OpenAI smoke (explicit approval) + direct-video temporal QA refinement, calibration on real runs                                                                                                                                                                                 | next                         |
+| **2E**   | Multi-model production + human quality intelligence: model catalog (6 Runway video models), shot-specific fit matrix, candidate sets, side-by-side compare, fast human review, model performance history, deterministic recommendation v1 (advisory); AI continuity QA stays optional | implemented                  |
+| 2E.1     | First real candidate set on a disposable fixture (explicit approval); calibration of the recommendation weights on real reviews                                                                                                                                                       | next                         |
+| 2E-old   | (superseded) Multi-model generation routing + attempt comparison (capability + cost + history + continuity aware)                                                                                                                                                                     | —                            |
+| 2F       | Production editor/timeline; delivery-master consumption; project budgets and cost intelligence                                                                                                                                                                                        | —                            |
 
 Phase 2A details: [generation-architecture](generation-architecture.md), [generation-jobs](generation-jobs.md),
 [provider-contract](provider-contract.md), [adding-a-provider](providers/adding-a-provider.md),
@@ -152,3 +154,24 @@ webhook endpoints (architecture only); realtime push instead of status polling; 
 
 - Route shots to models by modality, constraints, cost and historical approval rate.
 - Agents propose breakdowns, shot lists, performance directions; humans approve through the existing gates.
+
+## Known gaps (Phase 2E)
+
+- **No real candidate set has been generated yet.** Everything is verified with the MockProvider, the Runway SDK
+  request shapes (fake client) and the real Postgres stack; the first paid comparison needs explicit approval
+  ([generation-candidate-sets](generation-candidate-sets.md)).
+- **Capability unknowns are visible, not resolved:** duration bounds for Gen-4 Turbo, Hailuo 3 and Seedance 2.5's
+  minimum, Hailuo prompt length, whether Hailuo can generate audio, the provider-side reference limit on the
+  image-to-video route. The provider validates; a rejected request is free.
+- **Kling is not offered** (absent from the Runway SDK video types); other Runway-hosted models are one catalog entry each.
+- **Reference video and reference-audio duration limits** are not enforced at planning (Prism sends reference
+  images and performed audio only; video references are architecture-ready).
+- **Recommendations are computed at each model's default options** and are project-local; weights are a first
+  hand-set calibration, not fitted.
+- **Synchronized playback is start/pause/seek/loop/solo**, not frame-locked: videos start together but can drift
+  over a long loop. Same-position buttons seek every candidate to one fraction of its own duration.
+- **Review frames are the extracted QA frames** (free deterministic run); until one exists the strip says so and the
+  video same-position buttons still work.
+- **Latency** records provider-accepted → ingested; the provider's own completion instant is not stored.
+- **Model health is derived from attempts** (not probes); it never routes.
+- **Standalone attempts can be reviewed through the same action** but the attempt card has no quick-review buttons yet.

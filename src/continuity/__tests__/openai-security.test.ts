@@ -83,11 +83,13 @@ describe("OpenAI credential handling", () => {
   it("the worker role is unchanged: no new DB role or migration was introduced for OpenAI", () => {
     const migrations = readdirSync("supabase/migrations");
     expect(migrations.filter((m) => /openai/i.test(m))).toEqual([]);
-    expect(
-      migrations
-        .filter((m) => m.endsWith(".sql"))
-        .sort()
-        .at(-1),
-    ).toMatch(/^0025_/);
+    // the OpenAI phase ended at 0025; later migrations belong to other phases (2E: candidate sets, reviews)
+    const sql = migrations.filter((m) => m.endsWith(".sql")).sort();
+    expect(sql).toContain("0025_continuity_analysis_retry_state.sql");
+    for (const m of sql.filter((x) => x > "0025")) {
+      expect(readFileSync(`supabase/migrations/${m}`, "utf8")).not.toMatch(
+        /creates+role|alters+role|openai/i,
+      );
+    }
   });
 });

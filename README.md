@@ -138,29 +138,34 @@ Playwright installs its browser separately: `npx playwright install chromium`.
 
 ## Documentation index
 
-| Doc                                                        | Topic                                                              |
-| ---------------------------------------------------------- | ------------------------------------------------------------------ |
-| [architecture](docs/architecture.md)                       | Layers, request flow, key decisions, testing                       |
-| [domain-model](docs/domain-model.md)                       | Entities, invariants, SQL mapping                                  |
-| [persistence](docs/persistence.md)                         | Repository interface, memory vs Postgres, RLS preamble             |
-| [auth](docs/auth.md)                                       | Sign-in, session verification, route protection                    |
-| [storage](docs/storage.md)                                 | Private bucket, object keys, signed URLs, upload policy            |
-| [asset-lifecycle](docs/asset-lifecycle.md)                 | Upload → metadata → where-used → delete protection, audio pipeline |
-| [performance-workflow](docs/performance-workflow.md)       | Dialogue, directions, takes, waveform, timing                      |
-| [animatic](docs/animatic.md)                               | Timeline model, player, clocks, shortcuts                          |
-| [script-coverage](docs/script-coverage.md)                 | Script → action blocks → shots traceability and coverage           |
-| [production-workflow](docs/production-workflow.md)         | End-to-end creative workflow and freshness signals                 |
-| [shot-prep](docs/shot-prep.md)                             | Shot Prep sections and preflight rules                             |
-| [generation-package](docs/generation-package.md)           | Package v2 contract, brief, attempts                               |
-| [generation-architecture](docs/generation-architecture.md) | Attempt vs job, layers, submission, derived lifecycle              |
-| [generation-jobs](docs/generation-jobs.md)                 | Queue, leases, worker, retries, cancellation, idempotency          |
-| [provider-contract](docs/provider-contract.md)             | Adapter interface, capabilities, compatibility rules               |
-| [adding-a-provider](docs/providers/adding-a-provider.md)   | Step-by-step guide, tests and security checklist                   |
-| [generation-review](docs/generation-review.md)             | Approve/reject, rejection categories, history guarantees           |
-| [local-supabase](docs/local-supabase.md)                   | Environments, DB tooling and safety rails                          |
-| [migration-policy](docs/migration-policy.md)               | Forward-only migrations, checksums, history 0001–0014              |
-| [security-model](docs/security-model.md)                   | Trust boundaries, enforcement layers, residual risks               |
-| [roadmap](docs/roadmap.md)                                 | Phases and known gaps                                              |
+| Doc                                                            | Topic                                                               |
+| -------------------------------------------------------------- | ------------------------------------------------------------------- |
+| [architecture](docs/architecture.md)                           | Layers, request flow, key decisions, testing                        |
+| [domain-model](docs/domain-model.md)                           | Entities, invariants, SQL mapping                                   |
+| [persistence](docs/persistence.md)                             | Repository interface, memory vs Postgres, RLS preamble              |
+| [auth](docs/auth.md)                                           | Sign-in, session verification, route protection                     |
+| [storage](docs/storage.md)                                     | Private bucket, object keys, signed URLs, upload policy             |
+| [asset-lifecycle](docs/asset-lifecycle.md)                     | Upload → metadata → where-used → delete protection, audio pipeline  |
+| [performance-workflow](docs/performance-workflow.md)           | Dialogue, directions, takes, waveform, timing                       |
+| [animatic](docs/animatic.md)                                   | Timeline model, player, clocks, shortcuts                           |
+| [script-coverage](docs/script-coverage.md)                     | Script → action blocks → shots traceability and coverage            |
+| [production-workflow](docs/production-workflow.md)             | End-to-end creative workflow and freshness signals                  |
+| [shot-prep](docs/shot-prep.md)                                 | Shot Prep sections and preflight rules                              |
+| [generation-package](docs/generation-package.md)               | Package v2 contract, brief, attempts                                |
+| [generation-architecture](docs/generation-architecture.md)     | Attempt vs job, layers, submission, derived lifecycle               |
+| [generation-jobs](docs/generation-jobs.md)                     | Queue, leases, worker, retries, cancellation, idempotency           |
+| [provider-contract](docs/provider-contract.md)                 | Adapter interface, capabilities, compatibility rules                |
+| [adding-a-provider](docs/providers/adding-a-provider.md)       | Step-by-step guide, tests and security checklist                    |
+| [generation-review](docs/generation-review.md)                 | Approve/reject, rejection categories, history guarantees            |
+| [generation-model-catalog](docs/generation-model-catalog.md)   | Phase 2E model catalog: capabilities, pricing, verification         |
+| [generation-candidate-sets](docs/generation-candidate-sets.md) | Phase 2E candidate sets: multi-model experiments, spend, isolation  |
+| [human-generation-review](docs/human-generation-review.md)     | Phase 2E fast human review, reasons, shortcuts, append-only history |
+| [model-performance](docs/model-performance.md)                 | Phase 2E model history from human reviews, by shot type             |
+| [model-recommendation-v1](docs/model-recommendation-v1.md)     | Phase 2E deterministic, advisory model recommendation (math)        |
+| [local-supabase](docs/local-supabase.md)                       | Environments, DB tooling and safety rails                           |
+| [migration-policy](docs/migration-policy.md)                   | Forward-only migrations, checksums, history 0001–0014               |
+| [security-model](docs/security-model.md)                       | Trust boundaries, enforcement layers, residual risks                |
+| [roadmap](docs/roadmap.md)                                     | Phases and known gaps                                               |
 
 ## Where to look
 

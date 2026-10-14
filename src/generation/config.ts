@@ -39,6 +39,15 @@ export interface GenerationConfig {
     /** Per-generation ceiling in USD. null = no ceiling configured (which BLOCKS paid generation). */
     maxUsd: number | null;
   };
+  /**
+   * Candidate sets (Phase 2E): several paid generations submitted as ONE explicit experiment. The set ceiling is
+   * a SERVER value (never taken from the client) and applies on top of the per-generation ceiling.
+   */
+  candidateSet: {
+    /** Maximum total estimated USD of one set. null = not configured, which BLOCKS paid candidate sets. */
+    maxUsd: number | null;
+    maxCandidates: number;
+  };
 }
 
 type Env = Record<string, string | undefined>;
@@ -86,6 +95,10 @@ export function readGenerationConfig(env: Env = process.env): GenerationConfig {
     paid: {
       enabled: ["1", "true"].includes((env.PRISM_STUDIO_ALLOW_PAID_GENERATION ?? "").trim().toLowerCase()),
       maxUsd: positiveNumber(env.PRISM_STUDIO_MAX_GENERATION_USD),
+    },
+    candidateSet: {
+      maxUsd: positiveNumber(env.PRISM_STUDIO_MAX_CANDIDATE_SET_USD),
+      maxCandidates: intFrom(env.PRISM_STUDIO_MAX_CANDIDATES_PER_SET, 6, 1, 8),
     },
   };
 }

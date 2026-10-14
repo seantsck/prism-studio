@@ -6,6 +6,7 @@ import {
   evaluateCompatibility,
   type AdaptationChoice,
   type CompatibilityReport,
+  type InputMode,
 } from "@/domain/generation/compatibility";
 import {
   buildGenerationRequest,
@@ -58,6 +59,10 @@ export function evaluateShotForModel(args: {
   acknowledged?: readonly string[];
   /** The user's explicit adaptation choices; absent = nothing is adapted (incompatibilities stay blockers). */
   adaptation?: AdaptationChoice;
+  /** Models whose first/last frames exclude reference images: which mode to use (default keyframes). */
+  inputMode?: InputMode;
+  /** Normalized, non-secret model knobs (resolution tier, native audio). Recorded on the attempt. */
+  providerOptions?: Record<string, unknown>;
   now?: Date;
   /** Reuse an already built context/package when evaluating several models for one shot. */
   shared?: SharedShotEvaluation;
@@ -69,6 +74,7 @@ export function evaluateShotForModel(args: {
   let compatibility = model
     ? evaluateCompatibility(pkg, model, {
         adaptation: args.adaptation,
+        inputMode: args.inputMode,
         protectedNotes: ctx.shot.generation.protectedComposition,
       })
     : null;
@@ -84,6 +90,7 @@ export function evaluateShotForModel(args: {
         compatibility,
         plan,
         idempotencyKey: "estimate-only-key",
+        providerOptions: args.providerOptions,
       });
       // Provider-specific limits the generic engine cannot know (e.g. prompt length) surface as explicit
       // ignored features: acknowledged by the user, recorded in the attempt, never silently dropped.
@@ -154,6 +161,8 @@ export function prepareSubmission(args: {
   modelId: string;
   acknowledged: string[];
   adaptation?: AdaptationChoice;
+  inputMode?: InputMode;
+  providerOptions?: Record<string, unknown>;
   userId: string | null;
   idempotencyKey: string;
   config: GenerationConfig;
@@ -177,6 +186,7 @@ export function prepareSubmission(args: {
     plan,
     idempotencyKey: args.idempotencyKey,
     seed: args.seed ?? null,
+    providerOptions: args.providerOptions,
   });
   const check = adapter.validateRequest(request, model);
   if (!check.ok) {

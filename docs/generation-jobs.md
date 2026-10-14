@@ -148,3 +148,14 @@ Storage: the worker needs a **secret** key to write the private bucket (`PRISM_S
 legacy `PRISM_STUDIO_WORKER_SERVICE_KEY`). It exists only on the worker host, a publishable/anon key is refused,
 and with no key the worker refuses to start in production. A narrower mechanism (per-object signed upload URLs
 minted by the app) is possible future hardening.
+
+## Cost and candidate sets (Phase 2E)
+
+Costs stay per attempt (`generation_costs`: estimated at submission, then actual or unknown); a candidate set only
+**groups** attempts and sums them. For a set the UI and the experiments page show: estimated total, actual total
+(partial when some actual costs are unknown), winner cost, and spend on candidates a human rejected ("what exploring
+cost", not a judgment). Gates, in order: `PRISM_STUDIO_ALLOW_PAID_GENERATION`, the per-generation ceiling
+`PRISM_STUDIO_MAX_GENERATION_USD` for every candidate, then the set ceiling `PRISM_STUDIO_MAX_CANDIDATE_SET_USD`
+(unset blocks paid sets) and `PRISM_STUDIO_MAX_CANDIDATES_PER_SET`. The user must confirm the displayed maximum
+total; the server recomputes it. Model pricing is versioned configuration
+([generation-model-catalog](generation-model-catalog.md)); historical cost is never re-priced.

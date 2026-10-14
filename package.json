@@ -33,6 +33,7 @@
     "db:worker-role": "tsx --env-file=.env.local scripts/db-worker-role.mts",
     "db:media-qa": "tsx --env-file=.env.local scripts/db-media-qa.mts",
     "continuity:db:provision": "tsx --env-file=.env.local scripts/continuity-db-provision.mts",
+    "db:candidates": "tsx --env-file=.env.local scripts/db-candidates.mts",
     "db:continuity-analysis": "tsx --env-file=.env.local scripts/db-continuity-analysis.mts",
     "continuity:worker": "tsx --env-file=.env.local scripts/continuity-worker.mts",
     "continuity:pre-paid:check": "tsx --env-file=.env.local scripts/continuity-pre-paid-check.mts",

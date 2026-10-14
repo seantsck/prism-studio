@@ -22,9 +22,12 @@ export function AttemptCard({
   projectSlug,
   compareWith,
   media = null,
+  candidate = null,
 }: {
   view: AttemptView;
   projectSlug: string;
+  /** Phase 2E: the candidate set this attempt belongs to (null = a standalone generation). */
+  candidate?: { setId: string; label: string; title: string } | null;
   /** Media + continuity QA for this attempt (derived delivery, plan, QA status). */
   media?: AttemptMedia | null;
   /** Previous attempt id, for the "compare with attempt N-1" link. */
@@ -60,6 +63,19 @@ export function AttemptCard({
           {attempt.requestModality ? (
             <span className="font-mono text-[10.5px] text-faint">{attempt.requestModality}</span>
           ) : null}
+          {candidate ? (
+            <Link
+              href={`/projects/${projectSlug}/candidates/${candidate.setId}`}
+              className="text-[10.5px] underline"
+              data-testid="candidate-origin"
+            >
+              Candidate {candidate.label} · {candidate.title || "set"}
+            </Link>
+          ) : (
+            <span className="text-[10.5px] text-faint" data-testid="standalone-origin">
+              Standalone generation
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
           {job ? (

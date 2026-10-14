@@ -74,6 +74,11 @@ export const modelCapabilitiesSchema = z.object({
     endFrame: z.boolean(),
     referenceVideo: z.boolean(),
     referenceAudio: z.boolean(),
+    /**
+     * The provider rejects first/last frames mixed with unpositioned reference images. When true, the input
+     * mode (keyframes vs references) is an explicit choice (Phase 2E). Absent = false (older records).
+     */
+    keyframesExcludeReferences: z.boolean().optional(),
   }),
   video: z
     .object({

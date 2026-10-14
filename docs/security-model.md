@@ -136,3 +136,18 @@ These are known and unmitigated unless noted.
     column or privilege: `prism_continuity_worker` claims jobs of any provider.
 23. **`PRISM_STUDIO_ANALYSIS_TRANSPORT=fake`** swaps in deterministic in-memory transports for the acceptance
     E2E. It is honoured only in memory-persistence mode (the local demo) and cannot spend or reach a network.
+
+## Phase 2E: candidate sets and human review
+
+24. **Human decisions are user-domain only.** `generation_candidate_sets`, `_members`, `_events` and
+    `generation_reviews` (migrations 0026–0027) have owner-only RLS and **no grant** to `prism_generation_worker` or
+    `prism_continuity_worker`; a provider, worker or analyzer can never write a review, a rejection reason, a winner
+    or a promotion (`npm run db:candidates` asserts permission-denied as each role).
+25. **Reviews and set events are append-only**; a set's identity and frozen package are immutable; a preferred or
+    promoted attempt must be a member of the set and promotion needs a succeeded attempt (triggers, tested with raw
+    SQL). The only permitted row update is the FK action that clears `candidate_set_id` when a set is deleted.
+26. **Candidate-set spend is server-gated.** `PRISM_STUDIO_MAX_CANDIDATE_SET_USD` (unset ⇒ paid sets blocked) and
+    `PRISM_STUDIO_MAX_CANDIDATES_PER_SET` come from the server environment; the client's displayed total is only a
+    confirmation that the server recomputes and must match. The per-generation gate still applies to every candidate.
+    No automatic or scheduled paid benchmarking exists.
+27. **No cross-user learning.** Recommendations use the signed-in user's project history only.

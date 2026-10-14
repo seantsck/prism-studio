@@ -69,6 +69,11 @@ export interface CompatibilityReport {
     endFrameAssetId: string | null;
     audioAssetIds: string[];
   };
+  /**
+   * For models where first/last frames and reference images are mutually exclusive: which mode this
+   * evaluation used. null for every other model. Phase 2E.
+   */
+  inputMode: "keyframes" | "references" | null;
   /** Human summary of the duration comparison, always present for video modalities. */
   duration: { productionMs: number; supported: string; ok: boolean } | null;
   /**
@@ -78,6 +83,8 @@ export interface CompatibilityReport {
    */
   adaptation: GenerationAdaptationPlan | null;
 }
+
+export type InputMode = "keyframes" | "references";
 
 /** The user's explicit adaptation choices (never defaulted by the engine). */
 export interface AdaptationChoice {
@@ -174,6 +181,11 @@ export function evaluateCompatibility(
     adaptation?: AdaptationChoice;
     /** Shot-level protected composition notes (manual production intent). */
     protectedNotes?: string[];
+    /**
+     * Only meaningful for models whose first/last frames exclude reference images. Default "keyframes": the
+     * approved storyboard frame stays the exact first frame and references are listed as not used.
+     */
+    inputMode?: InputMode;
   } = {},
 ): CompatibilityReport {
   const caps = model.capabilities;
@@ -182,7 +194,14 @@ export function evaluateCompatibility(
   const ignored: IgnoredFeature[] = [];
   const inputs: CompatibilityInput[] = [];
 
-  const modality = opts.modality ?? chooseModality(pkg, model);
+  const exclusive = caps.references.keyframesExcludeReferences === true;
+  const referenceMode =
+    exclusive &&
+    opts.inputMode === "references" &&
+    caps.references.referenceImages &&
+    pkg.generation.modality === "video" &&
+    caps.modalities.includes("text_to_video");
+  const modality = opts.modality ?? (referenceMode ? "text_to_video" : chooseModality(pkg, model));
   if (!modality || !caps.modalities.includes(modality)) {
     errors.push({
       id: "modality.unsupported",
@@ -330,7 +349,34 @@ export function evaluateCompatibility(
   const end = pkg.references.endFrameAssetId;
   let startUsed: string | null = null;
   let endUsed: string | null = null;
-  if (modality === "image_to_video" || modality === "image_to_image") {
+  const asReference = referenceMode && video && modality === "text_to_video";
+  const frameRefs: Candidate[] = [];
+  if (asReference) {
+    // Reference mode: frames cannot be keyframes, so they join the reference images (visibly, not silently).
+    if (start) {
+      frameRefs.push({
+        assetId: start,
+        role: start === pkg.references.approvedStoryboardFrame?.assetId ? "storyboard" : "start_frame",
+        label: "Start frame / storyboard",
+      });
+      ignored.push({
+        id: "start_frame",
+        feature: "start_frame",
+        label: "Start frame as a reference image",
+        impact:
+          "In reference mode the storyboard frame is a reference image, not the exact first frame of the clip.",
+      });
+    }
+    if (end) {
+      frameRefs.push({ assetId: end, role: "end_frame", label: "End frame" });
+      ignored.push({
+        id: "end_frame",
+        feature: "end_frame",
+        label: "End frame as a reference image",
+        impact: "In reference mode the end frame is a reference image, not the exact last frame of the clip.",
+      });
+    }
+  } else if (modality === "image_to_video" || modality === "image_to_image") {
     if (!start) {
       errors.push({
         id: "start_frame.missing",
@@ -355,7 +401,7 @@ export function evaluateCompatibility(
         impact: "The approved storyboard frame will NOT condition the first frame of this generation.",
       });
   }
-  if (end) {
+  if (end && !asReference) {
     if (caps.references.endFrame && video) endUsed = end;
     else
       ignored.push({
@@ -371,7 +417,7 @@ export function evaluateCompatibility(
       label: "Start frame",
       assetId: start,
       role: "start_frame",
-      used: Boolean(startUsed),
+      used: Boolean(startUsed) || frameRefs.some((f) => f.assetId === start),
     });
   if (end)
     inputs.push({
@@ -379,11 +425,11 @@ export function evaluateCompatibility(
       label: "End frame",
       assetId: end,
       role: "end_frame",
-      used: Boolean(endUsed),
+      used: Boolean(endUsed) || frameRefs.some((f) => f.assetId === end),
     });
 
   // ── references ──
-  const candidates = deriveReferenceCandidates(pkg);
+  const candidates = [...frameRefs, ...deriveReferenceCandidates(pkg)];
   const accepted: GenerationReference[] = [];
   const roleSupported = (role: ReferenceRole): boolean => {
     if (!caps.references.referenceImages) return false;
@@ -404,6 +450,18 @@ export function evaluateCompatibility(
       role: c.role,
       used: roleSupported(c.role),
     });
+  }
+  if (exclusive && !referenceMode && (startUsed || endUsed) && accepted.length > 0) {
+    // The provider cannot mix first/last frames with reference images: never drop one silently.
+    for (const i of inputs) if (i.kind === "reference") i.used = false;
+    ignored.push({
+      id: "references.mode_exclusive",
+      feature: "references",
+      label: `${accepted.length} reference image${accepted.length === 1 ? "" : "s"} (keyframe mode)`,
+      impact:
+        "This model cannot combine first/last frames with reference images. In keyframe mode the references are NOT used; choose reference mode to use them (the storyboard frame then becomes a reference, not the exact first frame).",
+    });
+    accepted.length = 0;
   }
   for (const [role, list] of droppedByRole) {
     ignored.push({
@@ -496,6 +554,7 @@ export function evaluateCompatibility(
       endFrameAssetId: endUsed,
       audioAssetIds,
     },
+    inputMode: exclusive ? (referenceMode ? "references" : "keyframes") : null,
     duration,
     adaptation,
   };

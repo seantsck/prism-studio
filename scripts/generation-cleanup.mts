@@ -19,6 +19,18 @@ const attempts = (
   )
 ).rows.map((r) => String(r.id));
 
+// Phase 2E: candidate sets made ONLY of mock candidates (their members/events/reviews go with them or with the
+// attempts). Sets that include any real-provider candidate are never touched.
+const mockSets = (
+  await pool.query(
+    `select s.id from generation_candidate_sets s join projects p on p.id = s.project_id
+      where p.user_id = $1
+        and not exists (select 1 from generation_candidate_members m
+                         where m.candidate_set_id = s.id and m.provider <> 'mock')`,
+    [dev.id],
+  )
+).rows.map((r) => String(r.id));
+
 const providerAssets = attempts.length
   ? (
       await pool.query(
@@ -45,7 +57,7 @@ const derivedAssets = attempts.length
 const assets = [...derivedAssets, ...providerAssets];
 
 console.log(
-  `mock attempts: ${attempts.length}, generated assets: ${providerAssets.length}, derived assets: ${derivedAssets.length}`,
+  `mock attempts: ${attempts.length}, candidate sets: ${mockSets.length}, generated assets: ${providerAssets.length}, derived assets: ${derivedAssets.length}`,
 );
 if (!process.argv.includes("--yes")) {
   console.log("dry run; pass --yes to delete");
@@ -53,6 +65,8 @@ if (!process.argv.includes("--yes")) {
   process.exit(0);
 }
 
+if (mockSets.length)
+  await pool.query("delete from generation_candidate_sets where id = any($1::uuid[])", [mockSets]);
 if (attempts.length)
   await pool.query("delete from generation_attempts where id = any($1::uuid[])", [attempts]);
 if (assets.length) {

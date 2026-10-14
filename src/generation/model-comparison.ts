@@ -1,0 +1,190 @@
+import { catalogModel } from "@/domain/generation/models/catalog";
+import { evaluateModelFit, FIT_LABELS, type ModelFit } from "@/domain/generation/models/matrix";
+import {
+  deriveShotFeatureProfile,
+  deriveShotRequirements,
+  profileLabel,
+  type ShotFeatureProfile,
+  type ShotGenerationRequirements,
+} from "@/domain/generation/models/requirements";
+import { aggregateByModel, type OutcomeRecord } from "@/domain/generation/performance";
+import {
+  capabilityFit,
+  recommendModels,
+  type Recommendation,
+  type RecommendationPreference,
+} from "@/domain/generation/recommendation";
+import type { InputMode } from "@/domain/generation/compatibility";
+import type { ProjectData } from "@/domain/schemas";
+import type { ModelRegistry } from "./registry";
+import { buildSharedEvaluation } from "./submission";
+import { variantKey, type ModelRow, type VariantView } from "./model-comparison-types";
+
+export { variantKey, type ModelRow, type VariantView } from "./model-comparison-types";
+
+/**
+ * Serializable per-shot model comparison for the Generate workspace and the model pages. Pure given its inputs
+ * (data, registry, outcomes): the same numbers the candidate-set planner and the gate use. Nothing here
+ * contains credentials, URLs or asset bytes.
+ */
+export interface ModelComparison {
+  rows: ModelRow[];
+  profile: ShotFeatureProfile;
+  profileLabel: string;
+  requirements: ShotGenerationRequirements;
+  recommendation: Recommendation;
+  fingerprint: string;
+}
+
+const toView = (fit: ModelFit, requirements: ShotGenerationRequirements): VariantView => ({
+  status: fit.status,
+  statusLabel: FIT_LABELS[fit.status],
+  blockers: fit.blockers,
+  adaptations: fit.adaptations,
+  limitations: fit.limitations,
+  unknowns: fit.unknowns,
+  packaging: fit.packaging,
+  referencesUsed: fit.referencesUsed,
+  duration: fit.duration.text,
+  durationUnverified: fit.duration.unverified,
+  framing: fit.framing.text,
+  audio: fit.audio.text,
+  estimateUsd: fit.estimate?.amountUsd ?? null,
+  estimateBasis: fit.estimate?.basis ?? null,
+  fitScore: Math.round(capabilityFit(fit, requirements) * 1000) / 1000,
+});
+
+export function buildModelComparison(args: {
+  data: ProjectData;
+  shotId: string;
+  registry: ModelRegistry;
+  outcomes: readonly OutcomeRecord[];
+  preference?: RecommendationPreference;
+  /** Only these models (default: every registered model that can produce video). */
+  filter?: (provider: string, modelId: string) => boolean;
+  now?: Date;
+}): ModelComparison {
+  const shared = buildSharedEvaluation(args.data, args.shotId, args.now);
+  const { pkg, ctx } = shared;
+  const protectedNotes = ctx.shot.generation.protectedComposition;
+  const requirements = deriveShotRequirements(pkg, { protectedComposition: protectedNotes });
+  const profile = deriveShotFeatureProfile(pkg, requirements);
+
+  const models = args.registry
+    .models()
+    .filter((m) => m.capabilities.video != null)
+    .filter((m) => (args.filter ? args.filter(m.provider, m.modelId) : true));
+
+  interface Built {
+    model: (typeof models)[number];
+    variants: Record<string, VariantView>;
+    fits: Record<string, ModelFit>;
+    defaultKey: string;
+    modes: InputMode[];
+    tiers: string[];
+    nativeAudio: boolean;
+  }
+  const built: Built[] = models.map((model) => {
+    const cat = catalogModel(model.provider, model.modelId);
+    const availability = args.registry.availabilityOf(model);
+    const modes: InputMode[] = model.capabilities.references.keyframesExcludeReferences
+      ? ["keyframes", "references"]
+      : [];
+    const tiers = cat && cat.tiers.length > 1 ? cat.tiers.map((t) => t.id) : [];
+    const nativeAudio = cat?.audio.nativeGeneration === "supported";
+    const modeList: Array<InputMode | undefined> = modes.length ? modes : [undefined];
+    const tierList: Array<string | null> = tiers.length ? tiers : [null];
+    const audioList = nativeAudio ? [false, true] : [false];
+    const variants: Record<string, VariantView> = {};
+    const fits: Record<string, ModelFit> = {};
+    for (const mode of modeList)
+      for (const tier of tierList)
+        for (const audio of audioList) {
+          const fit = evaluateModelFit({
+            pkg,
+            model,
+            catalog: cat,
+            availability,
+            options: { inputMode: mode, tierId: tier, nativeAudio: audio, protectedNotes },
+          });
+          const key = variantKey(mode ?? null, tier ?? tiers[0] ?? null, audio);
+          variants[key] = toView(fit, requirements);
+          fits[key] = fit;
+        }
+    const defaultKey = variantKey(modes[0] ?? null, tiers[0] ?? null, false);
+    return { model, variants, fits, defaultKey, modes, tiers, nativeAudio };
+  });
+
+  const defaults = built.map((b) => b.fits[b.defaultKey]!);
+  const recommendation = recommendModels({
+    fits: defaults,
+    outcomes: args.outcomes,
+    profile,
+    requirements,
+    preference: args.preference,
+  });
+  const perf = new Map(aggregateByModel(args.outcomes).map((p) => [`${p.provider}/${p.model}`, p] as const));
+
+  const rows: ModelRow[] = built.map((b) => {
+    const m = b.model;
+    const a = args.registry.availabilityOf(m);
+    const cat = catalogModel(m.provider, m.modelId);
+    const rec = recommendation.models.find((r) => r.provider === m.provider && r.modelId === m.modelId)!;
+    const h = perf.get(`${m.provider}/${m.modelId}`) ?? null;
+    return {
+      key: `${m.provider}/${m.modelId}`,
+      provider: m.provider,
+      providerName: a.providerName,
+      modelId: m.modelId,
+      label: m.displayName,
+      description: m.description,
+      kind: m.kind,
+      role: cat?.role ?? null,
+      available: a.available,
+      unavailableReason: !a.enabled
+        ? "disabled on this server"
+        : !a.configured
+          ? `not configured (${a.missingConfig.join(", ")})`
+          : a.lifecycle === "retired"
+            ? "retired"
+            : !a.paidGenerationEnabled
+              ? "paid generation is switched off"
+              : null,
+      modes: b.modes,
+      tiers: b.tiers,
+      nativeAudio: b.nativeAudio,
+      defaultVariant: b.defaultKey,
+      variants: b.variants,
+      recommendation: {
+        label: rec.label,
+        rank: rec.rank,
+        score: rec.score,
+        confidence: rec.confidence,
+        why: rec.why,
+        concerns: rec.concerns,
+        sample: rec.sample,
+        historicalRate: rec.historicalRate,
+      },
+      history: h
+        ? {
+            reviewed: h.reviewed,
+            approved: h.approved,
+            shortlisted: h.shortlisted,
+            rejected: h.rejected,
+            preferredWins: h.preferredWins,
+            reliability: h.reliability,
+            topRejectionReasons: h.topRejectionReasons,
+          }
+        : null,
+    };
+  });
+
+  return {
+    rows,
+    profile,
+    profileLabel: profileLabel(profile),
+    requirements,
+    recommendation,
+    fingerprint: pkg.provenance.fingerprint,
+  };
+}

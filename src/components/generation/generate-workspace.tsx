@@ -9,7 +9,7 @@ import type { ProjectData } from "@/domain/schemas";
 import type { CompiledRequestSummary } from "@/generation/provider";
 import { buildSharedEvaluation, evaluateShotForModel } from "@/generation/submission";
 import { loadAttemptMedia } from "@/server/attempt-media";
-import { getGenerationRepo, getRegistry } from "@/server/generation";
+import { getGenerationConfig, getGenerationRepo, getRegistry } from "@/server/generation";
 import { AttemptCard } from "./attempt-card";
 import { assetUrl } from "@/lib/utils";
 import {
@@ -19,6 +19,9 @@ import {
   type AdaptationOptions,
   type VariantEvaluation,
 } from "./adaptation-summary";
+import { ModelComparePanel } from "@/components/candidates/model-compare-panel";
+import { buildModelComparison } from "@/generation/model-comparison";
+import { getCandidateRepo } from "@/server/candidates";
 import { GeneratePanel, type ModelOption } from "./generate-panel";
 import { LifecycleBadge } from "./parts";
 import { GenerationPoller } from "./poller";
@@ -191,9 +194,20 @@ export async function GenerateWorkspace({ data, shotId }: { data: ProjectData; s
     }
   }
 
+  // Phase 2E: model comparison + candidate sets (advisory; nothing here generates by itself)
+  const candidateRepo = await getCandidateRepo();
+  const outcomes = await candidateRepo.listOutcomeRecords(data.project.id);
+  const comparison = buildModelComparison({ data, shotId, registry, outcomes });
+  const cfg = getGenerationConfig();
+  const setsForShot = await candidateRepo.listSets(data.project.id, { shotId, limit: 10 });
+
   const storyboardUrl = assetUrl(data.assets.find((x) => x.id === shared.ctx.approvedFrame?.assetId));
   const slug = data.project.slug;
   const sorted = [...views].sort((a, b) => b.attempt.attemptNumber - a.attempt.attemptNumber);
+  const candidateOf = new Map<string, { setId: string; label: string; title: string }>();
+  for (const s of setsForShot)
+    for (const m of s.members)
+      if (m.attemptId) candidateOf.set(m.attemptId, { setId: s.set.id, label: m.label, title: s.set.title });
   const mediaByAttempt = new Map(
     await Promise.all(sorted.map(async (v) => [v.attempt.id, await loadAttemptMedia(data, v)] as const)),
   );
@@ -218,6 +232,41 @@ export async function GenerateWorkspace({ data, shotId }: { data: ProjectData; s
         protectedNotes={shot.generation.protectedComposition}
       />
 
+      <details className="border border-line bg-panel" data-testid="compare-models-section" open>
+        <summary className="cursor-pointer px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
+          Compare models for this shot (candidate set)
+        </summary>
+        <div className="space-y-2 p-3">
+          <ModelComparePanel
+            projectSlug={slug}
+            shotId={shotId}
+            rows={comparison.rows}
+            historyNote={comparison.recommendation.historyNote}
+            profileLabel={comparison.profileLabel}
+            preference={comparison.recommendation.preference}
+            coldStart={comparison.recommendation.coldStart}
+            engineVersion={comparison.recommendation.engineVersion}
+            maxCandidates={cfg.candidateSet.maxCandidates}
+            setCeilingUsd={cfg.candidateSet.maxUsd}
+            paidEnabled={cfg.paid.enabled}
+          />
+          {setsForShot.length > 0 ? (
+            <div className="text-[11.5px]" data-testid="shot-candidate-sets">
+              <span className="text-muted">Experiments for this shot: </span>
+              {setsForShot.map((s) => (
+                <a
+                  key={s.set.id}
+                  href={`/projects/${slug}/candidates/${s.set.id}`}
+                  className="mr-3 underline"
+                >
+                  {s.set.title || "Candidate set"}
+                </a>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </details>
+
       <PromptInspector
         brief={renderGenerationBrief(shared.pkg)}
         plan={plan}
@@ -238,6 +287,7 @@ export async function GenerateWorkspace({ data, shotId }: { data: ProjectData; s
                 view={v}
                 projectSlug={slug}
                 media={mediaByAttempt.get(v.attempt.id) ?? null}
+                candidate={candidateOf.get(v.attempt.id) ?? null}
                 compareWith={prev ? { id: prev.attempt.id, number: prev.attempt.attemptNumber } : undefined}
               />
             );

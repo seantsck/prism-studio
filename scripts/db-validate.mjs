@@ -49,6 +49,11 @@ const expectedTables = [
   "continuity_analysis_jobs",
   "continuity_analysis_costs",
   "continuity_analysis_events",
+  // Phase 2E
+  "generation_candidate_sets",
+  "generation_candidate_members",
+  "generation_reviews",
+  "generation_candidate_events",
 ];
 const tables = (await rows("select tablename, rowsecurity from pg_tables where schemaname='public'")).filter(
   (t) => t.tablename !== "prism_migrations",

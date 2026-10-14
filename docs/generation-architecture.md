@@ -105,3 +105,27 @@ PromptPlan section (`provider_adaptation`). After ingestion, an optional **deliv
 creates a derived delivery master; **continuity QA** judges it. None of this touches the worker: see
 [framing-adaptation](framing-adaptation.md), [delivery-conform](delivery-conform.md),
 [continuity-qa](continuity-qa.md), [media-processing](media-processing.md).
+
+## Multi-model production (Phase 2E)
+
+```
+ Shot ──► ShotGenerationRequirements + ShotFeatureProfile       (domain/generation/models/requirements.ts)
+   │
+   ├─► Model catalog ─► per-model fit matrix (what each model RECEIVES, adaptation, cost)
+   │        │               + recommendation v1 (capability fit · human history · cost; advisory)
+   ▼        ▼
+ CandidateSet  (ONE frozen package) ─► N × (GenerationAttempt + GenerationJob) ─► worker (unchanged)
+   │
+   ├─► side-by-side compare ─► HUMAN review (append-only) ─► Best ─► explicit Promote to Shot
+   └─► model performance (derived on demand from human reviews)
+```
+
+- The catalog is **versioned configuration** ([generation-model-catalog](generation-model-catalog.md)); the existing
+  `GenerationModel` is derived from it so the compatibility engine, gate, registry and worker are unchanged.
+- One Runway adapter dispatches by model **family** (`runway_gen4`, `veo`, `seedance`, `hailuo`); there is no
+  provider class per model.
+- A candidate set groups attempts; every candidate keeps its own attempt, job, events and costs. Failure isolation is
+  structural. See [generation-candidate-sets](generation-candidate-sets.md).
+- Candidate sets and reviews are **user-domain** tables: the generation and continuity workers have no grant on them.
+- Nothing here assumes Runway: `CandidateSet`, reviews, performance and recommendation are provider-independent and a
+  later direct provider adds a catalog entry and an adapter.
