@@ -1207,7 +1207,7 @@ export function buildSeedProject(): ProjectData {
       tone: "Restrained, wry, emotionally precise",
       defaultLanguage: "ja",
       productionStatus: "pre_production",
-      isBenchmark: false,
+      purpose: "production",
       createdAt: T0,
       updatedAt: T0,
     },

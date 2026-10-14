@@ -95,11 +95,12 @@ export const projectSchema = z.object({
   defaultLanguage: text,
   productionStatus: z.enum(PRODUCTION_STATUSES),
   /**
-   * Explicit owner classification: an infrastructure-validation / benchmark / synthetic-fixture project. Never
-   * inferred from the slug. Its reviews and winners persist and work normally, but its records are excluded
-   * from production model-performance aggregates and routing recommendations (see domain/generation/performance).
+   * Explicit owner classification, never inferred from the slug: production (default), benchmark (a model or
+   * provider benchmark / synthetic fixture) or test (infrastructure / UI test project). Reviews and winners of
+   * non-production projects persist and work normally, but their records are excluded from production
+   * model-performance aggregates and routing recommendations (see domain/generation/performance).
    */
-  isBenchmark: z.boolean().default(false),
+  purpose: z.enum(["production", "benchmark", "test"]).default("production"),
   createdAt: iso,
   updatedAt: iso,
 });

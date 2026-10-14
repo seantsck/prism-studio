@@ -61,7 +61,7 @@ export default async function ExperimentsPage({ params }: { params: Promise<{ pr
         subtitle="Candidate sets: which models were compared, what won, what it cost and why the others lost."
       />
       <div className="space-y-3 p-6">
-        {data.project.isBenchmark ? <BenchmarkBanner /> : null}
+        {data.project.purpose !== "production" ? <BenchmarkBanner /> : null}
         {rows.length === 0 ? (
           <Empty>
             No candidate sets yet. Compare models from a shot&apos;s Generate panel (Shot Prep). Standalone

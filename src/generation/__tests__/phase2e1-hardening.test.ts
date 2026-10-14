@@ -344,11 +344,11 @@ describe("Phase 2E.1: partial sets, failed candidates and benchmark persistence"
   it("a benchmark project still persists reviews and winners, flagged benchmark and out of production scope", async () => {
     const h = makeHarness();
     const base = await h.data();
-    await h.repo.updateProject({ ...base.project, isBenchmark: true });
+    await h.repo.updateProject({ ...base.project, purpose: "benchmark" as const });
     const out = await createSet(h, [mock("mock-video-1"), mock("mock-video-lite")]);
     await drain(h);
     const data = await h.data();
-    expect(data.project.isBenchmark).toBe(true);
+    expect(data.project.purpose).toBe("benchmark");
     const view = (await h.repo.candidates.getSet(out.view.set.id))!;
     const first = view.members[0]!.attemptId!;
     await review(h, data.project.id, view.set.id, first, "approve");
@@ -362,12 +362,12 @@ describe("Phase 2E.1: partial sets, failed candidates and benchmark persistence"
     expect(aggregateByModel(rows, "benchmark").some((p) => p.approved === 1)).toBe(true);
   });
 
-  it("a normal project's records are production data (the classification defaults to false)", async () => {
+  it("a normal project's records are production data (the purpose defaults to production)", async () => {
     const h = makeHarness();
     const out = await createSet(h, [mock("mock-video-1")]);
     await drain(h);
     const data = await h.data();
-    expect(data.project.isBenchmark).toBe(false);
+    expect(data.project.purpose).toBe("production");
     const attemptId = (await h.repo.candidates.getSet(out.view.set.id))!.members[0]!.attemptId!;
     await review(h, data.project.id, out.view.set.id, attemptId, "approve");
     const rows = await h.repo.candidates.listOutcomeRecords(data.project.id);

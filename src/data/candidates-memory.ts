@@ -267,6 +267,7 @@ export class MemoryCandidateService implements CandidateRepository {
               submittedAt: v.job.submittedAt,
               completedAt: v.job.completedAt,
               errorCategory: v.job.lastErrorCategory,
+              errorCode: v.job.lastErrorCode,
             }
           : null,
         actualCostUsd: actual?.amount ?? null,
@@ -286,7 +287,7 @@ export class MemoryCandidateService implements CandidateRepository {
       reviews: this.reviews.filter((r) => r.projectId === projectId),
       memberships,
       preferredAttemptIds: preferred,
-      benchmark: data.project.isBenchmark === true,
+      benchmark: data.project.purpose !== "production",
     });
   }
 }

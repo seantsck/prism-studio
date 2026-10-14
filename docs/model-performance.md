@@ -32,11 +32,20 @@ _total_ = job `created_at` → `completed_at`. The provider-reported completion 
 
 ## Benchmark / fixture data is separate
 
-Records from a project classified `is_benchmark` carry `benchmark: true`. Every aggregate (`aggregateByModel`,
+Records from a project whose `purpose` is `benchmark` or `test` carry `benchmark: true`. Every aggregate (`aggregateByModel`,
 `…ByModelAndBucket`, `…ByProvider`) takes a scope that **defaults to production**, so benchmark reviews can never leak
 into production statistics, approval rates or recommendations by accident. A benchmark project's own Models page shows
 its data with a **TEST / BENCHMARK DATA** banner (scope `benchmark`); the data is real and still useful for exercising
 the tooling.
+
+## Provider reliability is not creative quality
+
+`providerReliability(records, scope)` counts operational outcomes per model: terminal attempts, succeeded, provider
+failures (provider_unavailable, timeout, transient, rate_limit), invalid requests (invalid_request, content_rejected),
+ambiguous submissions (`submission_outcome_unknown`) and other failures. These are counts, not a score, and they are
+shown on the Models page next to, never inside, the human-review history. A provider failure or a rejected request is
+never a creative rejection and a creative reject is never a provider failure. It does not feed routing weights yet;
+if it does, it will appear as an explicit low-weight reason ("3/4 succeeded"), not a hidden penalty.
 
 ## Small samples are labelled
 

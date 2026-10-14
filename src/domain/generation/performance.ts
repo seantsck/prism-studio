@@ -35,6 +35,8 @@ export interface OutcomeRecord {
   status: string;
   /** Job failure category when it failed (rate_limit, provider_unavailable, ...). */
   errorCategory?: string | null;
+  /** Provider/worker error code (e.g. submission_outcome_unknown), when the job failed. */
+  errorCode?: string | null;
   createdAt: string;
 }
 
@@ -141,6 +143,63 @@ export function summarize(provider: string, model: string, rows: readonly Outcom
     avgCostPerPositiveUsd: positive.length > 0 && spend > 0 ? round4(spend / positive.length) : null,
     reliability: reliabilityOf(reviewedRows.length),
   };
+}
+
+/**
+ * OPERATIONAL reliability of a model: did the provider accept and complete the request. Deliberately separate
+ * from creative quality: a provider outage or a rejected request is never a human rejection, and a creative
+ * reject is never an outage. Counts only; tiny samples are labelled by the caller, never turned into a score.
+ */
+export interface ProviderReliability {
+  provider: string;
+  model: string;
+  /** Attempts that reached a terminal state (succeeded or failed). */
+  terminal: number;
+  succeeded: number;
+  /** Failed after the provider accepted work (provider_unavailable, timeout, transient, rate_limit). */
+  providerFailed: number;
+  /** Refused at submission as a bad request / unsupported input (invalid_request, content_rejected). */
+  invalidRequest: number;
+  /** Submission outcome unknown: may have been accepted and billed; never auto-resubmitted. */
+  ambiguousSubmission: number;
+  /** Other failures (auth, quota, permanent). */
+  otherFailed: number;
+}
+
+const INVALID_CATEGORIES = ["invalid_request", "content_rejected"];
+const PROVIDER_CATEGORIES = ["provider_unavailable", "timeout", "transient", "rate_limit"];
+
+export function providerReliability(
+  records: readonly OutcomeRecord[],
+  scope: DataScope = "production",
+): ProviderReliability[] {
+  const groups = new Map<string, ProviderReliability>();
+  for (const r of inScope(records, scope)) {
+    if (r.status !== "succeeded" && r.status !== "failed") continue;
+    const key = `${r.provider}/${r.model}`;
+    const g =
+      groups.get(key) ??
+      ({
+        provider: r.provider,
+        model: r.model,
+        terminal: 0,
+        succeeded: 0,
+        providerFailed: 0,
+        invalidRequest: 0,
+        ambiguousSubmission: 0,
+        otherFailed: 0,
+      } as ProviderReliability);
+    g.terminal++;
+    if (r.status === "succeeded") g.succeeded++;
+    else if (r.errorCode === "submission_outcome_unknown") g.ambiguousSubmission++;
+    else if (INVALID_CATEGORIES.includes(r.errorCategory ?? "")) g.invalidRequest++;
+    else if (PROVIDER_CATEGORIES.includes(r.errorCategory ?? "")) g.providerFailed++;
+    else g.otherFailed++;
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort((a, b) =>
+    `${a.provider}/${a.model}`.localeCompare(`${b.provider}/${b.model}`),
+  );
 }
 
 export function aggregateByModel(

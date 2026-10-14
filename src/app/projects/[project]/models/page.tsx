@@ -7,6 +7,7 @@ import {
   aggregateByModel,
   aggregateByModelAndBucket,
   aggregateByProvider,
+  providerReliability,
   RELIABILITY_NOTE,
 } from "@/domain/generation/performance";
 import { NEGATIVE_LABELS, POSITIVE_LABELS } from "@/domain/generation/reviews";
@@ -39,12 +40,15 @@ export default async function ModelsPage({ params }: { params: Promise<{ project
   const candidates = await getCandidateRepo();
   const outcomes = await candidates.listOutcomeRecords(data.project.id);
   // A benchmark project shows ITS OWN data, labelled; a production project never sees benchmark data here.
-  const scope = data.project.isBenchmark ? "benchmark" : "production";
+  const scope = data.project.purpose !== "production" ? "benchmark" : "production";
   const byModel = new Map(
     aggregateByModel(outcomes, scope).map((p) => [`${p.provider}/${p.model}`, p] as const),
   );
   const buckets = aggregateByModelAndBucket(outcomes, scope).filter((b) => b.reviewed > 0);
   const providers = aggregateByProvider(outcomes, scope).filter((p) => p.reviewed > 0);
+  const reliabilityByModel = new Map(
+    providerReliability(outcomes, scope).map((r) => [`${r.provider}/${r.model}`, r] as const),
+  );
   const models = registry.models().filter((m) => m.capabilities.video != null);
 
   return (
@@ -54,7 +58,7 @@ export default async function ModelsPage({ params }: { params: Promise<{ project
         subtitle="Capabilities, versioned pricing and this project's human-review history. Advisory: Prism never switches models for you."
       />
       <div className="space-y-4 p-6">
-        {data.project.isBenchmark ? <BenchmarkBanner /> : null}
+        {data.project.purpose !== "production" ? <BenchmarkBanner /> : null}
         {models.map((m) => {
           const cat = catalogModel(m.provider, m.modelId);
           const a = registry.availabilityOf(m);
@@ -128,6 +132,19 @@ export default async function ModelsPage({ params }: { params: Promise<{ project
                     ) : (
                       <p className="text-faint">No reviewed generations of this model in this project yet.</p>
                     )}
+                    {(() => {
+                      const r = reliabilityByModel.get(`${m.provider}/${m.modelId}`);
+                      return r ? (
+                        <p className="mt-1 text-[11px]" data-testid="model-reliability">
+                          Provider reliability (operational, not creative quality): {r.succeeded}/{r.terminal}{" "}
+                          succeeded
+                          {r.providerFailed ? ` · ${r.providerFailed} provider failure` : ""}
+                          {r.invalidRequest ? ` · ${r.invalidRequest} invalid request` : ""}
+                          {r.ambiguousSubmission ? ` · ${r.ambiguousSubmission} ambiguous submission` : ""}
+                          {r.otherFailed ? ` · ${r.otherFailed} other` : ""}. Tiny sample, not a trend.
+                        </p>
+                      ) : null;
+                    })()}
                     <p className="mt-1 text-[10.5px] text-faint">Health: {health.note}</p>
                   </div>
                 </div>

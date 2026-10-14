@@ -71,7 +71,9 @@ Later files (0012–0028) are documented in their own headers and in [generation
 Notable fix-forward: **0027** replaces the review append-only guard so the `on delete set null` action of 0026's
 `generation_reviews.candidate_set_id` is permitted (0026 is applied and therefore immutable). **0028** adds the
 explicit `projects.is_benchmark` classification (default false; no data is reclassified by SQL, never inferred from a
-slug) and a trigger that refuses a human review for an attempt that has not succeeded.
+slug) and a trigger that refuses a human review for an attempt that has not succeeded. **0029** replaces that boolean
+with the extensible `projects.purpose` enum (`production` default, `benchmark`, `test`; existing `is_benchmark = true`
+rows become `benchmark`) and drops `is_benchmark`.
 
 ## Adding a migration
 

@@ -21,7 +21,8 @@ export function BenchmarkBanner({ compact = false }: { compact?: boolean }) {
       <Badge tone="warn">TEST / BENCHMARK DATA</Badge>
       <span className="text-muted">
         This project is classified as a benchmark / synthetic fixture. Its reviews and winners work normally
-        but are excluded from production model performance and routing recommendations.
+        but are excluded from production model performance and routing recommendations. Excluded from
+        production recommendations.
       </span>
     </div>
   );

@@ -19,6 +19,7 @@ export interface RawAttemptOutcome {
     completedAt: string | null;
     /** Failure category of the job (rate_limit, provider_unavailable, ...), when it failed. */
     errorCategory?: string | null;
+    errorCode?: string | null;
   } | null;
   /** Provider-reported cost; null when unknown (never replaced by the estimate). */
   actualCostUsd: number | null;
@@ -75,6 +76,7 @@ export function buildOutcomeRecords(args: {
       benchmark: args.benchmark === true,
       status: a.status,
       errorCategory: a.job?.errorCategory ?? null,
+      errorCode: a.job?.errorCode ?? null,
       createdAt: a.createdAt,
     };
   });

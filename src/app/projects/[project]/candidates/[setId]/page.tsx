@@ -177,7 +177,7 @@ export default async function CandidateSetPage({
         }
       />
       <div className="space-y-4 p-6">
-        {data.project.isBenchmark ? <BenchmarkBanner /> : null}
+        {data.project.purpose !== "production" ? <BenchmarkBanner /> : null}
         <GenerationPoller projectSlug={slug} shotId={set.set.shotId} signature={signature} active={active} />
 
         <div className="grid gap-3 md:grid-cols-3">

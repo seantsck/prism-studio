@@ -7,12 +7,12 @@
 //   npm run runway:fixture -- --slug <s>   fixture project slug (default runway-smoke-test)
 //   npm run runway:fixture -- --mark-benchmark   classify the EXISTING fixture project as a benchmark project
 //
-// The fixture is created as a BENCHMARK project (projects.is_benchmark = true): its reviews and winners work
+// The fixture is created as a BENCHMARK project (projects.purpose = 'benchmark'): its reviews and winners work
 // normally but never feed production model intelligence. The flag is explicit, never inferred from the slug.
 //
 // It is a SEPARATE project (own slug, own rows). The demo/drama project and Shot 3A are never touched.
-// One 16:9, character-free establishing shot (5 s by default) of a paper lantern: harmless, no public figures or
-// copyrighted material. It sends nothing to Runway and spends nothing.
+// One 16:9 shot (5 s by default): a fictional red-coated figure with a yellow umbrella on a hillside road at dusk,
+// harmless, no public figures or copyrighted material. It sends nothing to Runway and spends nothing.
 import { randomUUID, createHash } from "node:crypto";
 import pg from "pg";
 import { AdminRepository } from "../src/data/postgres-repository";
@@ -22,7 +22,7 @@ import { runPreflight } from "../src/domain/preflight";
 import type { ProjectData } from "../src/domain/schemas";
 import { emptyShot } from "../src/domain/shot-defaults";
 import { readGenerationConfig } from "../src/generation/config";
-import { encodeMockPng } from "../src/generation/providers/mock-image";
+import { encodeSceneStillPng } from "../src/generation/providers/mock-image";
 import { createRegistry } from "../src/generation/registry";
 import { createOutputSink } from "../src/generation/sink";
 import { evaluateShotForModel } from "../src/generation/submission";
@@ -60,12 +60,11 @@ if (markBenchmark) {
   const found = (await admin.listProjects()).find((p) => p.slug === SLUG);
   if (!found) console.log("fixture project not present");
   else {
-    await pool.query("update projects set is_benchmark = true where id = $1 and slug = $2 and user_id = $3", [
-      found.id,
-      SLUG,
-      dev.id,
-    ]);
-    console.log(`project ${SLUG} is now classified as a benchmark project (is_benchmark = true)`);
+    await pool.query(
+      "update projects set purpose = 'benchmark' where id = $1 and slug = $2 and user_id = $3",
+      [found.id, SLUG, dev.id],
+    );
+    console.log(`project ${SLUG} is now classified as a benchmark project (purpose = benchmark)`);
   }
   await pool.end();
   process.exit(0);
@@ -98,7 +97,9 @@ const LOC = randomUUID();
 const SH = randomUUID();
 const FR = randomUUID();
 const AS = randomUUID();
-const png = encodeMockPng(1280, 720, 11);
+// Richer deterministic fictional scene (red-coated figure + yellow umbrella, mountains, lamp post) so models
+// have real foreground/background and colour detail to compare. No real person; disposable.
+const png = encodeSceneStillPng(1280, 720);
 
 const project = {
   ...demo.project,
@@ -110,7 +111,7 @@ const project = {
   genre: "",
   tone: "",
   productionStatus: "development" as typeof demo.project.productionStatus,
-  isBenchmark: true,
+  purpose: "benchmark" as const,
   createdAt: now,
   updatedAt: now,
 };
@@ -163,7 +164,7 @@ const scene = {
   intExt: "INT" as (typeof demo.scenes)[0]["intExt"],
   locationId: LOC,
   timeOfDay: "dusk",
-  summary: "A paper lantern on a table.",
+  summary: "A red-coated figure with a yellow umbrella on a hillside road at dusk.",
   dramaticPurpose: "",
   emotionEntering: "",
   emotionLeaving: "",
@@ -179,12 +180,13 @@ const base = emptyShot({
   episodeId: EP,
   sceneId: SC,
   shotCode: "SMOKE-1",
-  title: "Paper lantern at dusk",
+  title: "Red coat and yellow umbrella at dusk",
   order: 1,
 });
 const shot = {
   ...base,
-  storyBeat: "A single paper lantern glows on a wooden table beside a window at dusk.",
+  storyBeat:
+    "A fictional figure in a red coat holds a yellow umbrella on a quiet hillside road at dusk; a blue lamp post glows behind. Slow push-in.",
   dramaticPurpose: "Smoke test: prove submission, polling, ingest and review.",
   durationMode: "manual" as const,
   targetDurationMs: SECONDS * 1000,

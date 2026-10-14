@@ -151,7 +151,7 @@ These are known and unmitigated unless noted.
     confirmation that the server recomputes and must match. The per-generation gate still applies to every candidate.
     No automatic or scheduled paid benchmarking exists.
 27. **No cross-user learning.** Recommendations use the signed-in user's project history only.
-28. **Benchmark classification is explicit and owner-set.** `projects.is_benchmark` is never derived from a slug or
+28. **Benchmark classification is explicit and owner-set.** `projects.purpose` (production | benchmark | test; 0029) is never derived from a slug or
     title; the migration reclassifies nothing. Benchmark projects keep full review/winner/cost behaviour (so tooling
     can be tested) but their records never feed production aggregates or routing, and the UI labels them. Workers
     have no write path to the flag (no grant on the projects table beyond what they already lacked).

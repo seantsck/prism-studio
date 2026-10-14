@@ -78,3 +78,60 @@ export function encodeMockPng(width: number, height: number, seed: number): Uint
     chunk("IEND", new Uint8Array(0)),
   ]);
 }
+
+/**
+ * A deterministic, richer synthetic still for benchmark fixtures: sunset sky, dark mountain band, ground, a
+ * distinctive fictional figure (red coat, yellow umbrella) in the foreground and a blue lamp post in the
+ * background. Fictional, no real person or copyrighted subject; identical bytes for identical sizes.
+ */
+export function encodeSceneStillPng(width: number, height: number): Uint8Array {
+  const stride = width * 3 + 1;
+  const raw = Buffer.alloc(stride * height);
+  const horizon = Math.round(height * 0.62);
+  const cx = Math.round(width * 0.38);
+  const feet = Math.round(height * 0.9);
+  const body = Math.round(height * 0.3);
+  const lampX = Math.round(width * 0.78);
+  for (let y = 0; y < height; y++) {
+    raw[y * stride] = 0;
+    for (let x = 0; x < width; x++) {
+      let r: number, g: number, b: number;
+      if (y < horizon) {
+        const t = y / horizon;
+        r = Math.round(30 + 215 * t);
+        g = Math.round(60 + 110 * t);
+        b = Math.round(120 - 40 * t);
+        const ridge = horizon - 40 - Math.round(36 * Math.abs(Math.sin(x / 90)) + 20 * Math.sin(x / 37));
+        if (y > ridge) [r, g, b] = [28, 34, 62];
+      } else {
+        const t = (y - horizon) / (height - horizon);
+        [r, g, b] = [46 - Math.round(16 * t), 70 - Math.round(24 * t), 52 - Math.round(18 * t)];
+      }
+      // background lamp post (blue pole, warm lamp)
+      if (x >= lampX - 4 && x <= lampX + 4 && y >= horizon - 150 && y <= horizon + 10)
+        [r, g, b] = [40, 90, 210];
+      if ((x - lampX) ** 2 + (y - (horizon - 160)) ** 2 < 14 * 14) [r, g, b] = [255, 224, 120];
+      // figure: red coat body, skin-tone head, dark legs, yellow umbrella canopy
+      if (Math.abs(x - cx) <= 46 && y >= feet - body && y <= feet - 70) [r, g, b] = [200, 30, 40];
+      if (Math.abs(x - cx) <= 26 && y > feet - 70 && y <= feet) [r, g, b] = [25, 25, 35];
+      if ((x - cx) ** 2 + (y - (feet - body - 34)) ** 2 < 34 * 34) [r, g, b] = [226, 184, 150];
+      const ux = x - (cx + 20);
+      const uy = y - (feet - body - 70);
+      if (uy <= 0 && uy > -70 && ux * ux + uy * uy * 2.4 < 120 * 120) [r, g, b] = [250, 200, 30];
+      raw[y * stride + 1 + x * 3] = r;
+      raw[y * stride + 2 + x * 3] = g;
+      raw[y * stride + 3 + x * 3] = b;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(raw, { level: 9 })),
+    chunk("IEND", new Uint8Array(0)),
+  ]);
+}

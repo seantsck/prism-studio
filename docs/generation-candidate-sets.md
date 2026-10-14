@@ -84,13 +84,28 @@ Failure isolation held (1/3 completed, 2 failed; nothing retried or replaced). L
 
 ## Benchmark / fixture projects
 
-`projects.is_benchmark` (migration 0028) is an **explicit** classification, never inferred from a slug. A benchmark
+`projects.purpose` (`production` | `benchmark` | `test`; migration 0029, which replaced the 0028 boolean) is an **explicit**
+classification, never inferred from a slug. A benchmark or test
 project's candidate sets, reviews, winners, costs and comparison UI all work normally, which is the point: they let the
 tooling be exercised end to end. Its records are excluded from production model-performance aggregates and from routing
 recommendations (`inScope()`), and every page that shows its data says **TEST / BENCHMARK DATA**. Classify an existing
 fixture with `npm run runway:fixture -- --mark-benchmark` (new fixtures are created as benchmark projects).
 
 ## Proposed next real set (NOT executed; needs explicit approval)
+
+> Revised after review: the three-model set below (Gen-4.5, Hailuo 3 768p, Gen-4 Turbo = **$1.37**) is the
+> recommendation; the Seedance table that follows is the earlier alternative. Kling 3.0 Pro is officially available
+> but not typed in the SDK, so Gen-4 Turbo takes the third slot. If Kling is ever integrated its audio is sent
+> explicitly (`audio:false` unless provider audio is deliberately chosen; preview: USED / DISABLED / UNSUPPORTED).
+
+| Candidate | Model          | Duration | Estimate                                 |
+| --------- | -------------- | -------- | ---------------------------------------- |
+| A         | `gen4.5`       | 5 s      | 60 cr → **$0.60**                        |
+| B         | `hailuo3` 768p | 5 s      | 50 + 2 (start frame) = 52 cr → **$0.52** |
+| C         | `gen4_turbo`   | 5 s      | 25 cr → **$0.25**                        |
+
+The fixture is a richer deterministic fictional scene (red-coated figure, yellow umbrella, mountains, lamp post;
+`encodeSceneStillPng`), 16:9, slow push-in.
 
 Same disposable fixture style, one start frame, **5 s** (a duration Gen-4.5, Gen-4 Turbo, Hailuo 3 and Seedance 2.5
 all accept natively, so no model needs a trim and the comparison is not muddied by adaptation). Create it with

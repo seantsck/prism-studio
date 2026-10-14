@@ -472,27 +472,36 @@ try {
       check(`${role}: writing a review is permission denied`, deniedWrite);
     } catch (e) {
       check(`${role}: privilege probe could not run (${(e as Error).message})`, false);
+      const refusedPurpose = await pool
+        .query("update projects set purpose = 'staging' where id = $1", [projectId])
+        .then(() => false)
+        .catch(() => true);
+      check("an unknown purpose value is refused by the database", refusedPurpose);
     } finally {
       await c1.query("rollback").catch(() => undefined);
       c1.release();
     }
   }
 
-  // ── 7b. migration 0028: benchmark classification + "a review needs a clip" ──
+  // ── 7b. migrations 0028/0029: explicit project purpose + "a review needs a clip" ──
   {
     const col = await pool.query(
-      "select column_default, is_nullable from information_schema.columns where table_name = 'projects' and column_name = 'is_benchmark'",
+      "select column_default, is_nullable from information_schema.columns where table_name = 'projects' and column_name = 'purpose'",
     );
     check(
-      "projects.is_benchmark exists, not null, default false",
+      "projects.purpose exists, not null, default 'production'",
       col.rowCount === 1 &&
         col.rows[0].is_nullable === "NO" &&
-        String(col.rows[0].column_default) === "false",
+        String(col.rows[0].column_default).startsWith("'production'"),
     );
-    const flag = await pool.query("select is_benchmark from projects where id = $1", [projectId]);
+    const gone = await pool.query(
+      "select 1 from information_schema.columns where table_name = 'projects' and column_name = 'is_benchmark'",
+    );
+    check("the loose is_benchmark boolean is gone (replaced by purpose)", gone.rowCount === 0);
+    const flag = await pool.query("select purpose from projects where id = $1", [projectId]);
     check(
       "the demo project is a production project (never reclassified by migration)",
-      flag.rows[0]?.is_benchmark === false,
+      flag.rows[0]?.purpose === "production",
     );
 
     // a review on an attempt that did not succeed is refused by the database itself
@@ -526,7 +535,7 @@ try {
       before.every((o) => o.benchmark === false),
     );
     try {
-      await pool.query("update projects set is_benchmark = true where id = $1", [projectId]);
+      await pool.query("update projects set purpose = 'benchmark' where id = $1", [projectId]);
       const flagged = await ownerCand.listOutcomeRecords(projectId);
       check(
         "benchmark project outcomes are flagged and excluded from production aggregates",
@@ -535,7 +544,7 @@ try {
           aggregateByModel(flagged).every((p) => p.reviewed === 0 && p.generated === 0),
       );
     } finally {
-      await pool.query("update projects set is_benchmark = false where id = $1", [projectId]);
+      await pool.query("update projects set purpose = 'production' where id = $1", [projectId]);
     }
   }
 

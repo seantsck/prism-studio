@@ -638,11 +638,11 @@ export interface SdkBlockedModel {
 const KLING_NOTES = [
   "first frame and optional last frame",
   "providerSettings.multiPrompt: 1–6 segments, each 1–15 s, total 3–15 s",
-  "audio defaults to true (bills at the audio rate unless set false)",
+  "audio defaults to true (bills at the audio rate unless set false). Prism policy: provider audio is always EXPLICIT; an adapter must send audio:false unless the shot deliberately uses provider audio, and the preview must say USED / DISABLED / UNSUPPORTED",
   "providerSettings: shotType intelligence|customize, cfgScale default 0.5",
 ];
 const KLING_BLOCKER =
-  "Not in the video request unions of @runwayml/sdk 4.21.0 or 4.22.0 (checked 2026-10-14). Upgrade the SDK when a release types it, then add a catalog entry and a compiler family.";
+  "Not in the video request unions of @runwayml/sdk 4.21.0 or 4.22.0 (checked 2026-10-14). Upgrade the SDK when a release types it, then add a catalog entry and a compiler family that sets audio explicitly.";
 
 export const SDK_BLOCKED_MODELS: readonly SdkBlockedModel[] = [
   {

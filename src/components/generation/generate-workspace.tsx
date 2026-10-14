@@ -238,7 +238,7 @@ export async function GenerateWorkspace({ data, shotId }: { data: ProjectData; s
           Compare models for this shot (candidate set)
         </summary>
         <div className="space-y-2 p-3">
-          {data.project.isBenchmark ? <BenchmarkBanner /> : null}
+          {data.project.purpose !== "production" ? <BenchmarkBanner /> : null}
           <ModelComparePanel
             projectSlug={slug}
             shotId={shotId}

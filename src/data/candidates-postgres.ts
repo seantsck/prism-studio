@@ -373,13 +373,15 @@ export class PostgresCandidateData implements CandidateRepository {
       const attempts = await c.query(
         `select a.id, a.project_id, a.provider, a.model, a.status, a.package_snapshot, a.created_at,
                 j.created_at as job_created_at, j.submitted_at, j.completed_at, j.last_error_category,
+                j.last_error_code,
                 (select amount from generation_costs x where x.attempt_id = a.id and x.kind = 'actual'
                   order by recorded_at desc limit 1) as actual_amount,
                 (select amount from generation_costs x where x.attempt_id = a.id and x.kind = 'estimated'
                   order by recorded_at desc limit 1) as estimated_amount
            from generation_attempts a
            left join lateral (
-             select created_at, submitted_at, completed_at, last_error_category from generation_jobs
+             select created_at, submitted_at, completed_at, last_error_category, last_error_code
+               from generation_jobs
               where attempt_id = a.id order by created_at desc limit 1
            ) j on true
           where a.project_id = $1`,
@@ -387,8 +389,8 @@ export class PostgresCandidateData implements CandidateRepository {
       );
       const reviews = await c.query("select * from generation_reviews where project_id = $1", [projectId]);
       const benchmark =
-        (await c.query("select is_benchmark from projects where id = $1", [projectId])).rows[0]
-          ?.is_benchmark === true;
+        (await c.query("select purpose from projects where id = $1", [projectId])).rows[0]?.purpose !==
+        "production";
       const members = await c.query(
         "select attempt_id, candidate_set_id from generation_candidate_members where project_id = $1 and attempt_id is not null",
         [projectId],
@@ -411,6 +413,7 @@ export class PostgresCandidateData implements CandidateRepository {
               submittedAt: isoOrNull(r.submitted_at),
               completedAt: isoOrNull(r.completed_at),
               errorCategory: str(r.last_error_category),
+              errorCode: str(r.last_error_code),
             }
           : null,
         actualCostUsd: num(r.actual_amount),
