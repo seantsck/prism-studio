@@ -11,7 +11,7 @@ import { expect, test } from "@playwright/test";
  */
 const EMAIL = process.env.PRISM_STUDIO_TEST_EMAIL ?? process.env.PRISM_STUDIO_DEV_USER_EMAIL ?? "";
 const PASSWORD = process.env.PRISM_STUDIO_TEST_PASSWORD ?? "";
-const SLUG = "continuity-smoke-test";
+const SLUG = "continuity-semantic-test";
 
 let hasFfmpeg = true;
 try {

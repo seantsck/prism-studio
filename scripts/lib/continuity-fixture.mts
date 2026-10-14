@@ -1,9 +1,14 @@
-// Disposable, SYNTHETIC continuity fixture for the first live analyzer smoke test.
+// Disposable, SYNTHETIC continuity fixtures for live analyzer smoke tests (never the canonical drama, no real
+// or public person, no copyrighted character). Exactly two analyzer criteria result (identity + wardrobe), image
+// set only, no video.
 //
-// Two tiny synthetic images (no real people, no copyrighted material, not the canonical drama):
-//   - an expected character reference ("Synthetic A")
-//   - one output frame that either MATCHES that reference (same image) or MISMATCHES it (different image)
-// Exactly two analyzer criteria result (identity + wardrobe). Image set only: no video.
+//   variant "semantic" (default, slug continuity-semantic-test): a fictional character drawn by
+//       synthetic-character.mts. Prism's production truth is only: an identity reference (character A in a plain
+//       grey top), an assigned BLACK FORMAL Look (character A in a black jacket), and an output frame that keeps
+//       character A but wears a clearly RED jacket (or, with mismatch, shows a DIFFERENT character). Nothing
+//       about the expected verdict is encoded anywhere a provider can read it.
+//   variant "abstract" (slug continuity-smoke-test): the original gradient/grid frames. They carry no visible
+//       character, so a vision model correctly answers UNCHECKED; kept because Run 5 history references them.
 import { createHash, randomUUID } from "node:crypto";
 import type { AttemptView } from "../../src/data/generation-repository";
 import { buildSeedProject } from "../../src/data/seed";
@@ -11,9 +16,23 @@ import { buildShotContext } from "../../src/domain/context";
 import { generationAttemptSchema, type Asset, type ProjectData } from "../../src/domain/schemas";
 import { emptyShot } from "../../src/domain/shot-defaults";
 import { encodeMockPng } from "../../src/generation/providers/mock-image";
+import { renderSyntheticCharacter, type SyntheticArtwork } from "./synthetic-character.mjs";
 import { buildObjectPath } from "../../src/lib/storage-paths";
 
-export const FIXTURE_SLUG = "continuity-smoke-test";
+export const FIXTURE_SLUG = "continuity-semantic-test";
+/** The first (abstract-gradient) smoke fixture. Historical Run 5 hangs off this project: never recreate or remove it implicitly. */
+export const LEGACY_FIXTURE_SLUG = "continuity-smoke-test";
+export type FixtureVariant = "semantic" | "abstract";
+export const fixtureSlug = (variant: FixtureVariant): string =>
+  variant === "abstract" ? LEGACY_FIXTURE_SLUG : FIXTURE_SLUG;
+
+const artCache = new Map<string, SyntheticArtwork>();
+function art(character: "A" | "B", outfit: "grey" | "black" | "red"): SyntheticArtwork {
+  const key = `${character}:${outfit}`;
+  let a = artCache.get(key);
+  if (!a) artCache.set(key, (a = renderSyntheticCharacter({ character, outfit })));
+  return a;
+}
 
 export interface SyntheticFixture {
   data: ProjectData;
@@ -21,9 +40,19 @@ export interface SyntheticFixture {
   bytes: Map<string, Uint8Array>;
   shotId: string;
   attemptId: string;
+  variant: FixtureVariant;
+  slug: string;
+  /** What each synthetic image plainly shows (documentation/tests only; never sent as an expectation). */
+  pictures: { identity: string; look: string; output: string };
 }
 
-export function buildSyntheticFixture(opts: { userId: string; mismatch?: boolean }): SyntheticFixture {
+export function buildSyntheticFixture(opts: {
+  userId: string;
+  mismatch?: boolean;
+  variant?: FixtureVariant;
+}): SyntheticFixture {
+  const variant: FixtureVariant = opts.variant ?? "semantic";
+  const semantic = variant === "semantic";
   const demo = buildSeedProject();
   const now = new Date().toISOString();
   const PID = randomUUID();
@@ -35,9 +64,15 @@ export function buildSyntheticFixture(opts: { userId: string; mismatch?: boolean
   const AT = randomUUID();
   const bytes = new Map<string, Uint8Array>();
 
-  const asset = (name: string, purpose: Asset["purpose"], source: Asset["source"], seed: number): Asset => {
+  const asset = (
+    name: string,
+    purpose: Asset["purpose"],
+    source: Asset["source"],
+    seed: number,
+    picture?: SyntheticArtwork,
+  ): Asset => {
     const id = randomUUID();
-    const png = encodeMockPng(512, 288, seed);
+    const png = picture ? picture.png : encodeMockPng(512, 288, seed);
     bytes.set(id, png);
     return {
       ...demo.assets.find((a) => a.type === "image")!,
@@ -49,8 +84,8 @@ export function buildSyntheticFixture(opts: { userId: string; mismatch?: boolean
       type: "image",
       purpose,
       source,
-      width: 512,
-      height: 288,
+      width: picture ? picture.width : 512,
+      height: picture ? picture.height : 288,
       durationMs: null,
       byteSize: png.length,
       checksum: createHash("sha256").update(png).digest("hex"),
@@ -65,23 +100,34 @@ export function buildSyntheticFixture(opts: { userId: string; mismatch?: boolean
     };
   };
   // Character A: seed 11. A "matching" output reuses the same pixels; a mismatch uses different pixels.
-  const identity = asset("synthetic-a-identity.png", "identity_ref", "upload", 11);
-  const lookRef = asset("synthetic-a-look.png", "look_ref", "upload", 11);
+  const pics = semantic
+    ? {
+        identity: art("A", "grey"),
+        look: art("A", "black"),
+        output: opts.mismatch ? art("B", "red") : art("A", "red"),
+      }
+    : null;
+  const identity = asset("synthetic-a-identity.png", "identity_ref", "upload", 11, pics?.identity);
+  const lookRef = asset("synthetic-a-look.png", "look_ref", "upload", 11, pics?.look);
   const output = asset(
     "synthetic-a-output.png",
     "generation_output",
     "provider_output",
     opts.mismatch ? 97 : 11,
+    pics?.output,
   );
 
   const project = {
     ...demo.project,
     id: PID,
     userId: opts.userId,
-    title: "ZZ Continuity analysis smoke test (disposable)",
-    slug: FIXTURE_SLUG,
-    description:
-      "Disposable synthetic fixture for the first live continuity-analysis smoke test. Safe to delete.",
+    title: semantic
+      ? "ZZ Continuity semantic smoke test (disposable)"
+      : "ZZ Continuity analysis smoke test (disposable)",
+    slug: fixtureSlug(variant),
+    description: semantic
+      ? "Disposable synthetic fixture (fictional character, identity + wardrobe) for the semantic continuity-analysis smoke test. Safe to delete."
+      : "Disposable synthetic fixture for the first live continuity-analysis smoke test. Safe to delete.",
     genre: "",
     tone: "",
     createdAt: now,
@@ -111,7 +157,9 @@ export function buildSyntheticFixture(opts: { userId: string; mismatch?: boolean
     description: "",
     personality: "",
     behaviorNotes: "",
-    physicalDescription: "A synthetic test character shown by the supplied reference image.",
+    physicalDescription: semantic
+      ? "A fictional adult with dark shoulder-length hair, round glasses and a distinctive blue scarf."
+      : "A synthetic test character shown by the supplied reference image.",
     continuityRules: [],
     signatureBehavior: "",
     relationshipNotes: "",
@@ -132,8 +180,10 @@ export function buildSyntheticFixture(opts: { userId: string; mismatch?: boolean
     projectId: PID,
     characterId: CH,
     episodeId: null,
-    name: "Synthetic Look",
-    wardrobe: "the outfit shown in the reference image",
+    name: semantic ? "Black Formal Look" : "Synthetic Look",
+    wardrobe: semantic
+      ? "Black formal jacket over a white shirt."
+      : "the outfit shown in the reference image",
     shoes: "",
     jewelry: "",
     hair: "",
@@ -149,6 +199,9 @@ export function buildSyntheticFixture(opts: { userId: string; mismatch?: boolean
     id: EP,
     projectId: PID,
     title: "Smoke",
+    // never inherit the canonical drama's synopsis or script into a disposable fixture
+    synopsis: "Synthetic fixture episode.",
+    scriptText: "",
     order: 1,
     createdAt: now,
     updatedAt: now,
@@ -160,6 +213,8 @@ export function buildSyntheticFixture(opts: { userId: string; mismatch?: boolean
     episodeId: EP,
     sceneNumber: "1",
     slugline: "INT. TEST ROOM - DAY",
+    intExt: "INT" as const,
+    timeOfDay: "DAY" as const,
     summary: "A synthetic test frame.",
     dramaticPurpose: "",
     emotionEntering: "",
@@ -275,5 +330,24 @@ export function buildSyntheticFixture(opts: { userId: string; mismatch?: boolean
     ],
     costs: [],
   };
-  return { data, view, bytes, shotId: SH, attemptId: AT };
+  return {
+    data,
+    view,
+    bytes,
+    shotId: SH,
+    attemptId: AT,
+    variant,
+    slug: fixtureSlug(variant),
+    pictures: pics
+      ? {
+          identity: pics.identity.describes,
+          look: pics.look.describes,
+          output: pics.output.describes,
+        }
+      : {
+          identity: "abstract gradient with a grid",
+          look: "abstract gradient with a grid",
+          output: "abstract gradient with a grid",
+        },
+  };
 }

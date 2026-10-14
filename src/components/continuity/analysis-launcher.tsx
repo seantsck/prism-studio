@@ -131,6 +131,26 @@ export function AnalysisLauncher({
         ) : null}
       </div>
 
+      {/* informational only: never routes, disables or ranks a provider; visible whichever analyzer is selected */}
+      <ul
+        className="flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-muted"
+        aria-label="Provider health"
+        data-testid="provider-health-list"
+      >
+        {analyzers.map((x) => (
+          <li
+            key={x.id}
+            data-testid="provider-health-row"
+            data-provider={x.id}
+            data-health={x.health.state}
+            className={x.health.state === "recent_provider_failure" ? "text-warn" : undefined}
+          >
+            <span className="font-semibold">{x.providerName}</span>{" "}
+            {x.kind === "model" ? x.health.note : x.usable ? "available (free, local)" : x.health.note}
+          </li>
+        ))}
+      </ul>
+
       <div className="grid gap-3 md:grid-cols-4" data-testid="analysis-summary">
         <Stat
           label="Analyzer"

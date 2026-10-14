@@ -70,12 +70,17 @@ export function providerHealth(args: {
   const lastFailure = failed.at(-1) ?? null;
   const base = { failures: failed.length, lastFailureCategory: lastFailure?.lastErrorCategory ?? null };
 
-  if (args.configState === "disabled") return { ...base, state: "disabled", note: "disabled on this server" };
+  // history is never hidden by configuration: a disabled provider still reports its recorded failures
+  const history = failed.length
+    ? ` · ${failed.length} provider-side failure(s) in history (last: ${LABEL[lastFailure!.lastErrorCategory!] ?? lastFailure!.lastErrorCategory})`
+    : "";
+  if (args.configState === "disabled")
+    return { ...base, state: "disabled", note: `disabled on this server${history}` };
   if (args.configState !== "configured")
     return {
       ...base,
       state: "not_configured",
-      note: args.configState === "unsupported_model" ? "unsupported model" : "not configured",
+      note: `${args.configState === "unsupported_model" ? "unsupported model" : "not configured"}${history}`,
     };
   if (
     last &&

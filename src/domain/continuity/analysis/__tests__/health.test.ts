@@ -78,3 +78,40 @@ describe("provider health (informational, never routes)", () => {
     ).toBe("configured");
   });
 });
+
+describe("history stays visible whatever the configuration says", () => {
+  it("a provider disabled on this server still reports its recorded failures", () => {
+    const h = providerHealth({
+      providerId: "gemini",
+      configState: "disabled",
+      jobs: [
+        job({}),
+        job({ lastErrorCategory: "provider_overloaded_retry_exhausted", finishedAt: "2026-10-13T11:00:00Z" }),
+      ],
+    });
+    expect(h.state).toBe("disabled");
+    expect(h.failures).toBe(2);
+    expect(h.note).toMatch(/disabled on this server/);
+    expect(h.note).toMatch(/2 provider-side failure\(s\) in history/);
+  });
+
+  it("the Gemini 4-failure / OpenAI 1-success history reads correctly for each provider", () => {
+    const jobs = [
+      ...[1, 2, 3, 4].map((n) =>
+        job({ analyzer: "gemini", finishedAt: `2026-10-13T1${n}:00:00Z`, lastErrorCategory: "overloaded" }),
+      ),
+      job({
+        analyzer: "openai",
+        status: "succeeded",
+        lastErrorCategory: null,
+        finishedAt: "2026-10-13T22:10:00Z",
+      }),
+    ];
+    const g = providerHealth({ providerId: "gemini", configState: "configured", jobs });
+    const o = providerHealth({ providerId: "openai", configState: "configured", jobs });
+    expect(g.state).toBe("recent_provider_failure");
+    expect(g.failures).toBe(4);
+    expect(o.state).toBe("available");
+    expect(o.failures).toBe(0);
+  });
+});

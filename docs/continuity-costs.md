@@ -54,8 +54,8 @@ ceiling, so spend is never under-counted.
 
 ## Live smoke (prepared, NOT executed)
 
-`npm run continuity:fixture` plans a disposable synthetic project (two synthetic 512×288 PNGs; identity +
-wardrobe; no video). `npm run continuity:pre-paid:check` proves, with the network trapped: credential/config
+`npm run continuity:fixture` plans a disposable synthetic project (three deterministic 768×432 PNGs of a
+fictional character: identity reference, black formal Look, red-jacket output; identity + wardrobe; no video). `npm run continuity:pre-paid:check` proves, with the network trapped: credential/config
 status, the flag is false, the ceiling, the model, the fixture plan and estimate, that submission and the worker
 both refuse while paid analysis is off or over the ceiling, no browser secret exposure, and the worker role.
 

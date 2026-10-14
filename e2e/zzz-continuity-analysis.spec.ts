@@ -198,6 +198,30 @@ test("OpenAI (gpt-6-luna, fake transport): preview, acknowledged paid submit, fi
   await expect(rows.nth(1)).toContainText("mock-continuity");
   await expect(page.getByTestId("external-manifest")).toContainText("OpenAI");
   await expect(page.getByTestId("external-manifest")).toContainText("GPT-6 Luna");
+
+  // the launcher banner speaks for the LATEST job: a newer success is never shadowed by an older failure
+  await expect(page.getByTestId("analysis-failed")).toHaveCount(0);
+  // health stays informational and visible for every analyzer, with history intact
+  const openaiRow = page.locator('[data-testid="provider-health-row"][data-provider="openai"]');
+  await expect(openaiRow).toContainText("last analysis succeeded");
+  await expect(openaiRow).toHaveAttribute("data-health", "available");
+});
+
+test("provider health is visible for every analyzer even while Mock is the selected analyzer", async ({
+  page,
+}) => {
+  await page.goto(continuityPath);
+  await expect(page.getByTestId("analyzer-select")).toHaveValue(/mock/);
+  const list = page.getByTestId("provider-health-list");
+  await expect(list).toBeVisible();
+  const rows = list.getByTestId("provider-health-row");
+  await expect(rows).toHaveCount(3);
+  await expect(list.locator('[data-provider="openai"]')).toBeVisible();
+  await expect(list.locator('[data-provider="gemini"]')).toBeVisible();
+  await expect(list).toContainText("available (free, local)");
+  // informational only: nothing in the list is a control
+  await expect(list.getByRole("button")).toHaveCount(0);
+  await expect(list.getByRole("combobox")).toHaveCount(0);
 });
 
 test("the attempt card shows the continuity chip separately from creative approval", async ({ page }) => {

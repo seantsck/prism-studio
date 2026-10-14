@@ -1,21 +1,27 @@
-// Disposable SYNTHETIC fixture for the first live continuity-analysis smoke test.
+// Disposable SYNTHETIC fixture for live continuity-analysis smoke tests.
 //   npm run continuity:fixture                    plan + estimate in memory only (no database writes, no network)
-//   npm run continuity:fixture -- --create        create the separate project "continuity-smoke-test"
-//   npm run continuity:fixture -- --create --mismatch   same, but the output frame does NOT match the reference
+//   npm run continuity:fixture -- --create        create the separate project "continuity-semantic-test":
+//                                                 a fictional character (identity ref in a grey top, assigned
+//                                                 BLACK formal Look, output wearing a clearly RED jacket)
+//   npm run continuity:fixture -- --create --mismatch   same, but the output shows a DIFFERENT character
 //   npm run continuity:fixture -- --remove        delete it again
+//   add --abstract to any of the above to address the ORIGINAL gradient/grid fixture "continuity-smoke-test"
+//                                                 (Run 5 history lives there; it is never touched without the flag)
 //
-// A SEPARATE project (own slug, own rows): the canonical drama is never touched. Two synthetic 512×288 PNGs, one
-// criterion pair (identity + wardrobe). It sends nothing to any analyzer and spends nothing.
+// A SEPARATE project (own slug, own rows): the canonical drama is never touched. One criterion pair (identity +
+// wardrobe). It sends nothing to any analyzer and spends nothing.
 import pg from "pg";
 import { AdminRepository } from "../src/data/postgres-repository";
 import { createOutputSink } from "../src/generation/sink";
 import { assertDevUserExists, readDevUserEnv } from "./lib/dev-user.mjs";
 import { startScript } from "./lib/safety.mjs";
-import { FIXTURE_SLUG, buildSyntheticFixture } from "./lib/continuity-fixture.mts";
+import { buildSyntheticFixture, fixtureSlug } from "./lib/continuity-fixture.mts";
 
 const create = process.argv.includes("--create");
 const remove = process.argv.includes("--remove");
 const mismatch = process.argv.includes("--mismatch");
+const variant = process.argv.includes("--abstract") ? ("abstract" as const) : ("semantic" as const);
+const FIXTURE_SLUG = fixtureSlug(variant);
 
 const dev = readDevUserEnv();
 startScript({
@@ -57,9 +63,9 @@ if (remove) {
   process.exit(0);
 }
 
-const fx = buildSyntheticFixture({ userId: dev.id, mismatch });
+const fx = buildSyntheticFixture({ userId: dev.id, mismatch, variant });
 console.log(
-  `fixture: project=${FIXTURE_SLUG} shot=SMOKE-A assets=${fx.data.assets.length} output=${mismatch ? "MISMATCHING" : "matching"} reference`,
+  `fixture: project=${FIXTURE_SLUG} shot=SMOKE-A assets=${fx.data.assets.length} variant=${variant} output=${mismatch ? "DIFFERENT character" : variant === "semantic" ? "same character, red jacket" : "matching reference"}`,
 );
 if (!create) {
   console.log(

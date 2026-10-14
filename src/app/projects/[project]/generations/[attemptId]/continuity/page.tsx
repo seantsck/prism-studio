@@ -33,6 +33,7 @@ import {
 import type { AnalysisCost } from "@/data/media-qa-repository";
 import { assetUrl } from "@/lib/utils";
 import { providerHealth } from "@/domain/continuity/analysis/health";
+import { currentFailedAnalysis } from "@/domain/continuity/analysis/latest";
 import { modelDisplay, providerDisplayName } from "@/continuity/analysis/models";
 import { loadAttemptMedia } from "@/server/attempt-media";
 import { getGenerationRepo } from "@/server/generation";
@@ -372,9 +373,9 @@ export default async function ContinuityPage({
             ))}
           </div>
         ) : null}
-        {jobs
-          .filter((j) => j.status === "failed")
-          .slice(0, 1)
+        {/* only the LATEST job can be "the last analysis"; older failures live in history and provider health */}
+        {[currentFailedAnalysis(jobs)]
+          .filter((j): j is NonNullable<typeof j> => j !== null)
           .map((j) => (
             <div
               key={j.id}

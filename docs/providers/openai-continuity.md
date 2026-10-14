@@ -175,8 +175,51 @@ Real provider class and real SDK transport, with every outbound fetch trapped: r
 present/missing, flag state, ceiling, model, plan and estimate for the synthetic fixture, that submission and the
 worker refuse while paid analysis is off or over the ceiling, and that no request was attempted.
 
-## Proposed live smoke (NOT executed; needs explicit approval)
+## Live smoke history
 
-Same synthetic `continuity-smoke-test` fixture as the Gemini attempts (identity + wardrobe, image set, one
-512×288 output, ≤ 2 references), `gpt-6-luna`, `PRISM_STUDIO_ANALYSIS_MAX_TRANSPORT_CALLS=4`, ceiling $0.10,
-paid analysis enabled at process level only for that run, then restored to `false`.
+**Run 5 (2026-10-13, pipeline smoke).** One real `gpt-6-luna` analysis of the abstract gradient fixture
+(`continuity-smoke-test`): job `succeeded` with 2 transport calls, 0 corrections, strict output validated,
+evidence integrity intact, 3,020 input / 399 output (59 reasoning) tokens, $0.000502. Both criteria were
+**UNCHECKED** because that fixture contains no character or clothing: the model correctly declined to judge. It
+proves transport, normalization, cost and UI; it cannot show a semantic PASS/FAIL. That project is left
+untouched (Run 5 history lives there).
+
+## Semantic smoke (PREPARED, NOT executed; needs explicit approval)
+
+Fixture: project `continuity-semantic-test` (`npm run continuity:fixture -- --create`), drawn
+deterministically by `scripts/lib/synthetic-character.mts` (no real/public person, no copyrighted character,
+nothing from the canonical drama):
+
+| Asset         | Shows                                                                                 |
+| ------------- | ------------------------------------------------------------------------------------- |
+| identity ref  | fictional adult, dark shoulder-length hair, round glasses, blue scarf, plain grey top |
+| assigned Look | same character in a **black formal jacket** over a white shirt (`Black Formal Look`)  |
+| output frame  | same character, face, hair, glasses and scarf, in a clearly **red** jacket            |
+
+Prism supplies production truth only (identity reference, Look wardrobe text, the output). The expected
+diagnostic is identity plausibly PASS and wardrobe plausibly FAIL; those are test semantics, **not** written into
+any prompt, criterion or fixture field, and nothing is hardcoded as a provider result. `--mismatch` swaps the
+output for a different character (short light hair, no glasses, orange scarf) to exercise identity FAIL.
+
+Parameters: `gpt-6-luna`, mode `image_set`, criteria identity + wardrobe, 2 requests (+1 correction worst
+case), `PRISM_STUDIO_ANALYSIS_MAX_TRANSPORT_CALLS=4`, `PRISM_STUDIO_MAX_ANALYSIS_USD_PER_RUN=0.10`, expected
+cost ≈ $0.001, conservative worst case ≈ $0.007. Paid analysis is enabled at process level only, then restored.
+
+### Semantic smoke runbook (do not run without approval)
+
+1. `npm run continuity:pre-paid:check:openai` — all PASS, network trapped.
+2. Queue exactly one run (UI half; the app never calls OpenAI):
+   `LIVE_SMOKE_APPROVED=yes SMOKE_PAID=true node --env-file=.env.local node_modules/@playwright/test/cli.js test -c playwright.live.config.ts`
+3. Run the worker with the same process-level flags until the job is terminal
+   (`PRISM_STUDIO_ALLOW_PAID_ANALYSIS=true PRISM_STUDIO_ANALYSIS_MAX_TRANSPORT_CALLS=4 PRISM_STUDIO_CONTINUITY_ANALYZERS=mock,openai npm run continuity:worker`), then stop it.
+4. `npm run continuity:run:report -- <runId>` — job state, transport calls, usage, cost, findings, manifest and a
+   leak scan (read-only). Confirm `PRISM_STUDIO_ALLOW_PAID_ANALYSIS=false` in `.env.local` (it is never persisted).
+
+## Launcher status banner and provider health
+
+- The launcher's "Last analysis failed" banner reflects only the **latest** job of the attempt
+  (`src/domain/continuity/analysis/latest.ts`). A newer success, queued, running or cancelled job supersedes an
+  older failure; the older failure stays in run history and in provider health (never erased).
+- Provider health is a list shown for **every** analyzer whatever is selected (`data-testid="provider-health-list"`),
+  including Mock (`available (free, local)`). It stays informational: no routing, no auto-disable, no scoring. A
+  provider disabled on the server still reports its recorded failures.

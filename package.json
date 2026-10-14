@@ -37,6 +37,7 @@
     "continuity:worker": "tsx --env-file=.env.local scripts/continuity-worker.mts",
     "continuity:pre-paid:check": "tsx --env-file=.env.local scripts/continuity-pre-paid-check.mts",
     "continuity:pre-paid:check:openai": "tsx --env-file=.env.local scripts/continuity-pre-paid-check.mts --provider openai",
+    "continuity:run:report": "tsx --env-file=.env.local scripts/continuity-run-report.mts",
     "continuity:fixture": "tsx --env-file=.env.local scripts/continuity-smoke-fixture.mts",
     "pre-paid:check": "tsx --env-file=.env.local scripts/pre-paid-check.mts",
     "runway:fixture": "tsx --env-file=.env.local scripts/runway-smoke-fixture.mts"

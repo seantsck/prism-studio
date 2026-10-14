@@ -111,11 +111,13 @@ webhook endpoints (architecture only); realtime push instead of status polling; 
 
 ### Known gaps (Phase 2D)
 
-- **No analysis has ever been produced by a live provider.** Live Gemini attempts (`gemini-3.8-flash`,
-  `gemini-3.6-flash`) reached the provider (auth, model access and request parsing verified at zero cost) but
-  `generateContent` returned sustained 503 overload; Prism's durable retry, accounting and ceilings behaved as
-  designed. OpenAI is verified against a fake transport only; a paid smoke needs explicit approval
-  ([continuity-costs](continuity-costs.md)).
+- **One live provider analysis exists** (OpenAI `gpt-6-luna`, Run 5, 2 transport calls, $0.000502): the
+  pipeline is proven end to end, but its two findings were UNCHECKED because the abstract fixture has no
+  character. A semantic fixture (`continuity-semantic-test`: identity, black formal Look, red-jacket output) is
+  prepared; the semantic smoke is **not yet run** (needs explicit approval). Gemini (`gemini-3.8-flash`,
+  `gemini-3.6-flash`) still has no successful live inference: `generateContent` returned sustained 503
+  overload while auth, model access and parsing were verified at zero cost; Prism's durable retry, accounting
+  and ceilings behaved as designed ([continuity-costs](continuity-costs.md)).
 - **Credential unverified**: no zero-cost verification call is made (none is documented as free).
 - **Direct video is architecture only** (OFF by default; fake-transport tests; no live use). Temporal
   criteria stay unchecked until it is enabled and calibrated.

@@ -151,7 +151,7 @@ console.log(
 );
 
 // 2 ── plan + estimate the synthetic smoke fixture (offline)
-const fx = buildSyntheticFixture({ userId: randomId(), mismatch: false });
+const fx = buildSyntheticFixture({ userId: randomId(), mismatch: false, variant: "semantic" });
 function randomId() {
   return "00000000-0000-4000-8000-000000000001";
 }
@@ -363,7 +363,7 @@ console.log(`
 PROPOSED LIVE SMOKE (not executed)
   Provider/model : ${P.id} / ${P.model} (${analyzerModelLabel(P.id, P.model)})  (SDK ${P.sdk}, pricing ${P.pricing.version})
   Mode           : image set (no video)
-  Inputs         : ${prev.preview.summary.referencesSent} reference image(s) + ${prev.preview.summary.outputImagesSent} output image (synthetic, 512×288 PNG)
+  Inputs         : ${prev.preview.summary.referencesSent} reference image(s) + ${prev.preview.summary.outputImagesSent} output image (synthetic, ${fx.data.assets.at(-1)!.width}×${fx.data.assets.at(-1)!.height} PNG)
   Criteria       : ${prev.preview.summary.analysed} (identity + wardrobe)
   Requests       : ${prev.preview.summary.requests} (+1 correction worst case)
   Est. tokens    : ~${est.tokens.inputTokens} input, ceiling ${est.tokens.maxOutputTokens} output
