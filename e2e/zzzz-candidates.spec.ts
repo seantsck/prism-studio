@@ -184,3 +184,32 @@ test("automated continuity analysis was never required: the candidates have no s
   // the optional AI check exists as an action, not as a requirement
   await expect(page.getByTestId("analysis-launcher")).toBeVisible();
 });
+
+test("a partial set stays reviewable: the failed candidate shows its failure and exposes NO review controls", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await openGenerate(page);
+  for (const m of ["mock-video-1", "mock-video-rejects"]) {
+    await row(page, m).getByTestId("model-pick").check();
+  }
+  await page.getByTestId("ack-all").check();
+  await page.getByTestId("create-candidate-set").click();
+  await page.waitForURL(/\/candidates\/[0-9a-f-]{36}/, { timeout: 30_000 });
+
+  const failed = page.locator('[data-testid="candidate-card"][data-status="failed"]');
+  const done = page.locator('[data-testid="candidate-card"][data-status="succeeded"]');
+  await expect(failed).toHaveCount(1, { timeout: 90_000 });
+  await expect(done).toHaveCount(1, { timeout: 90_000 });
+  await expect(page.getByTestId("set-rollup")).toContainText("1/2 completed, 1 failed");
+
+  // no clip → no verdict controls, no shortcuts, and the provider failure stays visible
+  await expect(failed.getByTestId("review-controls")).toHaveCount(0);
+  await expect(failed.getByTestId("review-good")).toHaveCount(0);
+  await expect(failed.getByTestId("review-best")).toHaveCount(0);
+  await expect(failed).toContainText("No clip to review");
+  // the succeeded candidate can still be reviewed
+  await expect(done.getByTestId("review-controls")).toBeVisible();
+  await done.getByTestId("review-good").click();
+  await expect(done).toHaveAttribute("data-decision", "approve", { timeout: 30_000 });
+});

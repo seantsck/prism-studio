@@ -30,6 +30,14 @@ Latency honesty: _generation_ = job `submitted_at` (accepted by the provider) �
 _total_ = job `created_at` → `completed_at`. The provider-reported completion instant is not stored separately, so
 "ingested" and "completed" coincide.
 
+## Benchmark / fixture data is separate
+
+Records from a project classified `is_benchmark` carry `benchmark: true`. Every aggregate (`aggregateByModel`,
+`…ByModelAndBucket`, `…ByProvider`) takes a scope that **defaults to production**, so benchmark reviews can never leak
+into production statistics, approval rates or recommendations by accident. A benchmark project's own Models page shows
+its data with a **TEST / BENCHMARK DATA** banner (scope `benchmark`); the data is real and still useful for exercising
+the tooling.
+
 ## Small samples are labelled
 
 | Reviews | Reliability | Wording                                  |

@@ -25,27 +25,35 @@ provider class per model, no model logic scattered through the app.
 
 Each capability is `supported`, `unsupported` or `unknown`. `unknown` means the official documentation / SDK types do
 not state it. Prism then says **UNKNOWN** instead of guessing in either direction, and the compatibility matrix lists
-the unknowns that matter for the shot at hand. Example: Gen-4 Turbo's SDK type is `duration?: number` with no range,
-so its duration bounds are `verified: false` and shown as "bounds unverified" (the range is a permissive superset; the
-provider is the authority and a rejected request is free).
+the unknowns that matter for the shot at hand. The SDK types often say only `duration: number`; the
+**API reference** (`docs.dev.runwayml.com/api.md`, POST /v1/image_to_video) states the real range per model, so
+Prism reads both and records which one stated what. A bound that neither states stays `verified: false` (Seedance 2.5's
+minimum) and is shown as "bounds unverified". Phase 2E.1 corrected the first-release ranges: Gen-4 Turbo and Hailuo 3
+had been recorded as unknown, which let a 2 s Hailuo request reach the provider and be rejected (HTTP 400).
 
 Every entry carries `verification`: `verifiedAt`, the sources read, `sdkVersion` (`@runwayml/sdk@4.21.0`),
 `providerApiVersion` (`2024-11-06`) and an explicit `unstated` list.
 
 ## The initial comparison set (6 models, verified 2026-10-14)
 
-| Model         | Role (descriptive, not a ranking) | Inputs                                                      | Duration                    | Price (credits/s)                              |
-| ------------- | --------------------------------- | ----------------------------------------------------------- | --------------------------- | ---------------------------------------------- |
-| `gen4.5`      | Runway flagship                   | start frame only (i2v) or text                              | whole seconds 2–10          | 12                                             |
-| `gen4_turbo`  | lower cost / faster               | start frame **required** (i2v only)                         | bounds not documented       | 5                                              |
-| `seedance2_5` | reference-rich                    | first/last frame **or** ≤ 30 reference images, audio, video | ≤ 30 s (minimum not stated) | 20 / 30 / 68 at 480p / 720p / 1080p, min 80 cr |
-| `hailuo3`     | cinematic competitor              | first/last frame **or** ≤ 9 reference images, audio, video  | bounds not documented       | 10 (768p) / 15 (2K) + 2 cr per image/keyframe  |
-| `veo3.1_fast` | fast Veo, native audio            | first + last frame, negative prompt                         | exactly 4 / 6 / 8 s         | 10 (15 with audio)                             |
-| `veo3.1`      | premium Veo, native audio         | first + last frame, negative prompt                         | exactly 4 / 6 / 8 s         | 20 (40 with audio)                             |
+| Model         | Role (descriptive, not a ranking) | Inputs                                                      | Duration                                    | Price (credits/s)                              |
+| ------------- | --------------------------------- | ----------------------------------------------------------- | ------------------------------------------- | ---------------------------------------------- |
+| `gen4.5`      | Runway flagship                   | start frame only (i2v) or text                              | whole seconds 2–10                          | 12                                             |
+| `gen4_turbo`  | lower cost / faster               | start frame **required** (i2v only)                         | whole seconds 2–10                          | 5                                              |
+| `seedance2_5` | reference-rich                    | first/last frame **or** ≤ 30 reference images, audio, video | ≤ 30 s; min **unverified** (planned as 4 s) | 20 / 30 / 68 at 480p / 720p / 1080p, min 80 cr |
+| `hailuo3`     | cinematic competitor              | first/last frame **or** ≤ 9 reference images, audio, video  | whole seconds **5–15**                      | 10 (768p) / 15 (2K) + 2 cr per image/keyframe  |
+| `veo3.1_fast` | fast Veo, native audio            | first + last frame, negative prompt                         | exactly 4 / 6 / 8 s                         | 10 (15 with audio)                             |
+| `veo3.1`      | premium Veo, native audio         | first + last frame, negative prompt                         | exactly 4 / 6 / 8 s                         | 20 (40 with audio)                             |
 
 Not offered, deliberately:
 
-- **Kling**: absent from the Runway SDK's video request types (4.21.0 and 4.22.0). Prism does not invent a model id.
+- **Kling 3.0** (`kling3.0_standard` / `kling3.0_pro` / `kling3.0_4k`): the API reference documents them under
+  `image_to_video` (3–15 s, first/last frame, `providerSettings.multiPrompt`, `audio` defaulting to true; 9/13,
+  12/17 and 43 credits/s), but **no published `@runwayml/sdk` (4.21.0, 4.22.0) types them** in the video request
+  unions (Kling appears only under the organization usage types). Prism does not bypass the typed SDK with casts and
+  does not hand-roll a REST client for one vendor, so they are recorded in `SDK_BLOCKED_MODELS` (facts + blocker) and
+  NOT offered. A test fails when an SDK upgrade starts typing them: that is the signal to add real catalog entries.
+  Earlier phases' "Kling is absent from the docs" was wrong in framing: it is present in the docs, absent from the SDK.
 - The other 40+ hosted models: the set is small so comparisons stay meaningful. Each is one catalog entry later.
 - Runway's own **Model Router** is _not_ used. Prism needs shot-specific production truth, human history and a
   transparent choice that can later span providers. It can be documented as a future provider-side fallback.
@@ -82,6 +90,16 @@ lists no audio surcharge (Veo lists one explicitly).
 
 `availability: available | unavailable | deprecated | retired`. An unavailable model stays in the catalog (historical
 attempts remain interpretable) and is shown as such; it is never selectable.
+
+## Duration is enforced before the provider
+
+A shot duration outside a model's documented range is never sent natively and never rounded. The compatibility engine
+reports `duration.unsupported` and the matrix classifies the model **ADAPTATION REQUIRED** only when Prism has an explicit
+strategy (`generate_longer_then_trim`: generate the next supported length, trim the delivery). It then shows
+_Production 2 s · Provider generation 5 s · Delivery trim 2 s_ and **prices the full provider generation**. When the shot
+is longer than the model's maximum there is no strategy and the model is UNSUPPORTED. Veo (4/6/8 s only) works the same
+way. Regression tests pin: 2 s Gen-4 Turbo is native; 2 s Hailuo 3 needs the trim strategy (priced at 5 s); 5 s Hailuo is
+native; Seedance's 4 s lower bound; Gen-4.5's 2–10 s.
 
 ## Validation
 

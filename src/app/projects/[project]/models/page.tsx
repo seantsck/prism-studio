@@ -1,3 +1,4 @@
+import { BenchmarkBanner } from "@/components/candidates/benchmark-banner";
 import { Badge, PageHeader, Panel } from "@/components/ui";
 import { catalogModel, defaultTier } from "@/domain/generation/models/catalog";
 import type { CatalogModel, Support } from "@/domain/generation/models/types";
@@ -37,9 +38,13 @@ export default async function ModelsPage({ params }: { params: Promise<{ project
   const registry = getRegistry();
   const candidates = await getCandidateRepo();
   const outcomes = await candidates.listOutcomeRecords(data.project.id);
-  const byModel = new Map(aggregateByModel(outcomes).map((p) => [`${p.provider}/${p.model}`, p] as const));
-  const buckets = aggregateByModelAndBucket(outcomes).filter((b) => b.reviewed > 0);
-  const providers = aggregateByProvider(outcomes).filter((p) => p.reviewed > 0);
+  // A benchmark project shows ITS OWN data, labelled; a production project never sees benchmark data here.
+  const scope = data.project.isBenchmark ? "benchmark" : "production";
+  const byModel = new Map(
+    aggregateByModel(outcomes, scope).map((p) => [`${p.provider}/${p.model}`, p] as const),
+  );
+  const buckets = aggregateByModelAndBucket(outcomes, scope).filter((b) => b.reviewed > 0);
+  const providers = aggregateByProvider(outcomes, scope).filter((p) => p.reviewed > 0);
   const models = registry.models().filter((m) => m.capabilities.video != null);
 
   return (
@@ -49,6 +54,7 @@ export default async function ModelsPage({ params }: { params: Promise<{ project
         subtitle="Capabilities, versioned pricing and this project's human-review history. Advisory: Prism never switches models for you."
       />
       <div className="space-y-4 p-6">
+        {data.project.isBenchmark ? <BenchmarkBanner /> : null}
         {models.map((m) => {
           const cat = catalogModel(m.provider, m.modelId);
           const a = registry.availabilityOf(m);

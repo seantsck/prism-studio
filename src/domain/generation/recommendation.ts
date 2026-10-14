@@ -152,7 +152,8 @@ export function recommendModels(args: {
 }): Recommendation {
   const preference = args.preference ?? "balanced";
   const w = WEIGHTS[preference];
-  const reviewed = args.outcomes.filter((o) => valueOf(o.decision) != null);
+  // Benchmark / synthetic-fixture projects never feed production routing (their reviews exist to test tooling).
+  const reviewed = args.outcomes.filter((o) => !o.benchmark && valueOf(o.decision) != null);
 
   // history per model
   interface Hist {

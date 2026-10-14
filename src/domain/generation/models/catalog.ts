@@ -17,6 +17,8 @@ import type {
  *     (4.22.0 adds only image models; its video request types are identical, so the pin stays at 4.21.0)
  *   - https://docs.dev.runwayml.com/guides/pricing/  (credit price table; $0.01 per credit)
  *   - https://docs.dev.runwayml.com/guides/models/   (model cards)
+ *   - https://docs.dev.runwayml.com/api.md           (POST /v1/image_to_video reference: per-model duration, ratios;
+ *                                                     re-read 2026-10-14 for Phase 2E.1 duration hardening)
  * Where a source does not state something it is recorded in `verification.unstated` and the capability is
  * `unknown`. Nothing here is inferred from marketing material or from another model.
  *
@@ -28,9 +30,9 @@ import type {
  *   hailuo3       cinematic competitor with image/video/audio references at lower cost
  *   veo3.1_fast   fast Veo with first/last frame and native audio
  *   veo3.1        premium Veo with native audio
- * Kling and WAN are NOT in this SDK version's video types for the families asked about (Kling is absent
- * entirely), so Kling is not offered. Adding a model is one entry here plus its family compiler if the request
- * shape is new.
+ * Kling 3.0 (kling3.0_standard / kling3.0_pro / kling3.0_4k) is documented in the API reference, but NO published
+ * @runwayml/sdk version (4.21.0, 4.22.0) types it in the video request unions, so it is NOT offered: see
+ * SDK_BLOCKED_MODELS below. Adding a model is one entry here plus its family compiler if the request shape is new.
  */
 export const RUNWAY_SDK_REF = "@runwayml/sdk@4.21.0";
 export const RUNWAY_API_VERSION_REF = "2024-11-06";
@@ -43,6 +45,7 @@ const SOURCES = [
   "@runwayml/sdk@4.21.0 resources/text-to-video.d.ts",
   "docs.dev.runwayml.com/guides/pricing (2026-10-13)",
   "docs.dev.runwayml.com/guides/models (2026-10-14)",
+  "docs.dev.runwayml.com/api.md image_to_video reference (2026-10-14)",
 ];
 
 const verification = (unstated: string[]): CatalogVerification => ({
@@ -73,9 +76,6 @@ const tier = (
   canvas: w && h ? { width: w, height: h } : null,
   ratios,
 });
-
-const NO_DURATION_BOUNDS =
-  "The documentation states no minimum or maximum duration for this model; the range is a permissive superset and the provider validates it.";
 
 export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
   {
@@ -108,7 +108,7 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
       maxSeconds: 10,
       stepSeconds: 1,
       verified: true,
-      note: "Integer 2–10 seconds (SDK types).",
+      note: "Integer 2–10 seconds, required (API reference, 2026-10-14; the SDK type is only `number`).",
     },
     tiers: [
       tier("default", 1280, 720, {
@@ -142,10 +142,7 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
     summary: "Runway's fastest image-to-video model. A start frame is required; no text-to-video.",
     availability: "available",
     availabilityNote: "",
-    verification: verification([
-      "duration bounds (the SDK type is `number` with no range)",
-      "text-to-video endpoint (the model is not in the text-to-video types)",
-    ]),
+    verification: verification(["text-to-video endpoint (the model is not in the text-to-video types)"]),
     modalities: ["image_to_video"],
     inputs: {
       startFrame: "supported",
@@ -162,11 +159,11 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
     audio: { nativeGeneration: "unsupported", referenceConditioning: "unsupported" },
     duration: {
       allowedSeconds: null,
-      minSeconds: 1,
+      minSeconds: 2,
       maxSeconds: 10,
       stepSeconds: 1,
-      verified: false,
-      note: NO_DURATION_BOUNDS,
+      verified: true,
+      note: "Integer 2–10 seconds, optional (API reference, 2026-10-14). 2 s is a valid request.",
     },
     tiers: [
       tier("default", 1280, 720, {
@@ -202,7 +199,7 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
     availability: "available",
     availabilityNote: "",
     verification: verification([
-      "minimum duration (docs: 'up to 30 seconds')",
+      "minimum duration (the API reference says only 'seconds of video, or auto', default 5; model card: 'up to 30 seconds')",
       "maximum reference images on the image-to-video route (30 is documented for the text-to-video `references` field)",
       "whether `audio: true` produces speech or only sound",
     ]),
@@ -222,11 +219,11 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
     audio: { nativeGeneration: "supported", referenceConditioning: "supported" },
     duration: {
       allowedSeconds: null,
-      minSeconds: 1,
+      minSeconds: 4,
       maxSeconds: 30,
       stepSeconds: 1,
       verified: false,
-      note: "Documented maximum 30 s; the minimum is not stated (permissive range, whole seconds).",
+      note: "Documented maximum 30 s (model card). The 4 s minimum is NOT in the API reference (it states only an integer or 'auto', default 5): it is the operator-reported lower bound used conservatively, so a shorter shot is shown as needing a longer-then-trim adaptation instead of being sent and rejected. 'auto' is never used (billed at the maximum).",
     },
     tiers: [
       tier("720p", 1280, 720, {
@@ -284,8 +281,6 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
     availability: "available",
     availabilityNote: "",
     verification: verification([
-      "duration bounds (the SDK type is `number`)",
-      "prompt length limit",
       "native audio generation",
       "maximum reference images on the image-to-video route (9 is documented for text-to-video `references`)",
     ]),
@@ -305,11 +300,11 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
     audio: { nativeGeneration: "unknown", referenceConditioning: "supported" },
     duration: {
       allowedSeconds: null,
-      minSeconds: 1,
-      maxSeconds: 30,
+      minSeconds: 5,
+      maxSeconds: 15,
       stepSeconds: 1,
-      verified: false,
-      note: NO_DURATION_BOUNDS,
+      verified: true,
+      note: "Integer 5–15 seconds (API reference, 2026-10-14). A 2 s request is below the minimum; the first real candidate set's 2 s request was rejected with HTTP 400 ‘Model does not support this input’ (the message does not name the field, so the duration is the documented, not the proven, cause).",
     },
     tiers: [
       tier("768p", 1280, 720, {
@@ -331,7 +326,7 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
     ],
     aspectRatios: ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
     textToVideoAspectRatios: null,
-    promptMaxChars: null,
+    promptMaxChars: 6000,
     pricing: pricing({
       perSecond: { "768p": { silent: 10, audio: null }, "2k": { silent: 15, audio: null } },
       perReferenceImage: 2,
@@ -618,3 +613,72 @@ export function toGenerationModel(m: CatalogModel, opts: { maxConcurrency?: numb
     capabilities: caps,
   };
 }
+
+/**
+ * Models the provider DOCUMENTS but that cannot be offered yet because the pinned SDK does not type them. Prism
+ * never bypasses the typed SDK with casts to add a model, and does not hand-roll a REST client for one vendor.
+ * A test fails when an SDK upgrade starts typing one of these, which is the signal to add it as a catalog entry.
+ * Facts are the API reference of 2026-10-14; nothing here is sent anywhere.
+ */
+export interface SdkBlockedModel {
+  provider: "runway";
+  modelId: string;
+  displayName: string;
+  /** Endpoint the docs list it under. */
+  endpoint: "image_to_video";
+  durationSeconds: { min: number; max: number };
+  /** Credits per second (no audio / audio), $0.01 per credit. */
+  creditsPerSecond: { silent: number; audio: number | null };
+  ratios: string[];
+  notes: string[];
+  verifiedAt: string;
+  blocker: string;
+}
+
+const KLING_NOTES = [
+  "first frame and optional last frame",
+  "providerSettings.multiPrompt: 1–6 segments, each 1–15 s, total 3–15 s",
+  "audio defaults to true (bills at the audio rate unless set false)",
+  "providerSettings: shotType intelligence|customize, cfgScale default 0.5",
+];
+const KLING_BLOCKER =
+  "Not in the video request unions of @runwayml/sdk 4.21.0 or 4.22.0 (checked 2026-10-14). Upgrade the SDK when a release types it, then add a catalog entry and a compiler family.";
+
+export const SDK_BLOCKED_MODELS: readonly SdkBlockedModel[] = [
+  {
+    provider: "runway",
+    modelId: "kling3.0_standard",
+    displayName: "Kling 3.0 Standard",
+    endpoint: "image_to_video",
+    durationSeconds: { min: 3, max: 15 },
+    creditsPerSecond: { silent: 9, audio: 13 },
+    ratios: ["1280:720", "720:1280", "960:960"],
+    notes: KLING_NOTES,
+    verifiedAt: "2026-10-14",
+    blocker: KLING_BLOCKER,
+  },
+  {
+    provider: "runway",
+    modelId: "kling3.0_pro",
+    displayName: "Kling 3.0 Pro",
+    endpoint: "image_to_video",
+    durationSeconds: { min: 3, max: 15 },
+    creditsPerSecond: { silent: 12, audio: 17 },
+    ratios: ["1920:1080", "1080:1920", "1440:1440"],
+    notes: KLING_NOTES,
+    verifiedAt: "2026-10-14",
+    blocker: KLING_BLOCKER,
+  },
+  {
+    provider: "runway",
+    modelId: "kling3.0_4k",
+    displayName: "Kling 3.0 4K",
+    endpoint: "image_to_video",
+    durationSeconds: { min: 3, max: 15 },
+    creditsPerSecond: { silent: 43, audio: 43 },
+    ratios: ["3840:2160", "2160:3840", "2880:2880"],
+    notes: KLING_NOTES,
+    verifiedAt: "2026-10-14",
+    blocker: KLING_BLOCKER,
+  },
+];

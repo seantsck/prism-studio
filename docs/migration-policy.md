@@ -66,10 +66,12 @@ would trip the checksum guard, and that is the point of the guard.
 | 0010 | `0010_storage.sql`                           | Private bucket `prism-assets` (50 MB, MIME allow-list), `storage_object_project_id()`, four ownership policies on `storage.objects`.                                                                 |
 | 0011 | `0011_frame_approval_snapshot.sql`           | `storyboard_frames.approved_snapshot` JSONB (`parts` required) so staleness can name the changed parts.                                                                                              |
 
-Later files (0012–0027) are documented in their own headers and in [generation-jobs](generation-jobs.md),
+Later files (0012–0028) are documented in their own headers and in [generation-jobs](generation-jobs.md),
 [continuity-analysis-jobs](continuity-analysis-jobs.md) and [generation-candidate-sets](generation-candidate-sets.md).
 Notable fix-forward: **0027** replaces the review append-only guard so the `on delete set null` action of 0026's
-`generation_reviews.candidate_set_id` is permitted (0026 is applied and therefore immutable).
+`generation_reviews.candidate_set_id` is permitted (0026 is applied and therefore immutable). **0028** adds the
+explicit `projects.is_benchmark` classification (default false; no data is reclassified by SQL, never inferred from a
+slug) and a trigger that refuses a human review for an attempt that has not succeeded.
 
 ## Adding a migration
 

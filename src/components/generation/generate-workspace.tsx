@@ -19,6 +19,7 @@ import {
   type AdaptationOptions,
   type VariantEvaluation,
 } from "./adaptation-summary";
+import { BenchmarkBanner } from "@/components/candidates/benchmark-banner";
 import { ModelComparePanel } from "@/components/candidates/model-compare-panel";
 import { buildModelComparison } from "@/generation/model-comparison";
 import { getCandidateRepo } from "@/server/candidates";
@@ -237,6 +238,7 @@ export async function GenerateWorkspace({ data, shotId }: { data: ProjectData; s
           Compare models for this shot (candidate set)
         </summary>
         <div className="space-y-2 p-3">
+          {data.project.isBenchmark ? <BenchmarkBanner /> : null}
           <ModelComparePanel
             projectSlug={slug}
             shotId={shotId}

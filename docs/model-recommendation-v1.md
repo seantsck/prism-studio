@@ -56,6 +56,13 @@ sample"), cost and the label with confidence; the expanded row lists the reasons
 the recommendation (engine version, profile, per-model parts and reasons, recommended vs chosen) is **frozen on the
 set**. Pages are not persisted on every render.
 
+## Benchmark data never counts
+
+Outcome records flagged `benchmark` (an explicit project classification, see [model-performance](model-performance.md))
+are removed before any history is computed: a benchmark project's reviews are invisible to `model-routing-v1`, so a
+fixture experiment cannot make a model look better or worse in production. A benchmark project itself is always
+cold-start.
+
 ## Scope limits
 
 - Project/account history only. No hidden global crowd model, no sharing outcomes between users.

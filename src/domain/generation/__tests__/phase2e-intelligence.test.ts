@@ -137,6 +137,7 @@ const outcome = (
   generationMs: 60_000,
   totalMs: 70_000,
   profile: profile(),
+  benchmark: false,
   status: "succeeded",
   createdAt: "2026-10-14T00:00:00Z",
   ...over,

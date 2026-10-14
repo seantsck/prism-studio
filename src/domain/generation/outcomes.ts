@@ -50,6 +50,8 @@ export function buildOutcomeRecords(args: {
   memberships: ReadonlyMap<string, string>;
   /** attempt ids that won their set (marked Best, or promoted) */
   preferredAttemptIds: ReadonlySet<string>;
+  /** The project is a benchmark / synthetic-fixture project (explicit classification, not inferred). */
+  benchmark?: boolean;
 }): OutcomeRecord[] {
   const latest = latestReviews(args.reviews);
   return args.attempts.map((a) => {
@@ -70,6 +72,7 @@ export function buildOutcomeRecords(args: {
       generationMs: ms(a.job?.submittedAt ?? null, a.job?.completedAt ?? null),
       totalMs: ms(a.job?.createdAt ?? a.createdAt, a.job?.completedAt ?? null),
       profile: profileOfSnapshot(a.packageSnapshot),
+      benchmark: args.benchmark === true,
       status: a.status,
       errorCategory: a.job?.errorCategory ?? null,
       createdAt: a.createdAt,

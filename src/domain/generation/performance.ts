@@ -26,11 +26,23 @@ export interface OutcomeRecord {
   totalMs: number | null;
   /** Feature profile of the frozen package the attempt was built from (null when unavailable). */
   profile: ShotFeatureProfile | null;
+  /**
+   * The attempt belongs to a benchmark / synthetic-fixture project (an explicit project classification). Such
+   * records are kept and shown as TEST / BENCHMARK data but never feed production aggregates or routing.
+   */
+  benchmark: boolean;
   /** Execution status of the attempt. */
   status: string;
   /** Job failure category when it failed (rate_limit, provider_unavailable, ...). */
   errorCategory?: string | null;
   createdAt: string;
+}
+
+export type DataScope = "production" | "benchmark";
+
+/** Records of one scope. The default is production: benchmark data is opt-in and always labelled. */
+export function inScope(records: readonly OutcomeRecord[], scope: DataScope = "production"): OutcomeRecord[] {
+  return records.filter((r) => (scope === "benchmark" ? r.benchmark : !r.benchmark));
 }
 
 export type Reliability = "none" | "very_low" | "low" | "moderate";
@@ -131,9 +143,12 @@ export function summarize(provider: string, model: string, rows: readonly Outcom
   };
 }
 
-export function aggregateByModel(records: readonly OutcomeRecord[]): ModelPerformance[] {
+export function aggregateByModel(
+  records: readonly OutcomeRecord[],
+  scope: DataScope = "production",
+): ModelPerformance[] {
   const groups = new Map<string, OutcomeRecord[]>();
-  for (const r of records) {
+  for (const r of inScope(records, scope)) {
     const k = `${r.provider}/${r.model}`;
     groups.set(k, [...(groups.get(k) ?? []), r]);
   }
@@ -163,9 +178,12 @@ export interface BucketPerformance extends ModelPerformance {
 }
 
 /** Model history by shot type: "Seedance · two characters · dialogue: 6/8 positive". */
-export function aggregateByModelAndBucket(records: readonly OutcomeRecord[]): BucketPerformance[] {
+export function aggregateByModelAndBucket(
+  records: readonly OutcomeRecord[],
+  scope: DataScope = "production",
+): BucketPerformance[] {
   const groups = new Map<string, OutcomeRecord[]>();
-  for (const r of records) {
+  for (const r of inScope(records, scope)) {
     const k = `${r.provider}/${r.model}\u0000${bucketOf(r.profile)}`;
     groups.set(k, [...(groups.get(k) ?? []), r]);
   }
@@ -180,9 +198,12 @@ export function aggregateByModelAndBucket(records: readonly OutcomeRecord[]): Bu
     );
 }
 
-export function aggregateByProvider(records: readonly OutcomeRecord[]): ModelPerformance[] {
+export function aggregateByProvider(
+  records: readonly OutcomeRecord[],
+  scope: DataScope = "production",
+): ModelPerformance[] {
   const groups = new Map<string, OutcomeRecord[]>();
-  for (const r of records) groups.set(r.provider, [...(groups.get(r.provider) ?? []), r]);
+  for (const r of inScope(records, scope)) groups.set(r.provider, [...(groups.get(r.provider) ?? []), r]);
   return [...groups.entries()]
     .map(([provider, rows]) => summarize(provider, "(all models)", rows))
     .sort((a, b) => b.reviewed - a.reviewed || a.provider.localeCompare(b.provider));

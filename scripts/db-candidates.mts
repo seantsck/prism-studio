@@ -478,6 +478,67 @@ try {
     }
   }
 
+  // ── 7b. migration 0028: benchmark classification + "a review needs a clip" ──
+  {
+    const col = await pool.query(
+      "select column_default, is_nullable from information_schema.columns where table_name = 'projects' and column_name = 'is_benchmark'",
+    );
+    check(
+      "projects.is_benchmark exists, not null, default false",
+      col.rowCount === 1 &&
+        col.rows[0].is_nullable === "NO" &&
+        String(col.rows[0].column_default) === "false",
+    );
+    const flag = await pool.query("select is_benchmark from projects where id = $1", [projectId]);
+    check(
+      "the demo project is a production project (never reclassified by migration)",
+      flag.rows[0]?.is_benchmark === false,
+    );
+
+    // a review on an attempt that did not succeed is refused by the database itself
+    const c = await pool.connect();
+    let refused = "";
+    try {
+      await c.query("begin");
+      await c.query("alter table generation_attempts disable trigger user");
+      await c.query("update generation_attempts set status = 'failed' where id = $1", [createdAttemptIds[0]]);
+      await c.query("alter table generation_attempts enable trigger user");
+      await c.query(
+        "insert into generation_reviews (project_id, attempt_id, decision, positive_tags, negative_tags, notes) values ($1, $2, 'approve', '{}', '{}', '')",
+        [projectId, createdAttemptIds[0]],
+      );
+    } catch (e) {
+      refused = (e as Error).message;
+    } finally {
+      await c.query("rollback").catch(() => undefined);
+      c.release();
+    }
+    check(
+      "DB refuses a human review for a non-succeeded attempt",
+      /needs a completed generation/.test(refused),
+      refused.slice(0, 120),
+    );
+
+    // outcomes carry the project's explicit classification (toggled inside the test, always restored)
+    const before = await ownerCand.listOutcomeRecords(projectId);
+    check(
+      "production project outcomes are not flagged benchmark",
+      before.every((o) => o.benchmark === false),
+    );
+    try {
+      await pool.query("update projects set is_benchmark = true where id = $1", [projectId]);
+      const flagged = await ownerCand.listOutcomeRecords(projectId);
+      check(
+        "benchmark project outcomes are flagged and excluded from production aggregates",
+        flagged.length > 0 &&
+          flagged.every((o) => o.benchmark === true) &&
+          aggregateByModel(flagged).every((p) => p.reviewed === 0 && p.generated === 0),
+      );
+    } finally {
+      await pool.query("update projects set is_benchmark = false where id = $1", [projectId]);
+    }
+  }
+
   // ── 8. statistics derive from human outcomes ──
   const outcomes = await ownerCand.listOutcomeRecords(projectId);
   const mine = outcomes.filter((o) => createdAttemptIds.includes(o.attemptId));

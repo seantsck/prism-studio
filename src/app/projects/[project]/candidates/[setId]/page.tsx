@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ActionForm } from "@/components/action-form";
 import { CandidateBoard, type BoardCandidate } from "@/components/candidates/candidate-board";
 import { GenerationPoller } from "@/components/generation/poller";
+import { BenchmarkBanner } from "@/components/candidates/benchmark-banner";
 import { Badge, Button, PageHeader, Panel } from "@/components/ui";
 import type { AttemptView } from "@/data/generation-repository";
 import { rollupSet } from "@/domain/generation/candidates";
@@ -176,6 +177,7 @@ export default async function CandidateSetPage({
         }
       />
       <div className="space-y-4 p-6">
+        {data.project.isBenchmark ? <BenchmarkBanner /> : null}
         <GenerationPoller projectSlug={slug} shotId={set.set.shotId} signature={signature} active={active} />
 
         <div className="grid gap-3 md:grid-cols-3">

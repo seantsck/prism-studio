@@ -46,6 +46,14 @@ Keyboard on a focused card (cards are focusable; `Tab` to move):
 
 Keys are ignored while typing in a field. Every action is also a real button with a title and label.
 
+## Only a completed generation can be reviewed
+
+A candidate that failed, was cancelled, was never submitted or is still running has **no clip**. Its card shows the
+provider failure (or state) and says "No clip to review"; it exposes no Good / Shortlist / Reject / Best controls and no
+shortcuts. This is enforced in the UI, in the server action, in both repositories and by a database trigger
+(migration 0028). In a partial set ("1/3 completed, 2 failed") the succeeded clip stays fully reviewable and can be
+marked Best; the historical provider failures stay exactly as recorded.
+
 ## History is append-only
 
 Changing your mind inserts a **new** review that `supersedes` the previous one. Nothing is rewritten (a DB trigger

@@ -259,11 +259,13 @@ export class PostgresCandidateData implements CandidateRepository {
 
   async recordReview(input: NewReview): Promise<GenerationReview> {
     return this.tx(async (c) => {
-      const att = await c.query("select 1 from generation_attempts where id = $1 and project_id = $2", [
+      const att = await c.query("select status from generation_attempts where id = $1 and project_id = $2", [
         input.attemptId,
         input.projectId,
       ]);
       if (att.rowCount === 0) throw new CandidateError("not_found", "That generation no longer exists.");
+      if (att.rows[0].status !== "succeeded")
+        throw new CandidateError("not_succeeded", "Only a completed generation has a clip to review.");
       const prev = await c.query(
         "select id from generation_reviews where attempt_id = $1 order by reviewed_at desc, id desc limit 1",
         [input.attemptId],
@@ -384,6 +386,9 @@ export class PostgresCandidateData implements CandidateRepository {
         [projectId],
       );
       const reviews = await c.query("select * from generation_reviews where project_id = $1", [projectId]);
+      const benchmark =
+        (await c.query("select is_benchmark from projects where id = $1", [projectId])).rows[0]
+          ?.is_benchmark === true;
       const members = await c.query(
         "select attempt_id, candidate_set_id from generation_candidate_members where project_id = $1 and attempt_id is not null",
         [projectId],
@@ -423,6 +428,7 @@ export class PostgresCandidateData implements CandidateRepository {
           members.rows.map((m) => [String(m.attempt_id), String(m.candidate_set_id)] as const),
         ),
         preferredAttemptIds: preferred,
+        benchmark,
       });
     });
   }

@@ -52,7 +52,8 @@ Stated plainly; none of these are implied to exist elsewhere in the docs.
 | **2D.1** | Second real analyzer: OpenAI (`gpt-6-luna`, Responses API, Structured Outputs) behind the same provider contract; model registry; informational provider health; no live OpenAI call yet                                                                                              | implemented (fake transport) |
 | 2D.2     | Live OpenAI smoke (explicit approval) + direct-video temporal QA refinement, calibration on real runs                                                                                                                                                                                 | next                         |
 | **2E**   | Multi-model production + human quality intelligence: model catalog (6 Runway video models), shot-specific fit matrix, candidate sets, side-by-side compare, fast human review, model performance history, deterministic recommendation v1 (advisory); AI continuity QA stays optional | implemented                  |
-| 2E.1     | First real candidate set on a disposable fixture (explicit approval); calibration of the recommendation weights on real reviews                                                                                                                                                       | next                         |
+| 2E.1     | Model catalog hardening (documented duration ranges, pre-provider duration enforcement), benchmark-project isolation, failed-candidate review guard; Kling blocked by the SDK, documented                                                                                             | implemented (local)          |
+| 2E.2     | Second real candidate set at 5 s on a disposable fixture (explicit approval); calibration of the recommendation weights on real reviews                                                                                                                                               | next                         |
 | 2E-old   | (superseded) Multi-model generation routing + attempt comparison (capability + cost + history + continuity aware)                                                                                                                                                                     | —                            |
 | 2F       | Production editor/timeline; delivery-master consumption; project budgets and cost intelligence                                                                                                                                                                                        | —                            |
 
@@ -157,13 +158,13 @@ webhook endpoints (architecture only); realtime push instead of status polling; 
 
 ## Known gaps (Phase 2E)
 
-- **No real candidate set has been generated yet.** Everything is verified with the MockProvider, the Runway SDK
-  request shapes (fake client) and the real Postgres stack; the first paid comparison needs explicit approval
-  ([generation-candidate-sets](generation-candidate-sets.md)).
-- **Capability unknowns are visible, not resolved:** duration bounds for Gen-4 Turbo, Hailuo 3 and Seedance 2.5's
-  minimum, Hailuo prompt length, whether Hailuo can generate audio, the provider-side reference limit on the
-  image-to-video route. The provider validates; a rejected request is free.
-- **Kling is not offered** (absent from the Runway SDK video types); other Runway-hosted models are one catalog entry each.
+- **One real candidate set has run** (1 of 3 succeeded; see [generation-candidate-sets](generation-candidate-sets.md)).
+  It has no human review yet, so model history is still empty and recommendations are cold-start.
+- **Capability unknowns are visible, not resolved:** Seedance 2.5's minimum duration (planned conservatively as 4 s),
+  whether Hailuo can generate audio, the provider-side reference limit on the image-to-video route. The provider
+  validates; a rejected request is free. Duration ranges for Gen-4.5, Gen-4 Turbo, Hailuo 3 and Veo are documented.
+- **Kling 3.0 is documented by Runway but not typed by any published SDK** (4.21.0, 4.22.0), so it is not offered
+  (`SDK_BLOCKED_MODELS`); other Runway-hosted models are one catalog entry each.
 - **Reference video and reference-audio duration limits** are not enforced at planning (Prism sends reference
   images and performed audio only; video references are architecture-ready).
 - **Recommendations are computed at each model's default options** and are project-local; weights are a first

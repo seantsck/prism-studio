@@ -396,7 +396,11 @@ function CandidateCard({
       ref={root}
       tabIndex={0}
       onKeyDown={onKey}
-      aria-label={`Candidate ${c.label}: ${c.modelLabel}. Keys: 1 good, 2 shortlist, 3 reject, B best.`}
+      aria-label={
+        reviewable
+          ? `Candidate ${c.label}: ${c.modelLabel}. Keys: 1 good, 2 shortlist, 3 reject, B best.`
+          : `Candidate ${c.label}: ${c.modelLabel}. No clip to review (${c.status.replace(/_/g, " ")}).`
+      }
       className={`space-y-2 border bg-panel p-2.5 outline-none focus-visible:ring-1 focus-visible:ring-accent ${
         c.promoted ? "border-pass" : c.preferred ? "border-accent" : "border-line"
       }`}
@@ -425,7 +429,7 @@ function CandidateCard({
         </Badge>
         {c.preferred ? <Badge tone="accent">Best</Badge> : null}
         {c.promoted ? <Badge tone="pass">Promoted to shot</Badge> : null}
-        <Badge tone={DECISION_TONE[decision]}>{DECISION_TEXT[decision]}</Badge>
+        {reviewable ? <Badge tone={DECISION_TONE[decision]}>{DECISION_TEXT[decision]}</Badge> : null}
       </div>
 
       {c.videoUrl ? (
@@ -620,9 +624,17 @@ function CandidateCard({
 
       <div className="flex items-center justify-between text-[10.5px] text-faint">
         <span>
-          {c.reviewCount > 0 ? `${c.reviewCount} review(s) in history` : "No review yet"}
-          {" · "}
-          <Kbd>1</Kbd> good <Kbd>2</Kbd> shortlist <Kbd>3</Kbd> reject <Kbd>B</Kbd> best
+          {!reviewable
+            ? "No clip to review"
+            : c.reviewCount > 0
+              ? `${c.reviewCount} review(s) in history`
+              : "No review yet"}
+          {reviewable ? (
+            <>
+              {" · "}
+              <Kbd>1</Kbd> good <Kbd>2</Kbd> shortlist <Kbd>3</Kbd> reject <Kbd>B</Kbd> best
+            </>
+          ) : null}
         </span>
         {c.detailHref ? (
           <a className="underline" href={c.detailHref}>

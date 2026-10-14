@@ -165,8 +165,11 @@ export class MemoryCandidateService implements CandidateRepository {
 
   async recordReview(input: NewReview): Promise<GenerationReview> {
     const data = this.projectOf(input.projectId);
-    if (!data?.attempts.some((a) => a.id === input.attemptId))
-      throw new CandidateError("not_found", "That generation no longer exists.");
+    const attempt = data?.attempts.find((a) => a.id === input.attemptId);
+    if (!attempt) throw new CandidateError("not_found", "That generation no longer exists.");
+    // a verdict on a clip needs a clip (migration 0028 enforces the same in Postgres)
+    if (attempt.status !== "succeeded")
+      throw new CandidateError("not_succeeded", "Only a completed generation has a clip to review.");
     const current = this.reviews
       .filter((r) => r.attemptId === input.attemptId)
       .sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt))[0];
@@ -283,6 +286,7 @@ export class MemoryCandidateService implements CandidateRepository {
       reviews: this.reviews.filter((r) => r.projectId === projectId),
       memberships,
       preferredAttemptIds: preferred,
+      benchmark: data.project.isBenchmark === true,
     });
   }
 }

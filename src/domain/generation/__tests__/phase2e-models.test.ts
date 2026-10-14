@@ -66,9 +66,10 @@ describe("model catalog", () => {
   });
 
   it("does not claim what the sources do not state (unknown stays unknown)", () => {
-    expect(cat("gen4_turbo").duration.verified).toBe(false);
+    // Phase 2E.1: Gen-4 Turbo and Hailuo 3 duration bounds are now documented; Seedance's minimum still is not.
+    expect(cat("gen4_turbo").duration.verified).toBe(true);
+    expect(cat("seedance2_5").duration.verified).toBe(false);
     expect(cat("hailuo3").audio.nativeGeneration).toBe("unknown");
-    expect(cat("hailuo3").promptMaxChars).toBeNull();
     expect(cat("gen4.5").inputs.keyframesExcludeReferences).toBe("unknown");
     // gen4_turbo is not in the text-to-video types
     expect(cat("gen4_turbo").modalities).toEqual(["image_to_video"]);
@@ -409,9 +410,11 @@ describe("compatibility matrix", () => {
   });
 
   it("unverified duration bounds surface as UNKNOWN, not as supported", () => {
-    const f = by["gen4_turbo"]!;
+    const f = by["seedance2_5"]!;
     expect(f.unknowns.join(" ")).toMatch(/not documented/);
     expect(f.duration.unverified).toBe(true);
+    // documented bounds do not
+    expect(by["gen4_turbo"]!.duration.unverified).toBe(false);
   });
 
   it("an explicit adaptation preview is reported as adaptation, not as incompatibility", () => {

@@ -146,6 +146,10 @@ async function reviewCandidate_impl(form: FormData) {
     if (e instanceof ReviewValidationError) throw new UserFacingError(e.message);
     throw e;
   }
+  // A review is a verdict on a clip. A failed / cancelled / queued attempt has no clip, so it can never be
+  // reviewed as though one existed (its provider failure stays visible as the attempt's own status).
+  if (view.attempt.status !== "succeeded")
+    throw new UserFacingError("Only a completed generation has a clip to review.");
   const set = await candidates.findSetForAttempt(view.attempt.id);
   await candidates.recordReview({
     projectId: data.project.id,

@@ -61,20 +61,52 @@ Migration `0026`: `generation_candidate_sets`, `generation_candidate_members`, `
 member (promotion needs a succeeded attempt); members are frozen apart from their one-time attempt link. See
 [security-model](security-model.md). Verified by `npm run db:candidates`.
 
-## Proposed first real comparison (NOT executed; needs explicit approval)
+## The first real set (executed 2026-10-14) and what it taught
 
-A deliberately tiny experiment on a **disposable fictional visual fixture** (`npm run runway:fixture`: a separate
-project, one 16:9, 2 s, character-free paper-lantern establishing shot with one approved start frame). Not Shot 3A.
+One candidate set ran on the disposable `runway-smoke-test` fixture (a **benchmark project**, see below): Gen-4.5,
+Gen-4 Turbo and Hailuo 3 (768p), 2 s, one shared package fingerprint
+(`bea62422…959b0f`), estimated $0.56.
 
-| Candidate | Model          | Duration | Start frame | Estimate (credits → USD)                 |
-| --------- | -------------- | -------- | ----------- | ---------------------------------------- |
-| A         | `gen4.5`       | 2 s      | the same    | 24 cr → **$0.24**                        |
-| B         | `gen4_turbo`   | 2 s      | the same    | 10 cr → **$0.10**                        |
-| C         | `hailuo3` 768p | 2 s      | the same    | 20 + 2 (start frame) = 22 cr → **$0.22** |
+| Candidate   | Outcome                                                                            | Actual  |
+| ----------- | ---------------------------------------------------------------------------------- | ------- |
+| Gen-4.5     | succeeded, ingested (generation 68 s, total 159 s)                                 | $0.24   |
+| Gen-4 Turbo | accepted by the provider, then `INTERNAL.BAD_OUTPUT.CODE01` (provider_unavailable) | unknown |
+| Hailuo 3    | rejected at submission, HTTP 400 "Model does not support this input", never billed | none    |
 
-**Expected total $0.56.** Suggested server limits: `PRISM_STUDIO_MAX_GENERATION_USD=0.30`,
-`PRISM_STUDIO_MAX_CANDIDATE_SET_USD=0.75`. All three take the 16:9 frame natively, so there is no framing adaptation and
-the only differences are the models themselves (and their prompt wording). Gen-4 Turbo and Hailuo 3 duration bounds
-are not documented: if either rejects 2 s the request fails before billing and the set still completes with the
-others. (Add `veo3.1_fast` with _generate 4 s then trim_ for +$0.40 if a Veo data point is wanted.) The estimate is
-pinned by `phase2e-models.test.ts`.
+Failure isolation held (1/3 completed, 2 failed; nothing retried or replaced). Lessons, now encoded:
+
+- **Hailuo 3's range is 5–15 s** (API reference). The 2 s request was below the minimum and should never have been
+  sent: the catalog recorded the bounds as unknown. Phase 2E.1 fixed the catalog, so a 2 s Hailuo is ADAPTATION REQUIRED
+  (generate 5 s, trim to 2 s, priced at 5 s) or UNSUPPORTED, and never a native request.
+- **Gen-4 Turbo's 2 s is valid** (2–10 s). Its failure was the provider's, and stays `provider_unavailable` in history.
+  History is never rewritten when the catalog improves.
+- A failed candidate has no clip, so it exposes **no** Good / Shortlist / Best controls and cannot be reviewed.
+
+## Benchmark / fixture projects
+
+`projects.is_benchmark` (migration 0028) is an **explicit** classification, never inferred from a slug. A benchmark
+project's candidate sets, reviews, winners, costs and comparison UI all work normally, which is the point: they let the
+tooling be exercised end to end. Its records are excluded from production model-performance aggregates and from routing
+recommendations (`inScope()`), and every page that shows its data says **TEST / BENCHMARK DATA**. Classify an existing
+fixture with `npm run runway:fixture -- --mark-benchmark` (new fixtures are created as benchmark projects).
+
+## Proposed next real set (NOT executed; needs explicit approval)
+
+Same disposable fixture style, one start frame, **5 s** (a duration Gen-4.5, Gen-4 Turbo, Hailuo 3 and Seedance 2.5
+all accept natively, so no model needs a trim and the comparison is not muddied by adaptation). Create it with
+`npm run runway:fixture -- --create --seconds 5 --slug <new-slug>` (benchmark by default). The models are the three
+request families that have never produced a clip end to end: that is a provider-contract validation first and a quality
+comparison second.
+
+| Candidate | Model              | Duration | Estimate (credits → USD)                 |
+| --------- | ------------------ | -------- | ---------------------------------------- |
+| A         | `gen4_turbo`       | 5 s      | 25 cr → **$0.25**                        |
+| B         | `hailuo3` 768p     | 5 s      | 50 + 2 (start frame) = 52 cr → **$0.52** |
+| C         | `seedance2_5` 720p | 5 s      | 150 cr → **$1.50**                       |
+
+**Expected total $2.27.** Suggested limits: `PRISM_STUDIO_MAX_GENERATION_USD=1.60`,
+`PRISM_STUDIO_MAX_CANDIDATE_SET_USD=2.50`. Seedance 480p would be $1.00 (total $1.77) but changes the canvas; 720p
+keeps the three outputs 1280×720 for a fairer human comparison. Swap options at 5 s: `gen4.5` $0.60 (a quality anchor
+that already succeeded once), `veo3.1_fast` needs generate 6 s then trim ($0.60). Kling 3.0 is not offered until the
+SDK types it. The plan is printed by `npm run runway:fixture -- --seconds 5` (memory planning, no spend) and the
+estimates are pinned by `phase2e1-hardening.test.ts`.

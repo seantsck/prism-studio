@@ -94,6 +94,12 @@ export const projectSchema = z.object({
   tone: text,
   defaultLanguage: text,
   productionStatus: z.enum(PRODUCTION_STATUSES),
+  /**
+   * Explicit owner classification: an infrastructure-validation / benchmark / synthetic-fixture project. Never
+   * inferred from the slug. Its reviews and winners persist and work normally, but its records are excluded
+   * from production model-performance aggregates and routing recommendations (see domain/generation/performance).
+   */
+  isBenchmark: z.boolean().default(false),
   createdAt: iso,
   updatedAt: iso,
 });
