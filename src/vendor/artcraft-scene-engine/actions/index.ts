@@ -1,0 +1,13 @@
+// PRISM PATCH: trimmed barrel (the AssetModal / AnimationsModal / record / timeline UI actions are not vendored).
+export * from "./addObject";
+export * from "./addCharacter";
+export * from "./addShape";
+export * from "./deleteObject";
+export * from "./selectObject";
+export * from "./setTransformMode";
+export * from "./setCameraAspect";
+export * from "./setObjectColor";
+export * from "./toggleObjectLock";
+export * from "./toggleObjectVisibility";
+export * from "./transformObject";
+export * from "./cameraView";

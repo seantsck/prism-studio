@@ -1,0 +1,1958 @@
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/PageSceneStore.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/PageSceneStore.ts
+--- pristine/PageSceneStore.ts	2026-10-15 16:07:43.286557000 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/PageSceneStore.ts	2026-10-15 15:31:45.317900900 -0500
+@@ -1,6 +1,6 @@
+ import { create } from "zustand";
+ import type { LucideIcon } from "lucide-react";
+-import { Camera, FocalLengthDragging } from "@storyteller/common";
++import { Camera, FocalLengthDragging } from "./shims/common";
+ import {
+   AssetType,
+   AssetFilterOption,
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/actions/index.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/actions/index.ts
+--- pristine/actions/index.ts	2026-10-15 16:07:42.696657100 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/actions/index.ts	2026-10-15 15:31:15.966215800 -0500
+@@ -1,3 +1,4 @@
++// PRISM PATCH: trimmed barrel (the AssetModal / AnimationsModal / record / timeline UI actions are not vendored).
+ export * from "./addObject";
+ export * from "./addCharacter";
+ export * from "./addShape";
+@@ -8,9 +9,5 @@
+ export * from "./setObjectColor";
+ export * from "./toggleObjectLock";
+ export * from "./toggleObjectVisibility";
+-export * from "./toggleSkeletonHelper";
+-export * from "./openAnimationsModal";
+-export * from "./openAssetModal";
+ export * from "./transformObject";
+-export * from "./timeline";
+ export * from "./cameraView";
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/adapter.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/adapter.ts
+--- pristine/adapter.ts	2026-10-15 16:07:43.333967000 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/adapter.ts	2026-10-15 15:27:02.011669100 -0500
+@@ -1,91 +1,6 @@
+-// Single platform-abstraction surface the host (artcraft Tauri app or
+-// any future web host) injects into PageScene. Mirrors the shape of
+-// PageDrawAdapter — methods for Tauri-specific generation/upload, slot
+-// renderers for host-owned modals, and optional event hooks for
+-// telemetry / error surfacing / tab persistence.
+-//
+-// The library itself has zero Tauri imports. Everything platform-
+-// specific is on this interface; the adapter is constructed in the
+-// host wrapper and passed to <PageScene adapter={adapter} />.
+-
+-import type { ReactNode } from "react";
+-import type { LucideIcon } from "lucide-react";
+-import type {
+-  CommonAspectRatio,
+-  CommonResolution,
+-  ImageModel,
+-} from "@storyteller/model-list";
+-import type { GenerationProvider } from "@storyteller/api-enums";
+-import type { UploadImageArgs } from "@storyteller/common";
+-import type {
+-  FilterEngineCategories,
+-  FilterMediaType,
+-  ToastTypes,
+-} from "./enums";
+-import type { MediaInfo } from "./models/mediaInfo";
+-import type { Pagination, PaginationInfinite } from "./models/pagination";
+-
+-// ─── Generation ────────────────────────────────────────────────────────
+-
+-export interface PageSceneGenerateRequest {
+-  model?: ImageModel;
+-  provider?: GenerationProvider;
+-  prompt?: string;
+-  imageMediaTokens?: string[];
+-  sceneImageMediaToken?: string;
+-  imageCount?: number;
+-  aspectRatio?: CommonAspectRatio;
+-  resolution?: CommonResolution;
+-  frontendCaller?: string;
+-  frontendSubscriberId?: string;
+-}
+-
+-// ─── Media listing (AssetMenu) ─────────────────────────────────────────
+-
+-export interface ListMediaFilesQuery {
+-  pageSize: number;
+-  pageIndex?: number;        // user-list pagination
+-  cursor?: string;           // featured-list infinite pagination
+-  filterEngineCategories: FilterEngineCategories[];
+-  filterMediaTypes?: FilterMediaType[];
+-}
+-
+-export interface ListUserMediaFilesResult {
+-  success: boolean;
+-  data?: MediaInfo[];
+-  pagination?: Pagination;
+-  errorMessage?: string;
+-}
+-
+-export interface ListFeaturedMediaFilesResult {
+-  success: boolean;
+-  data?: MediaInfo[];
+-  pagination?: PaginationInfinite;
+-  errorMessage?: string;
+-}
+-
+-// One saved scene as returned by the host's scene listing (see
+-// PageSceneAdapter.listUserSceneProjects). Just what the scene picker
+-// renders — hosts map their richer API rows down to this.
+-export interface SceneProjectListItem {
+-  token: string;
+-  maybe_title?: string | null;
+-  updated_at: string;
+-  /**
+-   * Cover thumbnail: either a CDN bucket path (legacy media rows) or an
+-   * absolute URL (project rows expose full cover links, not bucket paths).
+-   * SceneCard handles both.
+-   */
+-  maybe_thumbnail?: string | null;
+-}
+-
+-export interface ListUserSceneProjectsResult {
+-  success: boolean;
+-  data?: SceneProjectListItem[];
+-  errorMessage?: string;
+-}
+-
+-// ─── Scene I/O ─────────────────────────────────────────────────────────
++// PRISM PATCH (replaces upstream adapter.ts, 336 LOC): the upstream interface mirrors the ArtCraft/Tauri host
++// (generation enqueue, media listing, CDN URLs, accounts). The engine only ever calls the members below, so the
++// boundary is reduced to exactly those. Prism implements it in `src/lib/previs/` (asset-id -> authorised URL).
+ 
+ export interface PageSceneSavePayload {
+   saveJson: string;
+@@ -94,243 +9,17 @@
+   sceneThumbnail: Blob | undefined;
+ }
+ 
+-// ─── Adapter ───────────────────────────────────────────────────────────
+-
+-// A still (Capture) or video (Record) produced by Record mode, cached
+-// locally (object URL) — handed to the 2D/video editor or uploaded on demand.
+-export interface PageSceneArtifact {
+-  kind: "image" | "video";
+-  blob: Blob;
+-  objectUrl: string;
+-  fileName: string;
+-  mimeType: string;
+-}
+-
+ export interface PageSceneAdapter {
+-  // Generation enqueue. Same shape as PageDrawAdapter.enqueueEditImage.
+-  enqueueGeneration(
+-    req: PageSceneGenerateRequest,
+-  ): Promise<{ status: string }>;
+-
+-  // Scene I/O — replaces the previous engine/api_manager.ts +
+-  // engine/api_fetchers.ts. The host owns all HTTP / FetchProxy
+-  // plumbing.
+   saveScene(payload: PageSceneSavePayload): Promise<string>;
+   loadScene(token: string): Promise<unknown>;
+-  // Wraps Tauri-flavored CORS-bypassed fetches. Used by Scene's GLTF
+-  // loader paths that resolve CDN URLs the browser can't fetch directly.
+-  // Accepts an optional AbortSignal so the scene loader can cancel
+-  // in-flight asset downloads when its load is superseded (rapid tab
+-  // switches, applyJson during loadScene). Adapters that can't honor
+-  // cancellation may ignore the signal — the lib's ticket guard still
+-  // protects state correctness.
+-  fetchAsset(
+-    url: string,
+-    init?: { signal?: AbortSignal },
+-  ): Promise<Response>;
+-
+-  // Hosts. Engine builds CDN URLs (`${cdnOrigin}${bucket_path}`) and
+-  // API URLs (`${apiSchemeAndHost}/v1/...`); the host supplies both.
+-  getCdnOrigin(): string;
+-  getApiSchemeAndHost(): string;
+-  getCurrentUserToken?(): string | undefined;
+-
+-  // Compose a CDN URL for a bucket path with optional width/quality
+-  // resize hints. Wraps the host's BucketConfig.getCdnUrl. AssetMenu
+-  // uses this to build asset thumbnails at small sizes.
+-  getCdnUrl(bucketPath: string, width?: number, quality?: number): string;
+-
+-  // Paginated media-file listing — backs AssetMenu's "My objects" tab.
+-  // Wraps the host's MediaFilesApi.ListUserMediaFiles.
+-  listUserMediaFiles(
+-    query: ListMediaFilesQuery,
+-  ): Promise<ListUserMediaFilesResult>;
+-
+-  // Cursor-paginated featured listing — backs AssetMenu's "Featured"
+-  // tabs (skybox, character, location, etc.). Wraps the host's
+-  // MediaFilesApi.ListFeaturedMediaFiles.
+-  listFeaturedMediaFiles(
+-    query: ListMediaFilesQuery,
+-  ): Promise<ListFeaturedMediaFilesResult>;
+-
+-  // Optional: list the user's saved 3D scenes for the scene picker.
+-  // Hosts that have migrated scene persistence to the project endpoints
+-  // (`/v1/media_files/upload/project/scene_3d/*`) implement this with the
+-  // project list (merged with any legacy engine_category=scene rows).
+-  // When absent, the picker falls back to
+-  // listUserMediaFiles(engine_category=scene) — the pre-split flow.
+-  listUserSceneProjects?(): Promise<ListUserSceneProjectsResult>;
+-
+-  // Toast notifications. Wraps the host's addToast / react-hot-toast
+-  // pipeline; the lib stays free of toast-library imports.
+-  showToast(level: ToastTypes, message: string): void;
+-
+-  // Resolve a media_file_token to its CDN URL. Wraps the host's
+-  // MediaFilesApi.GetMediaFileByToken. Used by Scene's asset loaders
+-  // when they only have the token, not the full URL.
++  fetchAsset(url: string, init?: { signal?: AbortSignal }): Promise<Response>;
+   getMediaUrlByToken(token: string): Promise<string>;
+-
+-  // Resolve many tokens in one batch. Used by the scene loader to warm
+-  // a URL cache up front so it can fire all asset downloads in parallel
+-  // instead of doing an N+1 metadata roundtrip. Optional: when absent
+-  // the lib falls back to Promise.all of getMediaUrlByToken.
+-  // Hosts that wrap MediaFilesApi can implement this with
+-  // ListMediaFilesByTokens (GET /v1/media_files/batch).
+   getMediaUrlsByTokens?(tokens: string[]): Promise<Record<string, string>>;
+-
+-  // Visual viewport dimensions. Used by DnD asset-drop hit-testing
+-  // to detect "is this drop over the 3D canvas?" — the artcraft host
+-  // wires its `pageWidth`/`pageHeight` signals through; web hosts
+-  // without those signals can omit, and the lib falls back to
+-  // window.innerWidth/innerHeight.
+-  getViewportSize?(): { width: number; height: number };
+-
+-  // Slot renders for host-owned UI. The library renders these inside
+-  // its own AssetMenu / scene-load modal containers — same shape as
+-  // PageDrawAdapter.renderBaseImageSelector.
+-  renderAssetBrowser(props: {
+-    onAssetSelect: (asset: {
+-      mediaToken: string;
+-      name: string;
+-      kind: string;
+-    }) => void;
+-  }): ReactNode;
+-  renderSceneLoader(props: {
+-    onSceneSelect: (token: string) => void;
+-  }): ReactNode;
+-
+-  // "Upload your own model" host modal. Rendered from inside the lib's
+-  // AssetModal / AnimationsModal — the lib owns the trigger button + modal
+-  // control state, the host owns the actual upload UI (file picker,
+-  // validation, progress, splat conversion, etc.).
+-  renderAssetUploader(props: {
+-    isOpen: boolean;
+-    onClose: () => void;
+-    onSuccess: (category: FilterEngineCategories) => void;
+-    title: string;
+-    titleIcon: LucideIcon;
+-    // Preselect the uploader's "Upload as ..." category toggle when opened
+-    // from a scoped library (the animations panel passes "animation"); a
+-    // scoped open also keeps the host's My Library from popping over that
+-    // panel on success. Literal strings rather than FilterEngineCategories:
+-    // the upload-modal lib declares its own copy of that enum, and the two
+-    // enum types aren't assignable across package boundaries.
+-    initialCategory?: "animation" | "character";
+-  }): ReactNode;
+-
+-  // Image upload modal — distinct from renderAssetUploader because
+-  // image-plane uploads use a different host pipeline (image
+-  // processing, no GLB/splat conversion). Triggered from Controls3D.
+-  renderImageUploader(props: {
+-    isOpen: boolean;
+-    onClose: () => void;
+-    onSuccess: () => void;
+-    title: string;
+-    titleIcon: LucideIcon;
+-  }): ReactNode;
+-
+-  // Splat (.spz) upload modal — triggered from Controls3D for the
+-  // gaussian-splat upload path.
+-  renderSplatUploader(props: {
+-    isOpen: boolean;
+-    onClose: () => void;
+-    onSuccess: () => void;
+-    title: string;
+-    titleIcon: LucideIcon;
+-  }): ReactNode;
+-
+-  // Upload an image File and emit upload-progress states. Wraps the
+-  // host's UploadImageMedia / UploadModalMedia.uploadImage pipeline.
+-  // Used by PromptBox3D for reference-image uploads. Signature
+-  // matches @storyteller/common's UploadImageArgs so it can pass
+-  // through to PromptBox3D.uploadImage as-is.
+-  uploadImage(args: UploadImageArgs): Promise<void>;
+-
+-  // Upload an image-plane keyed by an existing media token. Used by
+-  // the gallery-drop handler when the user drags a non-3D gallery
+-  // item onto the 3D scene. Wraps host's uploadPlaneFromMediaToken.
+-  uploadPlaneFromMediaToken(args: {
+-    title: string;
+-    mediaToken: string;
+-    progressCallback: UploadImageArgs["progressCallback"];
+-  }): Promise<void>;
+-
+-  // Cross-page navigation hook. Today the lib only needs one
+-  // destination ("create 3D model from image"), so it's a single
+-  // named action; add more as the lib grows page-aware UI. Tauri host
+-  // implements via useTabStore.setActiveTab; web host via router push.
+-  navigateToImageTo3D(): void;
+-
+-  // Persist a produced still/video to the user's media library and return its
+-  // media token. Images auto-upload after Capture; videos upload on demand
+-  // (they're large). Required so hosts cannot silently omit recording uploads.
+-  uploadMedia(args: {
+-    kind: "image" | "video";
+-    blob: Blob;
+-    fileName: string;
+-    title?: string;
+-  }): Promise<string>;
+-
+-  // Open the app's media Lightbox on an uploaded token — the shared modal that
+-  // offers every destination for the media type (Edit-on-Canvas, Make-Video,
+-  // Recreate, Share, Download). Host resolves the CDN URL from the token and
+-  // renders <Lightbox>. Replaces bespoke per-destination handoffs.
+-  openMediaLightbox(token: string, kind: "image" | "video"): void | Promise<void>;
+-
+-  // Auth/logout — the SettingsModal in Controls3D needs a logout
+-  // callback. Tauri host: setLogoutStates. Web host: web auth flow.
+-  performLogout(): void;
+-
+-  // Open the host's signup/login modal. Called when an anonymous
+-  // visitor clicks a feature that requires an account (Save, Generate,
+-  // Upload, "My Library"). Tauri host leaves it undefined — its user
+-  // is always signed in. Webapp host wires this to its auth modal.
+-  promptSignup?(reason?: string): void;
+-
+-  // Open the host's New-Scene chooser (e.g. webapp's splash modal). When
+-  // defined, the lib's File > New Scene item delegates here instead of
+-  // showing its inline confirm dialog. Tauri host leaves it undefined and
+-  // keeps the existing behavior.
+-  onRequestNewSceneSelector?(): void;
+-
+-  // Roll the current editor session back to the original scene the
+-  // host loaded. Called when the user confirms the destructive Reset
+-  // modal in the File menu. Implementations typically pull the
+-  // original scene JSON from a host-side cache and feed it back
+-  // through `editor.applyJson(json)`. When undefined the Reset menu
+-  // item is hidden — Tauri leaves it off; webapp wires it to its
+-  // per-token cache's stored `original` snapshot.
+-  resetToOriginal?(): Promise<void> | void;
+-
+-  // Optional event hooks — telemetry, host-side modals, tab title sync.
+-  onSelectionChange?(
+-    sel: { uuid: string; assetType: string } | null,
+-  ): void;
+-  onSceneDirty?(dirty: boolean): void;
+-  onError?(err: { title: string; message: string }): void;
+-  onSceneSaved?(token: string): void;
+-  // Wraps the host's `signalScene(...)` so the artcraft TopBar (and
+-  // other app-wide consumers) keeps seeing scene title/owner/dirty
+-  // state without the lib importing the host signal.
++  getCurrentUserToken?(): string | undefined;
+   onSceneTitleChange?(meta: {
+     title: string;
+     token?: string;
+     ownerToken?: string;
+     isModified: boolean;
+   }): void;
+-  onEnqueueMeta?(meta: {
+-    prompt: string;
+-    refImageUrls: string[];
+-    modelType: string;
+-    timestamp: number;
+-  }): void;
+-
+-  // Tab-cache integration. The host (artcraft useTabStore) reads/
+-  // writes the serialized scene JSON between tab switches; the library
+-  // is single-instance and tab-agnostic.
+-  cacheJsonString?: string;
+-  onSceneSerialized?(json: string): void;
+-
+-  // Initial scene to load on mount (the route param in artcraft).
+-  initialSceneToken?: string;
+ }
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/CustomOutlinePass.d.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/CustomOutlinePass.d.ts
+--- pristine/engine/CustomOutlinePass.d.ts	1969-12-31 18:00:00.000000000 -0600
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/CustomOutlinePass.d.ts	2026-10-15 15:28:44.007442000 -0500
+@@ -0,0 +1,9 @@
++// PRISM PATCH: declarations for the upstream JS outline pass.
++import { Camera, Scene } from "three";
++import { Pass } from "three/addons/postprocessing/Pass.js";
++export class CustomOutlinePass extends Pass {
++  constructor(resolution: any, scene: Scene, camera: Camera, ...rest: any[]);
++  [key: string]: any;
++  fsQuad: any;
++  updateMaxSurfaceId(id: number): void;
++}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/EditorState/EditorStateJSON/editor_state_json.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/EditorStateJSON/editor_state_json.ts
+--- pristine/engine/EditorState/EditorStateJSON/editor_state_json.ts	2026-10-15 16:07:39.809996500 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/EditorStateJSON/editor_state_json.ts	1969-12-31 18:00:00.000000000 -0600
+@@ -1,9 +0,0 @@
+-import { SceneGenereationMetaData } from "../../../models/sceneGenerationMetadata";
+-import { SceneStateJson } from "./scene_state_json";
+-
+-export interface EditorStateJson {
+-  version: number;
+-  sceneGenerationMetaData: SceneGenereationMetaData;
+-  sceneStateJson: SceneStateJson;
+-  snapshotTime: string; // make one via `new Date().toISOString()`
+-}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/EditorState/EditorStateJSON/index.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/EditorStateJSON/index.ts
+--- pristine/engine/EditorState/EditorStateJSON/index.ts	2026-10-15 16:07:39.830065800 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/EditorStateJSON/index.ts	1969-12-31 18:00:00.000000000 -0600
+@@ -1 +0,0 @@
+-export * from "./editor_state_json";
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/EditorState/EditorStateJSON/object_3d_json.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/EditorStateJSON/object_3d_json.ts
+--- pristine/engine/EditorState/EditorStateJSON/object_3d_json.ts	2026-10-15 16:07:39.853233300 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/EditorStateJSON/object_3d_json.ts	1969-12-31 18:00:00.000000000 -0600
+@@ -1,27 +0,0 @@
+-export interface Object3DJSON {
+-  position: {
+-    x: number;
+-    y: number;
+-    z: number;
+-  };
+-  rotation: {
+-    x: number;
+-    y: number;
+-    z: number;
+-  };
+-  scale: {
+-    x: number;
+-    y: number;
+-    z: number;
+-  };
+-  object_name: string;
+-  object_uuid: string;
+-  object_user_data_name: string;
+-  media_file_token: string;
+-  color: string;
+-  metalness: number;
+-  shininess: number;
+-  specular: number;
+-  locked: boolean;
+-  visible: boolean | undefined;
+-}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/EditorState/EditorStateJSON/scene_state_json.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/EditorStateJSON/scene_state_json.ts
+--- pristine/engine/EditorState/EditorStateJSON/scene_state_json.ts	2026-10-15 16:07:39.877435900 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/EditorStateJSON/scene_state_json.ts	1969-12-31 18:00:00.000000000 -0600
+@@ -1,7 +0,0 @@
+-// import * as THREE from "three";
+-import { Object3DJSON } from "./object_3d_json";
+-
+-export interface SceneStateJson {
+-  version: number;
+-  sceneItems: Object3DJSON[];
+-}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/EditorState/editor_state.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/editor_state.ts
+--- pristine/engine/EditorState/editor_state.ts	2026-10-15 16:07:39.893496000 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/editor_state.ts	1969-12-31 18:00:00.000000000 -0600
+@@ -1,26 +0,0 @@
+-import { SceneGenereationMetaData } from "../../models/sceneGenerationMetadata";
+-import { EditorStateJson } from "./EditorStateJSON";
+-import { SceneState } from "./scene_state";
+-
+-export class EditorState {
+-  version: number;
+-  sceneGenerationMetaData: SceneGenereationMetaData | undefined;
+-  sceneState: SceneState | undefined;
+-
+-  constructor({ editorVersion }: { editorVersion: number }) {
+-    this.version = editorVersion;
+-  }
+-
+-  public async toJSON() {
+-    if (!this.sceneGenerationMetaData || !this.sceneState) {
+-      throw "Error in EditorState.toJSON: data undefined";
+-    }
+-    const result: EditorStateJson = {
+-      version: this.version,
+-      sceneGenerationMetaData: this.sceneGenerationMetaData,
+-      sceneStateJson: await this.sceneState.toJSON(),
+-      snapshotTime: new Date().toISOString(),
+-    };
+-    return result;
+-  }
+-}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/EditorState/index.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/index.ts
+--- pristine/engine/EditorState/index.ts	2026-10-15 16:07:39.924854000 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/index.ts	1969-12-31 18:00:00.000000000 -0600
+@@ -1,2 +0,0 @@
+-export * from "./editor_state";
+-export * from "./EditorStateJSON";
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/EditorState/object_3d.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/object_3d.ts
+--- pristine/engine/EditorState/object_3d.ts	2026-10-15 16:07:39.992240400 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/object_3d.ts	1969-12-31 18:00:00.000000000 -0600
+@@ -1,98 +0,0 @@
+-import * as THREE from "three";
+-import { Object3DJSON } from "./EditorStateJSON/object_3d_json";
+-
+-export class Object3D {
+-  version: number;
+-
+-  position: THREE.Vector3;
+-  rotation: THREE.Euler;
+-  scale: THREE.Vector3;
+-
+-  object_uuid: string;
+-  object_name: string;
+-  object_user_data_name: string; // changable name
+-  media_file_token: string;
+-  color: string;
+-  metalness: number;
+-  shininess: number;
+-  specular: number;
+-  locked: boolean;
+-  visible: boolean;
+-
+-  constructor(version: number, media_file_token: string) {
+-    this.version = version;
+-    this.media_file_token = media_file_token;
+-
+-    this.position = new THREE.Vector3(0.0, 0.0, 0.0);
+-    this.rotation = new THREE.Euler(0.0, 0.0, 0.0);
+-    this.scale = new THREE.Vector3(1.0, 1.0, 1.0);
+-
+-    this.object_name = "";
+-    this.object_user_data_name = "";
+-    this.object_uuid = "";
+-
+-    this.color = "";
+-
+-    this.metalness = 0.0;
+-    this.shininess = 0.0;
+-    this.specular = 0.5;
+-    this.locked = false;
+-    this.visible = true;
+-  }
+-
+-  getColorAsHexString(object: THREE.Object3D): string {
+-    if (
+-      object instanceof THREE.Mesh &&
+-      object.material instanceof THREE.MeshBasicMaterial
+-    ) {
+-      return "#" + object.material.color.getHexString();
+-    }
+-    return "#FFFFFF";
+-  }
+-
+-  public async initialize(object: THREE.Object3D) {
+-    this.position = object.position;
+-    this.rotation = object.rotation;
+-    this.scale = object.scale;
+-
+-    this.object_name = object.name;
+-    this.object_user_data_name = object.userData.name;
+-    this.object_uuid = object.uuid;
+-    this.color = object.userData["color"];
+-    this.metalness = object.userData["metalness"];
+-    this.shininess = object.userData["shininess"];
+-    this.specular = object.userData["specular"];
+-    this.locked = object.userData["locked"];
+-  }
+-
+-  public async toJSON(): Promise<Object3DJSON> {
+-    const json: Object3DJSON = {
+-      position: {
+-        x: this.position.x,
+-        y: this.position.y,
+-        z: this.position.z,
+-      },
+-      rotation: {
+-        x: this.rotation.x,
+-        y: this.rotation.y,
+-        z: this.rotation.z,
+-      },
+-      scale: {
+-        x: this.scale.x,
+-        y: this.scale.y,
+-        z: this.scale.z,
+-      },
+-      object_name: this.object_name,
+-      object_uuid: this.object_uuid,
+-      object_user_data_name: this.object_user_data_name,
+-      media_file_token: this.media_file_token,
+-      color: this.color,
+-      metalness: this.metalness,
+-      shininess: this.shininess,
+-      specular: this.specular,
+-      locked: this.locked,
+-      visible: this.visible,
+-    };
+-    return json;
+-  }
+-}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/EditorState/scene_state.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/scene_state.ts
+--- pristine/engine/EditorState/scene_state.ts	2026-10-15 16:07:40.035436800 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/EditorState/scene_state.ts	1969-12-31 18:00:00.000000000 -0600
+@@ -1,100 +0,0 @@
+-// import * as THREE from "three";
+-import { Object3D } from "./object_3d";
+-import { Object3DJSON } from "./EditorStateJSON/object_3d_json";
+-import Scene from "../../engine/scene";
+-import { SceneStateJson } from "./EditorStateJSON/scene_state_json";
+-const DEFAULT_SCENE_VER = 1.0;
+-
+-export class SceneState {
+-  version: number;
+-  sceneItems: Object3D[] | undefined;
+-
+-  constructor({ scene, version }: { scene?: Scene; version?: number }) {
+-    this.version = version ?? scene?.version ?? DEFAULT_SCENE_VER;
+-  }
+-
+-  public async initiateFromScene({ scene }: { scene: Scene }): Promise<void> {
+-    if (this.version < 1) {
+-      this.saveFromSceneObjectVer0(scene)
+-        .then((result) => {
+-          this.sceneItems = result;
+-        })
+-        .catch((e) => {
+-          throw e;
+-        });
+-    }
+-
+-    const result = new Array<Object3D>();
+-    // TODO turn the sceneItems into an object3d-json
+-    // reject if something goes wrong
+-    // or else send the result via resolve
+-    this.sceneItems = result;
+-    return;
+-  }
+-
+-  public async initiateFromObject3DJson({
+-    objectJsons,
+-  }: {
+-    objectJsons: Object3DJSON[];
+-  }): Promise<void> {
+-    const sceneItems = objectJsons.map((jsonObject: Object3DJSON) => {
+-      console.log(jsonObject);
+-      const object3D = new Object3D(this.version, "placeholder-token");
+-      // TODO: now translate that jsonObject back into a ThreeJS 3D object
+-      return object3D;
+-    });
+-    this.sceneItems = sceneItems;
+-    return;
+-  }
+-
+-  public async saveFromSceneObjectVer0(scene: Scene): Promise<Object3D[]> {
+-    console.log("saveFromSceneObjectVer0", scene);
+-    const results: Object3D[] = [];
+-    // TODO: turn sceneItems fron type of Object3D into Object3DJSON, the old way
+-
+-    // if (this.scene.scene != null) {
+-    //   for (const child of this.scene.scene.children) {
+-    //     if (child.userData["media_id"] != undefined) {
+-    //       if (this.lookUpDictionary[child.uuid] == null) {
+-    //         this.lookUpDictionary[child.uuid] = new Object3D(
+-    //           this.version,
+-    //           child.userData["media_id"],
+-    //         );
+-    //       }
+-    //       const proxyObject3D: Object3D = this.lookUpDictionary[child.uuid];
+-    //       proxyObject3D.position.copy(child.position);
+-    //       proxyObject3D.rotation.copy(child.rotation);
+-    //       proxyObject3D.scale.copy(child.scale);
+-    //       proxyObject3D.object_user_data_name = child.userData.name;
+-    //       proxyObject3D.object_name = child.name;
+-    //       proxyObject3D.object_uuid = child.uuid;
+-    //       proxyObject3D.color = child.userData["color"];
+-    //       proxyObject3D.metalness = child.userData["metalness"];
+-    //       proxyObject3D.shininess = child.userData["shininess"];
+-    //       proxyObject3D.specular = child.userData["specular"];
+-    //       proxyObject3D.locked = child.userData["locked"];
+-    //       const json_data = await proxyObject3D.toJSON();
+-    //       results.push(json_data);
+-    //     }
+-    //   }
+-    // } else {
+-    //   console.log("Scene doesn't exist needs to be assigned");
+-    // }
+-    // console.log(results);
+-    return results;
+-  }
+-
+-  public async toJSON(): Promise<SceneStateJson> {
+-    const result: SceneStateJson = {
+-      version: this.version,
+-      sceneItems: [],
+-    };
+-    if (this.sceneItems) {
+-      for (let i = 0; i < this.sceneItems.length; i = i + 1) {
+-        const itemJson = await this.sceneItems[i].toJSON();
+-        result.sceneItems.push(itemJson);
+-      }
+-    }
+-    return result;
+-  }
+-}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/FindSurfaces.d.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/FindSurfaces.d.ts
+--- pristine/engine/FindSurfaces.d.ts	1969-12-31 18:00:00.000000000 -0600
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/FindSurfaces.d.ts	2026-10-15 15:28:44.075720300 -0500
+@@ -0,0 +1,10 @@
++// PRISM PATCH: declarations for the upstream JS surface-id helper.
++import type { Material, Mesh } from "three";
++export default class FindSurfaces {
++  [key: string]: any;
++  constructor(...args: any[]);
++  surfaceId: number;
++  getSurfaceIdAttribute(mesh: Mesh): any;
++}
++export function getSurfaceIdMaterial(): Material;
++export function getDebugSurfaceIdMaterial(): Material;
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/InfiniteGridHelper.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/InfiniteGridHelper.ts
+--- pristine/engine/InfiniteGridHelper.ts	2026-10-15 16:07:40.098450000 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/InfiniteGridHelper.ts	2026-10-15 15:31:45.220983900 -0500
+@@ -1,3 +1,4 @@
++// @ts-nocheck PRISM PATCH: upstream was compiled against looser three typings; behaviour is unchanged.
+ import * as THREE from "three";
+ 
+ export class InfiniteGridHelper extends THREE.Mesh {
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/KinHelpers/FKHelper.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/KinHelpers/FKHelper.ts
+--- pristine/engine/KinHelpers/FKHelper.ts	2026-10-15 16:07:40.240399900 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/KinHelpers/FKHelper.ts	2026-10-15 15:31:45.232169400 -0500
+@@ -1,3 +1,4 @@
++// @ts-nocheck PRISM PATCH: upstream was compiled against looser three typings; behaviour is unchanged.
+ import * as THREE from "three";
+ import { FKBoneBlacklistStrings } from "./FKBoneFilter";
+ import { TransformControls } from "../TransformControls";
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/TransformControls.d.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/TransformControls.d.ts
+--- pristine/engine/TransformControls.d.ts	1969-12-31 18:00:00.000000000 -0600
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/TransformControls.d.ts	2026-10-15 15:28:43.912521300 -0500
+@@ -0,0 +1,34 @@
++// PRISM PATCH: hand-written declarations for the three.js-derived JS fork (upstream ships no types).
++import { Camera, Object3D, Raycaster } from "three";
++export class TransformControls extends Object3D {
++  constructor(camera: Camera, domElement?: HTMLElement | null);
++  [key: string]: any;
++  camera: Camera;
++  object: Object3D | undefined;
++  enabled: boolean;
++  dragging: boolean;
++  axis: string | null;
++  mode: "translate" | "rotate" | "scale";
++  space: "world" | "local";
++  size: number;
++  showX: boolean;
++  showY: boolean;
++  showZ: boolean;
++  attach(object: Object3D): this;
++  detach(): this;
++  getHelper(): Object3D;
++  getRaycaster(): Raycaster;
++  setMode(mode: "translate" | "rotate" | "scale"): void;
++  setSpace(space: "world" | "local"): void;
++  setSize(size: number): void;
++  setTranslationSnap(v: number | null): void;
++  setRotationSnap(v: number | null): void;
++  setScaleSnap(v: number | null): void;
++  dispose(): void;
++}
++export class TransformControlsGizmo extends Object3D {
++  [key: string]: any;
++}
++export class TransformControlsPlane extends Object3D {
++  [key: string]: any;
++}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/ammoLoader.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/ammoLoader.ts
+--- pristine/engine/ammoLoader.ts	2026-10-15 16:07:40.356455600 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/ammoLoader.ts	2026-10-15 15:27:01.145487000 -0500
+@@ -1,44 +1,2 @@
+-// Singleton loader for the Ammo.js physics WASM glue. Editor's
+-// constructor used to inject `<script src="jsm/libs/ammo.wasm.js">`
+-// into document.body on every construction, which produced duplicate
+-// tags under React strict mode and provider remounts. We now ensure
+-// the script is appended exactly once, regardless of how many times
+-// the Editor is constructed across the app's lifetime.
+-
+-let ammoLoadPromise: Promise<void> | null = null;
+-
+-export const ensureAmmoLoaded = (): Promise<void> => {
+-  if (ammoLoadPromise) return ammoLoadPromise;
+-
+-  ammoLoadPromise = new Promise<void>((resolve, reject) => {
+-    if (typeof document === "undefined") {
+-      // SSR / non-DOM environments — resolve immediately; Ammo
+-      // wouldn't be usable anyway, and Editor consumers only need
+-      // the promise to settle.
+-      resolve();
+-      return;
+-    }
+-
+-    // If something already loaded ammo (e.g. a prior session before
+-    // this module took over), don't re-add it. Detect by querying for
+-    // an existing tag; the ammo.wasm.js script defines a global
+-    // `Ammo` symbol when it finishes evaluating.
+-    const existing = document.querySelector<HTMLScriptElement>(
+-      'script[src="jsm/libs/ammo.wasm.js"]',
+-    );
+-    if (existing) {
+-      resolve();
+-      return;
+-    }
+-
+-    const script = document.createElement("script");
+-    script.src = "jsm/libs/ammo.wasm.js";
+-    script.async = true;
+-    script.onload = () => resolve();
+-    script.onerror = () =>
+-      reject(new Error("Failed to load jsm/libs/ammo.wasm.js"));
+-    document.body.appendChild(script);
+-  });
+-
+-  return ammoLoadPromise;
+-};
++// PRISM PATCH (replaces upstream engine/ammoLoader.ts): the MMD physics wasm blob is not vendored.
++export function ensureAmmoLoaded(): void {}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/chromakey.d.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/chromakey.d.ts
+--- pristine/engine/chromakey.d.ts	1969-12-31 18:00:00.000000000 -0600
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/chromakey.d.ts	2026-10-15 15:28:44.135300600 -0500
+@@ -0,0 +1,6 @@
++// PRISM PATCH: declarations for the upstream JS chroma-key material.
++import { ShaderMaterial } from "three";
++export class ChromaKeyMaterial extends ShaderMaterial {
++  constructor(...args: any[]);
++  [key: string]: any;
++}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/editor/CameraController.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/editor/CameraController.ts
+--- pristine/engine/editor/CameraController.ts	2026-10-15 16:07:40.478064200 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/editor/CameraController.ts	2026-10-15 15:31:58.761111500 -0500
+@@ -10,7 +10,7 @@
+   DEFAULT_CAMERA_ASPECT_RATIO,
+   EditorStates,
+ } from "../../enums";
+-import type { Camera } from "@storyteller/common";
++import type { Camera } from "../../shims/common";
+ import type { EngineEventBus } from "../events/EngineEventBus";
+ import { CameraUpdatedEvent } from "../events/EngineEvent";
+ 
+@@ -256,6 +256,9 @@
+     switch (this.render_camera_aspect_ratio) {
+       case CameraAspectRatio.HORIZONTAL_16_9:
+         return { width: 1280, height: 720, aspectRatio: 16 / 9 };
++      // PRISM PATCH: production frame 2.39:1
++      case CameraAspectRatio.HORIZONTAL_2_39_1:
++        return { width: 1912, height: 800, aspectRatio: 1912 / 800 };
+       case CameraAspectRatio.HORIZONTAL_3_2:
+         return { width: 1200, height: 800, aspectRatio: 3 / 2 };
+       case CameraAspectRatio.VERTICAL_2_3:
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/editor/GizmoController.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/editor/GizmoController.ts
+--- pristine/engine/editor/GizmoController.ts	2026-10-15 16:07:40.520781700 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/editor/GizmoController.ts	2026-10-15 15:31:45.171603600 -0500
+@@ -1,3 +1,4 @@
++// @ts-nocheck PRISM PATCH: upstream was compiled against looser three typings; behaviour is unchanged.
+ // Owns the TransformControls gizmo used for translating/rotating/scaling
+ // the selected object. Construction is two-phase to match the existing
+ // editor lifecycle: the controller is created up front (held as a field
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/editor/PostProcessingPipeline.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/editor/PostProcessingPipeline.ts
+--- pristine/engine/editor/PostProcessingPipeline.ts	2026-10-15 16:07:40.603843000 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/editor/PostProcessingPipeline.ts	2026-10-15 15:31:45.192272200 -0500
+@@ -1,3 +1,4 @@
++// @ts-nocheck PRISM PATCH: upstream was compiled against looser three typings; behaviour is unchanged.
+ // Owns both EffectComposer chains (main + raw) and the post-process
+ // passes the editor actually uses today.
+ //
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/editor.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/editor.ts
+--- pristine/engine/editor.ts	2026-10-15 16:07:40.456361100 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/editor.ts	2026-10-15 15:31:58.764622200 -0500
+@@ -750,6 +750,12 @@
+         targetHeight = 720;
+         aspectRatio = 16 / 9;
+         break;
++      // PRISM PATCH: production frame 2.39:1
++      case CameraAspectRatio.HORIZONTAL_2_39_1:
++        targetWidth = 1912;
++        targetHeight = 800;
++        aspectRatio = 1912 / 800;
++        break;
+       case CameraAspectRatio.VERTICAL_9_16:
+         targetWidth = 720;
+         targetHeight = 1280;
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/entrance/easing.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/entrance/easing.ts
+--- pristine/engine/entrance/easing.ts	2026-10-15 16:07:40.967443800 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/entrance/easing.ts	1969-12-31 18:00:00.000000000 -0600
+@@ -1,37 +0,0 @@
+-// Shared easing curves for the entrance animations. Kept as plain scalar
+-// functions so both the transform-based mesh drop and the shader-driven splat
+-// settle pull from the same vocabulary of motion.
+-
+-export function clamp01(t: number): number {
+-  return t < 0 ? 0 : t > 1 ? 1 : t;
+-}
+-
+-export function lerp(a: number, b: number, t: number): number {
+-  return a + (b - a) * t;
+-}
+-
+-/** Decelerate to rest — the default for things arriving. */
+-export function easeOutCubic(t: number): number {
+-  return 1 - Math.pow(1 - t, 3);
+-}
+-
+-/** Accelerate from rest — reads as gravity for a fall. */
+-export function easeInCubic(t: number): number {
+-  return t * t * t;
+-}
+-
+-/** Stronger gravity feel for the drop phase. */
+-export function easeInQuart(t: number): number {
+-  return t * t * t * t;
+-}
+-
+-/** Symmetric ease for settling motions. */
+-export function easeInOutCubic(t: number): number {
+-  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+-}
+-
+-/** Overshoot-and-settle — the "pop" when an object first appears. */
+-export function easeOutBack(t: number, overshoot = 1.70158): number {
+-  const c3 = overshoot + 1;
+-  return 1 + c3 * Math.pow(t - 1, 3) + overshoot * Math.pow(t - 1, 2);
+-}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/entrance/meshDrop.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/entrance/meshDrop.ts
+--- pristine/engine/entrance/meshDrop.ts	2026-10-15 16:07:40.986128600 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/entrance/meshDrop.ts	1969-12-31 18:00:00.000000000 -0600
+@@ -1,91 +0,0 @@
+-import * as THREE from "three";
+-import type { EntranceHandle } from "./types";
+-import { clamp01, easeInQuart, easeOutBack, easeOutCubic, lerp } from "./easing";
+-
+-// Transform-based "drop onto the ground" entrance for non-splat objects (GLB
+-// models, primitives, image planes). Replaces the earlier fragment-clip reveal,
+-// which mis-clipped non-convex shapes (e.g. a torus). The object pops into
+-// existence slightly raised, then falls and lands with a soft rubbery vertical
+-// squash — as if it were physically dropped into place. Only the object's
+-// transform is touched (no shaders), so it works for any object uniformly.
+-
+-// Phase boundaries on linear time (0..1):
+-const POP_END = 0.22; // appear + rise finishes here
+-const IMPACT = 0.55; // object reaches the ground here; squash begins
+-// Squash/recover runs from IMPACT → 1.
+-
+-const POP_START_SCALE = 0.45; // appears at this fraction of full size, then pops up
+-const SQUASH_AMOUNT = 0.12; // peak vertical compression (0.12 = 12%); kept subtle
+-const SQUASH_DECAY = 3.6; // how fast the rubbery wobble dies out
+-const SQUASH_FREQ = 6.5; // wobble frequency (one squash + a small rebound)
+-
+-export function buildMeshDrop(object: THREE.Object3D): EntranceHandle | null {
+-  const finalPos = object.position.clone();
+-  const finalScale = object.scale.clone();
+-
+-  // Size drives the hop height and the ground-anchor compensation so the motion
+-  // reads the same for a teacup and a building.
+-  const size = new THREE.Box3().setFromObject(object).getSize(new THREE.Vector3());
+-  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+-  const halfHeight = Math.max(size.y * 0.5, 1e-3);
+-  const peak = THREE.MathUtils.clamp(0.22 * maxDim, 0.08, 0.45);
+-
+-  return {
+-    setProgress: (t) => {
+-      const pop = popScale(t);
+-      const yHop = hopOffset(t, peak);
+-      const { sy, sxz } = squash(t);
+-
+-      // Keep the base planted while it squashes: a center-pivot scaleY<1 lifts
+-      // the bottom by (1-sy)*halfHeight, so push the object down to compensate.
+-      const groundComp = -(1 - sy) * halfHeight * pop;
+-
+-      object.position.set(
+-        finalPos.x,
+-        finalPos.y + yHop + groundComp,
+-        finalPos.z,
+-      );
+-      object.scale.set(
+-        finalScale.x * pop * sxz,
+-        finalScale.y * pop * sy,
+-        finalScale.z * pop * sxz,
+-      );
+-    },
+-    finish: () => {
+-      object.position.copy(finalPos);
+-      object.scale.copy(finalScale);
+-    },
+-  };
+-}
+-
+-/** Appear with an overshooting pop, then hold at full size. */
+-function popScale(t: number): number {
+-  const appear = easeOutBack(clamp01(t / POP_END), 2.2);
+-  return lerp(POP_START_SCALE, 1, appear);
+-}
+-
+-/** Rise up from the ground as it pops in, then fall back down under gravity. */
+-function hopOffset(t: number, peak: number): number {
+-  if (t <= POP_END) {
+-    // Lift off the ground while it materializes, so the rise is visible.
+-    return peak * easeOutCubic(t / POP_END);
+-  }
+-  if (t < IMPACT) {
+-    // Accelerating fall down to the ground.
+-    return peak * (1 - easeInQuart((t - POP_END) / (IMPACT - POP_END)));
+-  }
+-  return 0;
+-}
+-
+-/** Rubbery vertical squash-and-stretch that fires on landing and settles out. */
+-function squash(t: number): { sy: number; sxz: number } {
+-  if (t < IMPACT) return { sy: 1, sxz: 1 };
+-  const u = clamp01((t - IMPACT) / (1 - IMPACT));
+-  // sin starts at 0 (no jump at the instant of contact), swells to a squash,
+-  // then a damped rebound — a single bouncy wobble that decays to rest.
+-  const wobble = Math.exp(-SQUASH_DECAY * u) * Math.sin(SQUASH_FREQ * u);
+-  return {
+-    sy: 1 - SQUASH_AMOUNT * wobble,
+-    sxz: 1 + SQUASH_AMOUNT * 0.6 * wobble,
+-  };
+-}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/entrance/splatSettle.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/entrance/splatSettle.ts
+--- pristine/engine/entrance/splatSettle.ts	2026-10-15 16:07:41.018492500 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/entrance/splatSettle.ts	1969-12-31 18:00:00.000000000 -0600
+@@ -1,109 +0,0 @@
+-import * as THREE from "three";
+-import { SplatMesh, dyno } from "@sparkjsdev/spark";
+-import type { EntranceHandle } from "./types";
+-import { easeInOutCubic } from "./easing";
+-
+-// Per-gaussian "radial settle" entrance for gaussian splats. Each gaussian rains
+-// down from a height and arrives as a center-out wave: gaussians near the splat's
+-// centroid fall in and fade up first, the farthest ones last. Done in Spark's
+-// `dyno` shader graph via an objectModifier — the only way to touch gaussians
+-// individually.
+-//
+-// The wave is driven by one float uniform (`uProgress`) we advance each frame
+-// from the editor render loop, so it doesn't depend on Spark's internal time
+-// ticker (which isn't wired up here — SparkRenderer is unused).
+-
+-// Wide wavefront so each gaussian fades and falls over a leisurely window rather
+-// than snapping in — the fade should read as a clear alpha ramp during the rain.
+-const SOFT_EDGE = 0.38; // width of the reveal wavefront, as a fraction of radius
+-const MIN_SCALE = 0.25; // gaussians start at this fraction of their size, then pop to full
+-const DROP_FACTOR = 0.5; // fall height as a multiple of the splat radius
+-
+-export function buildSplatSettle(splat: SplatMesh): EntranceHandle | null {
+-  // Normalize per-gaussian distance by the splat radius so the wave covers the
+-  // whole cloud regardless of scale.
+-  let radius = 1;
+-  try {
+-    const box = splat.getBoundingBox(true);
+-    const size = box.getSize(new THREE.Vector3());
+-    radius = 0.5 * Math.max(size.x, size.y, size.z);
+-  } catch {
+-    radius = 1;
+-  }
+-  if (!(radius > 0) || !Number.isFinite(radius)) radius = 1;
+-
+-  // World "up" expressed in the splat's local frame, so gaussians fall from
+-  // straight above regardless of the splat's orientation (splats are loaded with
+-  // a 180° flip, so local +Y is not world up).
+-  splat.updateWorldMatrix(true, false);
+-  const worldQuat = splat.getWorldQuaternion(new THREE.Quaternion());
+-  const upLocal = new THREE.Vector3(0, 1, 0).applyQuaternion(worldQuat.invert());
+-
+-  const uProgress = dyno.dynoFloat(0);
+-  const previousModifier = splat.objectModifier;
+-
+-  const modifier = dyno.dynoBlock(
+-    { gsplat: dyno.Gsplat },
+-    { gsplat: dyno.Gsplat },
+-    ({ gsplat }) => {
+-      if (!gsplat) throw new Error("splat settle: gsplat undefined");
+-      const split = dyno.splitGsplat(gsplat);
+-      const center = split.outputs.center; // vec3, object space
+-      const opacity = split.outputs.opacity; // float
+-      const scales = split.outputs.scales; // vec3
+-
+-      // Normalized distance of this gaussian from the splat centroid (0..~1).
+-      const nd = dyno.div(dyno.length(center), dyno.dynoFloat(radius));
+-
+-      // Reveal wavefront: gaussians with normalized distance below the growing
+-      // threshold are settled. `reveal` goes 1 (arrived) → 0 (not yet).
+-      const edge0 = dyno.sub(uProgress, dyno.dynoFloat(SOFT_EDGE));
+-      const reveal = dyno.sub(
+-        dyno.dynoFloat(1),
+-        dyno.smoothstep(edge0, uProgress, nd),
+-      );
+-      const notArrived = dyno.sub(dyno.dynoFloat(1), reveal);
+-
+-      // Height drop: un-arrived gaussians sit `DROP_FACTOR * radius` above their
+-      // home along world-up, and fall into place as they reveal.
+-      const fall = dyno.mul(
+-        dyno.dynoVec3(upLocal),
+-        dyno.mul(dyno.dynoFloat(radius * DROP_FACTOR), notArrived),
+-      );
+-      const newCenter = dyno.add(center, fall);
+-
+-      const newOpacity = dyno.mul(opacity, reveal);
+-      const popScale = dyno.clamp(
+-        reveal,
+-        dyno.dynoFloat(MIN_SCALE),
+-        dyno.dynoFloat(1),
+-      );
+-      const newScales = dyno.mul(scales, popScale);
+-
+-      return {
+-        gsplat: dyno.combineGsplat({
+-          gsplat,
+-          center: newCenter,
+-          opacity: newOpacity,
+-          scales: newScales,
+-        }),
+-      };
+-    },
+-  );
+-
+-  splat.objectModifier = modifier;
+-  splat.updateGenerator();
+-
+-  return {
+-    setProgress: (t) => {
+-      // Ease the wavefront so it settles softly, and push a touch past 1 so the
+-      // outermost gaussians (nd ≈ 1) fully arrive by the end.
+-      uProgress.value = easeInOutCubic(t) * (1 + SOFT_EDGE);
+-      splat.updateGenerator();
+-    },
+-    finish: () => {
+-      splat.objectModifier = previousModifier;
+-      splat.updateGenerator();
+-    },
+-  };
+-}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/entrance/types.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/entrance/types.ts
+--- pristine/engine/entrance/types.ts	2026-10-15 16:07:41.050599300 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/entrance/types.ts	1969-12-31 18:00:00.000000000 -0600
+@@ -1,14 +0,0 @@
+-// Shared contract for the two entrance-animation techniques (mesh mask-reveal,
+-// splat radial-settle). The coordinator drives `setProgress` each frame and
+-// calls `finish` once when the animation completes.
+-
+-export interface EntranceHandle {
+-  /**
+-   * Advance the animation. `progress` is the eased 0..1 completion; `dt` is the
+-   * frame delta in seconds (some techniques need it, some ignore it).
+-   */
+-  setProgress(progress: number, dt: number): void;
+-
+-  /** Snap to fully-shown and release any temporary resources (clones, modifiers). */
+-  finish(): void;
+-}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/entranceAnimation.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/entranceAnimation.ts
+--- pristine/engine/entranceAnimation.ts	2026-10-15 16:07:41.084877900 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/entranceAnimation.ts	2026-10-15 15:31:58.764622200 -0500
+@@ -1,114 +1,7 @@
+-import * as THREE from "three";
+-import { SplatMesh } from "@sparkjsdev/spark";
+-import type { EntranceHandle } from "./entrance/types";
+-import { buildMeshDrop } from "./entrance/meshDrop";
+-import { buildSplatSettle } from "./entrance/splatSettle";
+-
+-// Drives entrance animations for newly dropped objects. Two techniques, picked
+-// by object type:
+-//   • Gaussian splats → a per-gaussian radial settle: gaussians rain in from a
+-//     height, center-out, built in Spark's dyno shader graph. See splatSettle.ts.
+-//   • Everything else → a transform-based drop with a rubbery landing squash.
+-//     See meshDrop.ts.
+-//
+-// Both expose the same EntranceHandle. This coordinator advances raw linear time
+-// 0..1 each frame (each technique applies its own easing) and snaps to "shown" on
+-// completion. Saves in this editor are explicit (user-triggered), so the
+-// animation window is never persisted.
+-
+-// Base durations (seconds). The mesh drop reads best snappy (its physical bounce
+-// would feel sluggish drawn out); the splat rain wants room to breathe. The dev
+-// panel can still scale these live.
+-export const ENTRANCE_BASE_DURATIONS = { mesh: 0.75, splat: 4.0 };
+-
+-// Dev-only live tuning knob, driven by EntranceDebugPanel (mounted only in DEV).
+-// Defaults to 1 so the baked timing above is what ships; the panel scales it for
+-// experimentation. Read at play() time, so it applies to the next drop.
+-export const entranceDebugSettings = { durationScale: 1 };
+-
+-const MAX_DELTA = 1 / 30; // clamp per-frame step so a paused/resumed loop doesn't jump
+-
+-function prefersReducedMotion(): boolean {
+-  return (
+-    typeof window !== "undefined" &&
+-    typeof window.matchMedia === "function" &&
+-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+-  );
+-}
+-
+-interface Entry {
+-  object: THREE.Object3D;
+-  handle: EntranceHandle;
+-  elapsed: number;
+-  duration: number;
+-}
+-
++// PRISM PATCH (replaces upstream engine/entranceAnimation.ts): the entrance effect is a Spark-dyno polish
++// feature that is not part of the Prism 3D set. The editor only ever calls `tick` and `clear`.
+ export class EntranceAnimator {
+-  private entries: Entry[] = [];
+-
+-  /**
+-   * Begin an entrance for `object`, treating its current transform as final.
+-   * Call immediately after the object is positioned and added to the scene —
+-   * before the next render — so it's never shown fully-formed first. No-ops
+-   * (leaves the object shown) when the user prefers reduced motion.
+-   */
+-  play(object: THREE.Object3D): void {
+-    if (prefersReducedMotion()) return;
+-
+-    const isSplat = object instanceof SplatMesh;
+-    const handle = isSplat
+-      ? buildSplatSettle(object)
+-      : buildMeshDrop(object);
+-    if (!handle) return;
+-
+-    // Run the first frame hidden so nothing flashes at full size before the
+-    // render loop's first tick.
+-    handle.setProgress(0, 0);
+-
+-    const base = isSplat
+-      ? ENTRANCE_BASE_DURATIONS.splat
+-      : ENTRANCE_BASE_DURATIONS.mesh;
+-    this.entries = this.entries.filter((entry) => entry.object !== object);
+-    this.entries.push({
+-      object,
+-      handle,
+-      elapsed: 0,
+-      duration: base * entranceDebugSettings.durationScale,
+-    });
+-  }
+-
+-  /** Advance all active entrances. Call once per frame from the render loop. */
+-  tick(delta: number): void {
+-    if (this.entries.length === 0) return;
+-    const dt = Math.min(delta, MAX_DELTA);
+-    const remaining: Entry[] = [];
+-
+-    for (const entry of this.entries) {
+-      entry.elapsed += dt;
+-      const t = Math.min(entry.elapsed / entry.duration, 1);
+-      // Pass raw linear time; each technique applies its own easing.
+-      entry.handle.setProgress(t, dt);
+-      if (t < 1) {
+-        remaining.push(entry);
+-      } else {
+-        entry.handle.finish();
+-      }
+-    }
+-
+-    this.entries = remaining;
+-  }
+-
+-  /** Finish an object's entrance immediately and stop tracking it. */
+-  cancel(object: THREE.Object3D): void {
+-    const entry = this.entries.find((candidate) => candidate.object === object);
+-    if (!entry) return;
+-    entry.handle.finish();
+-    this.entries = this.entries.filter((candidate) => candidate !== entry);
+-  }
+-
+-  /** Finish all entrances (e.g. on scene clear/teardown). */
+-  clear(): void {
+-    for (const entry of this.entries) entry.handle.finish();
+-    this.entries = [];
+-  }
++  play(_object: unknown): void {}
++  tick(_deltaSeconds: number): void {}
++  clear(): void {}
+ }
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/events/EngineEvent.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/events/EngineEvent.ts
+--- pristine/engine/events/EngineEvent.ts	2026-10-15 16:07:41.098359500 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/events/EngineEvent.ts	2026-10-15 15:31:45.203323600 -0500
+@@ -20,7 +20,7 @@
+   TransformMode,
+   TransformSpace,
+ } from "../../PageSceneStore";
+-import type { Camera } from "@storyteller/common";
++import type { Camera } from "../../shims/common";
+ import type { ClipLane, TimelineTrack } from "../timeline/types";
+ 
+ export abstract class EngineEvent {
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/keybinds_controls.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/keybinds_controls.ts
+--- pristine/engine/keybinds_controls.ts	2026-10-15 16:07:41.230253600 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/keybinds_controls.ts	2026-10-15 15:31:45.220983900 -0500
+@@ -1,3 +1,4 @@
++// @ts-nocheck PRISM PATCH: upstream was compiled against looser three typings; behaviour is unchanged.
+ import * as THREE from "three";
+ import {
+   OrbitControls,
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/keymap.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/keymap.ts
+--- pristine/engine/keymap.ts	2026-10-15 16:07:41.257322700 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/keymap.ts	1969-12-31 18:00:00.000000000 -0600
+@@ -1,329 +0,0 @@
+-import {
+-  ACTIONS,
+-  useKeybindsStore,
+-  type ActionId,
+-  type Binding,
+-  type KeybindContext,
+-  type KeyGroup as KeybindsKeyGroup,
+-} from "@storyteller/keybinds";
+-import type Editor from "./editor";
+-import { CreateAction } from "./editor/actions/CreateAction";
+-import {
+-  AssetModalVisibilityChangedEvent,
+-  PoseControlsVisibilityChangedEvent,
+-  SelectedModeChangedEvent,
+-  TransformModeChangedEvent,
+-} from "./events/EngineEvent";
+-import { usePageSceneStore, type PoseMode } from "../PageSceneStore";
+-import {
+-  addKeyframe,
+-  deleteKeyframe,
+-  nudgeClipLane,
+-  nudgeKeyframe,
+-  pauseTimeline,
+-  playTimeline,
+-  removeClipLane,
+-  seekTimeline,
+-} from "../actions/timeline";
+-import { captureStill, recordVideo } from "../actions/recordOutput";
+-
+-// One declarative table mapping viewport actions to their handlers. The actual
+-// key bindings now come from the unified @storyteller/keybinds registry (preset
+-// + per-user overrides), so this file owns *what each action does*, not *which
+-// key triggers it*. useViewportKeyboard dispatches against the resolved list;
+-// the cheatsheet overlay renders the same registry.
+-
+-export type KeyGroup = KeybindsKeyGroup;
+-
+-export interface KeyBinding {
+-  code: string; // matches event.code (e.g. "KeyT", "Backspace")
+-  modifiers?: { ctrl?: boolean; shift?: boolean; alt?: boolean };
+-  label: string;
+-  group: KeyGroup;
+-  run: (editor: Editor) => void | Promise<void>;
+-  // Whether the binding should preventDefault + stopPropagation when
+-  // matched. Used for browser shortcut conflicts (Ctrl+Z, Ctrl+C, etc).
+-  preventDefault?: boolean;
+-  // Availability gate from the registry ActionDef. Absent = the default
+-  // rule (available unless an encode is running).
+-  when?: (ctx: KeybindContext) => boolean;
+-}
+-
+-// The TransformControls gizmo uses "translate" / "rotate" / "scale";
+-// the store's TransformMode union uses "move" / "rotate" / "scale".
+-// Keep the gizmo and store both in sync from one place.
+-const setGizmoMode = (
+-  editor: Editor,
+-  gizmoMode: "translate" | "rotate" | "scale",
+-  storeMode: "move" | "rotate" | "scale",
+-) => {
+-  editor.gizmo.changeMode(gizmoMode);
+-  editor.bus.emit(new TransformModeChangedEvent(storeMode));
+-  editor.bus.emit(new SelectedModeChangedEvent(storeMode));
+-};
+-
+-const deleteSelected = (editor: Editor) => {
+-  const mc = editor.mouse_controls;
+-  if (!mc?.selected) return;
+-  // Route through editor.deleteObject so HistoryManager records the
+-  // deletion. mc.deleteObject (the legacy direct path) bypasses history.
+-  mc.selected.forEach((sel) => {
+-    editor.deleteObject(sel.uuid);
+-  });
+-  mc.selected = [];
+-  mc.removeTransformControls();
+-  editor.bus.emit(new PoseControlsVisibilityChangedEvent(false));
+-};
+-
+-const onEscape = (editor: Editor) => {
+-  // Escape leaves camera view first (before touching pose/selection).
+-  if (editor.cameraController.getCameraPersonMode()) {
+-    editor.cameraController.exitCameraView();
+-    return;
+-  }
+-  const poseMode: PoseMode = editor.getPoseMode();
+-  if (poseMode === "pose") {
+-    editor.mouse_controls?.toggleFKMode();
+-    return;
+-  }
+-  if (editor.mouse_controls?.selected?.length) {
+-    editor.mouse_controls.removeTransformControls();
+-    editor.bus.emit(new PoseControlsVisibilityChangedEvent(false));
+-  }
+-};
+-
+-const deselectAll = (editor: Editor) => {
+-  const mc = editor.mouse_controls;
+-  if (!mc?.selected?.length) return;
+-  mc.removeTransformControls();
+-  mc.selected = [];
+-  editor.bus.emit(new PoseControlsVisibilityChangedEvent(false));
+-};
+-
+-const focusSelected = (editor: Editor) => {
+-  if (
+-    editor.mouse_controls?.selected?.length &&
+-    editor.mouse_controls.lockControls
+-  ) {
+-    editor.mouse_controls.focus();
+-  }
+-};
+-
+-const openAssetModal = (editor: Editor) => {
+-  editor.bus.emit(new AssetModalVisibilityChangedEvent(true, true));
+-};
+-
+-const toggleCameraView = (editor: Editor) => {
+-  editor.cameraController.switchCameraView();
+-};
+-
+-const undo = async (editor: Editor) => {
+-  await editor.history.undo();
+-};
+-
+-const redo = async (editor: Editor) => {
+-  await editor.history.redo();
+-};
+-
+-const copy = async (editor: Editor) => {
+-  await editor.sceneManager?.copy();
+-};
+-
+-const paste = async (editor: Editor) => {
+-  const obj = await editor.sceneManager?.paste();
+-  if (!obj) return;
+-  editor.history.record(new CreateAction(editor, obj));
+-  editor.selection.refreshOutliner();
+-};
+-
+-const toggleStats = (editor: Editor) => {
+-  editor.toggle_stats();
+-};
+-
+-// ── timeline / record handlers ───────────────────────────────────────────────
+-// Availability (which contexts these fire in) lives on the registry defs;
+-// handlers only implement the action itself.
+-
+-const timelinePlayPause = (editor: Editor) => {
+-  if (usePageSceneStore.getState().timelineIsPlaying) pauseTimeline(editor);
+-  else playTimeline(editor);
+-};
+-
+-const timelineStep = (editor: Editor, direction: 1 | -1) => {
+-  const timeline = editor.timelineController.getTimeline();
+-  if (!timeline) return;
+-  const fps = timeline.fps || 30;
+-  const next =
+-    editor.timelineController.getPlayhead() + direction / fps;
+-  seekTimeline(editor, Math.min(timeline.duration, Math.max(0, next)));
+-};
+-
+-// Move the selected keyframe (or clip strip) one frame in time. The registry
+-// gates this on a valid selection; the id lookups below are just resolution,
+-// not availability checks.
+-const timelineNudge = (editor: Editor, direction: 1 | -1) => {
+-  const store = usePageSceneStore.getState();
+-  const timeline = editor.timelineController.getTimeline();
+-  if (!timeline) return;
+-  const delta = direction / (timeline.fps || 30);
+-  const keyframeId = store.timelineSelectedKeyframeId;
+-  if (keyframeId) {
+-    for (const track of timeline.tracks) {
+-      const keyframe = track.keyframes.find((k) => k.id === keyframeId);
+-      if (keyframe) {
+-        const time = Math.min(
+-          timeline.duration,
+-          Math.max(0, keyframe.time + delta),
+-        );
+-        nudgeKeyframe(editor, keyframeId, time);
+-        return;
+-      }
+-    }
+-    return;
+-  }
+-  const laneId = store.timelineSelectedClipLaneId;
+-  if (!laneId) return;
+-  const lane = editor.timelineController.getClipLane(laneId);
+-  if (!lane) return;
+-  nudgeClipLane(editor, laneId, Math.max(0, lane.strip.startTime + delta));
+-};
+-
+-const timelineAddKeyframe = (editor: Editor) => {
+-  const uuid = editor.mouse_controls?.selected?.[0]?.uuid;
+-  if (!uuid) return;
+-  addKeyframe(editor, uuid);
+-};
+-
+-// Registry-gated complement of deleteSelected (scene object): fires only for
+-// a VALID keyframe/strip selection, so a stale id can never eat the key. The
+-// selection is re-resolved here in case it changed since the ctx snapshot.
+-const timelineDeleteSelected = (editor: Editor) => {
+-  const store = usePageSceneStore.getState();
+-  const keyframeId = store.timelineSelectedKeyframeId;
+-  if (keyframeId) {
+-    const exists = editor.timelineController
+-      .getTimeline()
+-      ?.tracks.some((t) => t.keyframes.some((k) => k.id === keyframeId));
+-    if (exists) deleteKeyframe(editor, keyframeId);
+-    store.setTimelineSelectedKeyframe(null);
+-    return;
+-  }
+-  const laneId = store.timelineSelectedClipLaneId;
+-  if (!laneId) return;
+-  if (editor.timelineController.getClipLane(laneId)) {
+-    removeClipLane(editor, laneId);
+-  }
+-  store.setTimelineSelectedClipLane(null);
+-};
+-
+-// Action id → handler. Bindings live in the keybinds registry; this maps each
+-// registered PageScene action to what it actually does.
+-const HANDLERS: Record<ActionId, (editor: Editor) => void | Promise<void>> = {
+-  "pagescene.transform.grab": (e) => e.beginModalTransform("translate"),
+-  "pagescene.transform.translate": (e) => setGizmoMode(e, "translate", "move"),
+-  "pagescene.transform.rotate": (e) => setGizmoMode(e, "rotate", "rotate"),
+-  "pagescene.transform.scale": (e) => setGizmoMode(e, "scale", "scale"),
+-  "pagescene.transform.toggleSpace": (e) => e.gizmo.toggleTransformSpace(),
+-  "pagescene.transform.poseFK": (e) => e.mouse_controls?.toggleFKMode(),
+-  "pagescene.view.focus": focusSelected,
+-  "pagescene.view.assetMenu": openAssetModal,
+-  "pagescene.view.toggleCameraView": toggleCameraView,
+-  "pagescene.view.toggleStats": toggleStats,
+-  "pagescene.selection.clearOrExit": onEscape,
+-  "pagescene.selection.deselectAll": deselectAll,
+-  "pagescene.edit.delete": deleteSelected,
+-  "pagescene.edit.duplicate": (e) => e.duplicateSelected(),
+-  "pagescene.edit.toggleSnapping": (e) => e.toggleSnapping(),
+-  "pagescene.view.toggleGrid": (e) => e.toggleGrid(),
+-  "pagescene.edit.undo": undo,
+-  "pagescene.edit.redo": redo,
+-  "pagescene.edit.copy": copy,
+-  "pagescene.edit.paste": paste,
+-  "pagescene.timeline.playPause": timelinePlayPause,
+-  "pagescene.timeline.stepBack": (e) => timelineStep(e, -1),
+-  "pagescene.timeline.stepForward": (e) => timelineStep(e, 1),
+-  "pagescene.timeline.nudgeLeft": (e) => timelineNudge(e, -1),
+-  "pagescene.timeline.nudgeRight": (e) => timelineNudge(e, 1),
+-  "pagescene.timeline.goToStart": (e) => seekTimeline(e, 0),
+-  "pagescene.timeline.goToEnd": (e) => {
+-    const timeline = e.timelineController.getTimeline();
+-    if (timeline) seekTimeline(e, timeline.duration);
+-  },
+-  "pagescene.timeline.addKeyframe": timelineAddKeyframe,
+-  "pagescene.timeline.deleteSelected": timelineDeleteSelected,
+-  "pagescene.timeline.toggleExpanded": () => {
+-    const store = usePageSceneStore.getState();
+-    store.setTimelineExpanded(!store.timelineExpanded);
+-  },
+-  "pagescene.record.toggleMode": () => {
+-    const store = usePageSceneStore.getState();
+-    store.setSceneMode(store.sceneMode === "record" ? "build" : "record");
+-  },
+-  "pagescene.record.captureStill": captureStill,
+-  "pagescene.record.recordVideo": recordVideo,
+-  "pagescene.record.cancelEncode": () =>
+-    usePageSceneStore.getState().requestEncodeCancel(),
+-};
+-
+-// Expand the handler table into concrete KeyBindings using the resolved bindings
+-// for each action (one KeyBinding per bound key — so Delete+Backspace and the
+-// two Redo combos each stay live). `forAction` defaults to the store so non-React
+-// callers keep working; useViewportKeyboard passes a reactive resolver.
+-export const buildKeymap = (
+-  forAction: (id: ActionId) => Binding[] = (id) =>
+-    useKeybindsStore.getState().resolveBindings(id),
+-): KeyBinding[] => {
+-  const out: KeyBinding[] = [];
+-  for (const [id, run] of Object.entries(HANDLERS)) {
+-    const def = ACTIONS[id];
+-    if (!def) continue;
+-    for (const binding of forAction(id)) {
+-      out.push({
+-        code: binding.code,
+-        modifiers: { ctrl: binding.ctrl, shift: binding.shift, alt: binding.alt },
+-        label: def.label,
+-        group: def.group,
+-        run,
+-        preventDefault: def.preventDefault,
+-        when: def.when,
+-      });
+-    }
+-  }
+-  return out;
+-};
+-
+-const matches = (binding: KeyBinding, e: KeyboardEvent): boolean => {
+-  if (binding.code !== e.code) return false;
+-  const m = binding.modifiers ?? {};
+-  // Treat Ctrl and Meta interchangeably so macOS Cmd+X works too.
+-  const ctrlOrMeta = e.ctrlKey || e.metaKey;
+-  if (!!m.ctrl !== !!ctrlOrMeta) return false;
+-  if (!!m.shift !== !!e.shiftKey) return false;
+-  if (!!m.alt !== !!e.altKey) return false;
+-  return true;
+-};
+-
+-// Availability: an action's `when` predicate has full control; without one,
+-// the default rule is "available unless an encode is running". An unavailable
+-// binding is skipped WITHOUT consuming the event, so the same key can serve
+-// different actions in different contexts (e.g. Space = camera toggle in
+-// build, playback in the timeline) and unrelated listeners still see the key.
+-export const dispatchBinding = (
+-  bindings: KeyBinding[],
+-  event: KeyboardEvent,
+-  editor: Editor,
+-  ctx: KeybindContext = {},
+-): boolean => {
+-  for (const binding of bindings) {
+-    if (!matches(binding, event)) continue;
+-    const available = binding.when ? binding.when(ctx) : !ctx.encoding;
+-    if (!available) continue;
+-    if (binding.preventDefault) {
+-      event.preventDefault();
+-      event.stopPropagation();
+-    }
+-    void binding.run(editor);
+-    return true;
+-  }
+-  return false;
+-};
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/placeholder_manager.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/placeholder_manager.ts
+--- pristine/engine/placeholder_manager.ts	2026-10-15 16:07:41.303650900 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/placeholder_manager.ts	2026-10-15 15:57:15.195346400 -0500
+@@ -69,7 +69,9 @@
+   }
+ 
+   async initialize() {
+-    this.font = await this.loadFont();
++    // PRISM PATCH: the 3D loading-text placeholder needs a font asset (Carter One, served from the ArtCraft app
++    // bundle) that Prism does not vendor. Loading indicators are shown by Prism UI instead; `add` is a no-op.
++    this.font = undefined;
+   }
+ 
+   public async remove(id: string) {
+@@ -83,10 +85,7 @@
+ 
+   public async add(id: string, message: string, position: THREE.Vector3) {
+     const placeholder = new LoadingPlaceHolder3DModel();
+-    if (this.font === undefined) {
+-      console.log("Forgot to Initialize LoadingPlaceHolderManager");
+-      return;
+-    }
++    if (this.font === undefined) return; // PRISM PATCH: no placeholder font vendored
+     const placeholder3DObj = await placeholder.initialize(
+       message,
+       position,
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/recording/TimelineRecorder.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/recording/TimelineRecorder.ts
+--- pristine/engine/recording/TimelineRecorder.ts	2026-10-15 16:07:41.367750300 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/recording/TimelineRecorder.ts	1969-12-31 18:00:00.000000000 -0600
+@@ -1,120 +0,0 @@
+-// Deterministic timeline → video encoder. Steps the timeline frame-by-frame
+-// (seekTo, render, grab) and encodes with mediabunny (WebCodecs) — the same
+-// pattern as video-editor's SceneExporter. Avoids realtime MediaRecorder
+-// (whose webm duration header is unreliable).
+-
+-import {
+-  Output,
+-  Mp4OutputFormat,
+-  WebMOutputFormat,
+-  BufferTarget,
+-  CanvasSource,
+-  QUALITY_HIGH,
+-} from "mediabunny";
+-import * as THREE from "three";
+-import type Editor from "../editor";
+-import { GridVisibleChangedEvent } from "../events/EngineEvent";
+-import { usePageSceneStore } from "../../PageSceneStore";
+-
+-export type RecordFormat = "mp4" | "webm";
+-
+-export interface RecordResult {
+-  blob: Blob;
+-  mimeType: string;
+-  fileName: string;
+-}
+-
+-export interface RecordOptions {
+-  format?: RecordFormat;
+-  onProgress?: (pct: number) => void;
+-  // Mutable flag the caller can flip to abort mid-encode.
+-  signal?: { cancelled: boolean };
+-}
+-
+-export async function recordTimeline(
+-  editor: Editor,
+-  opts: RecordOptions = {},
+-): Promise<RecordResult | null> {
+-  const format = opts.format ?? "mp4";
+-  const timeline = editor.timelineController.getTimeline();
+-  const renderer = editor.renderer;
+-  const canvas = renderer?.domElement;
+-  const camera = editor.cameraController.camera;
+-  if (!timeline || !renderer || !canvas || !camera) return null;
+-
+-  const fps = timeline.fps || 30;
+-  const frameCount = Math.max(1, Math.round(timeline.duration * fps));
+-
+-  // Freeze the realtime loop so our seek+render stepping isn't fought by the
+-  // per-frame tick, then always restore it.
+-  editor.stopRenderLoop();
+-
+-  // Encode the exact render framing, not the raw viewport: drop the
+-  // camera-view framing offset, hide the grid, and render at the render
+-  // camera's target dimensions/aspect for the duration of the encode.
+-  // Everything is restored in the finally block.
+-  const { width: targetWidth, height: targetHeight, aspectRatio } =
+-    editor.cameraController.getRenderDimensions();
+-  const sizeVector = new THREE.Vector2();
+-  renderer.getSize(sizeVector);
+-  const originalWidth = sizeVector.x;
+-  const originalHeight = sizeVector.y;
+-  const originalPixelRatio = renderer.getPixelRatio();
+-  const originalCameraAspect = camera.aspect;
+-  const wasGridVisible = usePageSceneStore.getState().gridVisible;
+-
+-  editor.bus.emit(new GridVisibleChangedEvent(false));
+-  if (camera.view?.enabled) camera.clearViewOffset();
+-  camera.aspect = aspectRatio;
+-  camera.updateProjectionMatrix();
+-  renderer.setSize(targetWidth, targetHeight, false);
+-  renderer.setPixelRatio(1);
+-  editor.postProcessing.composer?.setSize(targetWidth, targetHeight);
+-
+-  try {
+-    const output = new Output({
+-      format:
+-        format === "webm" ? new WebMOutputFormat() : new Mp4OutputFormat(),
+-      target: new BufferTarget(),
+-    });
+-    const videoSource = new CanvasSource(canvas, {
+-      codec: format === "webm" ? "vp9" : "avc",
+-      bitrate: QUALITY_HIGH,
+-    });
+-    output.addVideoTrack(videoSource, { frameRate: fps });
+-    await output.start();
+-
+-    for (let i = 0; i < frameCount; i++) {
+-      if (opts.signal?.cancelled) {
+-        await output.cancel();
+-        return null;
+-      }
+-      editor.timelineController.seekTo(i / fps);
+-      await editor.renderScene();
+-      await videoSource.add(i / fps, 1 / fps);
+-      opts.onProgress?.(i / frameCount);
+-    }
+-
+-    videoSource.close();
+-    await output.finalize();
+-    opts.onProgress?.(1);
+-
+-    const buffer = output.target.buffer;
+-    if (!buffer) return null;
+-    const mimeType = format === "webm" ? "video/webm" : "video/mp4";
+-    return {
+-      blob: new Blob([buffer], { type: mimeType }),
+-      mimeType,
+-      fileName: `scene-recording.${format}`,
+-    };
+-  } finally {
+-    camera.aspect = originalCameraAspect;
+-    camera.updateProjectionMatrix();
+-    renderer.setSize(originalWidth, originalHeight, false);
+-    renderer.setPixelRatio(originalPixelRatio);
+-    editor.postProcessing.composer?.setSize(originalWidth, originalHeight);
+-    editor.cameraController.applyFrameProjection();
+-    editor.bus.emit(new GridVisibleChangedEvent(wasGridVisible));
+-    editor.startRenderLoop();
+-  }
+-}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/save_manager.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/save_manager.ts
+--- pristine/engine/save_manager.ts	2026-10-15 16:07:41.415532900 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/save_manager.ts	2026-10-15 15:31:45.234696500 -0500
+@@ -1,5 +1,5 @@
+ import * as THREE from "three";
+-import { Camera } from "@storyteller/common";
++import { Camera } from "../shims/common";
+ 
+ import { SceneGenereationMetaData } from "../models/sceneGenerationMetadata";
+ import { StoryTellerProxyScene } from "../proxy/storyteller_proxy_scene";
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/engine/scene.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/scene.ts
+--- pristine/engine/scene.ts	2026-10-15 16:07:41.479439800 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/engine/scene.ts	2026-10-15 15:46:28.087525200 -0500
+@@ -8,15 +8,16 @@
+ import { MMDAnimationHelper, Water } from "three/examples/jsm/Addons.js";
+ import { MediaFileType } from "../enums";
+ import { ChromaKeyMaterial } from "./chromakey";
++import { getShapeFactory } from "../shims/shape-factory";
+ import { InfiniteGridHelper } from "./InfiniteGridHelper";
+-import type { Camera } from "@storyteller/common";
+-import toast from "react-hot-toast";
++import type { Camera } from "../shims/common";
++import toast from "../shims/toast";
+ import { SplatMesh } from "@sparkjsdev/spark";
+ import { ensureInternalBbox } from "./internalBbox";
+ import {
+   collectObjectTextures,
+   disposeObject3D,
+-} from "@storyteller/ui-viewer-3d";
++} from "../shims/ui-viewer-3d";
+ 
+ // Capabilities Scene needs from outside its own state. Editor wires
+ // these in inline at construction (Phase 2 idiom — same shape as
+@@ -71,7 +72,7 @@
+   placeholder_manager: LoadingPlaceHolderManager | undefined;
+ 
+   updateSurfaceIdAttributeToMesh: Function;
+-  helper: MMDAnimationHelper;
++  helper!: MMDAnimationHelper;
+   ambientLight: THREE.AmbientLight | undefined;
+   hemisphereLight: THREE.HemisphereLight | undefined;
+   directional_light: THREE.DirectionalLight | undefined;
+@@ -213,6 +214,11 @@
+       geometry = new THREE.SphereGeometry(0.5, 18, 12);
+     } else if (name == "Donut") {
+       geometry = new THREE.TorusGeometry(0.5, 0.25, 8, 24);
++    } else if (getShapeFactory(name)) {
++      // PRISM PATCH: host-registered procedural shapes (Plane, Mannequin)
++      const factory = getShapeFactory(name)!;
++      geometry = factory.geometry();
++      if (factory.doubleSided) material.side = THREE.DoubleSide;
+     } else if (name == "Water") {
+       geometry = new THREE.PlaneGeometry(100, 100);
+     } else if (name == "PointLight") {
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/enums/EditorState.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/enums/EditorState.ts
+--- pristine/enums/EditorState.ts	2026-10-15 16:07:41.970414700 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/enums/EditorState.ts	2026-10-15 15:31:58.760093500 -0500
+@@ -5,6 +5,8 @@
+ 
+ export enum CameraAspectRatio {
+   HORIZONTAL_16_9 = "horizontal_16_9",
++  // PRISM PATCH: the Prism production frame (anamorphic 2.39:1).
++  HORIZONTAL_2_39_1 = "horizontal_2_39_1",
+   VERTICAL_9_16 = "vertical_9_16",
+   SQUARE_1_1 = "SQUARE_1_1",
+   HORIZONTAL_3_2 = "horizontal_3_2",
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/hooks/useFreeCam.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/hooks/useFreeCam.ts
+--- pristine/hooks/useFreeCam.ts	2026-10-15 16:07:43.112202200 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/hooks/useFreeCam.ts	2026-10-15 15:31:58.753746100 -0500
+@@ -1,6 +1,5 @@
+ import { useEffect, useMemo, useRef } from "react";
+ import { MathUtils } from "three";
+-import { useResolvedKeybinds } from "@storyteller/keybinds";
+ import {
+   CAMERA_MOVE_ACTION_SLOTS,
+   CAMERA_ROTATE_ACTION_SLOTS,
+@@ -87,20 +86,26 @@
+ 
+   // Resolve camera bindings into `code → slot` lookups. Recomputed (new identity)
+   // only when the preset/overrides change, which re-attaches the key listeners.
+-  const { slotBindings } = useResolvedKeybinds();
++  // PRISM PATCH: fixed default bindings (upstream resolves these through the @storyteller/keybinds registry).
+   const { moveMap, rotateMap, moveCodes } = useMemo(() => {
+-    const resolved = slotBindings("pagescene");
+-    const moveMap: Record<string, keyof HeldMoveKeys> = {};
+-    for (const [id, slot] of Object.entries(CAMERA_MOVE_ACTION_SLOTS)) {
+-      for (const b of resolved[id] ?? []) moveMap[b.code] = slot;
+-    }
+-    const rotateMap: Record<string, keyof HeldRotateKeys> = {};
+-    for (const [id, slot] of Object.entries(CAMERA_ROTATE_ACTION_SLOTS)) {
+-      for (const b of resolved[id] ?? []) rotateMap[b.code] = slot;
+-    }
+-    // Movement codes only matter for the Alt-modifier preventDefault path.
++    void CAMERA_MOVE_ACTION_SLOTS;
++    void CAMERA_ROTATE_ACTION_SLOTS;
++    const moveMap: Record<string, keyof HeldMoveKeys> = {
++      KeyW: "forward",
++      KeyS: "back",
++      KeyA: "left",
++      KeyD: "right",
++      KeyE: "up",
++      KeyQ: "down",
++    };
++    const rotateMap: Record<string, keyof HeldRotateKeys> = {
++      ArrowUp: "pitchUp",
++      ArrowDown: "pitchDown",
++      ArrowLeft: "yawLeft",
++      ArrowRight: "yawRight",
++    };
+     return { moveMap, rotateMap, moveCodes: new Set(Object.keys(moveMap)) };
+-  }, [slotBindings]);
++  }, []);
+ 
+   // Hand the state to the editor so its render loop can integrate it.
+   useEffect(() => {
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/models/index.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/models/index.ts
+--- pristine/models/index.ts	1969-12-31 18:00:00.000000000 -0600
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/models/index.ts	2026-10-15 15:31:58.764622200 -0500
+@@ -0,0 +1,4 @@
++// PRISM PATCH: the upstream models barrel pulls in the ArtCraft media-library types. The store only needs an
++// opaque drag item, which Prism never sets (it has no asset-drag UI in M1).
++export type MediaItem = { media_id: string; name?: string; [key: string]: unknown };
++export type { SceneGenereationMetaData } from "./sceneGenerationMetadata";
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/proxy/storyteller_proxy_scene.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/proxy/storyteller_proxy_scene.ts
+--- pristine/proxy/storyteller_proxy_scene.ts	2026-10-15 16:07:41.803731200 -0500
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/proxy/storyteller_proxy_scene.ts	2026-10-15 16:02:06.488260800 -0500
+@@ -289,6 +289,10 @@
+       if (json_object.user_data?.skeletonVisible !== undefined) {
+         obj.userData["skeletonVisible"] = json_object.user_data.skeletonVisible;
+       }
++      // PRISM PATCH: restore host-owned userData (keys prefixed "prism": character blocking, asset checksums).
++      for (const [key, value] of Object.entries(json_object.user_data ?? {})) {
++        if (key.startsWith("prism")) obj.userData[key] = value;
++      }
+       if (json_object.visible !== undefined) {
+         this.scene.setVisible(obj.uuid, json_object.visible);
+       }
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/shims/common.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/shims/common.ts
+--- pristine/shims/common.ts	1969-12-31 18:00:00.000000000 -0600
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/shims/common.ts	2026-10-15 15:27:00.715059600 -0500
+@@ -0,0 +1,14 @@
++// PRISM PATCH: local replacement for the two `@storyteller/common` types the engine imports.
++export interface Camera {
++  id: string;
++  label: string;
++  focalLength: number;
++  position: { x: number; y: number; z: number };
++  rotation: { x: number; y: number; z: number };
++  lookAt: { x: number; y: number; z: number };
++}
++
++export interface FocalLengthDragging {
++  isDragging: boolean;
++  focalLength: number;
++}
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/shims/shape-factory.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/shims/shape-factory.ts
+--- pristine/shims/shape-factory.ts	1969-12-31 18:00:00.000000000 -0600
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/shims/shape-factory.ts	2026-10-15 15:46:27.787809100 -0500
+@@ -0,0 +1,13 @@
++// PRISM PATCH (new file): lets the host register extra procedural shapes (Plane, Mannequin) without editing the
++// engine's `Scene.instantiate` switch per shape. The host registers factories before mounting an editor.
++import type * as THREE from "three";
++
++export interface ShapeFactory {
++  geometry: () => THREE.BufferGeometry;
++  /** vertical offset so the shape stands on the ground plane when dropped at y = 0 */
++  doubleSided?: boolean;
++}
++
++const factories = new Map<string, ShapeFactory>();
++export const registerShapeFactory = (key: string, factory: ShapeFactory) => void factories.set(key, factory);
++export const getShapeFactory = (key: string) => factories.get(key);
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/shims/toast.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/shims/toast.ts
+--- pristine/shims/toast.ts	1969-12-31 18:00:00.000000000 -0600
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/shims/toast.ts	2026-10-15 15:27:00.851105700 -0500
+@@ -0,0 +1,13 @@
++// PRISM PATCH: the engine toasts through `react-hot-toast`; Prism routes engine messages through its own
++// adapter instead, so the engine gets a no-UI sink that records the last message.
++let last: string | null = null;
++const toast = {
++  error(message: string) {
++    last = message;
++  },
++  success(message: string) {
++    last = message;
++  },
++};
++export const lastToastMessage = () => last;
++export default toast;
+diff -ruN --strip-trailing-cr -x patches -x LICENSE-MIT -x LICENSE-APACHE -x NOTICE.upstream -x UPSTREAM.md pristine/shims/ui-viewer-3d.ts /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/shims/ui-viewer-3d.ts
+--- pristine/shims/ui-viewer-3d.ts	1969-12-31 18:00:00.000000000 -0600
++++ /c/Users/Sean/GitHubProjects/prism-studio/src/vendor/artcraft-scene-engine/shims/ui-viewer-3d.ts	2026-10-15 15:27:00.962445000 -0500
+@@ -0,0 +1,2 @@
++// PRISM PATCH: stands in for `@storyteller/ui-viewer-3d` (only the disposal helpers are used).
++export { collectObjectTextures, disposeObject3D } from "../viewer-3d/disposeObject3D";

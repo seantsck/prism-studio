@@ -13,5 +13,7 @@ export default defineConfig([
     "playwright-report/**",
     "test-results/**",
     ".local-storage/**",
+    // upstream-derived code, kept byte-close to the pinned commit; see src/vendor/artcraft-scene-engine/UPSTREAM.md
+    "src/vendor/**",
   ]),
 ]);
