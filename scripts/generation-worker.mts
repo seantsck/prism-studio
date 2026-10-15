@@ -125,7 +125,6 @@ let sink;
 try {
   // The dev-only test-user sink additionally needs PRISM_STUDIO_WORKER_DEV_STORAGE=1 (never in production).
   const sinkEnv = { ...process.env };
-  sinkEnv.PRISM_STUDIO_TEST_EMAIL ??= process.env.PRISM_STUDIO_DEV_USER_EMAIL;
   sink = await createOutputSink(sinkEnv, "supabase");
   console.log(`Storage:           ${sink.name} (private bucket ${sink.bucket})`);
 } catch (err) {

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
+import { getPrismStudioTestCredentials } from "./test-credentials";
 
 /**
  * Phase 2D against the REAL stack, NO paid request: signed-in user → server action freezes plan/manifest and
@@ -9,8 +10,7 @@ import { expect, test } from "@playwright/test";
  * Uses a disposable SYNTHETIC project (never the canonical drama). Needs PRISM_STUDIO_TEST_PASSWORD,
  * PRISM_STUDIO_CONTINUITY_DB_URL and ffmpeg (skipped without them). Removes the fixture afterwards.
  */
-const EMAIL = process.env.PRISM_STUDIO_TEST_EMAIL ?? process.env.PRISM_STUDIO_DEV_USER_EMAIL ?? "";
-const PASSWORD = process.env.PRISM_STUDIO_TEST_PASSWORD ?? "";
+const { email: EMAIL, password: PASSWORD } = getPrismStudioTestCredentials();
 const SLUG = "continuity-semantic-test";
 
 let hasFfmpeg = true;
@@ -38,7 +38,6 @@ const tsx = (script: string, args: string[]) =>
   });
 
 test.describe("continuity analysis (signed in, real queue + continuity worker login + Storage)", () => {
-  test.skip(!PASSWORD, "PRISM_STUDIO_TEST_PASSWORD is not set");
   test.skip(!process.env.PRISM_STUDIO_CONTINUITY_DB_URL, "PRISM_STUDIO_CONTINUITY_DB_URL is not set");
   test.skip(!hasFfmpeg, "ffmpeg/ffprobe are not installed");
   test.describe.configure({ mode: "serial" });

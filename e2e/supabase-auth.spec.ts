@@ -1,12 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
+import { getPrismStudioTestCredentials } from "./test-credentials";
 
 /**
  * Real Supabase Auth + RLS-bound persistence, end to end (run with `npm run test:e2e:supabase`).
- * The signed-in half needs a dev account:  PRISM_STUDIO_TEST_EMAIL (defaults to PRISM_STUDIO_DEV_USER_EMAIL)
- * and PRISM_STUDIO_TEST_PASSWORD in .env.local. It is skipped — loudly — without a password.
+ * The signed-in half needs the dedicated test account: PRISM_STUDIO_TEST_EMAIL and PRISM_STUDIO_TEST_PASSWORD
+ * in .env.local (no fallback to the DEV account). The suite fails loudly when either is missing.
  */
-const EMAIL = process.env.PRISM_STUDIO_TEST_EMAIL ?? process.env.PRISM_STUDIO_DEV_USER_EMAIL ?? "";
-const PASSWORD = process.env.PRISM_STUDIO_TEST_PASSWORD ?? "";
+const { email: EMAIL, password: PASSWORD } = getPrismStudioTestCredentials();
 const EP = "/projects/ojousama/episodes/ep-1";
 
 test.describe("protection (no credentials needed)", () => {
@@ -48,7 +48,6 @@ async function login(page: Page, next = "/") {
 }
 
 test.describe("signed-in production flow", () => {
-  test.skip(!PASSWORD, "PRISM_STUDIO_TEST_PASSWORD is not set; signed-in flow skipped");
   test.describe.configure({ mode: "serial" });
 
   test("login → project → perform → take selection → shot prep timing → storyboard → animatic → upload → reload → logout", async ({

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
+import { getPrismStudioTestCredentials } from "./test-credentials";
 
 /**
  * Phase 2C against the REAL stack, MockProvider only (no external calls, no cost): signed-in user, Postgres
@@ -9,8 +10,7 @@ import { expect, test } from "@playwright/test";
  * Needs PRISM_STUDIO_TEST_PASSWORD (skipped without it) and ffmpeg/ffprobe. Cleans up what it creates,
  * including derived assets and their stored files.
  */
-const EMAIL = process.env.PRISM_STUDIO_TEST_EMAIL ?? process.env.PRISM_STUDIO_DEV_USER_EMAIL ?? "";
-const PASSWORD = process.env.PRISM_STUDIO_TEST_PASSWORD ?? "";
+const { email: EMAIL, password: PASSWORD } = getPrismStudioTestCredentials();
 const EP = "/projects/ojousama/episodes/ep-1";
 
 let hasFfmpeg = true;
@@ -39,7 +39,6 @@ const tsx = (script: string, args: string[]) =>
   });
 
 test.describe("framing adaptation + delivery conform + continuity QA (signed in, real worker + Storage)", () => {
-  test.skip(!PASSWORD, "PRISM_STUDIO_TEST_PASSWORD is not set; signed-in flow skipped");
   test.skip(!hasFfmpeg, "ffmpeg/ffprobe are not installed");
   test.describe.configure({ mode: "serial" });
 

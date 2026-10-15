@@ -75,7 +75,6 @@ if (assets.length) {
   await pool.query("delete from assets where id = any($1::uuid[])", [providerAssets.map((a) => a.id)]);
   try {
     const sinkEnv = { ...process.env };
-    sinkEnv.PRISM_STUDIO_TEST_EMAIL ??= process.env.PRISM_STUDIO_DEV_USER_EMAIL;
     sinkEnv.PRISM_STUDIO_WORKER_DEV_STORAGE ??= "1"; // maintenance tool, development only
     const sink = await createOutputSink(sinkEnv, "supabase");
     for (const a of assets)

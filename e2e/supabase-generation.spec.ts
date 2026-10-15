@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
+import { getPrismStudioTestCredentials } from "./test-credentials";
 
 /**
  * Real Supabase Auth + Postgres queue + the real worker process + private Storage ingestion, with the free
@@ -8,8 +9,7 @@ import { expect, test } from "@playwright/test";
  * The web server has no inline worker in supabase mode, so this test runs `scripts/generation-worker.mts`
  * exactly as an operator would.
  */
-const EMAIL = process.env.PRISM_STUDIO_TEST_EMAIL ?? process.env.PRISM_STUDIO_DEV_USER_EMAIL ?? "";
-const PASSWORD = process.env.PRISM_STUDIO_TEST_PASSWORD ?? "";
+const { email: EMAIL, password: PASSWORD } = getPrismStudioTestCredentials();
 const EP = "/projects/ojousama/episodes/ep-1";
 
 const tsx = (script: string, args: string[]) =>
@@ -34,7 +34,6 @@ const tsx = (script: string, args: string[]) =>
   });
 
 test.describe("generation with the Mock provider (signed in, real queue + worker + Storage)", () => {
-  test.skip(!PASSWORD, "PRISM_STUDIO_TEST_PASSWORD is not set; signed-in generation flow skipped");
   test.describe.configure({ mode: "serial" });
 
   test.afterAll(() => {

@@ -92,8 +92,8 @@ Details: [docs/auth.md](docs/auth.md), [docs/persistence.md](docs/persistence.md
 | `SUPABASE_DB_URL`                      | app + scripts  | Session-pooler Postgres connection string. **Server-only secret.** Must contain the project ref.     |
 | `PRISM_STUDIO_DEV_USER_ID`             | scripts only   | UUID of the Auth user that owns seeded/test data. Never read by the app (a unit test enforces this). |
 | `PRISM_STUDIO_DEV_USER_EMAIL`          | scripts only   | Optional cross-check against `auth.users.email` for the dev user.                                    |
-| `PRISM_STUDIO_TEST_EMAIL`              | Playwright     | Account for the signed-in e2e flow.                                                                  |
-| `PRISM_STUDIO_TEST_PASSWORD`           | Playwright     | Its password. Without it the signed-in flow is skipped.                                              |
+| `PRISM_STUDIO_TEST_EMAIL`              | Playwright     | Dedicated automated-test account (required; no DEV fallback).                                        |
+| `PRISM_STUDIO_TEST_PASSWORD`           | Playwright     | Its password (required; the signed-in suites fail loudly without it).                                |
 
 | `NEXT_PUBLIC_SITE_URL` | app | Public origin of this app (`http://localhost:3100`; `https://studio.prismsuite.io` in production). |
 | `PRISM_STUDIO_GENERATION_PROVIDERS` | app + worker | Comma list of enabled provider ids. `mock` is on by default outside production. |

@@ -1,13 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
+import { getPrismStudioTestCredentials } from "./test-credentials";
 
 /**
  * Phase 2E on the REAL stack, NO paid provider: real Supabase Auth + RLS, candidate set persisted in Postgres,
  * three free mock candidates executed by the real worker process, human review, winner, promotion, model
  * history. Needs PRISM_STUDIO_TEST_PASSWORD (skipped without it). Removes its own mock generations and sets.
  */
-const EMAIL = process.env.PRISM_STUDIO_TEST_EMAIL ?? process.env.PRISM_STUDIO_DEV_USER_EMAIL ?? "";
-const PASSWORD = process.env.PRISM_STUDIO_TEST_PASSWORD ?? "";
+const { email: EMAIL, password: PASSWORD } = getPrismStudioTestCredentials();
 const EP = "/projects/ojousama/episodes/ep-1";
 
 const tsx = (script: string, args: string[]) =>
@@ -28,7 +28,6 @@ const tsx = (script: string, args: string[]) =>
   });
 
 test.describe("candidate sets (signed in, real queue + worker + Postgres reviews)", () => {
-  test.skip(!PASSWORD, "PRISM_STUDIO_TEST_PASSWORD is not set; signed-in candidate flow skipped");
   test.describe.configure({ mode: "serial" });
 
   test.afterAll(() => {

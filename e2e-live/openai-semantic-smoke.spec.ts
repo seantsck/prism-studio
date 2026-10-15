@@ -1,16 +1,16 @@
 import { expect, test } from "@playwright/test";
+import { getPrismStudioTestCredentials } from "../e2e/test-credentials";
 
 /**
  * MANUAL, PAID, ONE-SHOT: submits exactly ONE OpenAI continuity analysis for the synthetic semantic fixture
  * through the real UI/server action. It does NOT call OpenAI itself (the app only queues; the separate
  * `continuity:worker` process makes the request). Never part of `npm run test:e2e`.
  *
- * Refuses to run unless LIVE_SMOKE_APPROVED=yes (set deliberately, per run). Needs PRISM_STUDIO_TEST_PASSWORD
- * and the dev user email from the environment (.env.local via node --env-file).
+ * Refuses to run unless LIVE_SMOKE_APPROVED=yes (set deliberately, per run). Needs PRISM_STUDIO_TEST_EMAIL
+ * and PRISM_STUDIO_TEST_PASSWORD (the dedicated test account; no DEV fallback) from .env.local.
  */
 const SLUG = "continuity-semantic-test";
-const EMAIL = process.env.PRISM_STUDIO_TEST_EMAIL ?? process.env.PRISM_STUDIO_DEV_USER_EMAIL ?? "";
-const PASSWORD = process.env.PRISM_STUDIO_TEST_PASSWORD ?? "";
+const { email: EMAIL, password: PASSWORD } = getPrismStudioTestCredentials();
 
 test("submit ONE OpenAI semantic continuity analysis (queued only)", async ({ page }) => {
   test.skip(
