@@ -9,6 +9,7 @@ import type { ProjectData } from "@/domain/schemas";
 import { UserFacingError } from "./action-result";
 import { requireUser } from "./auth";
 import { getPool } from "./db";
+import { getPrevisRepo } from "./previs";
 
 declare global {
   var __prismMemoryRepo: Repository | undefined;
@@ -31,10 +32,16 @@ export async function getRepo(): Promise<Repository> {
 }
 
 /** Always reads from the repository. Server actions use this: they mutate and then re-render in the same request. */
+/** Attach each shot's 3D set snapshot (only shots with a production camera; absent otherwise). */
+async function withSpatialReferences(data: ProjectData): Promise<ProjectData> {
+  const refs = await (await getPrevisRepo()).listSpatialReferences(data.project.id);
+  return Object.keys(refs).length > 0 ? { ...data, spatialReferences: refs } : data;
+}
+
 export async function requireProjectFresh(slug: string): Promise<ProjectData> {
   const data = await (await getRepo()).loadProject(slug);
   if (!data) throw new UserFacingError("That project no longer exists.");
-  return data;
+  return withSpatialReferences(data);
 }
 
 /**
@@ -42,7 +49,8 @@ export async function requireProjectFresh(slug: string): Promise<ProjectData> {
  * Never use from server actions: the cache would hand the post-mutation re-render the pre-mutation data.
  */
 export const loadProjectCached = cache(async (slug: string): Promise<ProjectData | null> => {
-  return (await getRepo()).loadProject(slug);
+  const data = await (await getRepo()).loadProject(slug);
+  return data ? withSpatialReferences(data) : null;
 });
 
 export async function requireProject(slug: string): Promise<ProjectData> {

@@ -1,4 +1,5 @@
 import { computeShotDuration, selectedTake, type ShotDuration } from "./duration";
+import type { SpatialReference } from "./previs/spatial";
 import type {
   ActionBlock,
   Asset,
@@ -59,6 +60,8 @@ export interface ShotContext {
   /** Script content this shot links to, resolved from shot.scriptSources / audio.dialogueLineIds. */
   sourceActions: ActionBlock[];
   sourceDialogue: DialogueLine[];
+  /** Frozen into the GenerationPackage when the Shot has a 3D set (Phase 2F). Absent = no 3D set. */
+  spatial?: SpatialReference | null;
 }
 
 export function buildShotContext(data: ProjectData, shotId: string): ShotContext {
@@ -125,6 +128,7 @@ export function buildShotContext(data: ProjectData, shotId: string): ShotContext
     sourceDialogue: [...new Set([...shot.scriptSources.dialogueLineIds, ...shot.audio.dialogueLineIds])]
       .map((id) => data.dialogueLines.find((l) => l.id === id))
       .filter((l): l is DialogueLine => Boolean(l)),
+    ...(data.spatialReferences?.[shot.id] ? { spatial: data.spatialReferences[shot.id] } : {}),
   };
 }
 
