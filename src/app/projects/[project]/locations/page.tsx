@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Badge, Button, Field, PageHeader, Panel } from "@/components/ui";
 import { saveLocation, setLocationLocked } from "@/server/actions";
 import { requireProject } from "@/server/repo";
@@ -94,12 +95,18 @@ export default async function LocationsPage({ params }: { params: Promise<{ proj
                 </ActionForm>
               ) : null}
               {l ? (
-                <Panel title="3D set (reserved)" className="mt-4 max-w-4xl">
+                <Panel title="3D Set" className="mt-4 max-w-4xl">
                   <p className="text-muted">
-                    {l.set3d?.modelAssetId
-                      ? "3D model attached."
-                      : "No 3D set yet. Phase 4 attaches persistent geometry, camera rigs and blocking markers here."}
+                    A persistent virtual set for this location: block characters, place the production camera,
+                    and render a master frame for any shot set here.
                   </p>
+                  <Link
+                    href={`/projects/${slug}/locations/${l.id}/3d`}
+                    className="mt-2 inline-flex h-7 items-center rounded border border-accent bg-accent px-3 text-xs text-accentfg"
+                    data-testid={`open-3d-set-${l.id}`}
+                  >
+                    Open 3D Set
+                  </Link>
                 </Panel>
               ) : null}
             </div>

@@ -99,3 +99,11 @@ details > summary::-webkit-details-marker {
   background: var(--line-strong);
   border-radius: 4px;
 }
+
+/* Phase 2F: compact controls used by the 3D set editor */
+.btn {
+  @apply inline-flex h-7 items-center justify-center rounded border border-line2 bg-panel px-3 text-xs text-fg hover:bg-panel2 disabled:cursor-not-allowed disabled:opacity-50;
+}
+.btn-primary {
+  @apply border-accent bg-accent text-accentfg hover:bg-accent;
+}
