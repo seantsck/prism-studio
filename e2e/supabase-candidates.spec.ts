@@ -1,13 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
-import { getPrismStudioTestCredentials } from "./test-credentials";
+import { getPrismStudioDevCredentials } from "./dev-credentials";
 
 /**
  * Phase 2E on the REAL stack, NO paid provider: real Supabase Auth + RLS, candidate set persisted in Postgres,
  * three free mock candidates executed by the real worker process, human review, winner, promotion, model
- * history. Needs PRISM_STUDIO_TEST_PASSWORD (skipped without it). Removes its own mock generations and sets.
+ * history. Needs PRISM_STUDIO_DEV_USER_PASSWORD (skipped without it). Removes its own mock generations and sets.
  */
-const { email: EMAIL, password: PASSWORD } = getPrismStudioTestCredentials();
+const { email: EMAIL, password: PASSWORD } = getPrismStudioDevCredentials();
 const EP = "/projects/ojousama/episodes/ep-1";
 
 const tsx = (script: string, args: string[]) =>

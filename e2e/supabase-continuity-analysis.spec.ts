@@ -1,16 +1,16 @@
 import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
-import { getPrismStudioTestCredentials } from "./test-credentials";
+import { getPrismStudioDevCredentials } from "./dev-credentials";
 
 /**
  * Phase 2D against the REAL stack, NO paid request: signed-in user → server action freezes plan/manifest and
  * queues a job in Postgres → the REAL continuity worker process (dedicated least-privilege login, private
  * Storage) executes it with the free Mock analyzer → findings/evidence/cost → human override → re-run history.
  *
- * Uses a disposable SYNTHETIC project (never the canonical drama). Needs PRISM_STUDIO_TEST_PASSWORD,
+ * Uses a disposable SYNTHETIC project (never the canonical drama). Needs PRISM_STUDIO_DEV_USER_PASSWORD,
  * PRISM_STUDIO_CONTINUITY_DB_URL and ffmpeg (skipped without them). Removes the fixture afterwards.
  */
-const { email: EMAIL, password: PASSWORD } = getPrismStudioTestCredentials();
+const { email: EMAIL, password: PASSWORD } = getPrismStudioDevCredentials();
 const SLUG = "continuity-semantic-test";
 
 let hasFfmpeg = true;

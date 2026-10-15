@@ -122,8 +122,16 @@ describe("environment safety", () => {
         if (statSync(p).isDirectory()) {
           if (f === "__tests__") continue;
           walk(p);
-        } else if (/\.(ts|tsx)$/.test(f) && readFileSync(p, "utf8").includes("PRISM_STUDIO_DEV_USER")) {
-          offenders.push(path.relative(process.cwd(), p));
+        } else if (/\.(ts|tsx)$/.test(f)) {
+          const text = readFileSync(p, "utf8");
+          // the id is script-only everywhere; email/password may be named only by the worker's dev-storage
+          // sink and the log redactor that masks the password (the Next.js app itself never reads them)
+          const allowed = f === "sink.ts" || f === "redact.ts";
+          if (
+            text.includes("PRISM_STUDIO_DEV_USER_ID") ||
+            (!allowed && text.includes("PRISM_STUDIO_DEV_USER"))
+          )
+            offenders.push(path.relative(process.cwd(), p));
         }
       }
     };

@@ -38,6 +38,7 @@ const SENSITIVE_PARAMS = new Set([
 /** Environment variables whose VALUES must never appear in logs, even when they match no pattern. */
 const SECRET_ENV_NAMES = [
   "PRISM_STUDIO_WORKER_DB_URL",
+  "PRISM_STUDIO_DEV_USER_PASSWORD",
   "PRISM_STUDIO_WORKER_DB_PASSWORD",
   "PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY",
   "PRISM_STUDIO_WORKER_SERVICE_KEY",

@@ -126,8 +126,8 @@ export async function createOutputSink(
     }
     return new SupabaseSink(createClient(url, secret, { auth: { persistSession: false } }), bucket);
   }
-  const email = env.PRISM_STUDIO_TEST_EMAIL;
-  const password = env.PRISM_STUDIO_TEST_PASSWORD;
+  const email = env.PRISM_STUDIO_DEV_USER_EMAIL;
+  const password = env.PRISM_STUDIO_DEV_USER_PASSWORD;
   if (
     env.NODE_ENV !== "production" &&
     env.PRISM_STUDIO_WORKER_DEV_STORAGE === "1" &&
@@ -137,13 +137,13 @@ export async function createOutputSink(
   ) {
     const client = createClient(url, publishable, { auth: { persistSession: false } });
     const { error } = await client.auth.signInWithPassword({ email, password });
-    if (error) throw new SinkConfigError("Worker could not sign in with the test credentials.");
+    if (error) throw new SinkConfigError("Worker could not sign in with the dev user credentials.");
     return new SupabaseSink(client, bucket);
   }
   throw new SinkConfigError(
     "The worker has no way to write Supabase Storage. Set PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY " +
       "(or the legacy PRISM_STUDIO_WORKER_SERVICE_KEY) on the worker host. For local development only: " +
-      "PRISM_STUDIO_WORKER_DEV_STORAGE=1 with PRISM_STUDIO_TEST_EMAIL/PASSWORD.",
+      "PRISM_STUDIO_WORKER_DEV_STORAGE=1 with PRISM_STUDIO_DEV_USER_EMAIL/PASSWORD.",
   );
 }
 

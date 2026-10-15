@@ -80,7 +80,7 @@ Server actions are wrapped in `runAction` and return an `ActionResult`
 | Unit (`npm test`)                                          | `src/**/__tests__`, `scripts/lib/__tests__` | Domain, SQL mapping, upload policy, audio analysis, migration checksums, redaction, env safety. |
 | Memory e2e (`npm run test:e2e`)                            | `e2e/smoke`, `e2e/workflow`                 | Production build, forced memory mode.                                                           |
 | DB (`db:validate`, `db:behavior`, `db:rls`, `db:exercise`) | `scripts/`                                  | Run against the dedicated project; see [local-supabase](local-supabase.md).                     |
-| Supabase e2e (`test:e2e:supabase`)                         | `e2e/supabase-auth.spec.ts`                 | Real Auth; needs `PRISM_STUDIO_TEST_PASSWORD`, skipped without it.                              |
+| Supabase e2e (`test:e2e:supabase`)                         | `e2e/supabase-auth.spec.ts`                 | Real Auth; needs `PRISM_STUDIO_DEV_USER_PASSWORD`, skipped without it.                          |
 
 ## Not built yet
 

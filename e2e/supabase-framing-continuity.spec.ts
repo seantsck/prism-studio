@@ -1,16 +1,16 @@
 import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
-import { getPrismStudioTestCredentials } from "./test-credentials";
+import { getPrismStudioDevCredentials } from "./dev-credentials";
 
 /**
  * Phase 2C against the REAL stack, MockProvider only (no external calls, no cost): signed-in user, Postgres
  * queue, the real worker process, private Storage — then delivery conform + continuity QA through the app
  * server (ffmpeg, the user's own Storage session, RLS-bound repositories).
  *
- * Needs PRISM_STUDIO_TEST_PASSWORD (skipped without it) and ffmpeg/ffprobe. Cleans up what it creates,
+ * Needs PRISM_STUDIO_DEV_USER_PASSWORD (skipped without it) and ffmpeg/ffprobe. Cleans up what it creates,
  * including derived assets and their stored files.
  */
-const { email: EMAIL, password: PASSWORD } = getPrismStudioTestCredentials();
+const { email: EMAIL, password: PASSWORD } = getPrismStudioDevCredentials();
 const EP = "/projects/ojousama/episodes/ep-1";
 
 let hasFfmpeg = true;

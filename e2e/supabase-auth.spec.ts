@@ -1,12 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
-import { getPrismStudioTestCredentials } from "./test-credentials";
+import { getPrismStudioDevCredentials } from "./dev-credentials";
 
 /**
  * Real Supabase Auth + RLS-bound persistence, end to end (run with `npm run test:e2e:supabase`).
- * The signed-in half needs the dedicated test account: PRISM_STUDIO_TEST_EMAIL and PRISM_STUDIO_TEST_PASSWORD
- * in .env.local (no fallback to the DEV account). The suite fails loudly when either is missing.
+ * The signed-in half signs in as the one local dev user: PRISM_STUDIO_DEV_USER_EMAIL and
+ * PRISM_STUDIO_DEV_USER_PASSWORD in .env.local. The suite fails loudly when either is missing.
  */
-const { email: EMAIL, password: PASSWORD } = getPrismStudioTestCredentials();
+const { email: EMAIL, password: PASSWORD } = getPrismStudioDevCredentials();
 const EP = "/projects/ojousama/episodes/ep-1";
 
 test.describe("protection (no credentials needed)", () => {

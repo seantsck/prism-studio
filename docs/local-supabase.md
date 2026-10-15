@@ -72,8 +72,8 @@ npm run db:seed -- --reset
 ## Signed-in browser tests
 
 `npm run test:e2e:supabase` builds the app and runs `e2e/supabase-auth.spec.ts` on port 3101 (memory-mode e2e uses 3102; the dev server owns 3100) against the real
-project. It reads `PRISM_STUDIO_TEST_EMAIL` / `PRISM_STUDIO_TEST_PASSWORD` from `.env.local`; both are required and
-there is no fallback to the DEV account (the suite fails loudly without them). Run `db:seed -- --reset` first
+project. It reads `PRISM_STUDIO_DEV_USER_EMAIL` / `PRISM_STUDIO_DEV_USER_PASSWORD` from `.env.local`; both are required and
+are the one local dev user (the suite fails loudly without them). Run `db:seed -- --reset` first
 so the demo project is pristine; the flow restores what it changes and deletes what it uploads.
 
 ## Known limitations

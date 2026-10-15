@@ -16,7 +16,7 @@ Details: [architecture](architecture.md), [persistence](persistence.md), [auth](
 Stated plainly; none of these are implied to exist elsewhere in the docs.
 
 - **Signed-in browser flow and live Storage upload need a test account password.** `test:e2e:supabase` skips the
-  signed-in test without `PRISM_STUDIO_TEST_PASSWORD`; until it has run, upload through the real session is
+  signed-in test without `PRISM_STUDIO_DEV_USER_PASSWORD`; until it has run, upload through the real session is
   unproven end to end.
 - **Storage was validated at the policy level (SQL), not through the Storage HTTP API** in the environment
   where it was built (`db:rls` exercises `storage.objects` policies under the RLS preamble; bucket

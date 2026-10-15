@@ -91,9 +91,8 @@ Details: [docs/auth.md](docs/auth.md), [docs/persistence.md](docs/persistence.md
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | app (supabase) | Publishable (anon-class) key; safe to expose, useless without a session + RLS.                       |
 | `SUPABASE_DB_URL`                      | app + scripts  | Session-pooler Postgres connection string. **Server-only secret.** Must contain the project ref.     |
 | `PRISM_STUDIO_DEV_USER_ID`             | scripts only   | UUID of the Auth user that owns seeded/test data. Never read by the app (a unit test enforces this). |
-| `PRISM_STUDIO_DEV_USER_EMAIL`          | scripts only   | Optional cross-check against `auth.users.email` for the dev user.                                    |
-| `PRISM_STUDIO_TEST_EMAIL`              | Playwright     | Dedicated automated-test account (required; no DEV fallback).                                        |
-| `PRISM_STUDIO_TEST_PASSWORD`           | Playwright     | Its password (required; the signed-in suites fail loudly without it).                                |
+| `PRISM_STUDIO_DEV_USER_EMAIL`          | scripts + e2e  | Email of the one dev/project-owner user (signed-in e2e, cross-check). Never read by the app.         |
+| `PRISM_STUDIO_DEV_USER_PASSWORD`       | scripts + e2e  | That same user's password. Required by signed-in e2e/smoke; never read by the app.                   |
 
 | `NEXT_PUBLIC_SITE_URL` | app | Public origin of this app (`http://localhost:3100`; `https://studio.prismsuite.io` in production). |
 | `PRISM_STUDIO_GENERATION_PROVIDERS` | app + worker | Comma list of enabled provider ids. `mock` is on by default outside production. |
@@ -115,7 +114,7 @@ Generation limits and worker tuning: `PRISM_STUDIO_GENERATION_*`, `PRISM_STUDIO_
 | `npm run format` / `format:check` | Prettier                                                                                     |
 | `npm test` / `test:watch`         | Vitest unit tests (domain, mapping, upload policy, audio analysis, migration/safety helpers) |
 | `npm run test:e2e`                | Playwright, memory mode (forces `PRISM_STUDIO_PERSISTENCE=memory`, never touches a database) |
-| `npm run test:e2e:supabase`       | Playwright with real Supabase Auth (needs `PRISM_STUDIO_TEST_PASSWORD`; skipped without it)  |
+| `npm run test:e2e:supabase`       | Playwright with real Supabase Auth (needs the dev user email + password)                     |
 | `npm run db:inspect`              | Read-only: tables, auth user count, buckets                                                  |
 | `npm run db:migrate`              | Apply pending migrations; records SHA-256 checksums; refuses if an applied file changed      |
 | `npm run db:migrate:check`        | Read-only checksum / pending verification (`--check`)                                        |

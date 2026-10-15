@@ -49,7 +49,11 @@ describe("worker Storage credential (fails closed)", () => {
   });
 
   it("test-user storage needs an explicit opt-in and is never available in production", async () => {
-    const creds = { ...base, PRISM_STUDIO_TEST_EMAIL: "a@b.c", PRISM_STUDIO_TEST_PASSWORD: "pw-pw-pw-pw" };
+    const creds = {
+      ...base,
+      PRISM_STUDIO_DEV_USER_EMAIL: "a@b.c",
+      PRISM_STUDIO_DEV_USER_PASSWORD: "pw-pw-pw-pw",
+    };
     await expect(createOutputSink(creds, "supabase")).rejects.toBeInstanceOf(SinkConfigError);
     await expect(
       createOutputSink(
