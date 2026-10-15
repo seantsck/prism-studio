@@ -3,6 +3,8 @@ import { ActionForm } from "@/components/action-form";
 import { Badge, Button } from "@/components/ui";
 import type { AttemptView } from "@/data/generation-repository";
 import { isActive } from "@/domain/generation/job-state";
+import type { AttemptMedia } from "@/server/attempt-media";
+import { AttemptMediaPanel, StageChips } from "./attempt-media-panel";
 import { REJECTION_CATEGORIES, REJECTION_LABELS, USER_ERROR_NOTE } from "./constants";
 import {
   AttemptStatusBadge,
@@ -19,9 +21,15 @@ export function AttemptCard({
   view,
   projectSlug,
   compareWith,
+  media = null,
+  candidate = null,
 }: {
   view: AttemptView;
   projectSlug: string;
+  /** Phase 2E: the candidate set this attempt belongs to (null = a standalone generation). */
+  candidate?: { setId: string; label: string; title: string } | null;
+  /** Media + continuity QA for this attempt (derived delivery, plan, QA status). */
+  media?: AttemptMedia | null;
   /** Previous attempt id, for the "compare with attempt N-1" link. */
   compareWith?: { id: string; number: number };
 }) {
@@ -55,6 +63,19 @@ export function AttemptCard({
           {attempt.requestModality ? (
             <span className="font-mono text-[10.5px] text-faint">{attempt.requestModality}</span>
           ) : null}
+          {candidate ? (
+            <Link
+              href={`/projects/${projectSlug}/candidates/${candidate.setId}`}
+              className="text-[10.5px] underline"
+              data-testid="candidate-origin"
+            >
+              Candidate {candidate.label} · {candidate.title || "set"}
+            </Link>
+          ) : (
+            <span className="text-[10.5px] text-faint" data-testid="standalone-origin">
+              Standalone generation
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
           {job ? (
@@ -68,6 +89,24 @@ export function AttemptCard({
           {attempt.approved ? <Badge tone="pass">canonical</Badge> : null}
         </div>
       </header>
+
+      {media ? (
+        <div className="border-b border-line px-3 py-1.5">
+          <StageChips
+            attempt={attempt}
+            generated={
+              job
+                ? {
+                    label: job.status.replace(/_/g, " "),
+                    tone: job.status === "succeeded" ? "pass" : job.status === "failed" ? "fail" : "neutral",
+                  }
+                : { label: attempt.status, tone: attempt.status === "succeeded" ? "pass" : "neutral" }
+            }
+            qaStatus={media.qaStatus}
+            qaStale={media.qaStale}
+          />
+        </div>
+      ) : null}
 
       <div className="grid gap-3 p-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         <div className="min-w-0 space-y-1.5 text-[12px]">
@@ -177,6 +216,17 @@ export function AttemptCard({
         </div>
       </div>
 
+      {media && canReview ? (
+        <div className="border-t border-line p-3">
+          <AttemptMediaPanel
+            projectSlug={projectSlug}
+            attemptId={attempt.id}
+            media={media}
+            succeeded={canReview}
+          />
+        </div>
+      ) : null}
+
       <footer className="flex flex-wrap items-start gap-3 border-t border-line px-3 py-2">
         {active && job && job.status !== "cancel_requested" ? (
           <ActionForm action={cancelGeneration} successMessage="Cancellation requested" quiet>
@@ -188,6 +238,32 @@ export function AttemptCard({
           </ActionForm>
         ) : null}
 
+        {canReview && media && media.advisories.length > 0 && attempt.reviewStatus !== "approved" ? (
+          <p className="basis-full text-[11px] text-warn" data-testid="approval-advisory">
+            Before approving: {media.advisories.join(" ")}
+          </p>
+        ) : null}
+        {canReview ? (
+          <p className="basis-full text-[11px] text-muted" data-testid="final-approval-note">
+            <strong className="text-fg">Final approval of this attempt as the shot&apos;s output.</strong>{" "}
+            {candidate ? (
+              <>
+                This is not the candidate comparison: to judge this clip against the others (Good · Shortlist
+                · Reject · Best) use{" "}
+                <Link
+                  href={`/projects/${projectSlug}/candidates/${candidate.setId}`}
+                  className="underline"
+                  data-testid="go-candidate-review"
+                >
+                  Candidate {candidate.label} on the comparison board
+                </Link>
+                .
+              </>
+            ) : (
+              "It is separate from model-comparison reviews."
+            )}
+          </p>
+        ) : null}
         {canReview ? (
           <>
             {attempt.reviewStatus !== "approved" ? (
@@ -195,7 +271,7 @@ export function AttemptCard({
                 {hidden}
                 <input type="hidden" name="decision" value="approve" />
                 <Button size="sm" variant="primary" type="submit" data-testid="approve-button">
-                  Approve
+                  Approve as final output
                 </Button>
               </ActionForm>
             ) : null}
@@ -205,7 +281,7 @@ export function AttemptCard({
                   className="cursor-pointer text-[12px] text-fail hover:underline"
                   data-testid="reject-toggle"
                 >
-                  Reject…
+                  Reject as final output…
                 </summary>
                 <ActionForm action={reviewGeneration} className="mt-2 space-y-2" successMessage="Rejected">
                   {hidden}

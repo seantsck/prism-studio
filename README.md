@@ -17,7 +17,7 @@ Two principles drive the design:
 
 Production domain: `studio.prismsuite.io` (not deployed). Standalone repo, separate from PrismSuite.
 
-## Status (Phase 2A)
+## Status (Phase 2D)
 
 Planning, performance, storyboard and animatic are implemented, on two persistence backends:
 
@@ -26,8 +26,29 @@ Planning, performance, storyboard and animatic are implemented, on two persisten
 
 **Generation infrastructure (Phase 2A)**: a durable, provider-independent pipeline (frozen attempts, Postgres
 job queue, worker process, output ingestion into private Storage, review) with a free **MockProvider**. No real
-provider is integrated yet and the app is not deployed. See [docs/generation-architecture.md](docs/generation-architecture.md)
+provider is integrated in 2A; 2B added the least-privilege worker and the first real provider (Runway Gen-4.5,
+live-spend gated). The app is not deployed. See [docs/generation-architecture.md](docs/generation-architecture.md)
 and [docs/roadmap.md](docs/roadmap.md) (including "Known gaps").
+
+**Framing, conform and continuity QA (Phase 2C)**: a production shot (e.g. 2.39:1 / 4.5 s) is never silently
+changed to fit a provider (16:9 / 5 s). The user chooses and acknowledges an explicit **adaptation plan**
+(frozen on the attempt), the provider original stays immutable, a deterministic **delivery conform** produces a
+separate derived asset (crop / pad / trim with ffmpeg), and **continuity QA** (deterministic checks, review
+frames, contact sheet, reference sets, human overrides, a clearly-labelled Mock analyzer) advises while a person
+approves. See [framing-adaptation](docs/framing-adaptation.md), [media-processing](docs/media-processing.md),
+[delivery-conform](docs/delivery-conform.md), [continuity-qa](docs/continuity-qa.md) and
+[continuity-analyzer-contract](docs/continuity-analyzer-contract.md). Conform/review frames need **ffmpeg** on
+the app server's PATH (optional: everything else works without it).
+
+**Real continuity analysis (Phase 2D)**: automated analysis is durable, queued work. A frozen
+`ContinuityAnalysisInput` (criteria with expected values, ranked references, review frames, versions) is executed
+by a dedicated least-privilege **continuity worker**, with a provider-independent analyzer contract, a strict
+evidence-based result schema, a separate analysis spend gate and cost ledger, and two provider adapters behind
+the same contract: Gemini (`gemini-3.8-flash`, `gemini-3.6-flash`) and OpenAI (`gpt-6-luna`), the latter tested
+against a fake transport only. **No live analysis has been produced yet** (Gemini's live attempts hit provider
+overload; no live OpenAI request has been made); paid analysis is off by default. The model never decides what continuity should be and never approves anything. See
+[continuity-analysis-jobs](docs/continuity-analysis-jobs.md), [providers/gemini-continuity](docs/providers/gemini-continuity.md),
+[providers/openai-continuity](docs/providers/openai-continuity.md) and [continuity-costs](docs/continuity-costs.md).
 
 ## Quick start: memory mode
 
@@ -70,9 +91,8 @@ Details: [docs/auth.md](docs/auth.md), [docs/persistence.md](docs/persistence.md
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | app (supabase) | Publishable (anon-class) key; safe to expose, useless without a session + RLS.                       |
 | `SUPABASE_DB_URL`                      | app + scripts  | Session-pooler Postgres connection string. **Server-only secret.** Must contain the project ref.     |
 | `PRISM_STUDIO_DEV_USER_ID`             | scripts only   | UUID of the Auth user that owns seeded/test data. Never read by the app (a unit test enforces this). |
-| `PRISM_STUDIO_DEV_USER_EMAIL`          | scripts only   | Optional cross-check against `auth.users.email` for the dev user.                                    |
-| `PRISM_STUDIO_TEST_EMAIL`              | Playwright     | Account for the signed-in e2e flow.                                                                  |
-| `PRISM_STUDIO_TEST_PASSWORD`           | Playwright     | Its password. Without it the signed-in flow is skipped.                                              |
+| `PRISM_STUDIO_DEV_USER_EMAIL`          | scripts + e2e  | Email of the one dev/project-owner user (signed-in e2e, cross-check). Never read by the app.         |
+| `PRISM_STUDIO_DEV_USER_PASSWORD`       | scripts + e2e  | That same user's password. Required by signed-in e2e/smoke; never read by the app.                   |
 
 | `NEXT_PUBLIC_SITE_URL` | app | Public origin of this app (`http://localhost:3100`; `https://studio.prismsuite.io` in production). |
 | `PRISM_STUDIO_GENERATION_PROVIDERS` | app + worker | Comma list of enabled provider ids. `mock` is on by default outside production. |
@@ -94,7 +114,7 @@ Generation limits and worker tuning: `PRISM_STUDIO_GENERATION_*`, `PRISM_STUDIO_
 | `npm run format` / `format:check` | Prettier                                                                                     |
 | `npm test` / `test:watch`         | Vitest unit tests (domain, mapping, upload policy, audio analysis, migration/safety helpers) |
 | `npm run test:e2e`                | Playwright, memory mode (forces `PRISM_STUDIO_PERSISTENCE=memory`, never touches a database) |
-| `npm run test:e2e:supabase`       | Playwright with real Supabase Auth (needs `PRISM_STUDIO_TEST_PASSWORD`; skipped without it)  |
+| `npm run test:e2e:supabase`       | Playwright with real Supabase Auth (needs the dev user email + password)                     |
 | `npm run db:inspect`              | Read-only: tables, auth user count, buckets                                                  |
 | `npm run db:migrate`              | Apply pending migrations; records SHA-256 checksums; refuses if an applied file changed      |
 | `npm run db:migrate:check`        | Read-only checksum / pending verification (`--check`)                                        |
@@ -117,29 +137,34 @@ Playwright installs its browser separately: `npx playwright install chromium`.
 
 ## Documentation index
 
-| Doc                                                        | Topic                                                              |
-| ---------------------------------------------------------- | ------------------------------------------------------------------ |
-| [architecture](docs/architecture.md)                       | Layers, request flow, key decisions, testing                       |
-| [domain-model](docs/domain-model.md)                       | Entities, invariants, SQL mapping                                  |
-| [persistence](docs/persistence.md)                         | Repository interface, memory vs Postgres, RLS preamble             |
-| [auth](docs/auth.md)                                       | Sign-in, session verification, route protection                    |
-| [storage](docs/storage.md)                                 | Private bucket, object keys, signed URLs, upload policy            |
-| [asset-lifecycle](docs/asset-lifecycle.md)                 | Upload → metadata → where-used → delete protection, audio pipeline |
-| [performance-workflow](docs/performance-workflow.md)       | Dialogue, directions, takes, waveform, timing                      |
-| [animatic](docs/animatic.md)                               | Timeline model, player, clocks, shortcuts                          |
-| [script-coverage](docs/script-coverage.md)                 | Script → action blocks → shots traceability and coverage           |
-| [production-workflow](docs/production-workflow.md)         | End-to-end creative workflow and freshness signals                 |
-| [shot-prep](docs/shot-prep.md)                             | Shot Prep sections and preflight rules                             |
-| [generation-package](docs/generation-package.md)           | Package v2 contract, brief, attempts                               |
-| [generation-architecture](docs/generation-architecture.md) | Attempt vs job, layers, submission, derived lifecycle              |
-| [generation-jobs](docs/generation-jobs.md)                 | Queue, leases, worker, retries, cancellation, idempotency          |
-| [provider-contract](docs/provider-contract.md)             | Adapter interface, capabilities, compatibility rules               |
-| [adding-a-provider](docs/providers/adding-a-provider.md)   | Step-by-step guide, tests and security checklist                   |
-| [generation-review](docs/generation-review.md)             | Approve/reject, rejection categories, history guarantees           |
-| [local-supabase](docs/local-supabase.md)                   | Environments, DB tooling and safety rails                          |
-| [migration-policy](docs/migration-policy.md)               | Forward-only migrations, checksums, history 0001–0014              |
-| [security-model](docs/security-model.md)                   | Trust boundaries, enforcement layers, residual risks               |
-| [roadmap](docs/roadmap.md)                                 | Phases and known gaps                                              |
+| Doc                                                            | Topic                                                               |
+| -------------------------------------------------------------- | ------------------------------------------------------------------- |
+| [architecture](docs/architecture.md)                           | Layers, request flow, key decisions, testing                        |
+| [domain-model](docs/domain-model.md)                           | Entities, invariants, SQL mapping                                   |
+| [persistence](docs/persistence.md)                             | Repository interface, memory vs Postgres, RLS preamble              |
+| [auth](docs/auth.md)                                           | Sign-in, session verification, route protection                     |
+| [storage](docs/storage.md)                                     | Private bucket, object keys, signed URLs, upload policy             |
+| [asset-lifecycle](docs/asset-lifecycle.md)                     | Upload → metadata → where-used → delete protection, audio pipeline  |
+| [performance-workflow](docs/performance-workflow.md)           | Dialogue, directions, takes, waveform, timing                       |
+| [animatic](docs/animatic.md)                                   | Timeline model, player, clocks, shortcuts                           |
+| [script-coverage](docs/script-coverage.md)                     | Script → action blocks → shots traceability and coverage            |
+| [production-workflow](docs/production-workflow.md)             | End-to-end creative workflow and freshness signals                  |
+| [shot-prep](docs/shot-prep.md)                                 | Shot Prep sections and preflight rules                              |
+| [generation-package](docs/generation-package.md)               | Package v2 contract, brief, attempts                                |
+| [generation-architecture](docs/generation-architecture.md)     | Attempt vs job, layers, submission, derived lifecycle               |
+| [generation-jobs](docs/generation-jobs.md)                     | Queue, leases, worker, retries, cancellation, idempotency           |
+| [provider-contract](docs/provider-contract.md)                 | Adapter interface, capabilities, compatibility rules                |
+| [adding-a-provider](docs/providers/adding-a-provider.md)       | Step-by-step guide, tests and security checklist                    |
+| [generation-review](docs/generation-review.md)                 | Approve/reject, rejection categories, history guarantees            |
+| [generation-model-catalog](docs/generation-model-catalog.md)   | Phase 2E model catalog: capabilities, pricing, verification         |
+| [generation-candidate-sets](docs/generation-candidate-sets.md) | Phase 2E candidate sets: multi-model experiments, spend, isolation  |
+| [human-generation-review](docs/human-generation-review.md)     | Phase 2E fast human review, reasons, shortcuts, append-only history |
+| [model-performance](docs/model-performance.md)                 | Phase 2E model history from human reviews, by shot type             |
+| [model-recommendation-v1](docs/model-recommendation-v1.md)     | Phase 2E deterministic, advisory model recommendation (math)        |
+| [local-supabase](docs/local-supabase.md)                       | Environments, DB tooling and safety rails                           |
+| [migration-policy](docs/migration-policy.md)                   | Forward-only migrations, checksums, history 0001–0014               |
+| [security-model](docs/security-model.md)                       | Trust boundaries, enforcement layers, residual risks                |
+| [roadmap](docs/roadmap.md)                                     | Phases and known gaps                                               |
 
 ## Where to look
 

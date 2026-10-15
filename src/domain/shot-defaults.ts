@@ -96,6 +96,7 @@ export function emptyShot(
       referenceAudioAssetId: null,
       resolution: "1920x1080",
       fps: 24,
+      protectedComposition: [],
     },
     approval: { storyboardApproved: false, performanceApproved: false, continuityApproved: false },
     createdAt: now,

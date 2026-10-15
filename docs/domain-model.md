@@ -89,3 +89,20 @@ User (auth.users)
 Invariants: attempt ↔ job ↔ output ↔ cost always share a project (composite foreign keys); at most one active
 job per attempt; at most one approved attempt per shot; `approved = (review_status = 'approved')`; outputs have
 unique positions and at most one `primary`. See [generation-architecture](generation-architecture.md).
+
+## Phase 2C entities
+
+| Entity                   | Table / column                                                                                          | Nature                                                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| GenerationAdaptationPlan | `generation_attempts.adaptation_plan`                                                                   | Frozen, immutable: how production framing/duration were adapted to the provider; `null` for older attempts   |
+| ProductionFormat         | `project_bibles.aspect_ratio` (+ optional `delivery_width/height`, `target_codec`, `audio_sample_rate`) | Canonical frame; pixel size only when explicitly set                                                         |
+| Protected composition    | `shots.generation.protectedComposition`                                                                 | Manual notes: what must survive a crop (not a freshness part)                                                |
+| AssetDerivation          | `asset_derivations`                                                                                     | Child asset → parent + deterministic operation/parameters/processor; append-only; versioned per attempt slot |
+| AttemptDelivery          | `attempt_deliveries`                                                                                    | The selected delivery master of an attempt (provider original may be the master)                             |
+| ContinuityRun            | `continuity_runs`                                                                                       | Frozen QA snapshot: subject, analyzer, rules, fingerprints, reference set                                    |
+| ContinuityFinding        | `continuity_findings`                                                                                   | One criterion: expected, system result, severity; criteria frozen                                            |
+| ContinuityOverride       | `continuity_overrides`                                                                                  | Append-only human decision; latest wins; system result never rewritten                                       |
+
+Distinct concerns: Production Shot · Generation Package · Generation Adaptation Plan · Provider Output ·
+Delivery Conform · Continuity QA · Creative Approval. See [framing-adaptation](framing-adaptation.md),
+[delivery-conform](delivery-conform.md), [continuity-qa](continuity-qa.md).

@@ -135,7 +135,7 @@ Project `lyqdxiyjperhniwhzsvg` → Authentication → URL Configuration. The app
 ## Testing
 
 `e2e/supabase-auth.spec.ts` (`npm run test:e2e:supabase`): redirect with remembered destination, API 401,
-friendly bad-credential message, and (with `PRISM_STUDIO_TEST_PASSWORD`) a full signed-in workflow. Without the
+friendly bad-credential message, and (with `PRISM_STUDIO_DEV_USER_PASSWORD`) a full signed-in workflow. Without the
 password the signed-in test is skipped.
 
 The password-recovery flow has unit tests (`src/lib/auth/__tests__`) and unauthenticated browser coverage in

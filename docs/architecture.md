@@ -80,7 +80,7 @@ Server actions are wrapped in `runAction` and return an `ActionResult`
 | Unit (`npm test`)                                          | `src/**/__tests__`, `scripts/lib/__tests__` | Domain, SQL mapping, upload policy, audio analysis, migration checksums, redaction, env safety. |
 | Memory e2e (`npm run test:e2e`)                            | `e2e/smoke`, `e2e/workflow`                 | Production build, forced memory mode.                                                           |
 | DB (`db:validate`, `db:behavior`, `db:rls`, `db:exercise`) | `scripts/`                                  | Run against the dedicated project; see [local-supabase](local-supabase.md).                     |
-| Supabase e2e (`test:e2e:supabase`)                         | `e2e/supabase-auth.spec.ts`                 | Real Auth; needs `PRISM_STUDIO_TEST_PASSWORD`, skipped without it.                              |
+| Supabase e2e (`test:e2e:supabase`)                         | `e2e/supabase-auth.spec.ts`                 | Real Auth; needs `PRISM_STUDIO_DEV_USER_PASSWORD`, skipped without it.                          |
 
 ## Not built yet
 
@@ -94,3 +94,37 @@ Generation is a separate runtime concern: pure vocabulary in `src/domain/generat
 `src/generation` (no Next.js, no React), persistence behind `GenerationRepository` (user path, RLS) and
 `GenerationStore` (worker path). The web app only enqueues and observes; `npm run worker:generation`
 executes. See [generation-architecture](generation-architecture.md).
+
+## Framing, conform and continuity QA (Phase 2C)
+
+Three more pure/bounded layers, all outside React and outside the worker:
+
+- `src/domain/framing/*`: aspect-ratio parsing, integer-safe crop/pad math, the GenerationAdaptationPlan and the
+  DeliveryConformPlan. Pure. Consumed by the compatibility engine; the plan is frozen on the attempt.
+- `src/media/*`: the `MediaProcessor` interface, the FFmpeg adapter (no shell, magic-byte allow-list, limits,
+  timeouts, temp cleanup) and the delivery/derivation orchestration (idempotent, crash-safe).
+- `src/domain/continuity/*` + `src/continuity/service.ts`: criteria from production truth, reference sets,
+  deterministic checks, the analyzer contract (+ Mock), aggregation/status/staleness; persistence behind
+  `MediaQaRepository` (memory + Postgres, RLS-bound).
+
+Production frame ≠ provider canvas ≠ delivery frame: see [framing-adaptation](framing-adaptation.md).
+Media runs in the app server under the user's session; the worker role gained **no** privileges.
+
+## Continuity analysis (Phase 2D)
+
+```
+Continuity page ──server action──► plan + frozen input + manifest + estimate + spend gate
+                                      │ one transaction
+                                      ▼
+            continuity_runs (immutable) + findings + continuity_analysis_jobs (queued) + estimated cost
+                                      │
+        npm run continuity:worker  ◄──┘   role prism_continuity_worker (claim · lease · fenced writes)
+                 │ ContinuityAnalysisProvider (mock | gemini | openai) ── transport (SDK | fake) ── network
+                 ▼
+   normalized findings + evidence ── final cost ── events        (humans override; nothing auto-approves)
+```
+
+Pure domain in `src/domain/continuity/analysis/` (plan, schema, prompt, cost, job state); provider contract and
+worker in `src/continuity/analysis/`; Gemini and OpenAI adapters in `src/continuity/providers/gemini/` and
+`src/continuity/providers/openai/` (each SDK is imported only by its `sdk-transport.ts`, lazily). Persistence via `MediaQaRepository` (user path) and `AnalysisWorkerStore`
+(worker path), memory + Postgres. See [continuity-analysis-jobs](continuity-analysis-jobs.md).

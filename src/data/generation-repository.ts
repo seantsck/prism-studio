@@ -109,6 +109,11 @@ export interface CreateAttemptInput {
     maxActivePerProject: number;
     maxSubmitsPerMinutePerUser: number;
   };
+  /**
+   * Phase 2E: this attempt is one candidate of an explicit candidate set, so other active generations of the
+   * same shot are expected and do not make it a duplicate. The project-wide active limit still applies.
+   */
+  allowConcurrentOnShot?: boolean;
   now: string;
 }
 

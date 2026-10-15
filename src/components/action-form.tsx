@@ -12,6 +12,7 @@ import {
 import { AlertTriangle, Check, Loader2 } from "lucide-react";
 import type { ActionResult } from "@/server/action-result";
 import { cn } from "@/lib/utils";
+import { actionStatusVisible } from "./action-form-status";
 
 type ServerAction = (form: FormData) => Promise<ActionResult>;
 
@@ -22,7 +23,7 @@ interface ActionFormProps extends Omit<FormHTMLAttributes<HTMLFormElement>, "act
   successMessage?: string;
   /** Clear the inputs after a successful submit (e.g. "add take"). */
   resetOnSuccess?: boolean;
-  /** Hide the inline status line (when the surrounding UI already communicates state). */
+  /** Hide the "Saving…" / "Saved" status line (the surrounding UI already shows the state). A failure is always shown. */
   quiet?: boolean;
   /** Ask the user to confirm first (destructive actions). */
   confirmMessage?: string;
@@ -79,7 +80,7 @@ export function ActionForm({
       <fieldset disabled={pending} className={cn("contents")}>
         {children}
       </fieldset>
-      {!quiet && (pending || state || showSaved) ? (
+      {actionStatusVisible({ quiet, pending, state, showSaved }) ? (
         <div
           className="mt-1.5 min-h-4 text-[11px]"
           aria-live="polite"

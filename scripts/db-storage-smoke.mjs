@@ -1,6 +1,6 @@
 // Live Supabase Storage check through the real Storage HTTP API, as a signed-in user.
 //   npm run db:storage:smoke
-// Signs in with PRISM_STUDIO_TEST_EMAIL (default PRISM_STUDIO_DEV_USER_EMAIL) / PRISM_STUDIO_TEST_PASSWORD and:
+// Signs in with PRISM_STUDIO_DEV_USER_EMAIL / PRISM_STUDIO_DEV_USER_PASSWORD (the one local dev user) and:
 //   1. uploads a small object under <own project>/<uuid>/ (allowed)
 //   2. downloads it and mints a signed URL, fetches it without any session (signed URLs are bearer links)
 //   3. confirms an anonymous client can neither list, download nor upload
@@ -21,8 +21,8 @@ const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 if (!url?.includes("lyqdxiyjperhniwhzsvg") || !key)
   throw new Error("NEXT_PUBLIC_SUPABASE_* must target the Prism Studio project");
 
-const email = process.env.PRISM_STUDIO_TEST_EMAIL ?? process.env.PRISM_STUDIO_DEV_USER_EMAIL;
-const password = process.env.PRISM_STUDIO_TEST_PASSWORD;
+const email = process.env.PRISM_STUDIO_DEV_USER_EMAIL;
+const password = process.env.PRISM_STUDIO_DEV_USER_PASSWORD;
 
 const results = [];
 const check = (name, ok, detail = "") => results.push([name, ok, detail]);
@@ -60,7 +60,9 @@ if (!email || !password) {
   }
   console.log(`
 ${results.length - failed}/${results.length} anonymous checks passed`);
-  console.log("SKIPPED: PRISM_STUDIO_TEST_PASSWORD is not set; the signed-in storage checks did not run.");
+  console.log(
+    "SKIPPED: PRISM_STUDIO_DEV_USER_EMAIL / PRISM_STUDIO_DEV_USER_PASSWORD are not both set; the signed-in storage checks did not run.",
+  );
   process.exit(failed ? 1 : 0);
 }
 

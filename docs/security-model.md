@@ -109,3 +109,51 @@ These are known and unmitigated unless noted.
 14. **Worker holds a storage-write key** (production) with project-wide Storage access; scope it to the worker host and rotate it.
 15. **Output downloads rely on provider hosts' TLS and the allow-list**; a compromised provider CDN host on the allow-list can serve hostile bytes (validated by type/size, never executed).
 16. **Provider-side idempotency** is only as good as the provider: a crash between "provider accepted" and "Prism recorded it" can, for providers without idempotency keys, produce a second paid generation.
+17. **Media processing runs untrusted bytes through ffmpeg** in the app server. Mitigated by magic-byte
+    allow-listing + forced demuxer (no HLS/concat/SDP), `-protocol_whitelist file`, no shell, size/pixel/duration
+    limits, hard timeouts, private temp directories and a credential-free child environment
+    ([media-processing](media-processing.md)). A codec/decoder vulnerability in ffmpeg itself is out of scope:
+    keep ffmpeg patched and consider a separate low-privilege processing host for hostile-input deployments.
+18. **QA rows are owner-scoped like everything else** (RLS on `asset_derivations`, `attempt_deliveries`,
+    `continuity_*`); the generation worker role has no privileges on them (`db:media-qa`, `db:worker-role`).
+19. **A second least-privilege role exists** (`prism_continuity_worker`, migrations 0022–0024): no access to
+    creative content, overrides, approvals or generation tables; reads only assets named by an active frozen job;
+    writes execution state, normalized findings and the final cost. Proven with its real login
+    (`db:continuity-analysis`: 78 checks). It uses the same project-wide worker Storage secret as the generation
+    worker for READ access to the private bucket (residual risk; scope it to the worker host).
+20. **External analysis sends private media to a third party** (Gemini or OpenAI) when explicitly enabled and acknowledged:
+    bounded copies of references/output frames and the production criteria text. The manifest records what was
+    sent; nothing is made public; provider-side files (direct video) are deleted best-effort and expire after 48 h.
+    Prompt-injection controls: static system instruction, production text only as clearly bounded DATA, text inside
+    media declared untrusted, strict schema validation, no provider-supplied severity/approval.
+21. **A paid analysis can be ambiguous** (timeout after the request left): Gemini documents no idempotency key
+    and OpenAI's Responses `create` documents no de-duplication guarantee, so Prism records `outcome_unknown` and
+    never re-sends automatically; the user can start a new analysis.
+22. **Analysis credentials**: `GEMINI_API_KEY` and `OPENAI_API_KEY` are server/worker only, redacted from logs
+    (by value and, for `sk-…`, by shape), absent from jobs, manifests, snapshots and the browser bundle (tests); a
+    key alone never enables a provider or spend. OpenAI images travel inline as bounded base64 (no public URL, no
+    Files API object) and responses are requested with `store: false`. A second provider adds no database role,
+    column or privilege: `prism_continuity_worker` claims jobs of any provider.
+23. **`PRISM_STUDIO_ANALYSIS_TRANSPORT=fake`** swaps in deterministic in-memory transports for the acceptance
+    E2E. It is honoured only in memory-persistence mode (the local demo) and cannot spend or reach a network.
+
+## Phase 2E: candidate sets and human review
+
+24. **Human decisions are user-domain only.** `generation_candidate_sets`, `_members`, `_events` and
+    `generation_reviews` (migrations 0026–0027) have owner-only RLS and **no grant** to `prism_generation_worker` or
+    `prism_continuity_worker`; a provider, worker or analyzer can never write a review, a rejection reason, a winner
+    or a promotion (`npm run db:candidates` asserts permission-denied as each role).
+25. **Reviews and set events are append-only**; a set's identity and frozen package are immutable; a preferred or
+    promoted attempt must be a member of the set and promotion needs a succeeded attempt (triggers, tested with raw
+    SQL). The only permitted row update is the FK action that clears `candidate_set_id` when a set is deleted.
+26. **Candidate-set spend is server-gated.** `PRISM_STUDIO_MAX_CANDIDATE_SET_USD` (unset ⇒ paid sets blocked) and
+    `PRISM_STUDIO_MAX_CANDIDATES_PER_SET` come from the server environment; the client's displayed total is only a
+    confirmation that the server recomputes and must match. The per-generation gate still applies to every candidate.
+    No automatic or scheduled paid benchmarking exists.
+27. **No cross-user learning.** Recommendations use the signed-in user's project history only.
+28. **Benchmark classification is explicit and owner-set.** `projects.purpose` (production | benchmark | test; 0029) is never derived from a slug or
+    title; the migration reclassifies nothing. Benchmark projects keep full review/winner/cost behaviour (so tooling
+    can be tested) but their records never feed production aggregates or routing, and the UI labels them. Workers
+    have no write path to the flag (no grant on the projects table beyond what they already lacked).
+29. **A human review needs a clip.** The application, both repositories and a DB trigger (0028) refuse a review for an
+    attempt that is not `succeeded`, so a failed generation can never accumulate fabricated quality signal.

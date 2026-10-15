@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { AdaptationPlanCard } from "@/components/generation/adaptation-plan-card";
+import { AttemptMediaPanel, StageChips } from "@/components/generation/attempt-media-panel";
 import { PromptInspector } from "@/components/generation/prompt-inspector";
 import { JobBadge, OutputPreview, ReviewBadge, formatMoney } from "@/components/generation/parts";
 import { Badge, PageHeader } from "@/components/ui";
@@ -12,6 +14,7 @@ import { generationRequestSchema, promptPlanSchema } from "@/domain/generation/s
 import type { CompatibilityReport } from "@/domain/generation/compatibility";
 import { PART_LABELS } from "@/domain/fingerprint";
 import type { CompiledRequestSummary } from "@/generation/provider";
+import { loadAttemptMedia } from "@/server/attempt-media";
 import { getGenerationRepo, getRegistry } from "@/server/generation";
 import { requireProject } from "@/server/repo";
 
@@ -30,6 +33,7 @@ export default async function AttemptPage({
   if (!view || view.attempt.projectId !== data.project.id) notFound();
   const { attempt, job, outputs, costs } = view;
   const events = job ? await repo.listJobEvents(job.id) : [];
+  const media = await loadAttemptMedia(data, view);
   const shot = data.shots.find((s) => s.id === attempt.shotId);
   const episode = data.episodes.find((e) => e.id === shot?.episodeId);
 
@@ -84,6 +88,25 @@ export default async function AttemptPage({
             Download frozen package (.json)
           </a>
         </div>
+
+        <StageChips
+          attempt={attempt}
+          generated={{
+            label: job ? job.status.replace(/_/g, " ") : attempt.status,
+            tone: attempt.status === "succeeded" ? "pass" : attempt.status === "failed" ? "fail" : "neutral",
+          }}
+          qaStatus={media.qaStatus}
+          qaStale={media.qaStale}
+        />
+
+        <AttemptMediaPanel
+          projectSlug={slug}
+          attemptId={attempt.id}
+          media={media}
+          succeeded={attempt.status === "succeeded"}
+        />
+
+        <AdaptationPlanCard plan={media.plan} acknowledged={attempt.acknowledgedIgnored} />
 
         <PromptInspector
           heading="Frozen prompt inspector (as submitted)"

@@ -74,6 +74,11 @@ export const modelCapabilitiesSchema = z.object({
     endFrame: z.boolean(),
     referenceVideo: z.boolean(),
     referenceAudio: z.boolean(),
+    /**
+     * The provider rejects first/last frames mixed with unpositioned reference images. When true, the input
+     * mode (keyframes vs references) is an explicit choice (Phase 2E). Absent = false (older records).
+     */
+    keyframesExcludeReferences: z.boolean().optional(),
   }),
   video: z
     .object({
@@ -192,6 +197,8 @@ export const PROMPT_SECTIONS = [
   "continuity",
   "hard_constraints",
   "negative_constraints",
+  /** Provider-canvas guidance from the adaptation plan; never changes the production camera intent above. */
+  "provider_adaptation",
 ] as const;
 export type PromptSectionKey = (typeof PROMPT_SECTIONS)[number];
 

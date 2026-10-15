@@ -94,9 +94,38 @@ No job is created if any step fails. Double clicks replay (same key) or are refu
 See also: [generation-jobs](generation-jobs.md), [provider-contract](provider-contract.md),
 [generation-review](generation-review.md), [providers/adding-a-provider](providers/adding-a-provider.md).
 
-## Continuity QA hooks (not implemented)
+## Adaptation, conform and continuity QA (Phase 2C)
 
-Outputs are linked to attempts and attempts to the frozen package, so a later automated check has everything it
-needs: expected identity/wardrobe/hair/set/props/lighting/character count/camera/action (package) and the output
-asset. `continuity_checks.attempt_id` and `kind: "automated"` already exist. Phase 2C will add checks; no vision
-model is called today.
+The compatibility engine now also builds a **GenerationAdaptationPlan** per model: when a provider cannot offer
+the production ratio/duration the plan lists the usable strategies and recommends one, but the model stays
+incompatible until the user explicitly chooses (and acknowledges) one. The chosen plan is frozen on the attempt
+(`adaptation_plan`), the request carries the **provider canvas/duration** (`modelSettings.aspectRatio/durationMs`)
+while the package snapshot keeps the **production** values. Provider-side prompt guidance lives in its own
+PromptPlan section (`provider_adaptation`). After ingestion, an optional **delivery conform** (app server, ffmpeg)
+creates a derived delivery master; **continuity QA** judges it. None of this touches the worker: see
+[framing-adaptation](framing-adaptation.md), [delivery-conform](delivery-conform.md),
+[continuity-qa](continuity-qa.md), [media-processing](media-processing.md).
+
+## Multi-model production (Phase 2E)
+
+```
+ Shot ──► ShotGenerationRequirements + ShotFeatureProfile       (domain/generation/models/requirements.ts)
+   │
+   ├─► Model catalog ─► per-model fit matrix (what each model RECEIVES, adaptation, cost)
+   │        │               + recommendation v1 (capability fit · human history · cost; advisory)
+   ▼        ▼
+ CandidateSet  (ONE frozen package) ─► N × (GenerationAttempt + GenerationJob) ─► worker (unchanged)
+   │
+   ├─► side-by-side compare ─► HUMAN review (append-only) ─► Best ─► explicit Promote to Shot
+   └─► model performance (derived on demand from human reviews)
+```
+
+- The catalog is **versioned configuration** ([generation-model-catalog](generation-model-catalog.md)); the existing
+  `GenerationModel` is derived from it so the compatibility engine, gate, registry and worker are unchanged.
+- One Runway adapter dispatches by model **family** (`runway_gen4`, `veo`, `seedance`, `hailuo`); there is no
+  provider class per model.
+- A candidate set groups attempts; every candidate keeps its own attempt, job, events and costs. Failure isolation is
+  structural. See [generation-candidate-sets](generation-candidate-sets.md).
+- Candidate sets and reviews are **user-domain** tables: the generation and continuity workers have no grant on them.
+- Nothing here assumes Runway: `CandidateSet`, reviews, performance and recommendation are provider-independent and a
+  later direct provider adds a catalog entry and an adapter.

@@ -19,6 +19,7 @@ const PRIORITY: PromptSectionKey[] = [
   "subject",
   "performance",
   "composition",
+  "provider_adaptation",
   "camera",
   "environment",
   "lighting",
@@ -33,6 +34,7 @@ const LABEL: Partial<Record<PromptSectionKey, string>> = {
   subject: "Subject",
   performance: "Performance",
   composition: "Composition",
+  provider_adaptation: "Framing",
   camera: "Camera",
   environment: "Setting",
   lighting: "Lighting",
@@ -60,7 +62,21 @@ function performanceLines(lines: string[]): string[] {
   return lines.filter((l) => !/^[^:]{1,60}: ".*"$/.test(l) && !/^performed take|^no performed take/.test(l));
 }
 
-export function compileRunwayPrompt(plan: PromptPlan, limit = RUNWAY_MAX_PROMPT_CHARS): CompiledPrompt {
+export interface PromptCompileOptions {
+  /** Shown in notes (default "Gen-4.5"). */
+  modelName?: string;
+  /** The model has a separate negative-prompt field (Veo): constraints are sent there, not in the prose. */
+  negativeSent?: boolean;
+  /** Performed audio is supplied as a reference input. */
+  audioReference?: boolean;
+}
+
+export function compileRunwayPrompt(
+  plan: PromptPlan,
+  limit = RUNWAY_MAX_PROMPT_CHARS,
+  opts: PromptCompileOptions = {},
+): CompiledPrompt {
+  const modelName = opts.modelName ?? "Gen-4.5";
   const byKey = new Map(plan.sections.map((s) => [s.key, s] as const));
   const notes: string[] = [];
   const included = new Map<PromptSectionKey, string[]>();
@@ -75,7 +91,11 @@ export function compileRunwayPrompt(plan: PromptPlan, limit = RUNWAY_MAX_PROMPT_
     if (!section) continue;
     const lines = key === "performance" ? performanceLines(section.lines) : section.lines;
     if (key === "performance" && lines.length < section.lines.length) {
-      notes.push("Spoken dialogue text is not sent: Gen-4.5 has no audio/lip-sync input.");
+      notes.push(
+        opts.audioReference
+          ? `Spoken dialogue text is not sent; the performed audio is supplied as a reference input to ${modelName}.`
+          : `Spoken dialogue text is not sent: ${modelName} has no audio/lip-sync input.`,
+      );
     }
     const label = LABEL[key] ?? section.title;
     const kept: string[] = [];
@@ -104,7 +124,11 @@ export function compileRunwayPrompt(plan: PromptPlan, limit = RUNWAY_MAX_PROMPT_
   if (byKey.has("timing"))
     notes.push("Timing is carried by the duration parameter, not repeated in the prompt.");
   if (byKey.has("negative_constraints")) {
-    notes.push("Negative constraints are not sent: Runway has no negative prompt field.");
+    notes.push(
+      opts.negativeSent
+        ? "Negative constraints are sent in the model's negative prompt field."
+        : "Negative constraints are not sent: Runway has no negative prompt field.",
+    );
   }
 
   // Render in the plan's natural reading order, not priority order.
