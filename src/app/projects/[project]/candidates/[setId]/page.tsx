@@ -91,11 +91,16 @@ export default async function CandidateSetPage({
         return u ? [{ atMs: f.atMs, url: u }] : [];
       }),
       durationMs: shown?.durationMs ?? v?.attempt.durationMs ?? null,
-      resolution: shown?.width && shown?.height ? `${shown.width}×${shown.height}` : null,
+      // the stored PROVIDER file's own dimensions (the delivery master, if any, is reported separately)
+      resolution: output?.width && output?.height ? `${output.width}×${output.height}` : null,
       providerCanvas: plan?.framing.providerCanvas
         ? `${plan.framing.providerCanvas.width}×${plan.framing.providerCanvas.height}`
         : null,
       deliveryNote: media?.delivery?.isOriginal === false ? "conformed master" : "provider original",
+      deliveryResolution:
+        media?.delivery?.isOriginal === false && shown?.width && shown?.height
+          ? `${shown.width}×${shown.height}`
+          : null,
       estimateUsd: est,
       actualUsd: actual,
       currency: v?.costs[0]?.currency ?? "USD",

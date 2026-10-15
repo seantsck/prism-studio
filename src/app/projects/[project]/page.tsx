@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BenchmarkBanner } from "@/components/candidates/benchmark-banner";
 import { Badge, Button, Field, PageHeader, Panel } from "@/components/ui";
 import { ScoreBar } from "@/components/shared";
 import { formatDuration } from "@/domain/duration";
@@ -43,6 +44,7 @@ export default async function OverviewPage({ params }: { params: Promise<{ proje
         actions={<Badge tone="info">{data.project.productionStatus.replace("_", " ")}</Badge>}
       />
       <div className="space-y-6 p-6">
+        {data.project.purpose !== "production" ? <BenchmarkBanner /> : null}
         <div className="grid grid-cols-2 gap-px border border-line bg-line md:grid-cols-4 xl:grid-cols-7">
           {stats.map(([label, value, sub]) => (
             <div key={label} className="bg-panel px-3 py-2.5">

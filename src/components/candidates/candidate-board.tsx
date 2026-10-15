@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button, Kbd } from "@/components/ui";
+import { describeDims } from "./output-dims";
 import {
   NEGATIVE_LABELS,
   NEGATIVE_TAGS,
@@ -34,8 +35,12 @@ export interface BoardCandidate {
   posterUrl: string | null;
   frames: Array<{ atMs: number; url: string }>;
   durationMs: number | null;
+  /** Dimensions of the stored provider output asset, when recorded. */
   resolution: string | null;
+  /** Requested provider canvas from the frozen request, when it carries one. */
   providerCanvas: string | null;
+  /** Dimensions of the conformed delivery master (only when it is not the provider original). */
+  deliveryResolution: string | null;
   deliveryNote: string;
   estimateUsd: number | null;
   actualUsd: number | null;
@@ -73,11 +78,13 @@ function LazyVideo({
   poster,
   label,
   registerRef,
+  onSize,
 }: {
   src: string;
   poster: string | null;
   label: string;
   registerRef: (el: HTMLVideoElement | null) => void;
+  onSize?: (width: number, height: number) => void;
 }) {
   const ref = useRef<HTMLVideoElement | null>(null);
   const [visible, setVisible] = useState(false);
@@ -111,6 +118,10 @@ function LazyVideo({
       muted
       playsInline
       controls={false}
+      onLoadedMetadata={(e) => {
+        const v = e.currentTarget;
+        if (v.videoWidth > 0 && v.videoHeight > 0) onSize?.(v.videoWidth, v.videoHeight);
+      }}
       aria-label={`Candidate ${label} video`}
       className="aspect-video w-full bg-black object-contain"
       data-testid="candidate-video"
@@ -363,6 +374,7 @@ function CandidateCard({
   register: (el: HTMLVideoElement | null) => void;
 }) {
   const [rejecting, setRejecting] = useState(false);
+  const [measured, setMeasured] = useState<string | null>(null);
   const [more, setMore] = useState(false);
   const root = useRef<HTMLDivElement | null>(null);
   const reviewable = c.status === "succeeded";
@@ -382,6 +394,14 @@ function CandidateCard({
     else if (e.key.toLowerCase() === "b") click("best");
     else if (e.key === "Escape") setRejecting(false);
   };
+
+  const dims = describeDims({
+    recorded: c.resolution,
+    measured,
+    requestedCanvas: c.providerCanvas,
+    deliveryResolution: c.deliveryResolution,
+    deliveryNote: c.deliveryNote,
+  });
 
   const hidden = (
     <>
@@ -433,7 +453,13 @@ function CandidateCard({
       </div>
 
       {c.videoUrl ? (
-        <LazyVideo src={c.videoUrl} poster={c.posterUrl} label={c.label} registerRef={register} />
+        <LazyVideo
+          src={c.videoUrl}
+          poster={c.posterUrl}
+          label={c.label}
+          registerRef={register}
+          onSize={(w, h) => setMeasured(`${w}×${h}`)}
+        />
       ) : (
         <div className="flex aspect-video items-center justify-center border border-dashed border-line2 text-[11.5px] text-muted">
           {c.status === "failed" || c.status === "not_submitted"
@@ -453,12 +479,12 @@ function CandidateCard({
         </dd>
         <dt className="text-muted">Duration</dt>
         <dd>{secs(c.durationMs)}</dd>
-        <dt className="text-muted">Resolution</dt>
-        <dd>{c.resolution ?? "—"}</dd>
+        <dt className="text-muted">Actual output</dt>
+        <dd data-testid="dims-actual">{dims.actualOutput}</dd>
         <dt className="text-muted">Provider canvas</dt>
-        <dd>{c.providerCanvas ?? "—"}</dd>
+        <dd data-testid="dims-canvas">{dims.providerCanvas}</dd>
         <dt className="text-muted">Delivery</dt>
-        <dd>{c.deliveryNote}</dd>
+        <dd data-testid="dims-delivery">{dims.delivery}</dd>
         <dt className="text-muted">Generation / total</dt>
         <dd className="tabular-nums">
           {secs(c.generationMs)} / {secs(c.totalMs)}

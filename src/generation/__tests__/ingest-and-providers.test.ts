@@ -117,6 +117,29 @@ describe("output ingestion", () => {
     expect(sniffUpload(new Uint8Array(Buffer.from(MOCK_VIDEO_WEBM_BASE64, "base64")))?.kind).toBe("video");
   });
 
+  it("records the video file's own picture size: fills an unreported size and beats a wrong requested canvas", async () => {
+    const video = (reported: ProviderOutput["reported"]) =>
+      out({
+        kind: "video",
+        filename: "clip.webm",
+        mime: "video/webm",
+        source: { type: "bytes", base64: MOCK_VIDEO_WEBM_BASE64 },
+        reported,
+      });
+    // a model family that takes a resolution tier reports no canvas (the Hailuo 3 case)
+    const unreported = await ingestOutputs(
+      result([video({ width: null, height: null, durationMs: null, fps: null })]),
+      ctx(),
+    );
+    expect([unreported.outputs[0]!.asset.width, unreported.outputs[0]!.asset.height]).toEqual([192, 108]);
+    // the request's canvas is not evidence of what the provider returned
+    const wrong = await ingestOutputs(
+      result([video({ width: 1280, height: 720, durationMs: null, fps: null })]),
+      ctx(),
+    );
+    expect([wrong.outputs[0]!.asset.width, wrong.outputs[0]!.asset.height]).toEqual([192, 108]);
+  });
+
   it("rejects HTML masquerading as an image, executables, and wrong kinds", async () => {
     const html = Buffer.from("<html><script>alert(1)</script>" + " ".repeat(40));
     const exe = Buffer.concat([Buffer.from("MZ"), Buffer.alloc(64)]);

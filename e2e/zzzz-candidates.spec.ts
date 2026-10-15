@@ -107,6 +107,21 @@ test("compare side by side: layouts, synchronized controls, same-position frames
   await expect(meta).toContainText("Cost");
   await expect(meta).toContainText("Provider canvas");
   await expect(meta).toContainText("Generation / total");
+  // picture size is never a blank dash: the actual output and the requested canvas are separate, honest rows
+  await expect(card(page, "A").getByTestId("dims-actual")).not.toHaveText("—");
+  await expect(card(page, "A").getByTestId("dims-canvas")).not.toHaveText("—");
+  await expect(meta).toContainText("Actual output");
+});
+
+test("final shot approval is labelled as separate from candidate review, and points back to the board", async ({
+  page,
+}) => {
+  await openGenerate(page);
+  const note = page.getByTestId("final-approval-note").first();
+  await expect(note).toContainText("Final approval");
+  await expect(note).toContainText("not the candidate comparison");
+  await expect(page.getByTestId("go-candidate-review").first()).toBeVisible();
+  await expect(page.getByTestId("approve-button").first()).toHaveText("Approve as final output");
 });
 
 test("fast human review: reject for identity, reject for motion, mark the third Best, then promote", async ({

@@ -244,13 +244,34 @@ export function AttemptCard({
           </p>
         ) : null}
         {canReview ? (
+          <p className="basis-full text-[11px] text-muted" data-testid="final-approval-note">
+            <strong className="text-fg">Final approval of this attempt as the shot&apos;s output.</strong>{" "}
+            {candidate ? (
+              <>
+                This is not the candidate comparison: to judge this clip against the others (Good · Shortlist
+                · Reject · Best) use{" "}
+                <Link
+                  href={`/projects/${projectSlug}/candidates/${candidate.setId}`}
+                  className="underline"
+                  data-testid="go-candidate-review"
+                >
+                  Candidate {candidate.label} on the comparison board
+                </Link>
+                .
+              </>
+            ) : (
+              "It is separate from model-comparison reviews."
+            )}
+          </p>
+        ) : null}
+        {canReview ? (
           <>
             {attempt.reviewStatus !== "approved" ? (
               <ActionForm action={reviewGeneration} successMessage="Approved" quiet>
                 {hidden}
                 <input type="hidden" name="decision" value="approve" />
                 <Button size="sm" variant="primary" type="submit" data-testid="approve-button">
-                  Approve
+                  Approve as final output
                 </Button>
               </ActionForm>
             ) : null}
@@ -260,7 +281,7 @@ export function AttemptCard({
                   className="cursor-pointer text-[12px] text-fail hover:underline"
                   data-testid="reject-toggle"
                 >
-                  Reject…
+                  Reject as final output…
                 </summary>
                 <ActionForm action={reviewGeneration} className="mt-2 space-y-2" successMessage="Rejected">
                   {hidden}

@@ -145,8 +145,15 @@ async function inspect(
     try {
       const meta = await parseBuffer(bytes, undefined, { duration: true });
       const seconds = meta.format.duration;
+      // The file's own picture size wins over the request's canvas: a model family may take a resolution
+      // tier (no canvas) or return a different size (e.g. 1344×768), and the request is not evidence.
+      const track = meta.format.trackInfo?.find((t) => t.video?.pixelWidth && t.video?.pixelHeight)?.video;
+      const width = track?.pixelWidth ?? base.width;
+      const height = track?.pixelHeight ?? base.height;
       return {
         ...base,
+        width,
+        height,
         durationMs: seconds ? Math.round(seconds * 1000) : base.durationMs,
         extra: { container: meta.format.container ?? null },
       };

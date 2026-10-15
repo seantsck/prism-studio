@@ -64,3 +64,23 @@ current review per attempt, so a superseded rejection no longer counts against a
 
 Providers, workers and analyzers cannot write human decisions: neither worker role has any grant on the review/set
 tables (asserted in `db:candidates`). Reviews can only be written for attempts of the user's own projects (RLS).
+
+## Candidate review is not final shot approval
+
+Two different controls exist and they write to different places:
+
+| Where                                    | Controls                         | Writes                                                             | Feeds model intelligence |
+| ---------------------------------------- | -------------------------------- | ------------------------------------------------------------------ | ------------------------ |
+| Candidate board (`/candidates/<set>`)    | Good · Shortlist · Reject · Best | `generation_reviews` + the set's single preferred candidate        | yes (benchmark or prod)  |
+| Attempt card on the shot's Generate page | Approve / Reject as final output | the attempt's `review_status` (legacy vocabulary, e.g. bad_motion) | no                       |
+
+Final approval is the shot's creative approval; Best never makes it. The attempt card now says so and, for an attempt that
+belongs to a candidate set, links back to the board. A final approve/reject recorded by mistake is not reinterpreted:
+it stays what it is, and the candidate review is recorded separately on the board.
+
+## Picture size on a candidate card
+
+"Actual output" is the stored provider file's own dimensions (probed from the video track at ingest; for a historical
+asset with none recorded, read from the file in the browser). "Provider canvas" is the frozen request's canvas and is
+shown as unknown when the model family takes a resolution tier instead (Hailuo 3). The request is never presented as the
+output. A conformed delivery master is reported separately.
