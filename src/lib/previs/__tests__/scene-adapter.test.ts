@@ -28,7 +28,10 @@ describe("ArtCraftSceneAdapter engine boundary", () => {
     const fetchImpl = vi.fn(async () => new Response("ok"));
     const a = new ArtCraftSceneAdapter({ resolveAssetUrl: (id) => `/api/assets/${id}`, fetchImpl });
     await boundary(a).fetchAsset("/api/assets/x");
-    expect(fetchImpl).toHaveBeenCalledWith("/api/assets/x", { signal: undefined, credentials: "same-origin" });
+    expect(fetchImpl).toHaveBeenCalledWith("/api/assets/x", {
+      signal: undefined,
+      credentials: "same-origin",
+    });
   });
 
   it("never lets the engine persist a scene itself: persistence is Prism's", async () => {

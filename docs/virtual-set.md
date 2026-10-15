@@ -12,10 +12,10 @@ Nothing in M1 generates video, calls a provider or touches an ArtCraft service.
 
 ## Ownership
 
-| Prism owns (source of truth) | The vendored engine owns (runtime only) |
-| --- | --- |
+| Prism owns (source of truth)                                                                                      | The vendored engine owns (runtime only)                                                   |
+| ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Project, Episode, Script Scene, Shot, Location, Character, Look, Performance, Production Frame, GenerationPackage | Three.js scene graph, viewport, selection, gizmos, transforms, camera controls, rendering |
-| `prism.previs.v1` document, scene fingerprint, camera bookmark, master-frame provenance | the engine's own scene JSON (opaque round-trip payload inside the document) |
+| `prism.previs.v1` document, scene fingerprint, camera bookmark, master-frame provenance                           | the engine's own scene JSON (opaque round-trip payload inside the document)               |
 
 Code boundary: only `src/lib/previs/scene-adapter.ts` imports engine internals (plus two vendored hooks the editor
 component uses). Everything else depends on the `SpatialSceneAdapter` interface.
@@ -60,7 +60,7 @@ Rendered locally in the browser (`snapShotOfCurrentFrame` after entering camera 
 The server validates PNG magic bytes and exact dimensions, re-derives revision/fingerprint from the saved scene,
 stores the file in the private bucket (`purpose=storyboard`, `source=3d_render`) and writes provenance both to
 `scene_master_frames` and the asset's `metadata.previs`. **Capturing never changes the approved storyboard.**
-"Use as Master Frame" creates a *new unapproved* storyboard frame version (`source=3d_preview`) and records the
+"Use as Master Frame" creates a _new unapproved_ storyboard frame version (`source=3d_preview`) and records the
 adoption; approval stays a separate, existing action.
 
 ## GenerationPackage
@@ -79,14 +79,14 @@ impossible; owner-only RLS; no worker role has any grant. Verified by `npm run d
 
 ## Tests
 
-| Layer | File |
-| --- | --- |
-| schema, URL refusal, fingerprint, camera maths | `src/domain/previs/__tests__/previs-document.test.ts` |
-| package snapshot, optionality, immutability, adoption | `src/domain/previs/__tests__/spatial-package.test.ts` |
-| engine boundary, asset-id resolution | `src/lib/previs/__tests__/scene-adapter.test.ts`, `shapes.test.ts` |
-| Postgres, RLS, isolation, guards, cleanup | `scripts/db-previs.mts` (`npm run db:previs`) |
-| UI end to end + WebGL release (memory) | `e2e/zzzzz-previs.spec.ts` |
-| UI end to end on Supabase + private storage | `e2e/supabase-previs.spec.ts` |
+| Layer                                                 | File                                                               |
+| ----------------------------------------------------- | ------------------------------------------------------------------ |
+| schema, URL refusal, fingerprint, camera maths        | `src/domain/previs/__tests__/previs-document.test.ts`              |
+| package snapshot, optionality, immutability, adoption | `src/domain/previs/__tests__/spatial-package.test.ts`              |
+| engine boundary, asset-id resolution                  | `src/lib/previs/__tests__/scene-adapter.test.ts`, `shapes.test.ts` |
+| Postgres, RLS, isolation, guards, cleanup             | `scripts/db-previs.mts` (`npm run db:previs`)                      |
+| UI end to end + WebGL release (memory)                | `e2e/zzzzz-previs.spec.ts`                                         |
+| UI end to end on Supabase + private storage           | `e2e/supabase-previs.spec.ts`                                      |
 
 Playwright runs Chromium with the software rasteriser (`--use-angle=swiftshader`); GPU is not required.
 
@@ -105,18 +105,18 @@ Playwright runs Chromium with the software rasteriser (`--use-angle=swiftshader`
 
 ## M2 reuse (investigated, not built)
 
-| Capability | Upstream basis | What Prism must add |
-| --- | --- | --- |
-| Camera timeline / path | `engine/timeline/{types,interpolation}.ts`, `TimelineController` (`::CAM::` is already a keyframe target, cubic-bezier easing) | a Prism UI; persist `timeline` inside the document; include it in the fingerprint |
-| **Focal-length keyframing** | **not supported upstream** (keyframes store `TransformSnap` only) | patch: add an optional `focalLength` channel to `TimelineTrack`/`interpolation.ts`; evaluate into `cameras[].focalLength` each tick |
-| Quaternion/slerp rotation | upstream lerps Euler angles (documented) | patch interpolation to slerp camera quaternions; store Euler for display |
-| Character posing | `KinHelpers/{FKHelper,BoneJSONHelper}`, `SkeletonHelperController` | a Prism mannequin with `mixamorig:*`-compatible bones (rig is name-matched); pose presets as JSON |
-| Pose presets | `BoneJSONHelper.toJSON/poseFromBoneJSON` | Prism-authored preset library |
-| Local previs video | `engine/recording/TimelineRecorder.ts` (deterministic frame stepping) | `mediabunny` (MPL-2.0, WebCodecs); store as a derived asset with provenance |
-| Depth pass | `CustomOutlinePass` + `FindSurfaces` already render depth/surface-id via override materials | expose as export; PNG sequence |
-| Object-id / character masks | surface-id material exists; per-object id pass does not | new override material mapping `uuid → colour`; ties to mannequin `characterId` |
-| Gaussian splats | `SplatMesh` + `@sparkjsdev/spark` already wired | asset pipeline for `.spz`; licence/provenance of splat sources |
-| Image-to-location / image-to-3D | none locally (ArtCraft calls its own backend) | a Prism provider adapter behind the existing generation spend gates |
+| Capability                      | Upstream basis                                                                                                                 | What Prism must add                                                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Camera timeline / path          | `engine/timeline/{types,interpolation}.ts`, `TimelineController` (`::CAM::` is already a keyframe target, cubic-bezier easing) | a Prism UI; persist `timeline` inside the document; include it in the fingerprint                                                   |
+| **Focal-length keyframing**     | **not supported upstream** (keyframes store `TransformSnap` only)                                                              | patch: add an optional `focalLength` channel to `TimelineTrack`/`interpolation.ts`; evaluate into `cameras[].focalLength` each tick |
+| Quaternion/slerp rotation       | upstream lerps Euler angles (documented)                                                                                       | patch interpolation to slerp camera quaternions; store Euler for display                                                            |
+| Character posing                | `KinHelpers/{FKHelper,BoneJSONHelper}`, `SkeletonHelperController`                                                             | a Prism mannequin with `mixamorig:*`-compatible bones (rig is name-matched); pose presets as JSON                                   |
+| Pose presets                    | `BoneJSONHelper.toJSON/poseFromBoneJSON`                                                                                       | Prism-authored preset library                                                                                                       |
+| Local previs video              | `engine/recording/TimelineRecorder.ts` (deterministic frame stepping)                                                          | `mediabunny` (MPL-2.0, WebCodecs); store as a derived asset with provenance                                                         |
+| Depth pass                      | `CustomOutlinePass` + `FindSurfaces` already render depth/surface-id via override materials                                    | expose as export; PNG sequence                                                                                                      |
+| Object-id / character masks     | surface-id material exists; per-object id pass does not                                                                        | new override material mapping `uuid → colour`; ties to mannequin `characterId`                                                      |
+| Gaussian splats                 | `SplatMesh` + `@sparkjsdev/spark` already wired                                                                                | asset pipeline for `.spz`; licence/provenance of splat sources                                                                      |
+| Image-to-location / image-to-3D | none locally (ArtCraft calls its own backend)                                                                                  | a Prism provider adapter behind the existing generation spend gates                                                                 |
 
 M2 recommendation order: focal-length keyframes + slerp → camera path UI → local previs video → depth/object-id
 passes → mannequin rig/poses → splats → image-to-location.
