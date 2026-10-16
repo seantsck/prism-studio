@@ -2,6 +2,7 @@
 import * as THREE from "three";
 import { FKBoneBlacklistStrings } from "./FKBoneFilter";
 import { TransformControls } from "../TransformControls";
+import { fkHooks } from "../../shims/fk-hooks"; // PRISM PATCH: host observation/constraint hooks
 
 export const FKHelperSphereName = "__FKHelperSphere__";
 
@@ -35,6 +36,8 @@ export class FKHelper {
     onDragChange: (dragging: boolean) => void;
   }) {
     this.raycaster = new THREE.Raycaster();
+    // PRISM PATCH: the bone spheres and skeleton lines live on the editor-only layer 1 (never in a render)
+    this.raycaster.layers.enable(1);
     this.scene = scene;
     this.targetBoneSpheres = [];
     this.transformControls = new TransformControls(camera, domElement);
@@ -43,7 +46,20 @@ export class FKHelper {
     this.transformControls.setMode("rotate");
     this.transformControls.setSize(0.5);
     this.transformControls.addEventListener("dragging-changed", (event: any) => {
+      // PRISM PATCH: let the host record one undoable step per drag
+      const bone = this.transformControls.object;
+      if (bone) {
+        if (event.value) fkHooks.onBoneDragStart?.(bone);
+        else fkHooks.onBoneDragEnd?.(bone);
+      }
       onDragChange(event.value);
+    });
+    // PRISM PATCH: let the host clamp a rotation to its joint limits before anything else reads it
+    this.transformControls.addEventListener("objectChange", () => {
+      const bone = this.transformControls.object;
+      if (!bone) return;
+      fkHooks.constrainBone?.(bone);
+      fkHooks.onBoneChange?.(bone);
     });
   }
 
@@ -65,8 +81,6 @@ export class FKHelper {
         }
       }
 
-      console.log(child.name);
-
       // For each target bone, display a sphere to show the FK target and raycast intersect
       const geometry = new THREE.SphereGeometry(0.015, 16, 16);
       const material = new THREE.MeshBasicMaterial({ color: 0xff0000, depthTest: false, transparent: true });
@@ -82,13 +96,42 @@ export class FKHelper {
       sphere.scale.copy(sphereScale);
 
       sphere.name = FKHelperSphereName;
+      sphere.layers.set(1); // PRISM PATCH: editor-only
       child.add(sphere);
       this.targetBoneSpheres.push(sphere);
     });
 
     this.skeletonHelper = new THREE.SkeletonHelper(target);
+    this.skeletonHelper.layers.set(1); // PRISM PATCH: editor-only, never in a render
     this.scene.add(this.skeletonHelper);
-    console.log("All bones:", this.skeletonHelper.bones.map((b) => b.name));
+  }
+
+  // PRISM PATCH: panel-driven selection (the joint list), same visuals + gizmo as clicking the sphere
+  selectBone(bone: THREE.Object3D | null) {
+    if (!bone) {
+      this.resetHighlight();
+      this.removeControls();
+      fkHooks.onBoneSelected?.(null);
+      return;
+    }
+    const sphere = this.targetBoneSpheres.find((s) => s.parent === bone);
+    if (!sphere) return;
+    this.highlightSphere(sphere);
+    this.showControls(bone);
+    fkHooks.onBoneSelected?.(bone);
+  }
+
+  getSelectedBone(): THREE.Object3D | null {
+    return this.isControlInScene ? (this.transformControls.object ?? null) : null;
+  }
+
+  setSkeletonVisible(visible: boolean) {
+    if (this.skeletonHelper) this.skeletonHelper.visible = visible;
+  }
+
+  /** Hides/shows the rotate gizmo without detaching it (used while a clean render is taken). */
+  setGizmoVisible(visible: boolean) {
+    this.transformControls.visible = visible;
   }
 
   onMouseClick(mouse: THREE.Vector2) {
@@ -98,9 +141,9 @@ export class FKHelper {
     const intersections = this.raycaster.intersectObjects(this.targetBoneSpheres, false);
 
     if (intersections.length < 1) {
-      console.log("No intersections");
       this.resetHighlight();
       this.removeControls();
+      fkHooks.onBoneSelected?.(null);
       return;
     }
 
@@ -108,7 +151,7 @@ export class FKHelper {
     const firstBone = intersections[0];
     this.highlightSphere(firstBone.object);
     this.showControls(firstBone.object.parent!);
-    console.log("Showing bone", firstBone.object);
+    fkHooks.onBoneSelected?.(firstBone.object.parent!);
   }
 
   private showControls(object?: THREE.Object3D) {
@@ -155,6 +198,9 @@ export class FKHelper {
       sphere.parent?.remove(sphere);
       // @ts-expect-error Geometry on object3d, but it's fine since this is a mesh
       sphere.geometry.dispose();
+      // PRISM PATCH: the per-sphere material was never released upstream
+      // @ts-expect-error Material on object3d, but it's fine since this is a mesh
+      sphere.material.dispose();
     });
     this.targetBoneSpheres = [];
   }
@@ -165,6 +211,8 @@ export class FKHelper {
 
     if (this.skeletonHelper) {
       this.scene.remove(this.skeletonHelper!);
+      this.skeletonHelper.dispose(); // PRISM PATCH: upstream left the helper's geometry allocated
+      this.skeletonHelper = null;
     }
   }
 }

@@ -83,6 +83,8 @@ export interface PrevisClipInfo {
   hasAudio: boolean;
   audioMixFingerprint: string | null;
   audioCodec: string | null;
+  /** identity of the character blocking the previs showed (null = no visible character proxies) */
+  blockingFingerprint: string | null;
   renderedAt: string;
 }
 
@@ -154,6 +156,11 @@ export interface CameraMotionPanelProps {
   savedSceneFingerprint: string | null;
   sceneDirty: boolean;
   ensureSceneSaved: () => Promise<{ revision: number; fingerprint: string } | null>;
+  /**
+   * The Shot's character blocking: the SAVED rendered-layer fingerprint, whether the live overlay differs from it,
+   * and the live fingerprint (what a render made right now would actually show).
+   */
+  blocking: { savedFingerprint: string | null; dirty: boolean; liveFingerprint: () => string | null };
 }
 
 export function CameraMotionPanel(props: CameraMotionPanelProps) {
@@ -535,6 +542,7 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
       currentSceneFingerprint: props.savedSceneFingerprint,
       currentPathFingerprint: saved?.pathFingerprint ?? null,
       currentAudioMixFingerprint: currentMixFp,
+      currentBlockingFingerprint: props.blocking.savedFingerprint,
     });
   const clipStale = (c: PrevisClipInfo) => clipReasons(c).length > 0;
 
@@ -544,6 +552,7 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
     if (!path || path.keyframes.length < 2) reasons.push("Add at least two keyframes.");
     if (props.sceneDirty || !props.savedSceneFingerprint) reasons.push("Save the 3D set first.");
     if (dirty || !saved) reasons.push("Save the camera path first.");
+    if (props.blocking.dirty) reasons.push("Save the character blocking first.");
     if (sceneStale) reasons.push("The set changed since this path was saved — re-save the path.");
     if (reasons.length > 0 || !path || !saved || !props.shotId)
       return setStatus({ tone: "error", text: reasons.join(" ") });
@@ -557,6 +566,7 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
     try {
       // the plan is built from the Shot's selected takes on the same timeline as the camera path
       const plan = includeAudio ? planFor(path.durationMs) : null;
+      const blockingAtStart = props.blocking.liveFingerprint();
       const support = await detectPrevisEncoding(
         PREVIS_RENDER_SIZE,
         plan ? { sampleRate: plan.sampleRate, channels: plan.channels } : null,
@@ -608,6 +618,9 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
       fd.set("codec", out.codec);
       fd.set("renderWidth", String(out.width));
       fd.set("renderHeight", String(out.height));
+      // the blocking the frames actually showed (static for the whole clip); the server checks it is the saved one
+      const renderedBlocking = blockingAtStart;
+      if (renderedBlocking) fd.set("blockingFingerprint", renderedBlocking);
       const mixFp = plan && out.audioCodec ? audioMixFingerprint(plan) : null;
       if (mixFp && out.audioCodec) {
         fd.set("audioMixFingerprint", mixFp);
@@ -637,6 +650,7 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
           hasAudio: mixFp !== null,
           audioMixFingerprint: mixFp,
           audioCodec: mixFp ? out.audioCodec : null,
+          blockingFingerprint: renderedBlocking,
           renderedAt: new Date().toISOString(),
         },
         ...c,
@@ -1040,7 +1054,15 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
                 .join(" · ")}
               : the{" "}
               {clipReasons(latestClip)
-                .map((r) => (r === "scene" ? "set" : r === "camera" ? "camera path" : "performance audio"))
+                .map((r) =>
+                  r === "scene"
+                    ? "set"
+                    : r === "camera"
+                      ? "camera path"
+                      : r === "blocking"
+                        ? "character blocking"
+                        : "performance audio",
+                )
                 .join(", ")}{" "}
               changed after this render.
             </div>

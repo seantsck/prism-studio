@@ -66,6 +66,11 @@ commit, line endings normalised to LF). Summary:
 11. **Snapshot output size (M2A)**: `snapShotOfCurrentFrame(download, camera?, size?)` accepts an explicit output size so
     local previs frames can render below the full production frame through the same isolated camera.
 12. **`TransformControls.js` header**: provenance and the three.js MIT notice were added (see below).
+13. **FK pose hooks (M2B)**: `shims/fk-hooks.ts` (new) lets the host observe and constrain the FK helper;
+    `FKHelper` calls the hooks, moves its bone spheres and skeleton lines to the editor-only layer 1, gains
+    `selectBone/getSelectedBone/setSkeletonVisible/setGizmoVisible`, drops its debug logging and now disposes its sphere
+    materials and skeleton helper. `keybinds_controls.ts` exposes `kinMode`/`fkHelper` (were `private`).
+    Diff: [`patches/prism-m2b.patch`](./patches/prism-m2b.patch).
 
 ## Removed after the first import (M1 hardening)
 
@@ -107,9 +112,9 @@ by the e2e "same-origin requests, none missing" test.
 
 ## Prism-written code (outside this directory)
 
-`src/lib/previs/` (scene adapter, shapes), `src/domain/previs/` (schema, fingerprint, camera maths, spatial
-reference), `src/data/previs-*.ts`, `src/server/previs*.ts`, `src/components/previs/`, migration `0030`.
-Nothing outside `src/lib/previs/scene-adapter.ts` and the two vendored hooks imports from this directory.
+`src/lib/previs/` (scene adapter, shapes, procedural humanoid rig, blocking overlay), `src/domain/previs/` (schema, fingerprint, camera maths, spatial
+reference, rig/pose/blocking), `src/data/previs-*.ts`, `src/server/previs*.ts`, `src/components/previs/`, migration `0030`.
+Nothing outside `src/lib/previs/scene-adapter.ts`, `src/lib/previs/blocking-overlay.ts` and the vendored hooks imports from this directory.
 
 ## Update procedure
 

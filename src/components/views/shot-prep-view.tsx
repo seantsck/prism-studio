@@ -26,6 +26,7 @@ import { SHOT_SECTION_SPECS, getByPath, type EditableSectionKey, type FieldSpec 
 import { shortFingerprint } from "@/domain/hash";
 import { timelineFromContext } from "@/domain/timeline";
 import { previsStaleReasons, STALE_REASON_LABEL } from "@/domain/previs/audio-mix";
+import { isShotBlockingStale } from "@/domain/previs/spatial";
 import { episodePath, shotPath } from "@/lib/paths";
 import { assetUrl, cn } from "@/lib/utils";
 import {
@@ -264,6 +265,7 @@ export function ShotPrepView({
     keyframeCount: number;
     durationMs: number | null;
     currentAudioMixFingerprint: string | null;
+    currentBlockingFingerprint: string | null;
     clips: Array<{
       id: string;
       assetId: string;
@@ -275,6 +277,7 @@ export function ShotPrepView({
       codec: string;
       hasAudio: boolean;
       audioMixFingerprint: string | null;
+      blockingFingerprint: string | null;
     }>;
   };
 }) {
@@ -289,6 +292,7 @@ export function ShotPrepView({
           currentSceneFingerprint: ctx.spatial?.sceneFingerprint ?? null,
           currentPathFingerprint: previs.pathFingerprint,
           currentAudioMixFingerprint: previs.currentAudioMixFingerprint,
+          currentBlockingFingerprint: previs.currentBlockingFingerprint,
         })
       : [];
   const slug = data.project.slug;
@@ -780,6 +784,22 @@ export function ShotPrepView({
                     <span>No production camera linked yet.</span>
                   )}
                 </div>
+                {ctx.spatial?.shotBlocking ? (
+                  <div className="mt-2" data-testid="shot-character-blocking">
+                    <div className="mb-0.5 text-[11.5px]">
+                      Character blocking · {ctx.spatial.shotBlocking.figures.length} figure
+                      {ctx.spatial.shotBlocking.figures.length === 1 ? "" : "s"}
+                      {isShotBlockingStale(ctx.spatial) ? (
+                        <Badge tone="warn">set changed since the blocking was authored</Badge>
+                      ) : null}
+                    </div>
+                    <ul className="list-disc pl-5 text-[11.5px] text-muted">
+                      {ctx.spatial.shotBlocking.figures.map((f) => (
+                        <li key={f.characterId}>{f.summary}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 {previs && previs.pathRevision !== null ? (
                   <div className="mt-2" data-testid="shot-camera-motion">
                     Camera motion · {previs.keyframeCount} keyframes ·{" "}

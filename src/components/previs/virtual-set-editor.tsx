@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { BlockingFigureData } from "@/domain/previs/blocking";
 import { buildPrevisDocument, sceneFingerprint } from "@/domain/previs/document";
 import { bookmarkFromCamera, cameraFromBookmark } from "@/domain/previs/camera";
 import { buildHotelCanopyEngineScene } from "@/domain/previs/hotel-canopy";
@@ -13,6 +14,7 @@ import {
   type SpatialSceneAdapter,
 } from "@/lib/previs/scene-adapter";
 import { installPrevisTestHook } from "@/lib/previs/test-hook";
+import { CharacterBlockingPanel, type BlockingState } from "./character-blocking-panel";
 import {
   CameraMotionPanel,
   type CameraPathInfo,
@@ -56,7 +58,11 @@ export interface VirtualSetProps {
     sceneRevision: number;
     capturedAt: string;
     adopted: boolean;
+    /** the character blocking the frame showed (null = no visible character proxies) */
+    blockingFingerprint: string | null;
   }>;
+  /** stored character blocking of the active shot (plain data; the server derived every fingerprint) */
+  blocking: BlockingFigureData[];
   shotTiming: ShotTimingInfo | null;
   cameraPath: CameraPathInfo | null;
   previsClips: PrevisClipInfo[];
@@ -97,6 +103,12 @@ export function VirtualSetEditor(props: VirtualSetProps) {
   const [glbId, setGlbId] = useState<string>(props.glbAssets[0]?.id ?? "");
   const [transformMode, setTransformMode] = useState<"move" | "rotate" | "scale">("move");
   const savingRef = useRef(false);
+  const [blockingState, setBlockingState] = useState<BlockingState | null>(null);
+  const blockingRef = useRef<BlockingState | null>(null);
+  const onBlockingState = useCallback((b: BlockingState) => {
+    blockingRef.current = b;
+    setBlockingState(b);
+  }, []);
 
   // ── lifecycle: one adapter per mount, disposed on unmount (React strict-mode safe) ──
   useEffect(() => {
@@ -209,8 +221,11 @@ export function VirtualSetEditor(props: VirtualSetProps) {
         const mode = e.key === "1" ? "move" : e.key === "2" ? "rotate" : "scale";
         a.setTransformMode(mode);
         setTransformMode(mode);
-      } else if ((e.key === "Delete" || e.key === "Backspace") && a.selectedId()) {
-        a.removeObject(a.selectedId()!);
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        // a selected character proxy is removed from the SHOT (undoable), never through the set's object delete
+        const proxy = a.blocking.selectedCharacter();
+        if (proxy) a.blocking.remove(proxy);
+        else if (a.selectedId()) a.removeObject(a.selectedId()!);
       }
     };
     document.addEventListener("keydown", onKey);
@@ -296,6 +311,12 @@ export function VirtualSetEditor(props: VirtualSetProps) {
     if (!saved) return;
     if (!bookmark)
       return setStatus({ tone: "error", text: "Use the production camera for this shot first." });
+    // the frame shows the Shot's character proxies, so the blocking it shows must be the saved blocking
+    if (blockingRef.current?.dirty) {
+      const b = await blockingRef.current.ensureSaved();
+      if (!b) return;
+    }
+    const renderedBlocking = blockingRef.current?.liveFingerprint() ?? null;
     setStatus({ tone: "busy", text: "Rendering master frame…" });
     try {
       const frame = await adapter().captureMasterFrame(bookmark.value);
@@ -304,6 +325,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
       fd.set("shotId", shotId);
       fd.set("locationId", props.locationId);
       fd.set("sceneRevision", String(saved.revision));
+      if (renderedBlocking) fd.set("blockingFingerprint", renderedBlocking);
       fd.set("file", new File([frame.blob], "master-frame.png", { type: "image/png" }));
       const r = await captureMasterFrame(fd);
       if (!r.ok) return setStatus({ tone: "error", text: r.error });
@@ -314,6 +336,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
           sceneRevision: saved.revision,
           capturedAt: new Date().toISOString(),
           adopted: false,
+          blockingFingerprint: renderedBlocking,
         },
         ...f,
       ]);
@@ -705,6 +728,23 @@ export function VirtualSetEditor(props: VirtualSetProps) {
           )}
 
           {shotId ? (
+            <CharacterBlockingPanel
+              key={`blocking:${shotId}`}
+              adapter={adapter}
+              ready={ready}
+              projectSlug={props.projectSlug}
+              locationId={props.locationId}
+              shotId={shotId}
+              characters={props.characters}
+              initial={shotId === props.activeShotId ? props.blocking : null}
+              savedSceneFingerprint={savedFingerprint}
+              sceneDirty={dirty}
+              ensureSceneSaved={ensureSaved}
+              onState={onBlockingState}
+            />
+          ) : null}
+
+          {shotId ? (
             <CameraMotionPanel
               key={shotId}
               adapter={adapter}
@@ -720,6 +760,11 @@ export function VirtualSetEditor(props: VirtualSetProps) {
               savedSceneFingerprint={savedFingerprint}
               sceneDirty={dirty}
               ensureSceneSaved={ensureSaved}
+              blocking={{
+                savedFingerprint: blockingState?.savedFingerprint ?? null,
+                dirty: blockingState?.dirty ?? false,
+                liveFingerprint: () => blockingRef.current?.liveFingerprint() ?? null,
+              }}
             />
           ) : null}
 
@@ -745,6 +790,13 @@ export function VirtualSetEditor(props: VirtualSetProps) {
                 <div className="text-muted">
                   revision {f.sceneRevision} · {new Date(f.capturedAt).toLocaleString()}
                 </div>
+                {blockingState &&
+                shotId === props.activeShotId &&
+                f.blockingFingerprint !== blockingState.savedFingerprint ? (
+                  <div className="text-warn" data-testid="master-frame-stale">
+                    STALE BLOCKING — the character blocking changed after this frame.
+                  </div>
+                ) : null}
                 {f.adopted ? (
                   <span className="text-pass" data-testid="master-frame-adopted">
                     Master frame for this shot

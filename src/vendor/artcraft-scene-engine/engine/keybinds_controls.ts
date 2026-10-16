@@ -94,8 +94,9 @@ export class MouseControls {
   private isMovable: Function;
   toggle_stats: Function;
 
-  private kinMode: KinMode = KinMode.NONE;
-  private fkHelper: FKHelper;
+  // PRISM PATCH: kinMode/fkHelper are readable by the host (pose mode state + bone selection)
+  kinMode: KinMode = KinMode.NONE;
+  fkHelper: FKHelper;
   private isBoneDragged: boolean = false;
   private ignoreNextClick: boolean = false;
 
