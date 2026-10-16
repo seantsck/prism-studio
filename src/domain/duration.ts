@@ -21,6 +21,44 @@ export function selectedTake(takes: readonly PerformanceTake[], lineId: string):
   return takes.find((t) => t.dialogueLineId === lineId && t.selected && !t.archived) ?? null;
 }
 
+export interface PerformanceSegment {
+  /** offset from the start of the Shot timeline */
+  startMs: number;
+  durationMs: number;
+}
+
+export interface PerformanceLayout {
+  /** one entry per input; null for an input that has no take (it occupies no time) */
+  segments: Array<PerformanceSegment | null>;
+  /** end of the last take (pre-roll when there is none); the post-roll follows this */
+  speechEndMs: number;
+}
+
+/**
+ * THE Shot timeline arithmetic for a performance: pre-roll, then each take in order, with the inter-line gap
+ * between takes. computeShotDuration, the interactive audio scheduler and the offline previs audio mix all place
+ * takes through this one function, so they cannot disagree about where a take begins or ends.
+ */
+export function layoutPerformance(
+  preRollMs: number,
+  interLineGapMs: number,
+  durationsMs: ReadonlyArray<number | null>,
+): PerformanceLayout {
+  const segments: Array<PerformanceSegment | null> = [];
+  let cursor = preRollMs;
+  let speechEndMs = preRollMs;
+  for (const durationMs of durationsMs) {
+    if (durationMs === null) {
+      segments.push(null);
+      continue;
+    }
+    segments.push({ startMs: cursor, durationMs });
+    speechEndMs = cursor + durationMs;
+    cursor = speechEndMs + interLineGapMs;
+  }
+  return { segments, speechEndMs };
+}
+
 /**
  * Shot timing originates from the selected performance whenever possible:
  *   preRoll + Σ selected take durations + inter-line gaps + postRoll.
@@ -62,8 +100,13 @@ export function computeShotDuration(
     gapsMs,
     postRollMs: shot.audio.postRollMs,
   };
+  const layout = layoutPerformance(
+    shot.audio.preRollMs,
+    shot.audio.interLineGapMs,
+    picked.map((p) => p.take?.durationMs ?? 0),
+  );
   return {
-    durationMs: breakdown.preRollMs + performanceMs + gapsMs + breakdown.postRollMs,
+    durationMs: layout.speechEndMs + breakdown.postRollMs,
     source: "performance",
     breakdown,
     missingTakeLineIds: [],
