@@ -116,7 +116,7 @@ Playwright runs Chromium with the software rasteriser (`--use-angle=swiftshader`
 | Quaternion/slerp rotation       | **Done in M2A** (`slerpQuaternion`, shortest arc)                                                                                                         | —                                                                                                                             |
 | Character posing                | `KinHelpers/{FKHelper,BoneJSONHelper}`, `SkeletonHelperController`                                                                                        | a Prism mannequin with `mixamorig:*`-compatible bones (rig is name-matched); pose presets as JSON                             |
 | Pose presets                    | `BoneJSONHelper.toJSON/poseFromBoneJSON`                                                                                                                  | Prism-authored preset library                                                                                                 |
-| Local previs video              | **Done in M2A** with MediaBunny (WebCodecs)                                                                                                               | audio muxing                                                                                                                  |
+| Local previs video              | **Done in M2A**, with the selected performance audio muxed in **M2A.1** (MediaBunny + WebCodecs)                                                          | —                                                                                                                             |
 | Depth pass                      | none vendored (`CustomOutlinePass`/`FindSurfaces` were removed: provenance not established)                                                               | write a Prism depth override material (three.js `MeshDepthMaterial`); PNG sequence                                            |
 | Object-id / character masks     | surface-id material exists; per-object id pass does not                                                                                                   | new override material mapping `uuid → colour`; ties to mannequin `characterId`                                                |
 | Gaussian splats                 | removed in the pre-PR hardening (the engine's loader and the `@sparkjsdev/spark` dependency)                                                              | re-add `@sparkjsdev/spark` and the upstream loader behind a feature flag; asset pipeline for `.spz`; licence of splat sources |
@@ -182,9 +182,13 @@ was authored against, the path JSON and its fingerprint) and `shot_previs_clips`
 with path revision/fingerprint, scene revision/fingerprint, asset id, fps, duration, dimensions, container, codec).
 Owner-only RLS; composite `(id, project_id)` FKs; no worker grant. `assets.source` gains `local_previs`.
 
-**Staleness is computed, never destructive.** A path is stale when the live set fingerprint differs from the one it was
-saved against; a previs is stale when its path fingerprint or set fingerprint differs from the current ones. Stale
-paths and clips stay readable; "Re-save against the current set" re-anchors a path without changing its keyframes.
+**Staleness is computed, never destructive, and judged by what a clip contains.** A path is stale when the live set
+fingerprint differs from the one it was saved against. A previs is stale when its scene or camera-path fingerprint
+differs from the current ones; a previs **rendered with audio** is also stale when the Shot's performance-audio mix
+fingerprint differs ("STALE SCENE", "STALE CAMERA", "STALE AUDIO", combined when several apply). A **silent** previs
+depends on scene + camera only, so changing dialogue never invalidates a camera test. Stale paths and clips stay
+readable and historical clips are never rewritten; "Re-save against the current set" re-anchors a path without
+changing its keyframes.
 
 ### Authoring and playback in the editor
 
@@ -213,41 +217,91 @@ current for the saved set, the file must sniff as the claimed container, and the
 private asset (`type video`, `purpose video_reference`, `source local_previs`, `metadata.previs` provenance). No URL is
 stored; players use `/api/assets/<id>` (authorised per request, Range supported).
 
-**Audio.**
+### Performance audio (M2A.1)
 
-| Surface                                | Audio                                          |
-| -------------------------------------- | ---------------------------------------------- |
-| Interactive playback (camera timeline) | camera + the Shot's selected performance takes |
-| Rendered previs file                   | **silent** (not muxed in M2A)                  |
+| Surface                                | Audio                                                                                         |
+| -------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Interactive playback (camera timeline) | camera + the Shot's selected performance takes                                                |
+| Rendered previs file                   | the same takes muxed in when "Include selected performance audio" is on; otherwise **silent** |
 
-Muxing the performance audio into the encoded file is the next narrow follow-up (MediaBunny `AudioBufferSource`).
+**One Shot timeline, one arithmetic.** Camera motion, interactive audio, the rendered video frames and the muxed audio
+all share the Shot timebase (milliseconds from the start of the Shot):
 
-**One playback clock.** The camera timeline playhead is the only clock. Camera motion (`evaluateCameraPath(path, t)`) and
-performance audio are both consumers of it: the scheduler (`src/lib/previs/performance-audio.ts`) owns no timer that
-advances time, only one-shot starts armed relative to the playhead at the moment of play/seek, and they are cancelled
-on every pause, seek, end and unmount. Timing authority is unchanged: Shot duration comes from `computeShotDuration`
-(`buildShotContext(...).duration`) and cue offsets are computed by `buildAudioCues` with the same arithmetic
-(pre-roll, then each selected take followed by the inter-line gap; a take without audio is silent but still occupies its
-time). Behaviour: play from 0 waits through the pre-roll; seeking into a take starts it at the correct source offset;
-seeking into a gap plays nothing until the next take; pause stops all audio; resume starts from the current playhead;
-the timeline end stops audio; every start first stops everything so scrubbing never overlaps nodes; unmounting the
-editor disposes the scheduler (pauses, releases media elements, clears timers). Covered by deterministic fake-audio
-unit tests (`performance-audio.test.ts`); there is no browser audio test (it would need a committed audio fixture and
-autoplay permission).
+```
+Shot timing model  (layoutPerformance in src/domain/duration.ts: pre-roll → take → gap → take …, + post-roll)
+  ├─ computeShotDuration           the Shot's duration
+  └─ layoutTimelineCues            every selected take on the timeline (takes without audio keep their time)
+       ├─ interactive scheduler    cues with audio, untrimmed          (src/lib/previs/performance-audio.ts)
+       └─ PerformanceAudioPlan     cues with audio, trimmed to the render (src/domain/previs/audio-mix.ts)
+            └─ offline mix → MediaBunny mux
+```
+
+There is no second timer and no second cue arithmetic; tests assert that the interactive cues, the offline plan and
+`computeShotDuration` agree for every seeded Shot. The video duration stays the camera path's duration; the mix is
+exactly that long (a take running past the end is trimmed, a take starting after it is dropped).
+
+_Interactive playback._ The camera timeline playhead is the only clock. The scheduler owns no timer that advances time,
+only one-shot starts armed relative to the playhead at play/seek, cancelled on every pause, seek, end and unmount.
+Seeking into a take starts it at the right source offset; seeking into a gap plays nothing until the next take; resume
+starts from the playhead; every start first stops everything so scrubbing never overlaps nodes.
+
+_Audio plan._ `prism.previs-audio-mix.v1`: `{ sampleRate: 48000, channels: 2, durationMs, shotDurationMs, cues[] }`, each
+cue `{ assetId, assetChecksum, timelineStartMs, sourceStartMs, durationMs }` (`sourceStartMs` is 0 today; trimming is
+representable). No audio asset → the take occupies time and produces silence. The **audio mix fingerprint** (SHA-256) covers
+the format, the render and Shot durations and every cue in order (asset, checksum, offsets, length), so it changes when a
+selected take, its bytes, its duration, the pre-roll, a gap, the post-roll, the cue order or a source offset changes, and
+never for the playhead, UI state, selection or object URLs.
+
+_Local composition (nothing leaves the browser)._ Each cue's take audio is fetched as **bytes through the authenticated
+asset route** (`/api/assets/<id>`; no public, signed or blob URL is kept), verified against the asset checksum, decoded by
+the browser (`decodeAudioData` on a never-started `OfflineAudioContext` at 48 kHz, which also resamples), and placed
+sample-exactly on a silent 48 kHz stereo track: mono is duplicated to L/R, stereo keeps L/R (a source with more channels
+contributes its first two), a source longer than its cue is trimmed, a shorter one leaves silence (never stretched). No
+gain, normalisation, EQ, compression or noise reduction. A take that cannot be read or decoded stops the render with an
+error naming the asset; dialogue is never silently dropped. Placement is a pure function (`mixPlanToPcm`) rather than
+`OfflineAudioContext` scheduling so it is exact and unit-testable without a browser; the browser is used only to decode.
+
+_Muxing._ MediaBunny's `AudioSampleSource` encodes the PCM in the same `Output` as the video, fed alongside the frames so the
+muxer can interleave. The audio/video pair must be encodable **together** and fit the container: MP4 carries H.264 + AAC,
+WebM carries VP9/VP8 + Opus. Support is detected (`canEncodeVideo` + `canEncodeAudio`), never assumed. If video can be
+encoded but no compatible audio pair exists, the previs is rendered **silent** and the status says so; a file is never
+described as having audio unless the muxed file really has an audio track (the server also checks for an audio track
+marker in the stored container). Progress phases: `preparing_audio` (fetch, decode, compose), `rendering` (frames, with the
+audio encoding alongside), `finalizing`. Cancel works in every phase: fetches are aborted, no decode continues, the encoder
+and its audio feed are cancelled and the canvas and decoded buffers are released.
+
+_UI._ "Include selected performance audio" is on by default when the Shot has selected performance audio, disabled with
+"No selected performance audio for this Shot." otherwise. Before rendering the panel shows `Video: 956×400 · 24 fps` and
+`Audio: Selected performance · 48 kHz stereo` or `Audio: Silent`. There is no mixer (no gain, pan or effects).
+
+_Provenance._ `shot_previs_clips` (migration 0032) gains `audio_mix_json` (the plan above plus codec and
+`mixFingerprint`: asset ids, checksums and offsets only, never a URL) and `audio_mix_fingerprint`. `has_audio` means "a mix is
+recorded"; the legacy single `audio_asset_id` stays null because a mix of several takes is not one source asset. The previs
+video Asset's `metadata.previs` records `hasAudio` and `audio: { codec, sampleRate, channels, mixFingerprint, cueCount }`.
+The server derives the expected mix itself from the Shot's current selected takes and rejects a render whose claimed mix
+fingerprint differs (the takes changed while it rendered).
 
 ### GenerationPackage
 
 `spatialReference.cameraMotion` (optional; the key is absent without a saved path, so M1 packages and non-3D packages
 keep their exact fingerprints) freezes, by value: path id/revision/fingerprint, the set revision/fingerprint it was
 authored against, duration, frame rate, interpolation, lens basis, every keyframe, and `previsAssetId` — the latest
-previs rendered from exactly this path (null when none). Camera motion is **not** translated into provider prompts.
+previs that is exactly current for this path (null when none): a silent previs stays current when only the dialogue
+changed, while a previs rendered with audio counts only while its audio mix is current. The optional
+`cameraMotion.previs { assetId, hasAudio, audioMixFingerprint }` says whether that previs contains performance audio and
+which mix (additive and present only with a previs, so earlier packages are unchanged). No audio bytes enter the package
+and a previs file is not needed to compile it. Camera motion is **not** translated into provider prompts.
 
 ### Tests
 
-| Layer                                                                        | File                                                        |
-| ---------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| evaluator, slerp, easing, fingerprint, sampling                              | `src/domain/previs/__tests__/camera-path.test.ts`           |
-| renderer pipeline, cancel/cleanup, overlay layers                            | `src/lib/previs/__tests__/previs-render.test.ts`            |
-| package freeze, immutability, staleness, memory-store rules                  | `src/domain/previs/__tests__/camera-motion-package.test.ts` |
-| Postgres, RLS, isolation, guards (0031)                                      | `scripts/db-previs.mts`                                     |
-| authoring, persistence, playback, overlay, real local encode, stale, package | `e2e/zzzzzzz-camera-previs.spec.ts`                         |
+| Layer                                                                         | File                                                        |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| evaluator, slerp, easing, fingerprint, sampling                               | `src/domain/previs/__tests__/camera-path.test.ts`           |
+| renderer pipeline, cancel/cleanup, overlay layers                             | `src/lib/previs/__tests__/previs-render.test.ts`            |
+| package freeze, immutability, staleness, memory-store rules                   | `src/domain/previs/__tests__/camera-motion-package.test.ts` |
+| shared timeline, audio plan, mix fingerprint, staleness rules (M2A.1)         | `src/domain/previs/__tests__/audio-mix.test.ts`             |
+| decode/compose: placement, mono/stereo, trim, cancel, errors (M2A.1)          | `src/lib/previs/__tests__/audio-compose.test.ts`            |
+| interactive scheduler: seek, pause, resume, end, cleanup                      | `src/lib/previs/__tests__/performance-audio.test.ts`        |
+| Postgres, RLS, isolation, guards, audio-mix provenance (0031, 0032)           | `scripts/db-previs.mts`                                     |
+| authoring, persistence, playback, overlay, real local encode, stale, package  | `e2e/zzzzzzz-camera-previs.spec.ts`                         |
+| real audio mux (tracks, timing, stale audio vs silent), gap, fallback (M2A.1) | `e2e/zzzzzzzz-previs-audio.spec.ts`                         |
