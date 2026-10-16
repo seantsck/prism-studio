@@ -136,3 +136,38 @@ scene, freezes another and shows the first unchanged; the attempt row stores the
 - **Dependency added:** `mediabunny@1.60.0` (MPL-2.0), as an npm dependency only; used for local MP4/WebM encoding.
   MPL-2.0 file-level copyleft applies to modifications of MediaBunny's own files, which Prism does not make.
 - **Spark/splats** remain removed (M2D).
+
+## 12. M2B: FK pose reuse (decision record)
+
+**Audit.** `engine/KinHelpers/{FKHelper,FKBoneFilter,BoneJSONHelper}.ts`, `engine/editor/SkeletonHelperController.ts`,
+`engine/keybinds_controls.ts` (`toggleFKMode`), `HistoryManager`/`TransformAction`, `GizmoController` and the proxy
+save/load were read in full.
+
+| Piece                                        | Verdict  | Notes                                                                                                                                              |
+| -------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FKHelper` (bone spheres + rotate gizmo)     | reused   | Works on any `THREE.Bone` hierarchy. Name filtering is a substring blacklist (`FKBoneFilter`); every Prism alias passes (asserted in a unit test). |
+| `toggleFKMode` / `KinMode`                   | reused   | Needs a selected scene child with `userData.isCharacter`. Prism proxies set it.                                                                    |
+| Root selection, gizmo, `TransformAction`     | reused   | The proxy is a named top-level `Group`, so the engine's click-select, translate/rotate gizmo and undo work by uuid.                                |
+| `HistoryManager.record(UndoableAction)`      | reused   | Prism pushes joint/preset/visibility/add/remove as `UndoableAction`s into the **same** stack: one undo/redo, no second history.                    |
+| `BoneJSONHelper`                             | not used | It looks up `mixamorighips` and applies a bone tree by child index. Prism stores `prism.pose.v1` quaternions by semantic id instead.               |
+| `SkeletonHelperController` (outliner toggle) | not used | Keyed to outliner objects with `userData.skeletonVisible`; the proxies are not outliner objects. FK mode draws its own skeleton.                   |
+| Upstream characters/animations/GLBs          | none     | None is vendored or used. The rig is generated in code.                                                                                            |
+
+**Naming.** Upstream wants `mixamorig:*`. Prism keeps its own semantic ids (`prism.humanoid-rig.v1`) as the domain
+schema and puts an explicit `mixamoAlias` table on the bones; only the Three.js bone _names_ borrow the convention
+(a naming convention, not an asset). Reverse lookup (`jointFromAlias`) resolves a foreign bone name to a semantic joint.
+
+**Vendor patches added in M2B (`prism-m2b.patch`)** — all editor-only behaviour, no asset or feature change:
+
+1. `shims/fk-hooks.ts` (new): host hooks for bone selected / drag start / drag end / constrain / change.
+2. `FKHelper.ts`: calls the hooks; bone spheres and the skeleton helper move to **layer 1** (editor-only, excluded from
+   renders) and the raycaster enables layer 1; adds `selectBone`, `getSelectedBone`, `setSkeletonVisible`,
+   `setGizmoVisible`; removes the debug `console.log` calls; disposes the per-sphere materials and the skeleton helper
+   (both leaked upstream).
+3. `keybinds_controls.ts`: `kinMode` and `fkHelper` made readable by the host (they were `private`).
+
+**Cost of the integration.** No part of the editor was replaced. The Prism code is `src/lib/previs/humanoid-rig.ts`,
+`blocking-overlay.ts` and the panel; the engine still owns selection, gizmos, history, camera and rendering.
+
+**Known interaction quirk (upstream).** The engine swallows the first click after the navigation camera pose changed
+(`camera_last_pos`), so the first joint click after flying the camera may need repeating.

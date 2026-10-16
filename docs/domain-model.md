@@ -117,3 +117,14 @@ Delivery Conform · Continuity QA · Creative Approval. See [framing-adaptation]
 
 Distinct concerns: Editor camera · Production camera · Camera path · Camera bookmark (M1) · Master frame · Previs clip.
 See [virtual-set](virtual-set.md).
+
+## Shot character blocking (Phase 2F M2B)
+
+| Entity            | Table / column                                                                      | Nature                                                                                                                                                                                                                                               |
+| ----------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ShotBlocking      | `shot_character_blocking` (`root_*`, `pose_json`, `revision`, fingerprints)         | ONE current state per (Shot, Character): root placement (position, quaternion, uniform scale) and `prism.pose.v1` on `prism.humanoid-rig.v1`; compare-and-set revision; tied to the set revision/fingerprint it was authored against; owner-only RLS |
+| Render provenance | `scene_master_frames` / `shot_previs_clips` `blocking_fingerprint`, `blocking_json` | Which blocking a render showed (character id, blocking id, revision, fingerprint; never a URL); null = no character proxies                                                                                                                          |
+| ShotBlockingRef   | `GenerationPackage.spatialReference.shotBlocking`                                   | Frozen copy (by value) of the Shot's blocking, with a deterministic text summary; optional; separate from Character/Look identity                                                                                                                    |
+
+Blocking is **shot-specific**: it is never part of the Location's set. The proxy carries no identity. See
+[virtual-set](virtual-set.md#character-blocking-phase-2f-m2b).

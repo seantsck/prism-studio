@@ -728,23 +728,6 @@ export function VirtualSetEditor(props: VirtualSetProps) {
           )}
 
           {shotId ? (
-            <CharacterBlockingPanel
-              key={`blocking:${shotId}`}
-              adapter={adapter}
-              ready={ready}
-              projectSlug={props.projectSlug}
-              locationId={props.locationId}
-              shotId={shotId}
-              characters={props.characters}
-              initial={shotId === props.activeShotId ? props.blocking : null}
-              savedSceneFingerprint={savedFingerprint}
-              sceneDirty={dirty}
-              ensureSceneSaved={ensureSaved}
-              onState={onBlockingState}
-            />
-          ) : null}
-
-          {shotId ? (
             <CameraMotionPanel
               key={shotId}
               adapter={adapter}
@@ -765,6 +748,23 @@ export function VirtualSetEditor(props: VirtualSetProps) {
                 dirty: blockingState?.dirty ?? false,
                 liveFingerprint: () => blockingRef.current?.liveFingerprint() ?? null,
               }}
+            />
+          ) : null}
+
+          {shotId ? (
+            <CharacterBlockingPanel
+              key={`blocking:${shotId}`}
+              adapter={adapter}
+              ready={ready}
+              projectSlug={props.projectSlug}
+              locationId={props.locationId}
+              shotId={shotId}
+              characters={props.characters}
+              initial={shotId === props.activeShotId ? props.blocking : null}
+              savedSceneFingerprint={savedFingerprint}
+              sceneDirty={dirty}
+              ensureSceneSaved={ensureSaved}
+              onState={onBlockingState}
             />
           ) : null}
 
