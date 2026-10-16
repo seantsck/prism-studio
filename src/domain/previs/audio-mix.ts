@@ -133,32 +133,48 @@ export interface StoredAudioMix extends PerformanceAudioPlan {
  * same audio mix. A silent clip stays current when only the dialogue changed.
  */
 export function pickCurrentClip<
-  T extends { pathFingerprint: string; audioMixFingerprint: string | null; renderedAt: string },
->(clips: readonly T[], pathFingerprint: string, currentAudioMixFingerprint: string | null): T | null {
+  T extends {
+    pathFingerprint: string;
+    audioMixFingerprint: string | null;
+    /** what the clip's picture shows of the Shot's blocking (absent/null = no character proxies) */
+    blockingFingerprint?: string | null;
+    renderedAt: string;
+  },
+>(
+  clips: readonly T[],
+  pathFingerprint: string,
+  currentAudioMixFingerprint: string | null,
+  currentBlockingFingerprint: string | null = null,
+): T | null {
   return (
     [...clips]
       .filter(
         (c) =>
           c.pathFingerprint === pathFingerprint &&
-          (c.audioMixFingerprint === null || c.audioMixFingerprint === currentAudioMixFingerprint),
+          (c.audioMixFingerprint === null || c.audioMixFingerprint === currentAudioMixFingerprint) &&
+          (c.blockingFingerprint ?? null) === currentBlockingFingerprint,
       )
       .sort((a, b) => (a.renderedAt < b.renderedAt ? 1 : a.renderedAt > b.renderedAt ? -1 : 0))[0] ?? null
   );
 }
 
-export type PrevisStaleReason = "scene" | "camera" | "audio";
+export type PrevisStaleReason = "scene" | "camera" | "audio" | "blocking";
 
 export interface PrevisFreshnessInput {
   clip: {
     sceneFingerprint: string;
     pathFingerprint: string;
     audioMixFingerprint: string | null;
+    /** absent/null = the clip shows no character proxies */
+    blockingFingerprint?: string | null;
   };
   /** null = nothing saved / unknown: the corresponding check cannot pass */
   currentSceneFingerprint: string | null;
   currentPathFingerprint: string | null;
   /** null = the Shot currently has no selected performance audio */
   currentAudioMixFingerprint: string | null;
+  /** the Shot's rendered blocking layer now (null = no visible character proxies) */
+  currentBlockingFingerprint?: string | null;
 }
 
 /**
@@ -173,6 +189,9 @@ export function previsStaleReasons(i: PrevisFreshnessInput): PrevisStaleReason[]
     reasons.push("camera");
   if (i.clip.audioMixFingerprint !== null && i.clip.audioMixFingerprint !== i.currentAudioMixFingerprint)
     reasons.push("audio");
+  // blocking is part of what the picture shows, silent or not
+  if ((i.clip.blockingFingerprint ?? null) !== (i.currentBlockingFingerprint ?? null))
+    reasons.push("blocking");
   return reasons;
 }
 
@@ -180,4 +199,5 @@ export const STALE_REASON_LABEL: Record<PrevisStaleReason, string> = {
   scene: "STALE SCENE",
   camera: "STALE CAMERA",
   audio: "STALE AUDIO",
+  blocking: "STALE BLOCKING",
 };

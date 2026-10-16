@@ -1,5 +1,7 @@
 import { emptyCameraPath, keyframeFromCamera, upsertKeyframe, type CameraPath } from "./camera-path";
+import { canonicalizeEntry, scaleForHeight, yawQuat, type ShotBlockingEntry } from "./blocking";
 import { PRISM_USER_DATA, assetTokenFor } from "./document";
+import { neutralPose, presetById, withHeadDirection } from "./pose";
 
 /**
  * The synthetic acceptance set: neutral procedural objects only (no Yumeko image, no paid or third-party
@@ -208,4 +210,26 @@ export function buildHotelCanopyCameraPath(): CameraPath {
   p = upsertKeyframe(p, key("hotel-kf-2", 2000, 1.4, 1.6, 4, 0.1, 50, "ease_in_out"));
   p = upsertKeyframe(p, key("hotel-kf-3", 4000, 0, 1.5, 0.5, 0, 70, "linear"));
   return p;
+}
+
+/** The Shots whose blocking the synthetic fixture authors. */
+export const HOTEL_CANOPY_BLOCKING_SHOTS = ["3A"] as const;
+
+/**
+ * Synthetic Shot 3A blocking for the Hotel Canopy set: Yumeko near the doorway, standing, body angled toward Sean
+ * with her head turned further toward him; Sean near the vehicle, standing, body facing Yumeko (hands on hips).
+ * Neutral proxies only: no likeness, no assets.
+ */
+export function buildHotelCanopyShotBlocking(ids: { yumekoId: string; seanId: string }): ShotBlockingEntry[] {
+  const yumeko = canonicalizeEntry({
+    characterId: ids.yumekoId,
+    root: { position: { x: -0.8, y: 0, z: -4.6 }, orientation: yawQuat(30), scale: scaleForHeight(1.7) },
+    pose: withHeadDirection(neutralPose(), 20, 0),
+  });
+  const sean = canonicalizeEntry({
+    characterId: ids.seanId,
+    root: { position: { x: 3.0, y: 0, z: -1.4 }, orientation: yawQuat(-130), scale: scaleForHeight(1.8) },
+    pose: presetById("hands_on_hips").pose,
+  });
+  return [yumeko, sean];
 }
