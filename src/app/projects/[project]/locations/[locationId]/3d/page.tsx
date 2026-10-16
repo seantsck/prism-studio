@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/ui";
 import { VirtualSetLoader } from "@/components/previs/virtual-set-loader";
+import { buildShotContext } from "@/domain/context";
 import { getPrevisRepo } from "@/server/previs";
 import { requireProject } from "@/server/repo";
 
@@ -35,6 +36,37 @@ export default async function VirtualSetPage({
 
   const bookmark = activeShotId ? await previs.getBookmarkForShot(activeShotId) : null;
   const frames = activeShotId ? await previs.listMasterFrames(activeShotId) : [];
+  const cameraPath = activeShotId ? await previs.getCameraPathForShot(activeShotId) : null;
+  const clips = activeShotId ? await previs.listPrevisClips(activeShotId) : [];
+
+  // Shot timing authority: the canonical Shot duration (selected performance, else manual target) and the
+  // Shot's own frame rate. Camera motion aligns to these; nothing here invents a duration.
+  let shotTiming: {
+    durationMs: number;
+    source: string;
+    frameRate: number;
+    audioCues: Array<{ assetId: string; startMs: number; durationMs: number }>;
+  } | null = null;
+  if (activeShotId) {
+    const shot = data.shots.find((s) => s.id === activeShotId);
+    if (shot) {
+      const ctx = buildShotContext(data, activeShotId);
+      const cues: Array<{ assetId: string; startMs: number; durationMs: number }> = [];
+      let cursor = ctx.shot.audio.preRollMs;
+      for (const line of ctx.lines) {
+        const take = line.selectedTake;
+        if (!take?.audioAssetId) continue;
+        cues.push({ assetId: take.audioAssetId, startMs: cursor, durationMs: take.durationMs });
+        cursor += take.durationMs + ctx.shot.audio.interLineGapMs;
+      }
+      shotTiming = {
+        durationMs: ctx.duration.durationMs,
+        source: ctx.duration.source,
+        frameRate: shot.generation.fps,
+        audioCues: cues,
+      };
+    }
+  }
 
   return (
     <div>
@@ -74,6 +106,34 @@ export default async function VirtualSetPage({
               }
             : null
         }
+        shotTiming={shotTiming}
+        cameraPath={
+          cameraPath
+            ? {
+                id: cameraPath.id,
+                revision: cameraPath.revision,
+                sceneRevision: cameraPath.sceneRevision,
+                sceneFingerprint: cameraPath.sceneFingerprint,
+                pathFingerprint: cameraPath.pathFingerprint,
+                path: cameraPath.path,
+              }
+            : null
+        }
+        previsClips={clips.map((c) => ({
+          id: c.id,
+          assetId: c.assetId,
+          pathRevision: c.pathRevision,
+          pathFingerprint: c.pathFingerprint,
+          sceneRevision: c.sceneRevision,
+          sceneFingerprint: c.sceneFingerprint,
+          frameRate: c.frameRate,
+          durationMs: c.durationMs,
+          renderWidth: c.renderWidth,
+          renderHeight: c.renderHeight,
+          container: c.container,
+          codec: c.codec,
+          renderedAt: c.renderedAt,
+        }))}
         masterFrames={frames.map((f) => ({
           id: f.id,
           assetId: f.assetId,
