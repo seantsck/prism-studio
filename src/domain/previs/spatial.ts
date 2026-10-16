@@ -1,3 +1,4 @@
+import type { CameraInterpolation, CameraKeyframe } from "./camera-path";
 import { characterBlocking } from "./document";
 import type { CameraBookmarkValue, PrevisDocument } from "./types";
 
@@ -26,6 +27,31 @@ export interface SpatialReference {
   masterFrameAssetId: string | null;
   characterBlocking: ReturnType<typeof characterBlocking>;
   productionFrame: { ratio: string; width: number; height: number };
+  /** optional and omitted (not null) when the Shot has no camera path, so M1 packages are byte-identical */
+  cameraMotion?: CameraMotionReference;
+}
+
+export const CAMERA_MOTION_SCHEMA_VERSION = 1 as const;
+
+/**
+ * The authored camera motion frozen into a package (by value, so later edits to the live path cannot alter it).
+ * The key is absent from `SpatialReference` when the Shot has no saved camera path.
+ */
+export interface CameraMotionReference {
+  schemaVersion: typeof CAMERA_MOTION_SCHEMA_VERSION;
+  cameraPathId: string;
+  cameraPathRevision: number;
+  cameraPathFingerprint: string;
+  /** the set state the motion was authored against (differs from live when stale) */
+  sceneRevision: number;
+  sceneFingerprint: string;
+  durationMs: number;
+  frameRate: number;
+  interpolation: CameraInterpolation;
+  focalLengthBasis: "vertical-sensor-24mm";
+  keyframes: CameraKeyframe[];
+  /** the latest local previs rendered from exactly this path (an Asset id; never a URL), or null */
+  previsAssetId: string | null;
 }
 
 export interface SpatialSources {
@@ -39,10 +65,11 @@ export interface SpatialSources {
     value: CameraBookmarkValue;
   } | null;
   adoptedMasterFrameAssetId: string | null;
+  cameraMotion?: CameraMotionReference | null;
 }
 
 export function buildSpatialReference(src: SpatialSources): SpatialReference {
-  return {
+  const ref: SpatialReference = {
     schemaVersion: SPATIAL_REFERENCE_SCHEMA_VERSION,
     locationId: src.locationId,
     sceneDocumentId: src.scene.id,
@@ -61,6 +88,13 @@ export function buildSpatialReference(src: SpatialSources): SpatialReference {
     characterBlocking: characterBlocking(src.scene.document),
     productionFrame: { ...src.scene.document.productionFrame },
   };
+  if (src.cameraMotion) ref.cameraMotion = structuredClone(src.cameraMotion);
+  return ref;
+}
+
+/** True when the authored motion was made against an older state of the set than the live one. */
+export function isCameraMotionStale(ref: SpatialReference): boolean {
+  return !!ref.cameraMotion && ref.cameraMotion.sceneFingerprint !== ref.sceneFingerprint;
 }
 
 /** True when the Shot's camera was authored against an older state of the set than the live one. */

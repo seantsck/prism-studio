@@ -1,3 +1,4 @@
+import type { CameraPath } from "@/domain/previs/camera-path";
 import type { SpatialReference } from "@/domain/previs/spatial";
 import type { CameraBookmarkValue, PrevisDocument } from "@/domain/previs/types";
 
@@ -54,6 +55,73 @@ export interface MasterFrameRecord {
   createdBy: string | null;
   createdAt: string;
 }
+
+/** The Shot's current editable camera motion, tied to the scene state it was authored against. */
+export interface CameraPathRecord {
+  id: string;
+  projectId: string;
+  shotId: string;
+  locationId: string;
+  sceneDocumentId: string;
+  sceneRevision: number;
+  sceneFingerprint: string;
+  schemaVersion: string;
+  revision: number;
+  durationMs: number;
+  frameRate: number;
+  path: CameraPath;
+  pathFingerprint: string;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveCameraPathInput {
+  id: string;
+  projectId: string;
+  shotId: string;
+  locationId: string;
+  sceneDocumentId: string;
+  /** the LIVE set state the path is being authored against (looked up server-side, never trusted from the client) */
+  sceneRevision: number;
+  sceneFingerprint: string;
+  path: CameraPath;
+  /** null = first save for the shot; otherwise the revision the editor loaded */
+  expectedRevision: number | null;
+  userId: string | null;
+  now: string;
+}
+
+/** A locally rendered previs video and the exact path + scene state it was rendered from. */
+export interface PrevisClipRecord {
+  id: string;
+  projectId: string;
+  shotId: string;
+  locationId: string;
+  cameraPathId: string | null;
+  pathRevision: number;
+  pathFingerprint: string;
+  sceneDocumentId: string;
+  sceneRevision: number;
+  sceneFingerprint: string;
+  assetId: string;
+  source: "local_previs";
+  frameRate: number;
+  durationMs: number;
+  renderWidth: number;
+  renderHeight: number;
+  container: "mp4" | "webm";
+  codec: string;
+  hasAudio: boolean;
+  audioAssetId: string | null;
+  renderedAt: string;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export type NewPrevisClip = Omit<PrevisClipRecord, "source" | "createdAt" | "createdBy"> & {
+  userId: string | null;
+};
 
 export class PrevisError extends Error {
   constructor(
@@ -121,4 +189,12 @@ export interface PrevisRepository {
   recordMasterFrame(input: NewMasterFrame): Promise<MasterFrameRecord>;
   /** The explicit "Use as Master Frame" decision. Never called automatically. */
   adoptMasterFrame(id: string, storyboardFrameId: string, now: string): Promise<MasterFrameRecord>;
+
+  getCameraPathForShot(shotId: string): Promise<CameraPathRecord | null>;
+  /** Insert or compare-and-set update; throws PrevisError("conflict") on a stale expectedRevision. */
+  saveCameraPath(input: SaveCameraPathInput): Promise<CameraPathRecord>;
+
+  listPrevisClips(shotId: string): Promise<PrevisClipRecord[]>;
+  getPrevisClip(id: string): Promise<PrevisClipRecord | null>;
+  recordPrevisClip(input: NewPrevisClip): Promise<PrevisClipRecord>;
 }
