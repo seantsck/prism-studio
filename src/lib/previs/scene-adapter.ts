@@ -154,13 +154,21 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     };
   }
 
-  /** Coalesced to one call per animation frame so camera playback does not flood React. */
   private notify = () => {
+    for (const l of this.listeners) l();
+  };
+
+  /**
+   * Store updates caused by camera playback arrive on every frame; those are coalesced to one notification per
+   * animation frame. Everything else (inspector edits, selection) notifies synchronously, as in M1.
+   */
+  private notifyFromStore = () => {
+    if (!this.authoredCamera) return this.notify();
     if (this.notifyQueued) return;
     this.notifyQueued = true;
     const run = () => {
       this.notifyQueued = false;
-      for (const l of this.listeners) l();
+      this.notify();
     };
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
     else queueMicrotask(run);
@@ -189,7 +197,7 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     this.unsubscribers.push(
       editor.bus.subscribe(OutlinerRefreshedEvent, this.notify),
       editor.bus.subscribe(SelectionChangedEvent, this.notify),
-      usePageSceneStore.subscribe(this.notify),
+      usePageSceneStore.subscribe(this.notifyFromStore),
     );
     if (this.disposed) this.dispose();
   }
@@ -520,7 +528,8 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
         position: toVec(camera.position),
         rotation: toVec(camera.rotation),
       });
-      store.setSelectedCameraId(cfg.id);
+      // the viewport lens follows the production lens only while looking through the production camera
+      store.setSelectedCameraId(wasLooking ? cfg.id : "main");
     }
     if (wasLooking) cc.enterCameraView();
     this.notify();
@@ -529,7 +538,8 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
   lookThroughProductionCamera(on: boolean) {
     const cc = this.requireEditor().cameraController;
     const cfg = usePageSceneStore.getState().cameras.find((c) => c.id !== "main");
-    if (cfg) usePageSceneStore.getState().setSelectedCameraId(cfg.id); // viewport FOV follows the production lens
+    // the viewport lens follows the production lens only while looking through it; the navigation camera keeps its own
+    if (cfg) usePageSceneStore.getState().setSelectedCameraId(on ? cfg.id : "main");
     if (on) cc.enterCameraView();
     else cc.exitCameraView();
     this.notify();

@@ -1,6 +1,6 @@
 diff -ruN --strip-trailing-cr a/PageSceneStore.ts b/PageSceneStore.ts
 --- a/PageSceneStore.ts	2026-10-15 18:53:03.543635500 -0500
-+++ b/PageSceneStore.ts	2026-10-15 19:00:42.269927200 -0500
++++ b/PageSceneStore.ts	2026-10-15 20:26:26.814233200 -0500
 @@ -1,6 +1,6 @@
  import { create } from "zustand";
  import type { LucideIcon } from "lucide-react";
@@ -11,7 +11,7 @@ diff -ruN --strip-trailing-cr a/PageSceneStore.ts b/PageSceneStore.ts
    AssetFilterOption,
 diff -ruN --strip-trailing-cr a/actions/index.ts b/actions/index.ts
 --- a/actions/index.ts	2026-10-15 18:53:00.692403500 -0500
-+++ b/actions/index.ts	2026-10-15 19:00:44.823118600 -0500
++++ b/actions/index.ts	2026-10-15 20:26:30.636871300 -0500
 @@ -1,3 +1,4 @@
 +// PRISM PATCH: trimmed barrel (the AssetModal / AnimationsModal / record / timeline UI actions are not vendored).
  export * from "./addObject";
@@ -29,7 +29,7 @@ diff -ruN --strip-trailing-cr a/actions/index.ts b/actions/index.ts
  export * from "./cameraView";
 diff -ruN --strip-trailing-cr a/adapter.ts b/adapter.ts
 --- a/adapter.ts	2026-10-15 18:53:00.893337400 -0500
-+++ b/adapter.ts	2026-10-15 19:00:46.628966600 -0500
++++ b/adapter.ts	2026-10-15 20:26:35.095739300 -0500
 @@ -1,91 +1,6 @@
 -// Single platform-abstraction surface the host (artcraft Tauri app or
 -// any future web host) injects into PageScene. Mirrors the shape of
@@ -852,7 +852,7 @@ diff -ruN --strip-trailing-cr a/engine/FindSurfaces.js b/engine/FindSurfaces.js
 -}
 diff -ruN --strip-trailing-cr a/engine/InfiniteGridHelper.ts b/engine/InfiniteGridHelper.ts
 --- a/engine/InfiniteGridHelper.ts	2026-10-15 18:53:02.125840300 -0500
-+++ b/engine/InfiniteGridHelper.ts	2026-10-15 19:00:47.316314600 -0500
++++ b/engine/InfiniteGridHelper.ts	2026-10-15 20:26:36.303697500 -0500
 @@ -1,3 +1,4 @@
 +// @ts-nocheck PRISM PATCH: upstream was compiled against looser three typings; behaviour is unchanged.
  import * as THREE from "three";
@@ -860,7 +860,7 @@ diff -ruN --strip-trailing-cr a/engine/InfiniteGridHelper.ts b/engine/InfiniteGr
  export class InfiniteGridHelper extends THREE.Mesh {
 diff -ruN --strip-trailing-cr a/engine/KinHelpers/FKHelper.ts b/engine/KinHelpers/FKHelper.ts
 --- a/engine/KinHelpers/FKHelper.ts	2026-10-15 18:53:02.338480600 -0500
-+++ b/engine/KinHelpers/FKHelper.ts	2026-10-15 19:00:47.979129700 -0500
++++ b/engine/KinHelpers/FKHelper.ts	2026-10-15 20:26:37.764340100 -0500
 @@ -1,3 +1,4 @@
 +// @ts-nocheck PRISM PATCH: upstream was compiled against looser three typings; behaviour is unchanged.
  import * as THREE from "three";
@@ -868,7 +868,7 @@ diff -ruN --strip-trailing-cr a/engine/KinHelpers/FKHelper.ts b/engine/KinHelper
  import { TransformControls } from "../TransformControls";
 diff -ruN --strip-trailing-cr a/engine/SelectionOutlinePass.ts b/engine/SelectionOutlinePass.ts
 --- a/engine/SelectionOutlinePass.ts	2026-10-15 18:53:02.768819500 -0500
-+++ b/engine/SelectionOutlinePass.ts	2026-10-15 19:00:48.209473200 -0500
++++ b/engine/SelectionOutlinePass.ts	2026-10-15 20:26:38.143140500 -0500
 @@ -39,7 +39,6 @@
  
  import * as THREE from "three";
@@ -926,7 +926,7 @@ diff -ruN --strip-trailing-cr a/engine/SelectionOutlinePass.ts b/engine/Selectio
    // captured reference frame is clean. Toggling the whole pass off would
 diff -ruN --strip-trailing-cr a/engine/TransformControls.d.ts b/engine/TransformControls.d.ts
 --- a/engine/TransformControls.d.ts	1969-12-31 18:00:00.000000000 -0600
-+++ b/engine/TransformControls.d.ts	2026-10-15 19:01:13.618759400 -0500
++++ b/engine/TransformControls.d.ts	2026-10-15 20:27:07.333132700 -0500
 @@ -0,0 +1,34 @@
 +// PRISM PATCH: hand-written declarations for the three.js-derived JS fork (upstream ships no types).
 +import { Camera, Object3D, Raycaster } from "three";
@@ -964,7 +964,7 @@ diff -ruN --strip-trailing-cr a/engine/TransformControls.d.ts b/engine/Transform
 +}
 diff -ruN --strip-trailing-cr a/engine/TransformControls.js b/engine/TransformControls.js
 --- a/engine/TransformControls.js	2026-10-15 18:53:02.946809300 -0500
-+++ b/engine/TransformControls.js	2026-10-15 19:00:48.451895700 -0500
++++ b/engine/TransformControls.js	2026-10-15 20:26:38.524368300 -0500
 @@ -1,3 +1,8 @@
 +// PRISM PATCH (provenance header; no behavioural change).
 +// Derived from three.js examples/jsm/controls/TransformControls.js (as published in three r163/r164),
@@ -976,7 +976,7 @@ diff -ruN --strip-trailing-cr a/engine/TransformControls.js b/engine/TransformCo
    BufferGeometry,
 diff -ruN --strip-trailing-cr a/engine/ammoLoader.ts b/engine/ammoLoader.ts
 --- a/engine/ammoLoader.ts	2026-10-15 18:53:00.986056700 -0500
-+++ b/engine/ammoLoader.ts	2026-10-15 19:00:48.680557800 -0500
++++ b/engine/ammoLoader.ts	2026-10-15 20:26:39.000554600 -0500
 @@ -1,44 +1,2 @@
 -// Singleton loader for the Ammo.js physics WASM glue. Editor's
 -// constructor used to inject `<script src="jsm/libs/ammo.wasm.js">`
@@ -1103,7 +1103,7 @@ diff -ruN --strip-trailing-cr a/engine/chromakey.js b/engine/chromakey.js
 -export { ChromaKeyMaterial };
 diff -ruN --strip-trailing-cr a/engine/editor/CameraController.ts b/engine/editor/CameraController.ts
 --- a/engine/editor/CameraController.ts	2026-10-15 18:53:01.442329400 -0500
-+++ b/engine/editor/CameraController.ts	2026-10-15 19:00:49.979714100 -0500
++++ b/engine/editor/CameraController.ts	2026-10-15 20:26:40.921080900 -0500
 @@ -10,7 +10,7 @@
    DEFAULT_CAMERA_ASPECT_RATIO,
    EditorStates,
@@ -1125,7 +1125,7 @@ diff -ruN --strip-trailing-cr a/engine/editor/CameraController.ts b/engine/edito
        case CameraAspectRatio.VERTICAL_2_3:
 diff -ruN --strip-trailing-cr a/engine/editor/GizmoController.ts b/engine/editor/GizmoController.ts
 --- a/engine/editor/GizmoController.ts	2026-10-15 18:53:01.501102300 -0500
-+++ b/engine/editor/GizmoController.ts	2026-10-15 19:00:50.329870700 -0500
++++ b/engine/editor/GizmoController.ts	2026-10-15 20:26:41.335086200 -0500
 @@ -1,3 +1,4 @@
 +// @ts-nocheck PRISM PATCH: upstream was compiled against looser three typings; behaviour is unchanged.
  // Owns the TransformControls gizmo used for translating/rotating/scaling
@@ -1133,7 +1133,7 @@ diff -ruN --strip-trailing-cr a/engine/editor/GizmoController.ts b/engine/editor
  // editor lifecycle: the controller is created up front (held as a field
 diff -ruN --strip-trailing-cr a/engine/editor/PostProcessingPipeline.ts b/engine/editor/PostProcessingPipeline.ts
 --- a/engine/editor/PostProcessingPipeline.ts	2026-10-15 18:53:01.580960000 -0500
-+++ b/engine/editor/PostProcessingPipeline.ts	2026-10-15 19:00:51.343485400 -0500
++++ b/engine/editor/PostProcessingPipeline.ts	2026-10-15 20:26:43.017558600 -0500
 @@ -1,5 +1,5 @@
 -// Owns both EffectComposer chains (main + raw) and the post-process
 -// passes the editor actually uses today.
@@ -1266,7 +1266,7 @@ diff -ruN --strip-trailing-cr a/engine/editor/PostProcessingPipeline.ts b/engine
  }
 diff -ruN --strip-trailing-cr a/engine/editor.ts b/engine/editor.ts
 --- a/engine/editor.ts	2026-10-15 18:53:01.828634300 -0500
-+++ b/engine/editor.ts	2026-10-15 19:00:49.660780400 -0500
++++ b/engine/editor.ts	2026-10-15 20:26:40.539721000 -0500
 @@ -29,7 +29,6 @@
  import { ModalTransformController } from "./editor/ModalTransformController";
  
@@ -1313,7 +1313,7 @@ diff -ruN --strip-trailing-cr a/engine/editor.ts b/engine/editor.ts
      this.bus.emit(new EngineInitializedEvent(true));
  
      // This will enable all event and render loops
-@@ -712,8 +698,14 @@
+@@ -712,8 +698,15 @@
    }
  
    // Captures the scene without the grid
@@ -1325,12 +1325,13 @@ diff -ruN --strip-trailing-cr a/engine/editor.ts b/engine/editor.ts
 +  public snapShotOfCurrentFrame(
 +    shouldDownload: boolean = true,
 +    cameraOverride?: THREE.PerspectiveCamera,
++    sizeOverride?: { width: number; height: number },
 +  ) {
 +    const camera = cameraOverride ?? this.cameraController.camera;
      const renderCamera = this.cameraController.render_camera;
      if (!this.renderer?.domElement || !camera) {
        console.error("Error: Renderer or camera not available.");
-@@ -738,6 +730,9 @@
+@@ -738,6 +731,9 @@
      // the forward scene render, so a disabled pass yields a gray frame.
      const selectionPass = this.postProcessing.selectionPass;
      selectionPass?.setOutlineSuppressed(true);
@@ -1340,7 +1341,7 @@ diff -ruN --strip-trailing-cr a/engine/editor.ts b/engine/editor.ts
  
      // High quality dimensions for each aspect ratio
      let targetWidth: number;
-@@ -750,6 +745,12 @@
+@@ -750,6 +746,12 @@
          targetHeight = 720;
          aspectRatio = 16 / 9;
          break;
@@ -1353,7 +1354,21 @@ diff -ruN --strip-trailing-cr a/engine/editor.ts b/engine/editor.ts
        case CameraAspectRatio.VERTICAL_9_16:
          targetWidth = 720;
          targetHeight = 1280;
-@@ -852,6 +853,7 @@
+@@ -773,6 +775,13 @@
+         break;
+     }
+ 
++    // PRISM PATCH: an explicit output size (local previs renders below the full production frame)
++    if (sizeOverride) {
++      targetWidth = sizeOverride.width;
++      targetHeight = sizeOverride.height;
++      aspectRatio = sizeOverride.width / sizeOverride.height;
++    }
++
+     // Store original renderer and camera state
+     const sizeVector = new THREE.Vector2();
+     this.renderer.getSize(sizeVector);
+@@ -852,6 +861,7 @@
  
      // Restore outline overlay + splat bbox
      selectionPass?.setOutlineSuppressed(false);
@@ -1361,7 +1376,7 @@ diff -ruN --strip-trailing-cr a/engine/editor.ts b/engine/editor.ts
  
      if (shouldDownload) {
        const link = document.createElement("a");
-@@ -990,11 +992,8 @@
+@@ -990,11 +1000,8 @@
    async renderScene() {
      const { render_camera, render_width, render_height } =
        this.cameraController;
@@ -1375,7 +1390,7 @@ diff -ruN --strip-trailing-cr a/engine/editor.ts b/engine/editor.ts
        this.postProcessing.composer.render();
      } else if (this.renderer && render_camera) {
        this.renderer.setSize(render_width, render_height);
-@@ -1140,14 +1139,12 @@
+@@ -1140,14 +1147,12 @@
      // Fix: dispose 3D contexts
      this.renderer?.dispose();
      this.postProcessing.dispose();
@@ -1392,7 +1407,7 @@ diff -ruN --strip-trailing-cr a/engine/editor.ts b/engine/editor.ts
      this.bus.emit(new EngineInitializedEvent(false));
 diff -ruN --strip-trailing-cr a/engine/entranceAnimation.ts b/engine/entranceAnimation.ts
 --- a/engine/entranceAnimation.ts	2026-10-15 18:53:01.922571900 -0500
-+++ b/engine/entranceAnimation.ts	2026-10-15 19:00:55.397338200 -0500
++++ b/engine/entranceAnimation.ts	2026-10-15 20:26:48.225815500 -0500
 @@ -1,114 +1,7 @@
 -import * as THREE from "three";
 -import { SplatMesh } from "@sparkjsdev/spark";
@@ -1515,7 +1530,7 @@ diff -ruN --strip-trailing-cr a/engine/entranceAnimation.ts b/engine/entranceAni
  }
 diff -ruN --strip-trailing-cr a/engine/events/EngineEvent.ts b/engine/events/EngineEvent.ts
 --- a/engine/events/EngineEvent.ts	2026-10-15 18:53:01.992163900 -0500
-+++ b/engine/events/EngineEvent.ts	2026-10-15 19:00:55.675747400 -0500
++++ b/engine/events/EngineEvent.ts	2026-10-15 20:26:48.621114800 -0500
 @@ -20,7 +20,7 @@
    TransformMode,
    TransformSpace,
@@ -1527,7 +1542,7 @@ diff -ruN --strip-trailing-cr a/engine/events/EngineEvent.ts b/engine/events/Eng
  export abstract class EngineEvent {
 diff -ruN --strip-trailing-cr a/engine/keybinds_controls.ts b/engine/keybinds_controls.ts
 --- a/engine/keybinds_controls.ts	2026-10-15 18:53:02.203623400 -0500
-+++ b/engine/keybinds_controls.ts	2026-10-15 19:00:56.767885200 -0500
++++ b/engine/keybinds_controls.ts	2026-10-15 20:26:50.379868500 -0500
 @@ -1,3 +1,4 @@
 +// @ts-nocheck PRISM PATCH: upstream was compiled against looser three typings; behaviour is unchanged.
  import * as THREE from "three";
@@ -1535,7 +1550,7 @@ diff -ruN --strip-trailing-cr a/engine/keybinds_controls.ts b/engine/keybinds_co
    OrbitControls,
 diff -ruN --strip-trailing-cr a/engine/placeholder_manager.ts b/engine/placeholder_manager.ts
 --- a/engine/placeholder_manager.ts	2026-10-15 18:53:02.437427300 -0500
-+++ b/engine/placeholder_manager.ts	2026-10-15 19:00:57.437640700 -0500
++++ b/engine/placeholder_manager.ts	2026-10-15 20:26:51.210115600 -0500
 @@ -69,7 +69,9 @@
    }
  
@@ -1561,7 +1576,7 @@ diff -ruN --strip-trailing-cr a/engine/placeholder_manager.ts b/engine/placehold
        position,
 diff -ruN --strip-trailing-cr a/engine/save_manager.ts b/engine/save_manager.ts
 --- a/engine/save_manager.ts	2026-10-15 18:53:02.526681900 -0500
-+++ b/engine/save_manager.ts	2026-10-15 19:00:58.857629500 -0500
++++ b/engine/save_manager.ts	2026-10-15 20:26:51.984982200 -0500
 @@ -1,5 +1,5 @@
  import * as THREE from "three";
 -import { Camera } from "@storyteller/common";
@@ -1571,7 +1586,7 @@ diff -ruN --strip-trailing-cr a/engine/save_manager.ts b/engine/save_manager.ts
  import { StoryTellerProxyScene } from "../proxy/storyteller_proxy_scene";
 diff -ruN --strip-trailing-cr a/engine/scene.ts b/engine/scene.ts
 --- a/engine/scene.ts	2026-10-15 18:53:02.606508400 -0500
-+++ b/engine/scene.ts	2026-10-15 19:00:59.203406700 -0500
++++ b/engine/scene.ts	2026-10-15 20:26:52.450139200 -0500
 @@ -1,22 +1,18 @@
  import * as THREE from "three";
  import { GLTFLoader, GLTF } from "three/addons/loaders/GLTFLoader.js";
@@ -2059,7 +2074,7 @@ diff -ruN --strip-trailing-cr a/engine/shaders.js b/engine/shaders.js
 -export { VERTEX_SHADER, FRAGMENT_SHADER };
 diff -ruN --strip-trailing-cr a/enums/EditorState.ts b/enums/EditorState.ts
 --- a/enums/EditorState.ts	2026-10-15 18:53:03.094187300 -0500
-+++ b/enums/EditorState.ts	2026-10-15 19:01:03.309935800 -0500
++++ b/enums/EditorState.ts	2026-10-15 20:26:56.303018200 -0500
 @@ -5,6 +5,8 @@
  
  export enum CameraAspectRatio {
@@ -2071,7 +2086,7 @@ diff -ruN --strip-trailing-cr a/enums/EditorState.ts b/enums/EditorState.ts
    HORIZONTAL_3_2 = "horizontal_3_2",
 diff -ruN --strip-trailing-cr a/hooks/useFreeCam.ts b/hooks/useFreeCam.ts
 --- a/hooks/useFreeCam.ts	2026-10-15 18:53:03.425374200 -0500
-+++ b/hooks/useFreeCam.ts	2026-10-15 19:01:07.985059300 -0500
++++ b/hooks/useFreeCam.ts	2026-10-15 20:27:02.009080600 -0500
 @@ -1,6 +1,5 @@
  import { useEffect, useMemo, useRef } from "react";
  import { MathUtils } from "three";
@@ -2120,7 +2135,7 @@ diff -ruN --strip-trailing-cr a/hooks/useFreeCam.ts b/hooks/useFreeCam.ts
    useEffect(() => {
 diff -ruN --strip-trailing-cr a/models/index.ts b/models/index.ts
 --- a/models/index.ts	2026-10-15 18:53:03.480152300 -0500
-+++ b/models/index.ts	2026-10-15 19:01:08.634845900 -0500
++++ b/models/index.ts	2026-10-15 20:27:02.785376100 -0500
 @@ -1,6 +1,4 @@
 -export * from "./assets";
 -export * from "./mediaInfo";
@@ -2134,7 +2149,7 @@ diff -ruN --strip-trailing-cr a/models/index.ts b/models/index.ts
 +export type { SceneGenereationMetaData } from "./sceneGenerationMetadata";
 diff -ruN --strip-trailing-cr a/proxy/storyteller_proxy_scene.ts b/proxy/storyteller_proxy_scene.ts
 --- a/proxy/storyteller_proxy_scene.ts	2026-10-15 18:53:03.623271800 -0500
-+++ b/proxy/storyteller_proxy_scene.ts	2026-10-15 19:01:09.757111700 -0500
++++ b/proxy/storyteller_proxy_scene.ts	2026-10-15 20:27:04.033361200 -0500
 @@ -289,6 +289,10 @@
        if (json_object.user_data?.skeletonVisible !== undefined) {
          obj.userData["skeletonVisible"] = json_object.user_data.skeletonVisible;
@@ -2148,7 +2163,7 @@ diff -ruN --strip-trailing-cr a/proxy/storyteller_proxy_scene.ts b/proxy/storyte
        }
 diff -ruN --strip-trailing-cr a/shims/common.ts b/shims/common.ts
 --- a/shims/common.ts	1969-12-31 18:00:00.000000000 -0600
-+++ b/shims/common.ts	2026-10-15 19:01:12.169591700 -0500
++++ b/shims/common.ts	2026-10-15 20:27:05.825885400 -0500
 @@ -0,0 +1,14 @@
 +// PRISM PATCH: local replacement for the two `@storyteller/common` types the engine imports.
 +export interface Camera {
@@ -2166,7 +2181,7 @@ diff -ruN --strip-trailing-cr a/shims/common.ts b/shims/common.ts
 +}
 diff -ruN --strip-trailing-cr a/shims/shape-factory.ts b/shims/shape-factory.ts
 --- a/shims/shape-factory.ts	1969-12-31 18:00:00.000000000 -0600
-+++ b/shims/shape-factory.ts	2026-10-15 19:01:12.549003600 -0500
++++ b/shims/shape-factory.ts	2026-10-15 20:27:06.252776100 -0500
 @@ -0,0 +1,13 @@
 +// PRISM PATCH (new file): lets the host register extra procedural shapes (Plane, Mannequin) without editing the
 +// engine's `Scene.instantiate` switch per shape. The host registers factories before mounting an editor.
@@ -2183,7 +2198,7 @@ diff -ruN --strip-trailing-cr a/shims/shape-factory.ts b/shims/shape-factory.ts
 +export const getShapeFactory = (key: string) => factories.get(key);
 diff -ruN --strip-trailing-cr a/shims/toast.ts b/shims/toast.ts
 --- a/shims/toast.ts	1969-12-31 18:00:00.000000000 -0600
-+++ b/shims/toast.ts	2026-10-15 19:01:12.929163200 -0500
++++ b/shims/toast.ts	2026-10-15 20:27:06.602504600 -0500
 @@ -0,0 +1,13 @@
 +// PRISM PATCH: the engine toasts through `react-hot-toast`; Prism routes engine messages through its own
 +// adapter instead, so the engine gets a no-UI sink that records the last message.
@@ -2200,13 +2215,13 @@ diff -ruN --strip-trailing-cr a/shims/toast.ts b/shims/toast.ts
 +export default toast;
 diff -ruN --strip-trailing-cr a/shims/ui-viewer-3d.ts b/shims/ui-viewer-3d.ts
 --- a/shims/ui-viewer-3d.ts	1969-12-31 18:00:00.000000000 -0600
-+++ b/shims/ui-viewer-3d.ts	2026-10-15 19:01:13.256064500 -0500
++++ b/shims/ui-viewer-3d.ts	2026-10-15 20:27:06.986505300 -0500
 @@ -0,0 +1,2 @@
 +// PRISM PATCH: stands in for `@storyteller/ui-viewer-3d` (only the disposal helpers are used).
 +export { collectObjectTextures, disposeObject3D } from "../viewer-3d/disposeObject3D";
 diff -ruN --strip-trailing-cr a/viewer-3d/disposeObject3D.ts b/viewer-3d/disposeObject3D.ts
 --- a/viewer-3d/disposeObject3D.ts	2026-10-15 18:53:03.718298600 -0500
-+++ b/viewer-3d/disposeObject3D.ts	2026-10-15 19:01:10.415158500 -0500
++++ b/viewer-3d/disposeObject3D.ts	2026-10-15 20:27:04.873258500 -0500
 @@ -1,10 +1,10 @@
  import * as THREE from "three";
 -import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";

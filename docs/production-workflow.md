@@ -130,3 +130,16 @@ behind model recommendations (_Models_). Automated continuity analysis is an opt
 auto-runs. Details: [human-generation-review](human-generation-review.md),
 [generation-candidate-sets](generation-candidate-sets.md), [model-performance](model-performance.md),
 [model-recommendation-v1](model-recommendation-v1.md).
+
+## 3D camera motion and previs (Phase 2F M2A)
+
+A Shot's camera motion is authored in the 3D Set (Camera motion section) and stored as `prism.camera-path.v1`:
+keyframes of production-camera pose and focal length, interpolated by one deterministic evaluator. Timing comes from the
+Shot (selected performance duration, else the manual target; frame rate from `generation.fps`). A local previs video
+can be rendered in the browser and is kept as a private asset with the path and set revisions it came from.
+
+- **Not a freshness part.** Camera motion and previs do not change the 13 shot freshness parts, so authoring them never
+  stales an existing storyboard approval.
+- **Frozen in the package.** `spatialReference.cameraMotion` carries the path by value plus the asset id of the previs
+  rendered from exactly that path. It is context for future provider adapters; nothing is injected into prompts.
+- **Stale, not deleted.** Changing the set after a path/previs was made marks them stale; history is kept.

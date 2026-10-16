@@ -203,3 +203,37 @@ describe("camera motion in the GenerationPackage (Phase 2F M2A)", () => {
     expect((await repo.previs.getCameraPathForShot(shot.id))!.revision).toBe(2);
   });
 });
+
+describe("previs asset taxonomy", () => {
+  it("accepts a local_previs video asset (source is part of the shared asset schema)", async () => {
+    const { assetSchema } = await import("@/domain/schemas");
+    const r = assetSchema.safeParse({
+      id: "a1",
+      projectId: "p1",
+      createdBy: null,
+      type: "video",
+      purpose: "video_reference",
+      source: "local_previs",
+      name: "previs",
+      originalFilename: "previs.webm",
+      storageProvider: "local",
+      bucket: null,
+      objectPath: "p/a/previs.webm",
+      mime: "video/webm",
+      byteSize: 10,
+      checksum: "abc",
+      width: 956,
+      height: 400,
+      durationMs: 4000,
+      frameRate: 24,
+      sampleRate: null,
+      channels: null,
+      tags: ["previs"],
+      notes: "",
+      metadata: {},
+      createdAt: iso,
+      updatedAt: iso,
+    });
+    expect(r.success).toBe(true);
+  });
+});
