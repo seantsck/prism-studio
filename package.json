@@ -34,6 +34,7 @@
     "db:media-qa": "tsx --env-file=.env.local scripts/db-media-qa.mts",
     "continuity:db:provision": "tsx --env-file=.env.local scripts/continuity-db-provision.mts",
     "db:candidates": "tsx --env-file=.env.local scripts/db-candidates.mts",
+    "db:previs": "tsx --env-file=.env.local scripts/db-previs.mts",
     "db:continuity-analysis": "tsx --env-file=.env.local scripts/db-continuity-analysis.mts",
     "continuity:worker": "tsx --env-file=.env.local scripts/continuity-worker.mts",
     "continuity:pre-paid:check": "tsx --env-file=.env.local scripts/continuity-pre-paid-check.mts",
@@ -63,7 +64,9 @@
     "react-dom": "^19.3.0",
     "server-only": "^0.0.1",
     "tailwind-merge": "^3.3.1",
-    "zod": "^4.6.6"
+    "three": "^0.171.0",
+    "zod": "^4.6.6",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",
@@ -72,6 +75,7 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "@types/three": "^0.171.0",
     "eslint": "^9.39.0",
     "eslint-config-next": "^16.4.0",
     "prettier": "^3.6.2",

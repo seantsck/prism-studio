@@ -1,0 +1,2252 @@
+diff -ruN --strip-trailing-cr a/PageSceneStore.ts b/PageSceneStore.ts
+--- a/PageSceneStore.ts	2026-10-15 18:53:03.543635500 -0500
++++ b/PageSceneStore.ts	2026-10-15 19:00:42.269927200 -0500
+@@ -1,6 +1,6 @@
+ import { create } from "zustand";
+ import type { LucideIcon } from "lucide-react";
+-import { Camera, FocalLengthDragging } from "@storyteller/common";
++import { Camera, FocalLengthDragging } from "./shims/common";
+ import {
+   AssetType,
+   AssetFilterOption,
+diff -ruN --strip-trailing-cr a/actions/index.ts b/actions/index.ts
+--- a/actions/index.ts	2026-10-15 18:53:00.692403500 -0500
++++ b/actions/index.ts	2026-10-15 19:00:44.823118600 -0500
+@@ -1,3 +1,4 @@
++// PRISM PATCH: trimmed barrel (the AssetModal / AnimationsModal / record / timeline UI actions are not vendored).
+ export * from "./addObject";
+ export * from "./addCharacter";
+ export * from "./addShape";
+@@ -8,9 +9,5 @@
+ export * from "./setObjectColor";
+ export * from "./toggleObjectLock";
+ export * from "./toggleObjectVisibility";
+-export * from "./toggleSkeletonHelper";
+-export * from "./openAnimationsModal";
+-export * from "./openAssetModal";
+ export * from "./transformObject";
+-export * from "./timeline";
+ export * from "./cameraView";
+diff -ruN --strip-trailing-cr a/adapter.ts b/adapter.ts
+--- a/adapter.ts	2026-10-15 18:53:00.893337400 -0500
++++ b/adapter.ts	2026-10-15 19:00:46.628966600 -0500
+@@ -1,91 +1,6 @@
+-// Single platform-abstraction surface the host (artcraft Tauri app or
+-// any future web host) injects into PageScene. Mirrors the shape of
+-// PageDrawAdapter — methods for Tauri-specific generation/upload, slot
+-// renderers for host-owned modals, and optional event hooks for
+-// telemetry / error surfacing / tab persistence.
+-//
+-// The library itself has zero Tauri imports. Everything platform-
+-// specific is on this interface; the adapter is constructed in the
+-// host wrapper and passed to <PageScene adapter={adapter} />.
+-
+-import type { ReactNode } from "react";
+-import type { LucideIcon } from "lucide-react";
+-import type {
+-  CommonAspectRatio,
+-  CommonResolution,
+-  ImageModel,
+-} from "@storyteller/model-list";
+-import type { GenerationProvider } from "@storyteller/api-enums";
+-import type { UploadImageArgs } from "@storyteller/common";
+-import type {
+-  FilterEngineCategories,
+-  FilterMediaType,
+-  ToastTypes,
+-} from "./enums";
+-import type { MediaInfo } from "./models/mediaInfo";
+-import type { Pagination, PaginationInfinite } from "./models/pagination";
+-
+-// ─── Generation ────────────────────────────────────────────────────────
+-
+-export interface PageSceneGenerateRequest {
+-  model?: ImageModel;
+-  provider?: GenerationProvider;
+-  prompt?: string;
+-  imageMediaTokens?: string[];
+-  sceneImageMediaToken?: string;
+-  imageCount?: number;
+-  aspectRatio?: CommonAspectRatio;
+-  resolution?: CommonResolution;
+-  frontendCaller?: string;
+-  frontendSubscriberId?: string;
+-}
+-
+-// ─── Media listing (AssetMenu) ─────────────────────────────────────────
+-
+-export interface ListMediaFilesQuery {
+-  pageSize: number;
+-  pageIndex?: number;        // user-list pagination
+-  cursor?: string;           // featured-list infinite pagination
+-  filterEngineCategories: FilterEngineCategories[];
+-  filterMediaTypes?: FilterMediaType[];
+-}
+-
+-export interface ListUserMediaFilesResult {
+-  success: boolean;
+-  data?: MediaInfo[];
+-  pagination?: Pagination;
+-  errorMessage?: string;
+-}
+-
+-export interface ListFeaturedMediaFilesResult {
+-  success: boolean;
+-  data?: MediaInfo[];
+-  pagination?: PaginationInfinite;
+-  errorMessage?: string;
+-}
+-
+-// One saved scene as returned by the host's scene listing (see
+-// PageSceneAdapter.listUserSceneProjects). Just what the scene picker
+-// renders — hosts map their richer API rows down to this.
+-export interface SceneProjectListItem {
+-  token: string;
+-  maybe_title?: string | null;
+-  updated_at: string;
+-  /**
+-   * Cover thumbnail: either a CDN bucket path (legacy media rows) or an
+-   * absolute URL (project rows expose full cover links, not bucket paths).
+-   * SceneCard handles both.
+-   */
+-  maybe_thumbnail?: string | null;
+-}
+-
+-export interface ListUserSceneProjectsResult {
+-  success: boolean;
+-  data?: SceneProjectListItem[];
+-  errorMessage?: string;
+-}
+-
+-// ─── Scene I/O ─────────────────────────────────────────────────────────
++// PRISM PATCH (replaces upstream adapter.ts, 336 LOC): the upstream interface mirrors the ArtCraft/Tauri host
++// (generation enqueue, media listing, CDN URLs, accounts). The engine only ever calls the members below, so the
++// boundary is reduced to exactly those. Prism implements it in `src/lib/previs/` (asset-id -> authorised URL).
+ 
+ export interface PageSceneSavePayload {
+   saveJson: string;
+@@ -94,243 +9,17 @@
+   sceneThumbnail: Blob | undefined;
+ }
+ 
+-// ─── Adapter ───────────────────────────────────────────────────────────
+-
+-// A still (Capture) or video (Record) produced by Record mode, cached
+-// locally (object URL) — handed to the 2D/video editor or uploaded on demand.
+-export interface PageSceneArtifact {
+-  kind: "image" | "video";
+-  blob: Blob;
+-  objectUrl: string;
+-  fileName: string;
+-  mimeType: string;
+-}
+-
+ export interface PageSceneAdapter {
+-  // Generation enqueue. Same shape as PageDrawAdapter.enqueueEditImage.
+-  enqueueGeneration(
+-    req: PageSceneGenerateRequest,
+-  ): Promise<{ status: string }>;
+-
+-  // Scene I/O — replaces the previous engine/api_manager.ts +
+-  // engine/api_fetchers.ts. The host owns all HTTP / FetchProxy
+-  // plumbing.
+   saveScene(payload: PageSceneSavePayload): Promise<string>;
+   loadScene(token: string): Promise<unknown>;
+-  // Wraps Tauri-flavored CORS-bypassed fetches. Used by Scene's GLTF
+-  // loader paths that resolve CDN URLs the browser can't fetch directly.
+-  // Accepts an optional AbortSignal so the scene loader can cancel
+-  // in-flight asset downloads when its load is superseded (rapid tab
+-  // switches, applyJson during loadScene). Adapters that can't honor
+-  // cancellation may ignore the signal — the lib's ticket guard still
+-  // protects state correctness.
+-  fetchAsset(
+-    url: string,
+-    init?: { signal?: AbortSignal },
+-  ): Promise<Response>;
+-
+-  // Hosts. Engine builds CDN URLs (`${cdnOrigin}${bucket_path}`) and
+-  // API URLs (`${apiSchemeAndHost}/v1/...`); the host supplies both.
+-  getCdnOrigin(): string;
+-  getApiSchemeAndHost(): string;
+-  getCurrentUserToken?(): string | undefined;
+-
+-  // Compose a CDN URL for a bucket path with optional width/quality
+-  // resize hints. Wraps the host's BucketConfig.getCdnUrl. AssetMenu
+-  // uses this to build asset thumbnails at small sizes.
+-  getCdnUrl(bucketPath: string, width?: number, quality?: number): string;
+-
+-  // Paginated media-file listing — backs AssetMenu's "My objects" tab.
+-  // Wraps the host's MediaFilesApi.ListUserMediaFiles.
+-  listUserMediaFiles(
+-    query: ListMediaFilesQuery,
+-  ): Promise<ListUserMediaFilesResult>;
+-
+-  // Cursor-paginated featured listing — backs AssetMenu's "Featured"
+-  // tabs (skybox, character, location, etc.). Wraps the host's
+-  // MediaFilesApi.ListFeaturedMediaFiles.
+-  listFeaturedMediaFiles(
+-    query: ListMediaFilesQuery,
+-  ): Promise<ListFeaturedMediaFilesResult>;
+-
+-  // Optional: list the user's saved 3D scenes for the scene picker.
+-  // Hosts that have migrated scene persistence to the project endpoints
+-  // (`/v1/media_files/upload/project/scene_3d/*`) implement this with the
+-  // project list (merged with any legacy engine_category=scene rows).
+-  // When absent, the picker falls back to
+-  // listUserMediaFiles(engine_category=scene) — the pre-split flow.
+-  listUserSceneProjects?(): Promise<ListUserSceneProjectsResult>;
+-
+-  // Toast notifications. Wraps the host's addToast / react-hot-toast
+-  // pipeline; the lib stays free of toast-library imports.
+-  showToast(level: ToastTypes, message: string): void;
+-
+-  // Resolve a media_file_token to its CDN URL. Wraps the host's
+-  // MediaFilesApi.GetMediaFileByToken. Used by Scene's asset loaders
+-  // when they only have the token, not the full URL.
++  fetchAsset(url: string, init?: { signal?: AbortSignal }): Promise<Response>;
+   getMediaUrlByToken(token: string): Promise<string>;
+-
+-  // Resolve many tokens in one batch. Used by the scene loader to warm
+-  // a URL cache up front so it can fire all asset downloads in parallel
+-  // instead of doing an N+1 metadata roundtrip. Optional: when absent
+-  // the lib falls back to Promise.all of getMediaUrlByToken.
+-  // Hosts that wrap MediaFilesApi can implement this with
+-  // ListMediaFilesByTokens (GET /v1/media_files/batch).
+   getMediaUrlsByTokens?(tokens: string[]): Promise<Record<string, string>>;
+-
+-  // Visual viewport dimensions. Used by DnD asset-drop hit-testing
+-  // to detect "is this drop over the 3D canvas?" — the artcraft host
+-  // wires its `pageWidth`/`pageHeight` signals through; web hosts
+-  // without those signals can omit, and the lib falls back to
+-  // window.innerWidth/innerHeight.
+-  getViewportSize?(): { width: number; height: number };
+-
+-  // Slot renders for host-owned UI. The library renders these inside
+-  // its own AssetMenu / scene-load modal containers — same shape as
+-  // PageDrawAdapter.renderBaseImageSelector.
+-  renderAssetBrowser(props: {
+-    onAssetSelect: (asset: {
+-      mediaToken: string;
+-      name: string;
+-      kind: string;
+-    }) => void;
+-  }): ReactNode;
+-  renderSceneLoader(props: {
+-    onSceneSelect: (token: string) => void;
+-  }): ReactNode;
+-
+-  // "Upload your own model" host modal. Rendered from inside the lib's
+-  // AssetModal / AnimationsModal — the lib owns the trigger button + modal
+-  // control state, the host owns the actual upload UI (file picker,
+-  // validation, progress, splat conversion, etc.).
+-  renderAssetUploader(props: {
+-    isOpen: boolean;
+-    onClose: () => void;
+-    onSuccess: (category: FilterEngineCategories) => void;
+-    title: string;
+-    titleIcon: LucideIcon;
+-    // Preselect the uploader's "Upload as ..." category toggle when opened
+-    // from a scoped library (the animations panel passes "animation"); a
+-    // scoped open also keeps the host's My Library from popping over that
+-    // panel on success. Literal strings rather than FilterEngineCategories:
+-    // the upload-modal lib declares its own copy of that enum, and the two
+-    // enum types aren't assignable across package boundaries.
+-    initialCategory?: "animation" | "character";
+-  }): ReactNode;
+-
+-  // Image upload modal — distinct from renderAssetUploader because
+-  // image-plane uploads use a different host pipeline (image
+-  // processing, no GLB/splat conversion). Triggered from Controls3D.
+-  renderImageUploader(props: {
+-    isOpen: boolean;
+-    onClose: () => void;
+-    onSuccess: () => void;
+-    title: string;
+-    titleIcon: LucideIcon;
+-  }): ReactNode;
+-
+-  // Splat (.spz) upload modal — triggered from Controls3D for the
+-  // gaussian-splat upload path.
+-  renderSplatUploader(props: {
+-    isOpen: boolean;
+-    onClose: () => void;
+-    onSuccess: () => void;
+-    title: string;
+-    titleIcon: LucideIcon;
+-  }): ReactNode;
+-
+-  // Upload an image File and emit upload-progress states. Wraps the
+-  // host's UploadImageMedia / UploadModalMedia.uploadImage pipeline.
+-  // Used by PromptBox3D for reference-image uploads. Signature
+-  // matches @storyteller/common's UploadImageArgs so it can pass
+-  // through to PromptBox3D.uploadImage as-is.
+-  uploadImage(args: UploadImageArgs): Promise<void>;
+-
+-  // Upload an image-plane keyed by an existing media token. Used by
+-  // the gallery-drop handler when the user drags a non-3D gallery
+-  // item onto the 3D scene. Wraps host's uploadPlaneFromMediaToken.
+-  uploadPlaneFromMediaToken(args: {
+-    title: string;
+-    mediaToken: string;
+-    progressCallback: UploadImageArgs["progressCallback"];
+-  }): Promise<void>;
+-
+-  // Cross-page navigation hook. Today the lib only needs one
+-  // destination ("create 3D model from image"), so it's a single
+-  // named action; add more as the lib grows page-aware UI. Tauri host
+-  // implements via useTabStore.setActiveTab; web host via router push.
+-  navigateToImageTo3D(): void;
+-
+-  // Persist a produced still/video to the user's media library and return its
+-  // media token. Images auto-upload after Capture; videos upload on demand
+-  // (they're large). Required so hosts cannot silently omit recording uploads.
+-  uploadMedia(args: {
+-    kind: "image" | "video";
+-    blob: Blob;
+-    fileName: string;
+-    title?: string;
+-  }): Promise<string>;
+-
+-  // Open the app's media Lightbox on an uploaded token — the shared modal that
+-  // offers every destination for the media type (Edit-on-Canvas, Make-Video,
+-  // Recreate, Share, Download). Host resolves the CDN URL from the token and
+-  // renders <Lightbox>. Replaces bespoke per-destination handoffs.
+-  openMediaLightbox(token: string, kind: "image" | "video"): void | Promise<void>;
+-
+-  // Auth/logout — the SettingsModal in Controls3D needs a logout
+-  // callback. Tauri host: setLogoutStates. Web host: web auth flow.
+-  performLogout(): void;
+-
+-  // Open the host's signup/login modal. Called when an anonymous
+-  // visitor clicks a feature that requires an account (Save, Generate,
+-  // Upload, "My Library"). Tauri host leaves it undefined — its user
+-  // is always signed in. Webapp host wires this to its auth modal.
+-  promptSignup?(reason?: string): void;
+-
+-  // Open the host's New-Scene chooser (e.g. webapp's splash modal). When
+-  // defined, the lib's File > New Scene item delegates here instead of
+-  // showing its inline confirm dialog. Tauri host leaves it undefined and
+-  // keeps the existing behavior.
+-  onRequestNewSceneSelector?(): void;
+-
+-  // Roll the current editor session back to the original scene the
+-  // host loaded. Called when the user confirms the destructive Reset
+-  // modal in the File menu. Implementations typically pull the
+-  // original scene JSON from a host-side cache and feed it back
+-  // through `editor.applyJson(json)`. When undefined the Reset menu
+-  // item is hidden — Tauri leaves it off; webapp wires it to its
+-  // per-token cache's stored `original` snapshot.
+-  resetToOriginal?(): Promise<void> | void;
+-
+-  // Optional event hooks — telemetry, host-side modals, tab title sync.
+-  onSelectionChange?(
+-    sel: { uuid: string; assetType: string } | null,
+-  ): void;
+-  onSceneDirty?(dirty: boolean): void;
+-  onError?(err: { title: string; message: string }): void;
+-  onSceneSaved?(token: string): void;
+-  // Wraps the host's `signalScene(...)` so the artcraft TopBar (and
+-  // other app-wide consumers) keeps seeing scene title/owner/dirty
+-  // state without the lib importing the host signal.
++  getCurrentUserToken?(): string | undefined;
+   onSceneTitleChange?(meta: {
+     title: string;
+     token?: string;
+     ownerToken?: string;
+     isModified: boolean;
+   }): void;
+-  onEnqueueMeta?(meta: {
+-    prompt: string;
+-    refImageUrls: string[];
+-    modelType: string;
+-    timestamp: number;
+-  }): void;
+-
+-  // Tab-cache integration. The host (artcraft useTabStore) reads/
+-  // writes the serialized scene JSON between tab switches; the library
+-  // is single-instance and tab-agnostic.
+-  cacheJsonString?: string;
+-  onSceneSerialized?(json: string): void;
+-
+-  // Initial scene to load on mount (the route param in artcraft).
+-  initialSceneToken?: string;
+ }
+diff -ruN --strip-trailing-cr a/engine/CustomOutlinePass.js b/engine/CustomOutlinePass.js
+--- a/engine/CustomOutlinePass.js	2026-10-15 18:53:01.192092100 -0500
++++ b/engine/CustomOutlinePass.js	1969-12-31 18:00:00.000000000 -0600
+@@ -1,278 +0,0 @@
+-import * as THREE from "three";
+-import { Pass } from "three/examples/jsm/postprocessing/Pass.js";
+-import { FullScreenQuad } from "three/examples/jsm/postprocessing/Pass.js";
+-import {
+-  getSurfaceIdMaterial,
+-  getDebugSurfaceIdMaterial,
+-} from "./FindSurfaces.js";
+-
+-// Follows the structure of
+-// 		https://github.com/mrdoob/three.js/blob/master/examples/jsm/postprocessing/OutlinePass.js
+-class CustomOutlinePass extends Pass {
+-  constructor(resolution, scene, camera) {
+-    super();
+-
+-    this.renderScene = scene;
+-    this.renderCamera = camera;
+-    this.resolution = new THREE.Vector2(resolution.x, resolution.y);
+-
+-    this.fsQuad = new FullScreenQuad(null);
+-    this.fsQuad.material = this.createOutlinePostProcessMaterial();
+-
+-    // Create a buffer to store the normals of the scene onto
+-    // or store the "surface IDs"
+-    const surfaceBuffer = new THREE.WebGLRenderTarget(
+-      this.resolution.x,
+-      this.resolution.y,
+-    );
+-    surfaceBuffer.texture.format = THREE.RGBAFormat;
+-    surfaceBuffer.texture.type = THREE.HalfFloatType;
+-    surfaceBuffer.texture.minFilter = THREE.NearestFilter;
+-    surfaceBuffer.texture.magFilter = THREE.NearestFilter;
+-    surfaceBuffer.texture.generateMipmaps = false;
+-    surfaceBuffer.stencilBuffer = false;
+-    this.surfaceBuffer = surfaceBuffer;
+-
+-    this.normalOverrideMaterial = new THREE.MeshNormalMaterial();
+-    this.surfaceIdOverrideMaterial = getSurfaceIdMaterial();
+-    this.surfaceIdDebugOverrideMaterial = getDebugSurfaceIdMaterial();
+-    this.save_ = false;
+-  }
+-
+-  dispose() {
+-    this.surfaceBuffer.dispose();
+-    this.fsQuad.dispose();
+-  }
+-
+-  updateMaxSurfaceId(maxSurfaceId) {
+-    this.surfaceIdOverrideMaterial.uniforms.maxSurfaceId.value = maxSurfaceId;
+-  }
+-
+-  setSize(width, height) {
+-    this.surfaceBuffer.setSize(width, height);
+-    this.resolution.set(width, height);
+-
+-    this.fsQuad.material.uniforms.screenSize.value.set(
+-      this.resolution.x,
+-      this.resolution.y,
+-      1 / this.resolution.x,
+-      1 / this.resolution.y,
+-    );
+-  }
+-
+-  getDebugVisualizeValue() {
+-    return this.fsQuad.material.uniforms.debugVisualize.value;
+-  }
+-
+-  isUsingSurfaceIds() {
+-    const debugVisualize = this.getDebugVisualizeValue();
+-
+-    return (
+-      debugVisualize == 0 || // Main outlines v2 mode
+-      debugVisualize == 5 || // Render just surfaceID debug buffer
+-      debugVisualize == 6
+-    ); // Render just outlines with surfaceId
+-  }
+-
+-  save() {
+-    this.save_ = true;
+-  }
+-
+-  render(renderer, writeBuffer, readBuffer) {
+-    const depthBufferValue = writeBuffer.depthBuffer;
+-    writeBuffer.depthBuffer = false;
+-
+-    renderer.setRenderTarget(this.surfaceBuffer);
+-    const overrideMaterialValue = this.renderScene.overrideMaterial;
+-    this.renderScene.overrideMaterial = this.normalOverrideMaterial;
+-
+-    renderer.render(this.renderScene, this.renderCamera);
+-    this.renderScene.overrideMaterial = overrideMaterialValue;
+-
+-    this.fsQuad.material.uniforms["depthBuffer"].value =
+-      readBuffer.depthTexture;
+-    this.fsQuad.material.uniforms["surfaceBuffer"].value =
+-      this.surfaceBuffer.texture;
+-    this.fsQuad.material.uniforms["sceneColorBuffer"].value =
+-      readBuffer.texture;
+-
+-    renderer.setRenderTarget(writeBuffer);
+-    this.fsQuad.render(renderer);
+-
+-    // Reset the depthBuffer value so we continue writing to it in the next render.
+-    writeBuffer.depthBuffer = depthBufferValue;
+-  }
+-
+-  get vertexShader() {
+-    return `
+-			varying vec2 vUv;
+-			void main() {
+-				vUv = uv;
+-				gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+-			}
+-			`;
+-  }
+-  get fragmentShader() {
+-    return `
+-			#include <packing>
+-			// The above include imports "perspectiveDepthToViewZ"
+-			// and other GLSL functions from ThreeJS we need for reading depth.
+-			uniform sampler2D sceneColorBuffer;
+-			uniform sampler2D depthBuffer;
+-			uniform sampler2D surfaceBuffer;
+-			uniform float cameraNear;
+-			uniform float cameraFar;
+-			uniform vec4 screenSize;
+-			uniform vec3 outlineColor;
+-			uniform vec4 multiplierParameters;
+-			uniform int debugVisualize;
+-
+-			varying vec2 vUv;
+-
+-			// Helper functions for reading from depth buffer.
+-			float readDepth (sampler2D depthSampler, vec2 coord) {
+-				float fragCoordZ = texture2D(depthSampler, coord).x;
+-				float viewZ = perspectiveDepthToViewZ( fragCoordZ, cameraNear, cameraFar );
+-				return viewZToOrthographicDepth( viewZ, cameraNear, cameraFar );
+-			}
+-			float getLinearDepth(vec3 pos) {
+-				return -(viewMatrix * vec4(pos, 1.0)).z;
+-			}
+-
+-			float getLinearScreenDepth(sampler2D map) {
+-					vec2 uv = gl_FragCoord.xy * screenSize.zw;
+-					return readDepth(map,uv);
+-			}
+-
+-			// Helper functions for reading normals and depth of neighboring pixels.
+-			float getPixelDepth(int x, int y) {
+-				// screenSize.zw is pixel size 
+-				// vUv is current position
+-				return readDepth(depthBuffer, vUv + screenSize.zw * vec2(x, y));
+-			}
+-			// "surface value" is either the normal or the "surfaceID"
+-			vec3 getSurfaceValue(int x, int y) {
+-				vec3 val = texture2D(surfaceBuffer, vUv + screenSize.zw * vec2(x, y)).rgb;
+-				return val;
+-			}
+-
+-			float saturateValue(float num) {
+-				return clamp(num, 0.0, 1.0);
+-			}
+-
+-			float getSufaceIdDiff(vec3 surfaceValue) {
+-				float surfaceIdDiff = 0.0;
+-				surfaceIdDiff += distance(surfaceValue, getSurfaceValue(1, 0));
+-				surfaceIdDiff += distance(surfaceValue, getSurfaceValue(0, 1));
+-				surfaceIdDiff += distance(surfaceValue, getSurfaceValue(0, 1));
+-				surfaceIdDiff += distance(surfaceValue, getSurfaceValue(0, -1));
+-
+-				surfaceIdDiff += distance(surfaceValue, getSurfaceValue(1, 1));
+-				surfaceIdDiff += distance(surfaceValue, getSurfaceValue(1, -1));
+-				surfaceIdDiff += distance(surfaceValue, getSurfaceValue(-1, 1));
+-				surfaceIdDiff += distance(surfaceValue, getSurfaceValue(-1, -1));
+-				return surfaceIdDiff;
+-			}
+-
+-			void main() {
+-				vec4 sceneColor = texture2D(sceneColorBuffer, vUv);
+-				float depth = getPixelDepth(0, 0);
+-
+-				// "surfaceValue" is either the normal or the surfaceId
+-				vec3 surfaceValue = getSurfaceValue(0, 0);
+-
+-				// Get the difference between depth of neighboring pixels and current.
+-				float depthDiff = 0.0;
+-				depthDiff += abs(depth - getPixelDepth(1, 0));
+-				depthDiff += abs(depth - getPixelDepth(-1, 0));
+-				depthDiff += abs(depth - getPixelDepth(0, 1));
+-				depthDiff += abs(depth - getPixelDepth(0, -1));
+-
+-				// Get the difference between surface values of neighboring pixels
+-				// and current
+-				float surfaceValueDiff = getSufaceIdDiff(surfaceValue);
+-				
+-				// Apply multiplier & bias to each 
+-				float depthBias = multiplierParameters.x;
+-				float depthMultiplier = multiplierParameters.y;
+-				float normalBias = multiplierParameters.z;
+-				float normalMultiplier = multiplierParameters.w;
+-
+-				depthDiff = depthDiff * depthMultiplier;
+-				depthDiff = saturateValue(depthDiff);
+-				depthDiff = pow(depthDiff, depthBias);
+-
+-				if (debugVisualize != 0 && debugVisualize != 6) {
+-					// Apply these params when using
+-					// normals instead of surfaceIds
+-					surfaceValueDiff = surfaceValueDiff * normalMultiplier;
+-					surfaceValueDiff = saturateValue(surfaceValueDiff);
+-					surfaceValueDiff = pow(surfaceValueDiff, normalBias);
+-				} else {
+-					if (surfaceValueDiff != 0.0) surfaceValueDiff = 1.0;
+-				}
+-
+-				float outline = saturateValue(surfaceValueDiff + depthDiff);
+-			
+-				// Combine outline with scene color.
+-				vec4 outlineColor = vec4(outlineColor, 1.0);
+-				gl_FragColor = vec4(mix(sceneColor, outlineColor, outline));
+-
+-				//// For debug visualization of the different inputs to this shader.
+-				if (debugVisualize == 2) {
+-					gl_FragColor = sceneColor;
+-				}
+-				if (debugVisualize == 3) {
+-					gl_FragColor = vec4(vec3(depth), 1.0);
+-          gl_FragColor.rgb = 1.0 - gl_FragColor.rgb;
+-				}
+-				if (debugVisualize == 4 || debugVisualize == 5) {
+-					// 4 visualizes the normal buffer
+-					// 5 visualizes the surfaceID buffer 
+-					// Either way they are the same buffer, we change 
+-					// what we render into it
+-					gl_FragColor = vec4(surfaceValue, 1.0);
+-				}
+-				if (debugVisualize == 6 || debugVisualize == 7) {
+-          // Apply threshold
+-          if (outline > 0.75) {
+-              outline = 1.0;
+-          } else {
+-              outline = 0.0;
+-          }
+-					gl_FragColor = vec4(vec3(outline * outlineColor), 1.0);
+-				}				
+-			}
+-			`;
+-  }
+-
+-  createOutlinePostProcessMaterial() {
+-    return new THREE.ShaderMaterial({
+-      uniforms: {
+-        debugVisualize: { value: 0 },
+-        sceneColorBuffer: {},
+-        depthBuffer: {},
+-        surfaceBuffer: {},
+-        outlineColor: { value: new THREE.Color(0xffffff) },
+-        //4 scalar values packed in one uniform: depth multiplier, depth bias, and same for normals.
+-        multiplierParameters: {
+-          value: new THREE.Vector4(0.9, 20, 1, 1),
+-        },
+-        cameraNear: { value: 0.1 },
+-        cameraFar: { value: 3 },
+-        screenSize: {
+-          value: new THREE.Vector4(
+-            this.resolution.x,
+-            this.resolution.y,
+-            1 / this.resolution.x,
+-            1 / this.resolution.y,
+-          ),
+-        },
+-      },
+-      vertexShader: this.vertexShader,
+-      fragmentShader: this.fragmentShader,
+-    });
+-  }
+-}
+-
+-export { CustomOutlinePass };
+diff -ruN --strip-trailing-cr a/engine/FindSurfaces.js b/engine/FindSurfaces.js
+--- a/engine/FindSurfaces.js	2026-10-15 18:53:02.042369700 -0500
++++ b/engine/FindSurfaces.js	1969-12-31 18:00:00.000000000 -0600
+@@ -1,193 +0,0 @@
+-import * as THREE from "three";
+-
+-/*
+-  This class computes "surface IDs" for a given mesh.
+-
+-  A "surface" is defined as a set of triangles that share vertices.
+-  
+-  Inspired by Ian MacLarty, see:
+-    https://twitter.com/ianmaclarty/status/1499494878908403712
+-*/
+-class FindSurfaces {
+-  constructor() {
+-    // This identifier, must be globally unique for each surface
+-    // across all geometry rendered on screen
+-    this.surfaceId = 0;
+-  }
+-
+-  /*
+-   * Returns the surface Ids as a Float32Array that can be inserted as a vertex attribute
+-   */
+-  getSurfaceIdAttribute(mesh) {
+-    const bufferGeometry = mesh.geometry;
+-    const numVertices = bufferGeometry.attributes.position.count;
+-    const vertexIdToSurfaceId = this._generateSurfaceIds(mesh);
+-
+-    const colors = [];
+-    for (let i = 0; i < numVertices; i++) {
+-      const vertexId = i;
+-      let surfaceId = vertexIdToSurfaceId[vertexId];
+-
+-      colors.push(surfaceId, 0, 0, 1);
+-    }
+-
+-    const colorsTypedArray = new Float32Array(colors);
+-    return colorsTypedArray;
+-  }
+-
+-  /*
+-   * Returns a `vertexIdToSurfaceId` map
+-   * given a vertex, returns the surfaceId
+-   */
+-  _generateSurfaceIds(mesh) {
+-    const bufferGeometry = mesh.geometry;
+-    //const numVertices = bufferGeometry.attributes.position.count;
+-    const numIndices = bufferGeometry.index.count;
+-    const indexBuffer = bufferGeometry.index.array;
+-    //const vertexBuffer = bufferGeometry.attributes.position.array;
+-    // For each vertex, search all its neighbors
+-    const vertexMap = {};
+-    for (let i = 0; i < numIndices; i += 3) {
+-      const i1 = indexBuffer[i + 0];
+-      const i2 = indexBuffer[i + 1];
+-      const i3 = indexBuffer[i + 2];
+-
+-      add(i1, i2);
+-      add(i1, i3);
+-      add(i2, i3);
+-    }
+-    function add(a, b) {
+-      if (vertexMap[a] == undefined) vertexMap[a] = [];
+-      if (vertexMap[b] == undefined) vertexMap[b] = [];
+-
+-      if (vertexMap[a].indexOf(b) == -1) vertexMap[a].push(b);
+-      if (vertexMap[b].indexOf(a) == -1) vertexMap[b].push(a);
+-    }
+-
+-    // Find cycles
+-    const frontierNodes = Object.keys(vertexMap).map((v) => Number(v));
+-    const exploredNodes = {};
+-    const vertexIdToSurfaceId = {};
+-
+-    while (frontierNodes.length > 0) {
+-      const node = frontierNodes.pop();
+-      if (exploredNodes[node]) continue;
+-
+-      // Get all neighbors recursively
+-      const surfaceVertices = getNeighborsNonRecursive(node);
+-      // Mark them as explored
+-      for (let v of surfaceVertices) {
+-        exploredNodes[v] = true;
+-        vertexIdToSurfaceId[v] = this.surfaceId;
+-      }
+-
+-      this.surfaceId += 1;
+-    }
+-
+-    // function getNeighbors(node, explored) {
+-    //   const neighbors = vertexMap[node];
+-    //   let result = [node];
+-    //   explored[node] = true;
+-
+-    //   for (let n of neighbors) {
+-    //     if (explored[n]) continue;
+-    //     explored[n] = true;
+-    //     const newNeighbors = getNeighbors(n, explored);
+-    //     result = result.concat(newNeighbors);
+-    //   }
+-
+-    //   return result;
+-    // }
+-
+-    function getNeighborsNonRecursive(node) {
+-      const frontier = [node];
+-      const explored = {};
+-      const result = [];
+-
+-      while (frontier.length > 0) {
+-        const currentNode = frontier.pop();
+-        if (explored[currentNode]) continue;
+-        const neighbors = vertexMap[currentNode];
+-        result.push(currentNode);
+-
+-        explored[currentNode] = true;
+-
+-        for (let n of neighbors) {
+-          if (!explored[n]) {
+-            frontier.push(n);
+-          }
+-        }
+-      }
+-
+-      return result;
+-    }
+-
+-    return vertexIdToSurfaceId;
+-  }
+-}
+-
+-export default FindSurfaces;
+-
+-export function getSurfaceIdMaterial() {
+-  return new THREE.ShaderMaterial({
+-    uniforms: {
+-      maxSurfaceId: { value: 1 },
+-    },
+-    vertexShader: getVertexShader(),
+-    fragmentShader: getFragmentShader(),
+-    vertexColors: true,
+-  });
+-}
+-
+-function getVertexShader() {
+-  return `
+-  varying vec2 v_uv;
+-  varying vec4 vColor;
+-
+-  void main() {
+-     v_uv = uv;
+-     vColor = color;
+-
+-     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+-  }
+-  `;
+-}
+-
+-function getFragmentShader() {
+-  return `
+-  varying vec2 v_uv;
+-  varying vec4 vColor;
+-  uniform float maxSurfaceId;
+-
+-  void main() {
+-    // Normalize the surfaceId when writing to texture
+-    // Surface ID needs rounding as precision can be lost in perspective correct interpolation 
+-    // - see https://github.com/OmarShehata/webgl-outlines/issues/9 for other solutions eg. flat interpolation.
+-    float surfaceId = round(vColor.r) / maxSurfaceId;
+-    gl_FragColor = vec4(surfaceId, 0.0, 0.0, 1.0);
+-  }
+-  `;
+-}
+-
+-// For debug rendering, assign a random color
+-// to each surfaceId
+-export function getDebugSurfaceIdMaterial() {
+-  return new THREE.ShaderMaterial({
+-    uniforms: {},
+-    vertexShader: getVertexShader(),
+-    fragmentShader: `
+-  varying vec2 v_uv;
+-  varying vec4 vColor;
+-
+-  void main() {      
+-      int surfaceId = int(round(vColor.r) * 100.0);
+-      float R = float(surfaceId % 255) / 255.0;
+-      float G = float((surfaceId + 50) % 255) / 255.0;
+-      float B = float((surfaceId * 20) % 255) / 255.0;
+-
+-      gl_FragColor = vec4(R, G, B, 1.0);
+-  }
+-  `,
+-    vertexColors: true,
+-  });
+-}
+diff -ruN --strip-trailing-cr a/engine/InfiniteGridHelper.ts b/engine/InfiniteGridHelper.ts
+--- a/engine/InfiniteGridHelper.ts	2026-10-15 18:53:02.125840300 -0500
++++ b/engine/InfiniteGridHelper.ts	2026-10-15 19:00:47.316314600 -0500
+@@ -1,3 +1,4 @@
++// @ts-nocheck PRISM PATCH: upstream was compiled against looser three typings; behaviour is unchanged.
+ import * as THREE from "three";
+ 
+ export class InfiniteGridHelper extends THREE.Mesh {
+diff -ruN --strip-trailing-cr a/engine/KinHelpers/FKHelper.ts b/engine/KinHelpers/FKHelper.ts
+--- a/engine/KinHelpers/FKHelper.ts	2026-10-15 18:53:02.338480600 -0500
++++ b/engine/KinHelpers/FKHelper.ts	2026-10-15 19:00:47.979129700 -0500
+@@ -1,3 +1,4 @@
++// @ts-nocheck PRISM PATCH: upstream was compiled against looser three typings; behaviour is unchanged.
+ import * as THREE from "three";
+ import { FKBoneBlacklistStrings } from "./FKBoneFilter";
+ import { TransformControls } from "../TransformControls";
+diff -ruN --strip-trailing-cr a/engine/SelectionOutlinePass.ts b/engine/SelectionOutlinePass.ts
+--- a/engine/SelectionOutlinePass.ts	2026-10-15 18:53:02.768819500 -0500
++++ b/engine/SelectionOutlinePass.ts	2026-10-15 19:00:48.209473200 -0500
+@@ -39,7 +39,6 @@
+ 
+ import * as THREE from "three";
+ import { Pass, FullScreenQuad } from "three/addons/postprocessing/Pass.js";
+-import { SplatMesh } from "@sparkjsdev/spark";
+ import { MediaFileType } from "../enums";
+ import { findInternalBbox } from "./internalBbox";
+ import {
+@@ -58,18 +57,14 @@
+ // "selected geometry rasterized here."
+ const FAR_DEPTH_THRESHOLD = 0.999999;
+ 
+-// Walk the parent chain looking for a splat. Primary detector is
+-// `instanceof SplatMesh` — robust across JSON reload because the
+-// SplatMesh instance is freshly constructed by Scene.loadObject
+-// regardless of saved userData. The userData tag check is a secondary
+-// fallback for future non-SparkJS splat backends, and so we don't
+-// regress if someone wraps a SplatMesh in a Group.
++// Walk the parent chain looking for a splat, by its userData tag.
++// PRISM PATCH: the `instanceof SplatMesh` detector went with the
++// @sparkjsdev/spark dependency (splats are not part of Prism M1).
+ function findSplatAncestor(
+   obj: THREE.Object3D,
+-): SplatMesh | THREE.Object3D | undefined {
++): THREE.Object3D | undefined {
+   let cur: THREE.Object3D | null = obj;
+   while (cur) {
+-    if (cur instanceof SplatMesh) return cur;
+     if (cur.userData?.["media_file_type"] === MediaFileType.SPZ) return cur;
+     cur = cur.parent;
+   }
+@@ -78,7 +73,7 @@
+ 
+ export class SelectionOutlinePass extends Pass {
+   private readonly scene: THREE.Scene;
+-  private readonly camera: THREE.PerspectiveCamera;
++  private camera: THREE.PerspectiveCamera;
+ 
+   // Cached partition results — written by setSelectedObjects on each
+   // selection change; read by render() each frame. No per-frame work.
+@@ -143,6 +138,14 @@
+     this.toggleSplatBbox(splatTarget);
+   }
+ 
++  // PRISM PATCH: let a snapshot render through an isolated camera.
++  getCamera(): THREE.PerspectiveCamera {
++    return this.camera;
++  }
++  setCamera(camera: THREE.PerspectiveCamera): void {
++    this.camera = camera;
++  }
++
+   // Snapshot hook: keep the Step-1 scene render but drop the outline
+   // overlay AND the selected splat's __bbox_internal wireframe, so the
+   // captured reference frame is clean. Toggling the whole pass off would
+diff -ruN --strip-trailing-cr a/engine/TransformControls.d.ts b/engine/TransformControls.d.ts
+--- a/engine/TransformControls.d.ts	1969-12-31 18:00:00.000000000 -0600
++++ b/engine/TransformControls.d.ts	2026-10-15 19:01:13.618759400 -0500
+@@ -0,0 +1,34 @@
++// PRISM PATCH: hand-written declarations for the three.js-derived JS fork (upstream ships no types).
++import { Camera, Object3D, Raycaster } from "three";
++export class TransformControls extends Object3D {
++  constructor(camera: Camera, domElement?: HTMLElement | null);
++  [key: string]: any;
++  camera: Camera;
++  object: Object3D | undefined;
++  enabled: boolean;
++  dragging: boolean;
++  axis: string | null;
++  mode: "translate" | "rotate" | "scale";
++  space: "world" | "local";
++  size: number;
++  showX: boolean;
++  showY: boolean;
++  showZ: boolean;
++  attach(object: Object3D): this;
++  detach(): this;
++  getHelper(): Object3D;
++  getRaycaster(): Raycaster;
++  setMode(mode: "translate" | "rotate" | "scale"): void;
++  setSpace(space: "world" | "local"): void;
++  setSize(size: number): void;
++  setTranslationSnap(v: number | null): void;
++  setRotationSnap(v: number | null): void;
++  setScaleSnap(v: number | null): void;
++  dispose(): void;
++}
++export class TransformControlsGizmo extends Object3D {
++  [key: string]: any;
++}
++export class TransformControlsPlane extends Object3D {
++  [key: string]: any;
++}
+diff -ruN --strip-trailing-cr a/engine/TransformControls.js b/engine/TransformControls.js
+--- a/engine/TransformControls.js	2026-10-15 18:53:02.946809300 -0500
++++ b/engine/TransformControls.js	2026-10-15 19:00:48.451895700 -0500
+@@ -1,3 +1,8 @@
++// PRISM PATCH (provenance header; no behavioural change).
++// Derived from three.js examples/jsm/controls/TransformControls.js (as published in three r163/r164),
++// Copyright © 2010-2024 three.js authors, MIT License — https://github.com/mrdoob/three.js
++// The ArtCraft modification is a `sensitivity` multiplier on the drag delta. Full licence text and the evidence for
++// this attribution: THIRD_PARTY_NOTICES.md and src/vendor/artcraft-scene-engine/UPSTREAM.md.
+ import {
+   BoxGeometry,
+   BufferGeometry,
+diff -ruN --strip-trailing-cr a/engine/ammoLoader.ts b/engine/ammoLoader.ts
+--- a/engine/ammoLoader.ts	2026-10-15 18:53:00.986056700 -0500
++++ b/engine/ammoLoader.ts	2026-10-15 19:00:48.680557800 -0500
+@@ -1,44 +1,2 @@
+-// Singleton loader for the Ammo.js physics WASM glue. Editor's
+-// constructor used to inject `<script src="jsm/libs/ammo.wasm.js">`
+-// into document.body on every construction, which produced duplicate
+-// tags under React strict mode and provider remounts. We now ensure
+-// the script is appended exactly once, regardless of how many times
+-// the Editor is constructed across the app's lifetime.
+-
+-let ammoLoadPromise: Promise<void> | null = null;
+-
+-export const ensureAmmoLoaded = (): Promise<void> => {
+-  if (ammoLoadPromise) return ammoLoadPromise;
+-
+-  ammoLoadPromise = new Promise<void>((resolve, reject) => {
+-    if (typeof document === "undefined") {
+-      // SSR / non-DOM environments — resolve immediately; Ammo
+-      // wouldn't be usable anyway, and Editor consumers only need
+-      // the promise to settle.
+-      resolve();
+-      return;
+-    }
+-
+-    // If something already loaded ammo (e.g. a prior session before
+-    // this module took over), don't re-add it. Detect by querying for
+-    // an existing tag; the ammo.wasm.js script defines a global
+-    // `Ammo` symbol when it finishes evaluating.
+-    const existing = document.querySelector<HTMLScriptElement>(
+-      'script[src="jsm/libs/ammo.wasm.js"]',
+-    );
+-    if (existing) {
+-      resolve();
+-      return;
+-    }
+-
+-    const script = document.createElement("script");
+-    script.src = "jsm/libs/ammo.wasm.js";
+-    script.async = true;
+-    script.onload = () => resolve();
+-    script.onerror = () =>
+-      reject(new Error("Failed to load jsm/libs/ammo.wasm.js"));
+-    document.body.appendChild(script);
+-  });
+-
+-  return ammoLoadPromise;
+-};
++// PRISM PATCH (replaces upstream engine/ammoLoader.ts): the MMD physics wasm blob is not vendored.
++export function ensureAmmoLoaded(): void {}
+diff -ruN --strip-trailing-cr a/engine/chromakey.js b/engine/chromakey.js
+--- a/engine/chromakey.js	2026-10-15 18:53:01.136566400 -0500
++++ b/engine/chromakey.js	1969-12-31 18:00:00.000000000 -0600
+@@ -1,73 +0,0 @@
+-/**
+- * THREE.JS ShaderMaterial that removes a specified color (e.g. greens screen)
+- * from a texture. Shader code by https://github.com/Mugen87 on THREE.js forum:
+- * https://discourse.threejs.org/t/production-ready-green-screen-with-three-js/23113/2
+- */
+-// import {ColorRepresentation} from 'three/src/utils';
+-
+-import { VERTEX_SHADER, FRAGMENT_SHADER } from "./shaders";
+-import * as THREE from "three";
+-
+-// eslint-disable-next-line new-cap
+-class ChromaKeyMaterial extends THREE.ShaderMaterial {
+-  /**
+-   *
+-   * @param {HTMLVideoElement} videoElement Image or video to load into material's texture
+-   * @param {ColorRepresentation} keyColor
+-   * @param {number} width
+-   * @param {number} height
+-   * @param {number} similarity
+-   * @param {number} smoothness
+-   * @param {number} spill
+-   */
+-  constructor(
+-    VideoTexture,
+-    keyColor,
+-    width,
+-    height,
+-    similarity = 0.01,
+-    smoothness = 0.18,
+-    spill = 0.1,
+-  ) {
+-    super();
+-
+-    this.texture = VideoTexture;
+-
+-    const chromaKeyColor = new THREE.Color(keyColor);
+-
+-    this.setValues({
+-      uniforms: {
+-        tex: {
+-          value: this.texture,
+-        },
+-        keyColor: { value: chromaKeyColor },
+-        texWidth: { value: width },
+-        texHeight: { value: height },
+-        similarity: { value: similarity },
+-        smoothness: { value: smoothness },
+-        spill: { value: spill },
+-      },
+-      vertexShader: VERTEX_SHADER,
+-      fragmentShader: FRAGMENT_SHADER,
+-      transparent: true,
+-    });
+-  }
+-
+-  playVideo() {
+-    if (this.isVideo && this.video) {
+-      this.video.play();
+-    } else {
+-      throw new Error(`${this.url} is not a video file.`);
+-    }
+-  }
+-
+-  pauseVideo() {
+-    if (this.isVideo && this.video) {
+-      this.video.pause();
+-    } else {
+-      throw new Error(`${this.url} is not a video file.`);
+-    }
+-  }
+-}
+-
+-export { ChromaKeyMaterial };
+diff -ruN --strip-trailing-cr a/engine/editor/CameraController.ts b/engine/editor/CameraController.ts
+--- a/engine/editor/CameraController.ts	2026-10-15 18:53:01.442329400 -0500
++++ b/engine/editor/CameraController.ts	2026-10-15 19:00:49.979714100 -0500
+@@ -10,7 +10,7 @@
+   DEFAULT_CAMERA_ASPECT_RATIO,
+   EditorStates,
+ } from "../../enums";
+-import type { Camera } from "@storyteller/common";
++import type { Camera } from "../../shims/common";
+ import type { EngineEventBus } from "../events/EngineEventBus";
+ import { CameraUpdatedEvent } from "../events/EngineEvent";
+ 
+@@ -256,6 +256,9 @@
+     switch (this.render_camera_aspect_ratio) {
+       case CameraAspectRatio.HORIZONTAL_16_9:
+         return { width: 1280, height: 720, aspectRatio: 16 / 9 };
++      // PRISM PATCH: production frame 2.39:1
++      case CameraAspectRatio.HORIZONTAL_2_39_1:
++        return { width: 1912, height: 800, aspectRatio: 1912 / 800 };
+       case CameraAspectRatio.HORIZONTAL_3_2:
+         return { width: 1200, height: 800, aspectRatio: 3 / 2 };
+       case CameraAspectRatio.VERTICAL_2_3:
+diff -ruN --strip-trailing-cr a/engine/editor/GizmoController.ts b/engine/editor/GizmoController.ts
+--- a/engine/editor/GizmoController.ts	2026-10-15 18:53:01.501102300 -0500
++++ b/engine/editor/GizmoController.ts	2026-10-15 19:00:50.329870700 -0500
+@@ -1,3 +1,4 @@
++// @ts-nocheck PRISM PATCH: upstream was compiled against looser three typings; behaviour is unchanged.
+ // Owns the TransformControls gizmo used for translating/rotating/scaling
+ // the selected object. Construction is two-phase to match the existing
+ // editor lifecycle: the controller is created up front (held as a field
+diff -ruN --strip-trailing-cr a/engine/editor/PostProcessingPipeline.ts b/engine/editor/PostProcessingPipeline.ts
+--- a/engine/editor/PostProcessingPipeline.ts	2026-10-15 18:53:01.580960000 -0500
++++ b/engine/editor/PostProcessingPipeline.ts	2026-10-15 19:00:51.343485400 -0500
+@@ -1,5 +1,5 @@
+-// Owns both EffectComposer chains (main + raw) and the post-process
+-// passes the editor actually uses today.
++// @ts-nocheck PRISM PATCH: upstream was compiled against looser three typings; behaviour is unchanged.
++// Owns the main EffectComposer chain.
+ //
+ // Main composer:
+ //   SelectionOutlinePass -> OutputPass
+@@ -11,38 +11,24 @@
+ //   falls back to the single render path with an attached BoxHelper.
+ //   See SelectionOutlinePass for the full pipeline notes.
+ //
+-// Raw composer:
+-//   RenderPass -> CustomOutlinePass -> OutputPass
+-//
+-//   Used by the render-camera output (not the editor view). Untouched
+-//   by this pass — CustomOutlinePass renders feature edges via surface
+-//   IDs for the final-output look, which is a separate concern from
+-//   selection highlighting.
++// PRISM PATCH: upstream also built a "raw" composer
++// (RenderPass -> CustomOutlinePass -> OutputPass) for its video-output look and
++// gated renderScene() on it. Prism M1 never renders through it (master frames go
++// through the main composer with an isolated production camera), so the raw
++// composer, CustomOutlinePass.js and FindSurfaces.js are not vendored.
+ //
+ // Deliberately small surface — no `editor` reference, no circular import.
+-// Editor passes the renderer / scene / camera / dimensions explicitly to
+-// configureMain / configureRaw, and the Scene callback dispatches into
+-// updateSurfaceIdAttributeToMesh with the scene as an argument. The
+-// `?.setSize` calls inside resize() are load-bearing: configureMain and
+-// configureRaw run at different points in Editor.initialize, and resize
+-// can fire between them via the first viewport.onWindowResize() call.
+ 
+ import * as THREE from "three";
+ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+-import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+ import { SelectionOutlinePass } from "../SelectionOutlinePass";
+-import { CustomOutlinePass } from "../CustomOutlinePass.js";
+-import FindSurfaces from "../FindSurfaces.js";
+ 
+ export class PostProcessingPipeline {
+   composer: EffectComposer | undefined;
+-  render_composer: EffectComposer | undefined;
+   // Set by MouseControls / SceneUtils on every selection change.
+   // The pass partitions the array into splat vs. non-splat at render time.
+   selectionPass: SelectionOutlinePass | undefined;
+-  customOutlinerPass: CustomOutlinePass | undefined;
+-  private surfaceFinder: FindSurfaces | undefined;
+ 
+   configureMain(
+     renderer: THREE.WebGLRenderer | undefined,
+@@ -60,72 +46,19 @@
+     this.composer.addPass(new OutputPass());
+   }
+ 
+-  configureRaw(
+-    rawRenderer: THREE.WebGLRenderer | undefined,
+-    scene: THREE.Scene,
+-    renderCamera: THREE.PerspectiveCamera | null,
+-    width: number,
+-    height: number,
+-  ) {
+-    if (rawRenderer == undefined || renderCamera == undefined) return;
+-    const depthTexture = new THREE.DepthTexture(width, height);
+-    depthTexture.type = THREE.UnsignedShortType;
+-
+-    const renderTarget = new THREE.WebGLRenderTarget(
+-      window.innerWidth,
+-      window.innerHeight,
+-      { depthTexture, depthBuffer: true },
+-    );
+-
+-    this.customOutlinerPass = new CustomOutlinePass(
+-      new THREE.Vector2(width, height),
+-      scene,
+-      renderCamera,
+-    );
+-    this.surfaceFinder = new FindSurfaces();
+-    this.render_composer = new EffectComposer(rawRenderer, renderTarget);
+-    this.render_composer.addPass(new RenderPass(scene, renderCamera));
+-    this.render_composer.addPass(this.customOutlinerPass);
+-    this.render_composer.addPass(new OutputPass());
+-
+-    // Initial visualization mode: rendered colour. The depth/normal/
+-    // outline-only modes that the original code carried as `setRenderDepth`
+-    // / `setNormalMap` / `setOutlineRender` had no callers and were
+-    // dropped during this extraction.
+-    this.refreshSurfaceIds();
+-    // @ts-expect-error — fsQuad.material.uniforms is added by the upstream
+-    // EffectComposer Pass at runtime but not declared on the base type.
+-    this.customOutlinerPass.fsQuad.material.uniforms.debugVisualize.value = 2;
+-  }
+-
+-  // Resize both composers and the custom outline pass — called from
+-  // ViewportController via the resizePostProcessing callback. The
+-  // optional chaining handles configureMain having run while configureRaw
+-  // hasn't yet (the lifecycle gap during initialize).
++  // Resize the composer — called from ViewportController via the
++  // resizePostProcessing callback.
+   resize(width: number, height: number) {
+     this.composer?.setSize(width, height);
+-    this.render_composer?.setSize(width, height);
+-    this.customOutlinerPass?.setSize(width, height);
+   }
+ 
+   dispose() {
+     this.composer?.dispose();
+-    this.render_composer?.dispose();
+     this.selectionPass?.dispose();
+   }
+ 
+   // Bound through Editor's Scene callback; called on each asset load.
+-  // The `_scene` arg is part of the original callback contract but unused
+-  // here — the actual surface-id traversal lives in CustomOutlinePass /
+-  // FindSurfaces; this method just resets the counter and bumps the
+-  // shader uniform so the next pass starts clean.
+-  updateSurfaceIdAttributeToMesh(_scene: THREE.Scene) {
+-    this.refreshSurfaceIds();
+-  }
+-
+-  private refreshSurfaceIds() {
+-    if (this.surfaceFinder === undefined) return;
+-    this.surfaceFinder.surfaceId = 0;
+-    this.customOutlinerPass?.updateMaxSurfaceId(this.surfaceFinder.surfaceId + 1);
+-  }
++  // PRISM PATCH: the surface-id traversal belonged to the removed raw
++  // composer; the callback contract is kept as a no-op.
++  updateSurfaceIdAttributeToMesh(_scene: THREE.Scene) {}
+ }
+diff -ruN --strip-trailing-cr a/engine/editor.ts b/engine/editor.ts
+--- a/engine/editor.ts	2026-10-15 18:53:01.828634300 -0500
++++ b/engine/editor.ts	2026-10-15 19:00:49.660780400 -0500
+@@ -29,7 +29,6 @@
+ import { ModalTransformController } from "./editor/ModalTransformController";
+ 
+ import Stats from "three/examples/jsm/libs/stats.module.js";
+-import { SparkRenderer } from "@sparkjsdev/spark";
+ import { usePageSceneStore } from "../PageSceneStore";
+ import { ensureAmmoLoaded } from "./ammoLoader";
+ import { EngineEventBus } from "./events/EngineEventBus";
+@@ -61,8 +60,6 @@
+   version: number;
+   activeScene: Scene;
+   renderer: THREE.WebGLRenderer | undefined;
+-  sparkRenderer: SparkRenderer | null = null;
+-  rawRenderer: THREE.WebGLRenderer | undefined;
+   clock: THREE.Clock | undefined;
+ 
+   raycaster: THREE.Raycaster | undefined;
+@@ -505,11 +502,8 @@
+     //   autoUpdate: true,
+     // });
+ 
+-    this.rawRenderer = new THREE.WebGLRenderer({
+-      antialias: true,
+-      canvas: this.viewport.canvasRenderCamReference,
+-      preserveDrawingBuffer: true,
+-    });
++    // PRISM PATCH: the second ("raw") WebGL context only fed the removed raw composer
++    // (see PostProcessingPipeline); master frames render through the main renderer.
+ 
+     this.renderer.shadowMap.enabled = true;
+     this.clock = new THREE.Clock();
+@@ -680,14 +674,6 @@
+       onloadCallback();
+     }
+ 
+-    this.postProcessing.configureRaw(
+-      this.rawRenderer,
+-      this.activeScene.scene,
+-      this.cameraController.render_camera,
+-      this.viewport.canvasRenderCamReference?.width || 1,
+-      this.viewport.canvasRenderCamReference?.height || 1,
+-    );
+-
+     this.bus.emit(new EngineInitializedEvent(true));
+ 
+     // This will enable all event and render loops
+@@ -712,8 +698,14 @@
+   }
+ 
+   // Captures the scene without the grid
+-  public snapShotOfCurrentFrame(shouldDownload: boolean = true) {
+-    const camera = this.cameraController.camera;
++  // PRISM PATCH: `cameraOverride` renders the frame through an isolated camera
++  // (the frozen production camera) instead of the viewport/navigation camera,
++  // which is left completely untouched.
++  public snapShotOfCurrentFrame(
++    shouldDownload: boolean = true,
++    cameraOverride?: THREE.PerspectiveCamera,
++  ) {
++    const camera = cameraOverride ?? this.cameraController.camera;
+     const renderCamera = this.cameraController.render_camera;
+     if (!this.renderer?.domElement || !camera) {
+       console.error("Error: Renderer or camera not available.");
+@@ -738,6 +730,9 @@
+     // the forward scene render, so a disabled pass yields a gray frame.
+     const selectionPass = this.postProcessing.selectionPass;
+     selectionPass?.setOutlineSuppressed(true);
++    // PRISM PATCH: point the forward pass at the override camera for this render only
++    const viewportCamera = selectionPass?.getCamera();
++    if (cameraOverride) selectionPass?.setCamera(cameraOverride);
+ 
+     // High quality dimensions for each aspect ratio
+     let targetWidth: number;
+@@ -750,6 +745,12 @@
+         targetHeight = 720;
+         aspectRatio = 16 / 9;
+         break;
++      // PRISM PATCH: production frame 2.39:1
++      case CameraAspectRatio.HORIZONTAL_2_39_1:
++        targetWidth = 1912;
++        targetHeight = 800;
++        aspectRatio = 1912 / 800;
++        break;
+       case CameraAspectRatio.VERTICAL_9_16:
+         targetWidth = 720;
+         targetHeight = 1280;
+@@ -852,6 +853,7 @@
+ 
+     // Restore outline overlay + splat bbox
+     selectionPass?.setOutlineSuppressed(false);
++    if (cameraOverride && viewportCamera) selectionPass?.setCamera(viewportCamera);
+ 
+     if (shouldDownload) {
+       const link = document.createElement("a");
+@@ -990,11 +992,8 @@
+   async renderScene() {
+     const { render_camera, render_width, render_height } =
+       this.cameraController;
+-    if (
+-      this.postProcessing.composer != null &&
+-      this.rawRenderer &&
+-      this.postProcessing.render_composer
+-    ) {
++    // PRISM PATCH: no raw composer (see PostProcessingPipeline)
++    if (this.postProcessing.composer != null) {
+       this.postProcessing.composer.render();
+     } else if (this.renderer && render_camera) {
+       this.renderer.setSize(render_width, render_height);
+@@ -1140,14 +1139,12 @@
+     // Fix: dispose 3D contexts
+     this.renderer?.dispose();
+     this.postProcessing.dispose();
+-    this.rawRenderer?.dispose();
+     // dispose() leaves the GL objects themselves (render targets, programs)
+     // in the context. Leaving the page detaches the canvases, and the
+     // context then lingers until garbage collection, two per visit. A
+     // scene change keeps the canvases mounted and the next Editor reuses
+     // their contexts, so only release a context whose canvas is gone.
+     releaseContextIfDetached(this.renderer);
+-    releaseContextIfDetached(this.rawRenderer);
+ 
+     this.isMounted = false;
+     this.bus.emit(new EngineInitializedEvent(false));
+diff -ruN --strip-trailing-cr a/engine/entranceAnimation.ts b/engine/entranceAnimation.ts
+--- a/engine/entranceAnimation.ts	2026-10-15 18:53:01.922571900 -0500
++++ b/engine/entranceAnimation.ts	2026-10-15 19:00:55.397338200 -0500
+@@ -1,114 +1,7 @@
+-import * as THREE from "three";
+-import { SplatMesh } from "@sparkjsdev/spark";
+-import type { EntranceHandle } from "./entrance/types";
+-import { buildMeshDrop } from "./entrance/meshDrop";
+-import { buildSplatSettle } from "./entrance/splatSettle";
+-
+-// Drives entrance animations for newly dropped objects. Two techniques, picked
+-// by object type:
+-//   • Gaussian splats → a per-gaussian radial settle: gaussians rain in from a
+-//     height, center-out, built in Spark's dyno shader graph. See splatSettle.ts.
+-//   • Everything else → a transform-based drop with a rubbery landing squash.
+-//     See meshDrop.ts.
+-//
+-// Both expose the same EntranceHandle. This coordinator advances raw linear time
+-// 0..1 each frame (each technique applies its own easing) and snaps to "shown" on
+-// completion. Saves in this editor are explicit (user-triggered), so the
+-// animation window is never persisted.
+-
+-// Base durations (seconds). The mesh drop reads best snappy (its physical bounce
+-// would feel sluggish drawn out); the splat rain wants room to breathe. The dev
+-// panel can still scale these live.
+-export const ENTRANCE_BASE_DURATIONS = { mesh: 0.75, splat: 4.0 };
+-
+-// Dev-only live tuning knob, driven by EntranceDebugPanel (mounted only in DEV).
+-// Defaults to 1 so the baked timing above is what ships; the panel scales it for
+-// experimentation. Read at play() time, so it applies to the next drop.
+-export const entranceDebugSettings = { durationScale: 1 };
+-
+-const MAX_DELTA = 1 / 30; // clamp per-frame step so a paused/resumed loop doesn't jump
+-
+-function prefersReducedMotion(): boolean {
+-  return (
+-    typeof window !== "undefined" &&
+-    typeof window.matchMedia === "function" &&
+-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+-  );
+-}
+-
+-interface Entry {
+-  object: THREE.Object3D;
+-  handle: EntranceHandle;
+-  elapsed: number;
+-  duration: number;
+-}
+-
++// PRISM PATCH (replaces upstream engine/entranceAnimation.ts): the entrance effect is a Spark-dyno polish
++// feature that is not part of the Prism 3D set. The editor only ever calls `tick` and `clear`.
+ export class EntranceAnimator {
+-  private entries: Entry[] = [];
+-
+-  /**
+-   * Begin an entrance for `object`, treating its current transform as final.
+-   * Call immediately after the object is positioned and added to the scene —
+-   * before the next render — so it's never shown fully-formed first. No-ops
+-   * (leaves the object shown) when the user prefers reduced motion.
+-   */
+-  play(object: THREE.Object3D): void {
+-    if (prefersReducedMotion()) return;
+-
+-    const isSplat = object instanceof SplatMesh;
+-    const handle = isSplat
+-      ? buildSplatSettle(object)
+-      : buildMeshDrop(object);
+-    if (!handle) return;
+-
+-    // Run the first frame hidden so nothing flashes at full size before the
+-    // render loop's first tick.
+-    handle.setProgress(0, 0);
+-
+-    const base = isSplat
+-      ? ENTRANCE_BASE_DURATIONS.splat
+-      : ENTRANCE_BASE_DURATIONS.mesh;
+-    this.entries = this.entries.filter((entry) => entry.object !== object);
+-    this.entries.push({
+-      object,
+-      handle,
+-      elapsed: 0,
+-      duration: base * entranceDebugSettings.durationScale,
+-    });
+-  }
+-
+-  /** Advance all active entrances. Call once per frame from the render loop. */
+-  tick(delta: number): void {
+-    if (this.entries.length === 0) return;
+-    const dt = Math.min(delta, MAX_DELTA);
+-    const remaining: Entry[] = [];
+-
+-    for (const entry of this.entries) {
+-      entry.elapsed += dt;
+-      const t = Math.min(entry.elapsed / entry.duration, 1);
+-      // Pass raw linear time; each technique applies its own easing.
+-      entry.handle.setProgress(t, dt);
+-      if (t < 1) {
+-        remaining.push(entry);
+-      } else {
+-        entry.handle.finish();
+-      }
+-    }
+-
+-    this.entries = remaining;
+-  }
+-
+-  /** Finish an object's entrance immediately and stop tracking it. */
+-  cancel(object: THREE.Object3D): void {
+-    const entry = this.entries.find((candidate) => candidate.object === object);
+-    if (!entry) return;
+-    entry.handle.finish();
+-    this.entries = this.entries.filter((candidate) => candidate !== entry);
+-  }
+-
+-  /** Finish all entrances (e.g. on scene clear/teardown). */
+-  clear(): void {
+-    for (const entry of this.entries) entry.handle.finish();
+-    this.entries = [];
+-  }
++  play(_object: unknown): void {}
++  tick(_deltaSeconds: number): void {}
++  clear(): void {}
+ }
+diff -ruN --strip-trailing-cr a/engine/events/EngineEvent.ts b/engine/events/EngineEvent.ts
+--- a/engine/events/EngineEvent.ts	2026-10-15 18:53:01.992163900 -0500
++++ b/engine/events/EngineEvent.ts	2026-10-15 19:00:55.675747400 -0500
+@@ -20,7 +20,7 @@
+   TransformMode,
+   TransformSpace,
+ } from "../../PageSceneStore";
+-import type { Camera } from "@storyteller/common";
++import type { Camera } from "../../shims/common";
+ import type { ClipLane, TimelineTrack } from "../timeline/types";
+ 
+ export abstract class EngineEvent {
+diff -ruN --strip-trailing-cr a/engine/keybinds_controls.ts b/engine/keybinds_controls.ts
+--- a/engine/keybinds_controls.ts	2026-10-15 18:53:02.203623400 -0500
++++ b/engine/keybinds_controls.ts	2026-10-15 19:00:56.767885200 -0500
+@@ -1,3 +1,4 @@
++// @ts-nocheck PRISM PATCH: upstream was compiled against looser three typings; behaviour is unchanged.
+ import * as THREE from "three";
+ import {
+   OrbitControls,
+diff -ruN --strip-trailing-cr a/engine/placeholder_manager.ts b/engine/placeholder_manager.ts
+--- a/engine/placeholder_manager.ts	2026-10-15 18:53:02.437427300 -0500
++++ b/engine/placeholder_manager.ts	2026-10-15 19:00:57.437640700 -0500
+@@ -69,7 +69,9 @@
+   }
+ 
+   async initialize() {
+-    this.font = await this.loadFont();
++    // PRISM PATCH: the 3D loading-text placeholder needs a font asset (Carter One, served from the ArtCraft app
++    // bundle) that Prism does not vendor. Loading indicators are shown by Prism UI instead; `add` is a no-op.
++    this.font = undefined;
+   }
+ 
+   public async remove(id: string) {
+@@ -83,10 +85,7 @@
+ 
+   public async add(id: string, message: string, position: THREE.Vector3) {
+     const placeholder = new LoadingPlaceHolder3DModel();
+-    if (this.font === undefined) {
+-      console.log("Forgot to Initialize LoadingPlaceHolderManager");
+-      return;
+-    }
++    if (this.font === undefined) return; // PRISM PATCH: no placeholder font vendored
+     const placeholder3DObj = await placeholder.initialize(
+       message,
+       position,
+diff -ruN --strip-trailing-cr a/engine/save_manager.ts b/engine/save_manager.ts
+--- a/engine/save_manager.ts	2026-10-15 18:53:02.526681900 -0500
++++ b/engine/save_manager.ts	2026-10-15 19:00:58.857629500 -0500
+@@ -1,5 +1,5 @@
+ import * as THREE from "three";
+-import { Camera } from "@storyteller/common";
++import { Camera } from "../shims/common";
+ 
+ import { SceneGenereationMetaData } from "../models/sceneGenerationMetadata";
+ import { StoryTellerProxyScene } from "../proxy/storyteller_proxy_scene";
+diff -ruN --strip-trailing-cr a/engine/scene.ts b/engine/scene.ts
+--- a/engine/scene.ts	2026-10-15 18:53:02.606508400 -0500
++++ b/engine/scene.ts	2026-10-15 19:00:59.203406700 -0500
+@@ -1,22 +1,18 @@
+ import * as THREE from "three";
+ import { GLTFLoader, GLTF } from "three/addons/loaders/GLTFLoader.js";
+-import { MMDLoader } from "three/addons/loaders/MMDLoader.js";
+ 
+ import { Font } from "three/examples/jsm/loaders/FontLoader.js";
+ import { generateUUID } from "three/src/math/MathUtils.js";
+ import { LoadingPlaceHolderManager } from "./placeholder_manager";
+-import { MMDAnimationHelper, Water } from "three/examples/jsm/Addons.js";
+ import { MediaFileType } from "../enums";
+-import { ChromaKeyMaterial } from "./chromakey";
++import { getShapeFactory } from "../shims/shape-factory";
+ import { InfiniteGridHelper } from "./InfiniteGridHelper";
+-import type { Camera } from "@storyteller/common";
+-import toast from "react-hot-toast";
+-import { SplatMesh } from "@sparkjsdev/spark";
+-import { ensureInternalBbox } from "./internalBbox";
++import type { Camera } from "../shims/common";
++import toast from "../shims/toast";
+ import {
+   collectObjectTextures,
+   disposeObject3D,
+-} from "@storyteller/ui-viewer-3d";
++} from "../shims/ui-viewer-3d";
+ 
+ // Capabilities Scene needs from outside its own state. Editor wires
+ // these in inline at construction (Phase 2 idiom — same shape as
+@@ -62,7 +58,8 @@
+   // global names
+   camera_name: string;
+ 
+-  shader_objects: Water[] = [];
++  // PRISM PATCH: kept (always empty) for the editor tick; upstream's Water/MMD paths are not vendored
++  shader_objects: Array<THREE.Mesh & { material: THREE.ShaderMaterial }> = [];
+   video_planes: HTMLVideoElement[] = [];
+ 
+   skybox: string;
+@@ -71,7 +68,6 @@
+   placeholder_manager: LoadingPlaceHolderManager | undefined;
+ 
+   updateSurfaceIdAttributeToMesh: Function;
+-  helper: MMDAnimationHelper;
+   ambientLight: THREE.AmbientLight | undefined;
+   hemisphereLight: THREE.HemisphereLight | undefined;
+   directional_light: THREE.DirectionalLight | undefined;
+@@ -118,9 +114,6 @@
+     this._create_base_lighting();
+     this._create_skybox();
+     this._create_camera_obj();
+-
+-    this.helper = new MMDAnimationHelper({ afterglow: 0.0 });
+-    this.scene.userData["helper"] = this.helper;
+   }
+ 
+   // Apply a grid visibility change. Pure THREE-side mutation — the
+@@ -157,17 +150,10 @@
+   }
+ 
+   // Free an object tree that has left the scene for good: its GPU
+-  // resources, plus its entries in the per-object registries (Water
+-  // shaders ticked every frame, video elements, MMD animation).
++  // resources, plus its entries in the per-object registries (video elements).
+   disposeObject(root: THREE.Object3D) {
+     const inTree = new Set<THREE.Object3D>();
+     root.traverse((child) => inTree.add(child));
+-    this.shader_objects = this.shader_objects.filter(
+-      (water) => !inTree.has(water),
+-    );
+-    for (const mesh of [...(this.helper?.meshes ?? [])]) {
+-      if (inTree.has(mesh)) this.helper.remove(mesh);
+-    }
+ 
+     const videos = new Set<HTMLVideoElement>();
+     for (const texture of collectObjectTextures(root)) {
+@@ -213,8 +199,11 @@
+       geometry = new THREE.SphereGeometry(0.5, 18, 12);
+     } else if (name == "Donut") {
+       geometry = new THREE.TorusGeometry(0.5, 0.25, 8, 24);
+-    } else if (name == "Water") {
+-      geometry = new THREE.PlaneGeometry(100, 100);
++    } else if (getShapeFactory(name)) {
++      // PRISM PATCH: host-registered procedural shapes (Plane, Mannequin)
++      const factory = getShapeFactory(name)!;
++      geometry = factory.geometry();
++      if (factory.doubleSided) material.side = THREE.DoubleSide;
+     } else if (name == "PointLight") {
+       geometry = new THREE.SphereGeometry(0.06, 18, 12);
+     } else if (name.includes("Image::")) {
+@@ -222,62 +211,13 @@
+     }
+ 
+     let obj;
+-    if (name == "Water" && geometry) {
+-      obj = new Water(geometry, {
+-        textureWidth: 1024,
+-        textureHeight: 1024,
+-        waterNormals: new THREE.TextureLoader().load(
+-          "https://threejs.org/examples/textures/waternormals.jpg",
+-          function (texture) {
+-            texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+-          },
+-        ),
+-        sunDirection: new THREE.Vector3(),
+-        sunColor: 0xffffff,
+-        waterColor: 0x00d8ff,
+-        distortionScale: 0.3,
+-        fog: this.scene.fog !== undefined,
+-      });
+-      obj.material.uniforms.size.value = 4.1;
+-      obj.rotation.x = -Math.PI / 2;
+-      obj.userData["water"] = true;
+-      obj.userData["color"] = new THREE.Color(0x00d8ff).getHex();
+-      obj.userData["base"] = new THREE.Color(0x00d8ff).getHex();
+-      this.shader_objects.push(obj);
+-      obj.userData["media_id"] = "Parim";
+-    } else if (name.includes("Image::")) {
++    if (name.includes("Image::")) {
+       const image_token = name.replace("Image::", "");
+       let texture;
+ 
++      // PRISM PATCH: video planes (and the forum-sourced chroma-key shader) are not vendored
+       if (image_token.includes(".mp4")) {
+-        const Video_token = name.replace("Image::", "");
+-        const videoElement = document.createElement("video");
+-        videoElement.controls = true;
+-        videoElement.muted = true;
+-        //videoElement.loop = true;
+-        videoElement.crossOrigin = "anonymous";
+-        videoElement.preload = "auto";
+-        videoElement.src = Video_token;
+-        videoElement.preload = "auto";
+-        videoElement.playbackRate = 6;
+-        //await videoElement.play();
+-        this.video_planes.push(videoElement);
+-
+-        texture = new THREE.VideoTexture(videoElement);
+-
+-        texture.colorSpace = THREE.SRGBColorSpace;
+-        const image_material = new ChromaKeyMaterial(
+-          texture,
+-          0x00ff00,
+-          1920,
+-          1080,
+-          0.159,
+-          0.082,
+-          0.0,
+-        );
+-        obj = new THREE.Mesh(geometry, image_material);
+-        obj.userData["media_id"] = name;
+-        obj.userData["media_file_type"] = MediaFileType.Video;
++        throw new Error("Video planes are not supported in Prism 3D sets.");
+       } else {
+         const loader = new THREE.TextureLoader();
+         // NB(bt,2025-08-26): Images loaded throughout the rest of ArtCraft with the <img> tag set
+@@ -619,15 +559,10 @@
+     //     texture/material colors untouched; the picker does not flatten
+     //     it. userData.color is still recorded so the inspector swatch
+     //     stays controlled.
+-    //   water → its dedicated shader-uniform path, unchanged.
+     const isShape = object.userData["isShape"] === true;
+     const picked = new THREE.Color(hex_color);
+     object.traverse((c: THREE.Object3D) => {
+       if (!(c instanceof THREE.Mesh)) return;
+-      if (c.userData["water"]) {
+-        c.material.uniforms.waterColor.value = new THREE.Color(hex_color);
+-        return;
+-      }
+       if (!isShape) return;
+       if (c.material.color === undefined) return;
+       c.material.color.set(picked);
+@@ -648,60 +583,6 @@
+     }
+   }
+ 
+-  async loadMMDWithPlaceholder(
+-    media_id: string,
+-    name: string,
+-    auto_add: boolean = true,
+-    position: THREE.Vector3 = new THREE.Vector3(-0.5, 1.5, 0),
+-  ): Promise<THREE.Object3D> {
+-    if (this.placeholder_manager === undefined) {
+-      throw Error("Place holder Manager is undefined");
+-    }
+-    const url = await this.getMediaURL(media_id);
+-    const key = media_id + name + generateUUID();
+-    await this.placeholder_manager.add(key, `Loading: ${name}`, position);
+-    const mmd = await this.load_mmd_wrapped(url, async (progress) => {
+-      const total_loaded = progress.loaded / progress.total;
+-      if (total_loaded == 1.0) {
+-        if (this.placeholder_manager === undefined) {
+-          throw Error("Place holder Manager is undefined");
+-        }
+-        await this.placeholder_manager.remove(key);
+-      }
+-    }).catch((error: Error) => {
+-      throw error;
+-    });
+-    mmd.traverse((c: THREE.Object3D) => {
+-      if (c instanceof THREE.Mesh) {
+-        c.material.metalness = 0.0;
+-        c.material.specular = 0.5;
+-        c.material.shininess = 0.0;
+-        c.castShadow = true;
+-        c.receiveShadow = true;
+-        c.frustumCulled = false;
+-        c.material.transparent = false;
+-      }
+-    });
+-    mmd.castShadow = true;
+-    mmd.receiveShadow = true;
+-    mmd.frustumCulled = false;
+-    mmd.name = "MMD" + name;
+-    mmd.frustumCulled = false;
+-    mmd.userData["media_id"] = media_id;
+-    mmd.userData["color"] = "#FFFFFF";
+-    mmd.userData["metalness"] = 0.0;
+-    mmd.userData["shininess"] = 0.5;
+-    mmd.userData["specular"] = 0.5;
+-    mmd.userData["locked"] = false;
+-    mmd.userData["media_file_type"] = MediaFileType.MMD;
+-    mmd.layers.enable(0);
+-    mmd.layers.enable(1);
+-    mmd.position.copy(position);
+-    this.scene.add(mmd);
+-    this.updateSurfaceIdAttributeToMesh(this.scene);
+-    return mmd;
+-  }
+-
+   async loadObjectFromUrl(
+     url: string,
+     position: THREE.Vector3 = new THREE.Vector3(-0.5, 1.5, 0),
+@@ -735,13 +616,9 @@
+   ): Promise<THREE.Object3D> {
+     const url = await this.getMediaURL(media_id);
+ 
++    // PRISM PATCH: MMD (.pmd/.pmx) is not supported
+     if (url.includes(".pmd") || url.includes(".pmx")) {
+-      return await this.loadMMDWithPlaceholder(
+-        media_id,
+-        name,
+-        auto_add,
+-        position,
+-      );
++      throw new Error("MMD models are not supported in Prism 3D sets.");
+     } else if (
+       url.includes(".png") ||
+       url.includes(".jpg") ||
+@@ -759,13 +636,8 @@
+       }
+       return obj;
+     } else if (url.includes(".spz")) {
+-      return await this.loadSplatWithPlaceholder(
+-        media_id,
+-        name,
+-        auto_add,
+-        position,
+-        signal,
+-      );
++      // PRISM PATCH: Gaussian splats (and @sparkjsdev/spark) are not part of M1
++      throw new Error("Gaussian splats are not supported in Prism 3D sets yet.");
+     }
+ 
+     return await this.loadGlbWithPlaceholder(
+@@ -800,66 +672,6 @@
+     return false;
+   }
+ 
+-  async loadSplatWithPlaceholder(
+-    media_id: string,
+-    name: string,
+-    auto_add: boolean = true,
+-    position: THREE.Vector3 = new THREE.Vector3(-0.5, 1.5, 0),
+-    signal?: AbortSignal,
+-  ): Promise<THREE.Object3D> {
+-    if (this.placeholder_manager === undefined) {
+-      throw Error("Place holder Manager is undefined");
+-    }
+-
+-    const url = await this.getMediaURL(media_id);
+-    const key = media_id + name + generateUUID();
+-    await this.placeholder_manager.add(key, `Loading: ${name}`, position);
+-
+-    const splat: SplatMesh = await this.load_splat_wrapped_no_cors(
+-      url,
+-      async () => {
+-        if (this.placeholder_manager === undefined) {
+-          throw Error("Place holder Manager is undefined");
+-        }
+-        await this.placeholder_manager.remove(key);
+-      },
+-      signal,
+-    ).catch(async (error) => {
+-      if (this.placeholder_manager !== undefined) {
+-        await this.placeholder_manager.remove(key);
+-      }
+-      // Don't toast aborts — those are us cancelling a superseded load.
+-      if ((error as { name?: string })?.name !== "AbortError") {
+-        toast.error("Failed to load splat.");
+-      }
+-      throw error;
+-    });
+-
+-    splat.rotation.z = Math.PI;
+-    splat.position.copy(position);
+-    splat.userData["media_id"] = media_id;
+-    splat.userData["media_file_type"] = MediaFileType.SPZ;
+-
+-    // Build the selection bbox child once. SplatMesh.initialized
+-    // resolves after the gaussian data is fully ready, so
+-    // getBoundingBox() returns real local-space extents. The wireframe
+-    // is hidden by default; SelectionOutlinePass flips its visibility
+-    // on select/deselect. ensureInternalBbox no-ops if an identical
+-    // child is already present.
+-    try {
+-      await splat.initialized;
+-      ensureInternalBbox(splat, splat.getBoundingBox());
+-    } catch (e) {
+-      console.warn("Splat bbox skipped: initialized promise rejected", e);
+-    }
+-
+-    if (auto_add) {
+-      this.scene.add(splat);
+-    }
+-    this.updateSurfaceIdAttributeToMesh(this.scene);
+-    return splat;
+-  }
+-
+   async loadGlbWithPlaceholder(
+     media_id: string,
+     name: string,
+@@ -1058,43 +870,6 @@
+   }
+ 
+   /**
+-   * Load a full media_url via Tauri (without browser cors)
+-   * @param media_url
+-   * @param onComplete
+-   * @returns
+-   */
+-  private async load_splat_wrapped_no_cors(
+-    media_url: string,
+-    onComplete: () => void,
+-    signal?: AbortSignal,
+-  ): Promise<SplatMesh> {
+-    return new Promise(async (resolve, reject) => {
+-      let buffer;
+-      try {
+-        // Host-supplied CORS-bypassed binary fetch (FetchProxy under
+-        // Tauri; plain fetch under web hosts that allow it).
+-        buffer = await (
+-          await this.deps.fetchAsset(media_url, { signal })
+-        ).arrayBuffer();
+-      } catch (error) {
+-        if ((error as { name?: string })?.name !== "AbortError") {
+-          console.error("load Splat from Tauri error:", error);
+-        }
+-        reject(error);
+-        return;
+-      }
+-
+-      new SplatMesh({
+-        fileBytes: buffer,
+-        onLoad: (mesh) => {
+-          resolve(mesh);
+-          onComplete();
+-        },
+-      });
+-    });
+-  }
+-
+-  /**
+    * Using a constructed media_url load a glb, grab the progress.
+    * @param media_url
+    * @param progress
+@@ -1113,54 +888,6 @@
+         },
+         progress,
+         (error) => {
+-          reject(error);
+-        },
+-      );
+-    });
+-  }
+-
+-  // This allows to wait for Ammo to fully load.
+-  delay_mmd(ms: number): Promise<void> {
+-    return new Promise((resolve) => setTimeout(resolve, ms));
+-  }
+-
+-  private async load_mmd_wrapped(
+-    media_url: string,
+-    progress: (event: ProgressEvent) => void,
+-  ): Promise<THREE.SkinnedMesh> {
+-    // TODO: When converted to ts remove this and make ammo await instead.
+-    await this.delay_mmd(100);
+-
+-    console.log("Load MMD");
+-    const scriptModule = document.createElement("script");
+-    scriptModule.type = "module";
+-
+-    scriptModule.textContent = `
+-      Ammo().then(function (AmmoLib) {
+-        Ammo = AmmoLib;
+-    });
+-    `;
+-    document.head.appendChild(scriptModule);
+-
+-    // TODO: When converted to ts remove this and make ammo await instead.
+-    await this.delay_mmd(500);
+-
+-    return new Promise((resolve, reject) => {
+-      const mmdLoader = new MMDLoader();
+-      mmdLoader.loadWithAnimation(
+-        media_url,
+-        ["/resources/pose/Lumine Idle cycle.vmd"],
+-        (mmd) => {
+-          this.helper.add(mmd.mesh, {
+-            animation: mmd.animation,
+-            physics: false,
+-          });
+-
+-          mmd.mesh.scale.set(0.1, 0.1, 0.1);
+-          resolve(mmd.mesh);
+-        },
+-        progress,
+-        (error) => {
+           reject(error);
+         },
+       );
+diff -ruN --strip-trailing-cr a/engine/shaders.js b/engine/shaders.js
+--- a/engine/shaders.js	2026-10-15 18:53:02.811063000 -0500
++++ b/engine/shaders.js	1969-12-31 18:00:00.000000000 -0600
+@@ -1,52 +0,0 @@
+-// @see https://discourse.threejs.org/t/production-ready-green-screen-with-three-js/23113/2
+-
+-const VERTEX_SHADER = `
+-varying vec2 vUv;
+-
+-void main() {
+-  vUv = uv;
+-  gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+-}
+-`;
+-const FRAGMENT_SHADER = `
+-uniform sampler2D tex;
+-uniform float texWidth;
+-uniform float texHeight;
+-
+-uniform vec3 keyColor;
+-uniform float similarity;
+-uniform float smoothness;
+-uniform float spill;
+-
+-varying vec2 vUv;
+-
+-// From https://github.com/libretro/glsl-shaders/blob/master/nnedi3/shaders/rgb-to-yuv.glsl
+-vec2 RGBtoUV(vec3 rgb) {
+-  return vec2(
+-    rgb.r * -0.169 + rgb.g * -0.331 + rgb.b *  0.5    + 0.5,
+-    rgb.r *  0.5   + rgb.g * -0.419 + rgb.b * -0.081  + 0.5
+-  );
+-}
+-
+-vec4 ProcessChromaKey(vec2 texCoord) {
+-  vec4 rgba = texture2D(tex, texCoord);
+-  float chromaDist = distance(RGBtoUV(texture2D(tex, texCoord).rgb), RGBtoUV(keyColor));
+-
+-  float baseMask = chromaDist - similarity;
+-  float fullMask = pow(clamp(baseMask / smoothness, 0., 1.), 1.5);
+-  rgba.a = fullMask;
+-
+-  float spillVal = pow(clamp(baseMask / spill, 0., 1.), 1.5);
+-  float desat = clamp(rgba.r * 0.2126 + rgba.g * 0.7152 + rgba.b * 0.0722, 0., 1.);
+-  rgba.rgb = mix(vec3(desat, desat, desat), rgba.rgb, spillVal);
+-
+-  return rgba;
+-}
+-
+-void main(void) {
+-  vec2 texCoord = vUv;
+-  gl_FragColor = ProcessChromaKey(texCoord);
+-}
+-`;
+-
+-export { VERTEX_SHADER, FRAGMENT_SHADER };
+diff -ruN --strip-trailing-cr a/enums/EditorState.ts b/enums/EditorState.ts
+--- a/enums/EditorState.ts	2026-10-15 18:53:03.094187300 -0500
++++ b/enums/EditorState.ts	2026-10-15 19:01:03.309935800 -0500
+@@ -5,6 +5,8 @@
+ 
+ export enum CameraAspectRatio {
+   HORIZONTAL_16_9 = "horizontal_16_9",
++  // PRISM PATCH: the Prism production frame (anamorphic 2.39:1).
++  HORIZONTAL_2_39_1 = "horizontal_2_39_1",
+   VERTICAL_9_16 = "vertical_9_16",
+   SQUARE_1_1 = "SQUARE_1_1",
+   HORIZONTAL_3_2 = "horizontal_3_2",
+diff -ruN --strip-trailing-cr a/hooks/useFreeCam.ts b/hooks/useFreeCam.ts
+--- a/hooks/useFreeCam.ts	2026-10-15 18:53:03.425374200 -0500
++++ b/hooks/useFreeCam.ts	2026-10-15 19:01:07.985059300 -0500
+@@ -1,6 +1,5 @@
+ import { useEffect, useMemo, useRef } from "react";
+ import { MathUtils } from "three";
+-import { useResolvedKeybinds } from "@storyteller/keybinds";
+ import {
+   CAMERA_MOVE_ACTION_SLOTS,
+   CAMERA_ROTATE_ACTION_SLOTS,
+@@ -87,20 +86,26 @@
+ 
+   // Resolve camera bindings into `code → slot` lookups. Recomputed (new identity)
+   // only when the preset/overrides change, which re-attaches the key listeners.
+-  const { slotBindings } = useResolvedKeybinds();
++  // PRISM PATCH: fixed default bindings (upstream resolves these through the @storyteller/keybinds registry).
+   const { moveMap, rotateMap, moveCodes } = useMemo(() => {
+-    const resolved = slotBindings("pagescene");
+-    const moveMap: Record<string, keyof HeldMoveKeys> = {};
+-    for (const [id, slot] of Object.entries(CAMERA_MOVE_ACTION_SLOTS)) {
+-      for (const b of resolved[id] ?? []) moveMap[b.code] = slot;
+-    }
+-    const rotateMap: Record<string, keyof HeldRotateKeys> = {};
+-    for (const [id, slot] of Object.entries(CAMERA_ROTATE_ACTION_SLOTS)) {
+-      for (const b of resolved[id] ?? []) rotateMap[b.code] = slot;
+-    }
+-    // Movement codes only matter for the Alt-modifier preventDefault path.
++    void CAMERA_MOVE_ACTION_SLOTS;
++    void CAMERA_ROTATE_ACTION_SLOTS;
++    const moveMap: Record<string, keyof HeldMoveKeys> = {
++      KeyW: "forward",
++      KeyS: "back",
++      KeyA: "left",
++      KeyD: "right",
++      KeyE: "up",
++      KeyQ: "down",
++    };
++    const rotateMap: Record<string, keyof HeldRotateKeys> = {
++      ArrowUp: "pitchUp",
++      ArrowDown: "pitchDown",
++      ArrowLeft: "yawLeft",
++      ArrowRight: "yawRight",
++    };
+     return { moveMap, rotateMap, moveCodes: new Set(Object.keys(moveMap)) };
+-  }, [slotBindings]);
++  }, []);
+ 
+   // Hand the state to the editor so its render loop can integrate it.
+   useEffect(() => {
+diff -ruN --strip-trailing-cr a/models/index.ts b/models/index.ts
+--- a/models/index.ts	2026-10-15 18:53:03.480152300 -0500
++++ b/models/index.ts	2026-10-15 19:01:08.634845900 -0500
+@@ -1,6 +1,4 @@
+-export * from "./assets";
+-export * from "./mediaInfo";
+-export * from "./pagination";
+-export * from "./prompts";
+-export * from "./types";
+-export * from "./userBookmark";
++// PRISM PATCH: the upstream models barrel pulls in the ArtCraft media-library types. The store only needs an
++// opaque drag item, which Prism never sets (it has no asset-drag UI in M1).
++export type MediaItem = { media_id: string; name?: string; [key: string]: unknown };
++export type { SceneGenereationMetaData } from "./sceneGenerationMetadata";
+diff -ruN --strip-trailing-cr a/proxy/storyteller_proxy_scene.ts b/proxy/storyteller_proxy_scene.ts
+--- a/proxy/storyteller_proxy_scene.ts	2026-10-15 18:53:03.623271800 -0500
++++ b/proxy/storyteller_proxy_scene.ts	2026-10-15 19:01:09.757111700 -0500
+@@ -289,6 +289,10 @@
+       if (json_object.user_data?.skeletonVisible !== undefined) {
+         obj.userData["skeletonVisible"] = json_object.user_data.skeletonVisible;
+       }
++      // PRISM PATCH: restore host-owned userData (keys prefixed "prism": character blocking, asset checksums).
++      for (const [key, value] of Object.entries(json_object.user_data ?? {})) {
++        if (key.startsWith("prism")) obj.userData[key] = value;
++      }
+       if (json_object.visible !== undefined) {
+         this.scene.setVisible(obj.uuid, json_object.visible);
+       }
+diff -ruN --strip-trailing-cr a/shims/common.ts b/shims/common.ts
+--- a/shims/common.ts	1969-12-31 18:00:00.000000000 -0600
++++ b/shims/common.ts	2026-10-15 19:01:12.169591700 -0500
+@@ -0,0 +1,14 @@
++// PRISM PATCH: local replacement for the two `@storyteller/common` types the engine imports.
++export interface Camera {
++  id: string;
++  label: string;
++  focalLength: number;
++  position: { x: number; y: number; z: number };
++  rotation: { x: number; y: number; z: number };
++  lookAt: { x: number; y: number; z: number };
++}
++
++export interface FocalLengthDragging {
++  isDragging: boolean;
++  focalLength: number;
++}
+diff -ruN --strip-trailing-cr a/shims/shape-factory.ts b/shims/shape-factory.ts
+--- a/shims/shape-factory.ts	1969-12-31 18:00:00.000000000 -0600
++++ b/shims/shape-factory.ts	2026-10-15 19:01:12.549003600 -0500
+@@ -0,0 +1,13 @@
++// PRISM PATCH (new file): lets the host register extra procedural shapes (Plane, Mannequin) without editing the
++// engine's `Scene.instantiate` switch per shape. The host registers factories before mounting an editor.
++import type * as THREE from "three";
++
++export interface ShapeFactory {
++  geometry: () => THREE.BufferGeometry;
++  /** vertical offset so the shape stands on the ground plane when dropped at y = 0 */
++  doubleSided?: boolean;
++}
++
++const factories = new Map<string, ShapeFactory>();
++export const registerShapeFactory = (key: string, factory: ShapeFactory) => void factories.set(key, factory);
++export const getShapeFactory = (key: string) => factories.get(key);
+diff -ruN --strip-trailing-cr a/shims/toast.ts b/shims/toast.ts
+--- a/shims/toast.ts	1969-12-31 18:00:00.000000000 -0600
++++ b/shims/toast.ts	2026-10-15 19:01:12.929163200 -0500
+@@ -0,0 +1,13 @@
++// PRISM PATCH: the engine toasts through `react-hot-toast`; Prism routes engine messages through its own
++// adapter instead, so the engine gets a no-UI sink that records the last message.
++let last: string | null = null;
++const toast = {
++  error(message: string) {
++    last = message;
++  },
++  success(message: string) {
++    last = message;
++  },
++};
++export const lastToastMessage = () => last;
++export default toast;
+diff -ruN --strip-trailing-cr a/shims/ui-viewer-3d.ts b/shims/ui-viewer-3d.ts
+--- a/shims/ui-viewer-3d.ts	1969-12-31 18:00:00.000000000 -0600
++++ b/shims/ui-viewer-3d.ts	2026-10-15 19:01:13.256064500 -0500
+@@ -0,0 +1,2 @@
++// PRISM PATCH: stands in for `@storyteller/ui-viewer-3d` (only the disposal helpers are used).
++export { collectObjectTextures, disposeObject3D } from "../viewer-3d/disposeObject3D";
+diff -ruN --strip-trailing-cr a/viewer-3d/disposeObject3D.ts b/viewer-3d/disposeObject3D.ts
+--- a/viewer-3d/disposeObject3D.ts	2026-10-15 18:53:03.718298600 -0500
++++ b/viewer-3d/disposeObject3D.ts	2026-10-15 19:01:10.415158500 -0500
+@@ -1,10 +1,10 @@
+ import * as THREE from "three";
+-import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
+ 
+ // Free the GPU resources held by an object tree that is leaving the scene
+ // for good: geometries, materials, the textures those materials reference
+-// (Material.dispose() does not free its maps), skeleton bone textures and
+-// Spark splat buffers. Call it after the tree has been removed.
++// (Material.dispose() does not free its maps) and skeleton bone textures.
++// Call it after the tree has been removed. PRISM PATCH: the Spark splat
++// branches were removed with the dependency.
+ //
+ // Textures are found both as material properties (map, normalMap, ...) and
+ // as ShaderMaterial uniforms (Water's normal and mirror samplers, Spark's
+@@ -19,8 +19,6 @@
+ // objects from their snapshot rather than reusing the instance.
+ export function disposeObject3D(root: THREE.Object3D): void {
+   root.traverse((child) => {
+-    if (child instanceof SplatMesh) child.dispose();
+-    if (child instanceof SparkRenderer) disposeSparkRenderer(child);
+     if (child instanceof THREE.SkinnedMesh) child.skeleton?.dispose();
+     (child as Partial<THREE.Mesh>).geometry?.dispose();
+   });
+@@ -39,19 +37,6 @@
+   return collectMaterialTextures(collectMaterials(root));
+ }
+ 
+-// A SparkRenderer is added to the scene automatically the first time a
+-// splat renders. Its viewpoint render targets and splat accumulators are
+-// not reachable from its material, so free them explicitly. The viewpoint
+-// goes first: disposing it returns its accumulators to the free list.
+-function disposeSparkRenderer(spark: SparkRenderer): void {
+-  spark.defaultView.dispose();
+-  spark.active.splats.dispose();
+-  const { freeAccumulators } = spark as unknown as {
+-    freeAccumulators: SparkRenderer["active"][];
+-  };
+-  for (const accumulator of freeAccumulators) accumulator.splats.dispose();
+-}
+-
+ function collectMaterials(root: THREE.Object3D): Set<THREE.Material> {
+   const materials = new Set<THREE.Material>();
+   root.traverse((child) => {

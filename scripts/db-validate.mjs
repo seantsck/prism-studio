@@ -54,6 +54,10 @@ const expectedTables = [
   "generation_candidate_members",
   "generation_reviews",
   "generation_candidate_events",
+  // Phase 2F
+  "location_scene_documents",
+  "shot_camera_bookmarks",
+  "scene_master_frames",
 ];
 const tables = (await rows("select tablename, rowsecurity from pg_tables where schemaname='public'")).filter(
   (t) => t.tablename !== "prism_migrations",

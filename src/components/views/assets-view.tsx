@@ -389,7 +389,10 @@ export async function AssetLibraryView({
           <Panel title="Upload">
             <ActionForm action={uploadAsset} resetOnSuccess className="grid grid-cols-2 gap-3">
               <input type="hidden" name="projectSlug" value={data.project.slug} />
-              <Field label="File" hint="Images, audio, video, PDF. Validated server-side; max 50 MB.">
+              <Field
+                label="File"
+                hint="Images, audio, video, PDF, 3D models (.glb). Validated server-side; max 50 MB."
+              >
                 <input type="file" name="file" required className="!p-0.5" />
               </Field>
               <Field label="Purpose">

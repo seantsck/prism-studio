@@ -1,0 +1,182 @@
+import { PRISM_USER_DATA, assetTokenFor } from "./document";
+
+/**
+ * The synthetic acceptance set: neutral procedural objects only (no Yumeko image, no paid or third-party
+ * assets). Expressed as the engine's own scene JSON so loading it exercises the real load path.
+ * Ids are deterministic so the set (and its fingerprint) is reproducible.
+ */
+export const HOTEL_CANOPY_SET_NAME = "Hotel Canopy Test Set";
+
+type V = { x: number; y: number; z: number };
+interface Def {
+  id: string;
+  name: string;
+  shape: string;
+  position: V;
+  rotation?: V;
+  scale: V;
+  color: string;
+  characterId?: string;
+}
+
+const Z: V = { x: 0, y: 0, z: 0 };
+
+export const HOTEL_CANOPY_OBJECTS: Def[] = [
+  {
+    id: "00000000-0000-4000-8000-0000000c0001",
+    name: "Ground plane",
+    shape: "Plane",
+    position: { x: 0, y: 0, z: 0 },
+    rotation: { x: -Math.PI / 2, y: 0, z: 0 },
+    scale: { x: 24, y: 24, z: 1 },
+    color: "#8a8f98",
+  },
+  {
+    id: "00000000-0000-4000-8000-0000000c0002",
+    name: "Hotel wall",
+    shape: "Box",
+    position: { x: 0, y: 3, z: -6 },
+    scale: { x: 14, y: 6, z: 0.4 },
+    color: "#c9c2b8",
+  },
+  {
+    id: "00000000-0000-4000-8000-0000000c0003",
+    name: "Canopy",
+    shape: "Box",
+    position: { x: 0, y: 3.6, z: -4.2 },
+    scale: { x: 6, y: 0.25, z: 3.4 },
+    color: "#3b4a5a",
+  },
+  {
+    id: "00000000-0000-4000-8000-0000000c0004",
+    name: "Door opening",
+    shape: "Box",
+    position: { x: 0, y: 1.2, z: -5.75 },
+    scale: { x: 2.2, y: 2.4, z: 0.15 },
+    color: "#1d1f24",
+  },
+  {
+    id: "00000000-0000-4000-8000-0000000c0005",
+    name: "Vehicle block",
+    shape: "Box",
+    position: { x: 4.2, y: 0.75, z: -1 },
+    scale: { x: 4.6, y: 1.5, z: 1.9 },
+    color: "#5b6470",
+  },
+  {
+    id: "00000000-0000-4000-8000-0000000c0006",
+    name: "Lamp post",
+    shape: "Cylinder",
+    position: { x: -3.6, y: 2, z: -2.6 },
+    scale: { x: 0.18, y: 2, z: 0.18 },
+    color: "#2a2d33",
+  },
+  {
+    id: "00000000-0000-4000-8000-0000000c0007",
+    name: "Mannequin",
+    shape: "Mannequin",
+    position: { x: -0.6, y: 0, z: -2.4 },
+    scale: { x: 1, y: 1, z: 1 },
+    color: "#d9d9d9",
+  },
+];
+
+export const HOTEL_CANOPY_CAMERA = {
+  id: "cam-a",
+  label: "CAM-A",
+  focalLength: 35,
+  position: { x: 1.2, y: 1.6, z: 5.5 },
+  rotation: { x: -0.06, y: 0.12, z: 0 },
+  lookAt: { x: 0, y: 1.2, z: -3 },
+} as const;
+
+export interface EngineSceneObject {
+  version: number;
+  position: V;
+  rotation: V;
+  scale: V;
+  object_name: string;
+  object_uuid: string;
+  object_user_data_name: string;
+  media_file_token: string;
+  color: string;
+  metalness: number;
+  shininess: number;
+  specular: number;
+  locked: boolean;
+  visible: boolean;
+  rigData: unknown;
+  user_data: Record<string, unknown>;
+}
+export interface EngineSceneCamera {
+  id: string;
+  label: string;
+  focalLength: number;
+  position: V;
+  rotation: V;
+  lookAt: V;
+}
+export interface EngineSceneJson {
+  version: number;
+  scene: EngineSceneObject[];
+  positivePrompt: string;
+  cameraAspectRatio: string;
+  timeline: unknown;
+  skybox: string;
+  camera_data: { position: V; rotation: V };
+  cameras: EngineSceneCamera[];
+  selectedCameraId: string;
+}
+
+/** Engine scene JSON for the set. `characterId` optionally blocks a Prism Character with the mannequin proxy. */
+export function buildHotelCanopyEngineScene(opts: { characterId?: string } = {}): EngineSceneJson {
+  return {
+    version: 2,
+    scene: HOTEL_CANOPY_OBJECTS.map((o) => ({
+      version: 2,
+      position: o.position,
+      rotation: o.rotation ?? Z,
+      scale: o.scale,
+      object_name: o.name,
+      object_uuid: o.id,
+      object_user_data_name: o.name,
+      media_file_token: "Parim",
+      color: o.color,
+      metalness: 0,
+      shininess: 0.5,
+      specular: 0,
+      locked: false,
+      visible: true,
+      rigData: undefined,
+      user_data: {
+        shapeKey: o.shape,
+        shapeType: o.shape,
+        media_id: "Parim",
+        isShape: true,
+        color: o.color,
+        ...(o.shape === "Mannequin" && opts.characterId
+          ? { [PRISM_USER_DATA.characterId]: opts.characterId }
+          : {}),
+      },
+    })),
+    positivePrompt: "",
+    cameraAspectRatio: "horizontal_2_39_1",
+    timeline: null,
+    skybox: "m_1",
+    camera_data: { position: { x: 6, y: 4, z: 9 }, rotation: { x: -0.25, y: 0.55, z: 0 } },
+    cameras: [
+      {
+        id: "main",
+        label: "Main",
+        focalLength: 17,
+        position: { x: 6, y: 4, z: 9 },
+        rotation: { x: -0.25, y: 0.55, z: 0 },
+        lookAt: Z,
+      },
+      { ...HOTEL_CANOPY_CAMERA },
+    ],
+    selectedCameraId: HOTEL_CANOPY_CAMERA.id,
+  };
+}
+
+export { assetTokenFor };

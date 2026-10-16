@@ -10,6 +10,7 @@ import { fingerprint } from "./hash";
 import { runPreflight } from "./preflight";
 import type { Asset, Shot } from "./schemas";
 import { timelineFromContext, type TimelineSegment } from "./timeline";
+import type { SpatialReference } from "./previs/spatial";
 
 /** Bump when the package SHAPE changes. Attempts keep the version they were built with. */
 export const PACKAGE_SCHEMA_VERSION = 2 as const;
@@ -39,6 +40,11 @@ export interface PackageAsset {
  * into provider payloads. Principle: never ask a model to remember what Prism Studio can store.
  */
 export interface GenerationPackage {
+  /**
+   * The 3D set state this package was compiled against (Phase 2F). OPTIONAL and omitted entirely when the Shot
+   * has no 3D set, so packages for such Shots are byte-identical to those built before 3D sets existed.
+   */
+  spatialReference?: SpatialReference;
   version: typeof PACKAGE_SCHEMA_VERSION;
   packageSchemaVersion: typeof PACKAGE_SCHEMA_VERSION;
   builtAt: string;
@@ -436,6 +442,7 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
       positive: visual,
       negative: negative.concat(bible.guardrails).join("; "),
     },
+    ...(ctx.spatial ? { spatialReference: ctx.spatial } : {}),
   };
 
   // Every referenced asset is described by value (checksum, dimensions, filename...).
@@ -450,6 +457,7 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
     base.references.approvedStoryboardFrame?.assetId,
     base.references.referenceVideoAssetId,
     base.references.referenceAudioAssetId,
+    base.spatialReference?.masterFrameAssetId,
     base.lighting.referenceAssetId,
     ...base.references.referenceAssetIds,
     ...base.performance.map((p) => p.selectedTake?.audioAssetId),

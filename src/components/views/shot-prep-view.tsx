@@ -727,6 +727,28 @@ export function ShotPrepView({
                 {ctx.location.zones.length ? (
                   <div>Zones: {ctx.location.zones.map((z) => z.name).join(" · ")}</div>
                 ) : null}
+                <div className="mt-2 flex flex-wrap items-center gap-2" data-testid="shot-3d-set">
+                  <Link
+                    href={`/projects/${slug}/locations/${ctx.location.id}/3d?shot=${shot.id}`}
+                    className="inline-flex h-7 items-center rounded border border-line2 px-3 text-xs text-fg hover:bg-panel2"
+                    data-testid="open-in-3d-set"
+                  >
+                    Open in 3D Set
+                  </Link>
+                  {ctx.spatial?.cameraBookmark ? (
+                    <span data-testid="shot-camera-link">
+                      Camera <strong>{ctx.spatial.cameraBookmark.label}</strong> · set revision{" "}
+                      {ctx.spatial.cameraBookmark.sceneRevision} ·{" "}
+                      {ctx.spatial.cameraBookmark.sceneFingerprint.slice(0, 10)}
+                      {ctx.spatial.cameraBookmark.sceneFingerprint !== ctx.spatial.sceneFingerprint ? (
+                        <Badge tone="warn">set changed since linked</Badge>
+                      ) : null}
+                      {ctx.spatial.masterFrameAssetId ? <Badge tone="pass">master frame</Badge> : null}
+                    </span>
+                  ) : (
+                    <span>No production camera linked yet.</span>
+                  )}
+                </div>
               </div>
             ) : null}
           </SectionChrome>

@@ -679,4 +679,9 @@ export type CollectionName = keyof Collections;
 export interface ProjectData extends Collections {
   project: Project;
   bible: ProjectBible;
+  /**
+   * Per-shot 3D set snapshot (Phase 2F), attached by the server loaders for shots that have a production camera.
+   * Never persisted here and absent for projects without 3D sets.
+   */
+  spatialReferences?: Record<string, import("./previs/spatial").SpatialReference>;
 }
