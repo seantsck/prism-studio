@@ -157,6 +157,8 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
   useEffect(() => {
     pathRef.current = path;
   }, [path]);
+  // the production-camera pose the path last wrote (or a keyframe last captured): anything else is an unkeyed edit
+  const committedRef = useRef<{ position: number[]; rotation: number[]; focal: number } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const rafRef = useRef<number | null>(null);
   const audioRef = useRef<{ els: HTMLAudioElement[]; timers: number[] }>({ els: [], timers: [] });
@@ -173,13 +175,54 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
   const durationMs = path?.durationMs ?? timingDuration ?? DEFAULT_DURATION_MS;
   const durationDrift = !!path && !!timingDuration && path.durationMs !== timingDuration;
 
+  const snapshotOf = (c: PrevisCamera) => ({
+    position: [c.position.x, c.position.y, c.position.z],
+    rotation: [c.rotation.x, c.rotation.y, c.rotation.z],
+    focal: c.focalLengthMm,
+  });
+  const commitLiveCamera = () => {
+    try {
+      const c = props.adapter().getProductionCamera();
+      if (c) committedRef.current = snapshotOf(c);
+    } catch {
+      /* adapter not ready */
+    }
+  };
+  /** True when the operator moved the production camera and has not keyed or discarded that edit. */
+  const hasUnkeyedEdit = () => {
+    const committed = committedRef.current;
+    if (!committed) return false;
+    const c = props.adapter().getProductionCamera();
+    if (!c) return false;
+    const now = snapshotOf(c);
+    const eps = 1e-3;
+    return (
+      Math.abs(now.focal - committed.focal) > eps ||
+      now.position.some((v, i) => Math.abs(v - committed.position[i]) > eps) ||
+      now.rotation.some((v, i) => Math.abs(v - committed.rotation[i]) > eps)
+    );
+  };
+
+  // the baseline is whatever the camera is when the panel becomes usable
+  useEffect(() => {
+    if (props.ready && !committedRef.current) commitLiveCamera();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.ready]);
+
   // ── playback: the ONE evaluator drives the production camera (never the navigation camera) ──
   const applyAt = useCallback(
     (t: number) => {
       const p = pathRef.current;
       if (!p || p.keyframes.length === 0) return;
       const state = evaluateCameraPath(p, t);
-      if (state) props.adapter().applyCameraState(poseOf(state));
+      if (!state) return;
+      props.adapter().applyCameraState(poseOf(state));
+      const pose = poseOf(state);
+      committedRef.current = {
+        position: [pose.position.x, pose.position.y, pose.position.z],
+        rotation: [pose.rotation.x, pose.rotation.y, pose.rotation.z],
+        focal: pose.focalLengthMm,
+      };
     },
     [props],
   );
@@ -227,13 +270,20 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
 
   const play = () => {
     if (!path || path.keyframes.length < 1 || !props.ready) return;
+    if (hasUnkeyedEdit()) {
+      return setStatus({
+        tone: "error",
+        text: "The production camera has an unkeyed edit. Add or update a keyframe, or return the camera to its set pose, before playing.",
+      });
+    }
     let t0 = timeMs >= path.durationMs ? 0 : timeMs;
-    let wall0 = performance.now();
+    let wall0: number | null = null;
     setPlaying(true);
     startAudio(t0);
     const tick = (now: number) => {
       const p = pathRef.current;
       if (!p) return stopPlayback();
+      if (wall0 === null) wall0 = now;
       let t = t0 + (now - wall0);
       if (t >= p.durationMs) {
         if (loop) {
@@ -259,7 +309,16 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
     stopPlayback();
     const clamped = Math.min(durationMs, Math.max(0, Math.round(t)));
     setTimeMs(clamped);
-    if (props.ready) applyAt(clamped);
+    if (!props.ready) return;
+    if (hasUnkeyedEdit()) {
+      // never throw the operator's camera move away just because the playhead moved
+      setStatus({
+        tone: "idle",
+        text: "The camera has an unkeyed edit — Add keyframe at playhead to commit it here.",
+      });
+      return;
+    }
+    applyAt(clamped);
   };
 
   useEffect(
@@ -326,6 +385,7 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
     let p = emptyCameraPath(dur, fps);
     p = upsertKeyframe(p, keyframeFromCamera(newKeyId(), 0, c));
     setPath(p);
+    committedRef.current = snapshotOf(c);
     setSelectedId(p.keyframes[0].id);
     setTimeMs(0);
     setStatus({
@@ -361,6 +421,7 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
     const existing = path.keyframes.find((k) => k.timeMs === t);
     const key = keyframeFromCamera(existing?.id ?? newKeyId(), t, c, existing?.easing ?? "ease_in_out");
     mutate((p) => upsertKeyframe(p, key));
+    committedRef.current = snapshotOf(c);
     setSelectedId(key.id);
     setStatus({ tone: "ok", text: `Keyframe at ${formatTimecode(t, fps)}` });
   };
@@ -373,6 +434,7 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
         ...keyframeFromCamera(selected.id, selected.timeMs, c, selected.easing),
       }),
     );
+    committedRef.current = snapshotOf(c);
   };
 
   const patchSelected = (patch: Partial<CameraKeyframe>) => {
@@ -789,7 +851,10 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
 
           <button
             className="btn mb-2 w-full"
-            onClick={() => props.adapter().restoreAuthoredCamera()}
+            onClick={() => {
+              props.adapter().restoreAuthoredCamera();
+              commitLiveCamera();
+            }}
             data-testid="reset-camera"
           >
             Return camera to its set pose
