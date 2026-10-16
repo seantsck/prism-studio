@@ -704,6 +704,7 @@ class Editor {
   public snapShotOfCurrentFrame(
     shouldDownload: boolean = true,
     cameraOverride?: THREE.PerspectiveCamera,
+    sizeOverride?: { width: number; height: number },
   ) {
     const camera = cameraOverride ?? this.cameraController.camera;
     const renderCamera = this.cameraController.render_camera;
@@ -772,6 +773,13 @@ class Editor {
         targetHeight = 1024;
         aspectRatio = 1;
         break;
+    }
+
+    // PRISM PATCH: an explicit output size (local previs renders below the full production frame)
+    if (sizeOverride) {
+      targetWidth = sizeOverride.width;
+      targetHeight = sizeOverride.height;
+      aspectRatio = sizeOverride.width / sizeOverride.height;
     }
 
     // Store original renderer and camera state

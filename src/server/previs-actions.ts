@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { ZodError } from "zod";
 import { PrevisError } from "@/data/previs-repository";
 import { assetSchema, shotSchema, storyboardFrameSchema } from "@/domain/schemas";
+import { cameraPathSchema, validateCameraPath } from "@/domain/previs/camera-path";
 import { buildPrevisDocument } from "@/domain/previs/document";
 import { PREVIS_PRODUCTION_FRAME } from "@/domain/previs/types";
 import { readImageSize } from "@/lib/image-size";
@@ -334,5 +335,227 @@ export async function adoptMasterFrame(form: FormData): Promise<PrevisResult<{ s
     await previs.adoptMasterFrame(mf.id, frameId, stamp);
     refresh(slug);
     return { ok: true, storyboardFrameId: frameId };
+  });
+}
+
+const MAX_PATH_JSON_BYTES = 256 * 1024;
+const MAX_PREVIS_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Saves the Shot's camera motion (compare-and-set on revision). The set revision/fingerprint it is authored
+ * against are read from the LIVE saved set on the server, never trusted from the client.
+ */
+export async function saveShotCameraPath(
+  form: FormData,
+): Promise<PrevisResult<{ pathId: string; revision: number; fingerprint: string }>> {
+  return guarded(async () => {
+    const slug = str(form, "projectSlug");
+    const shotId = str(form, "shotId");
+    const locationId = str(form, "locationId");
+    const expectedRaw = str(form, "expectedRevision");
+    const raw = String(form.get("pathJson") ?? "");
+    if (raw.length === 0 || raw.length > MAX_PATH_JSON_BYTES)
+      throw new UserFacingError("The camera path is empty or too large to save.");
+    let candidate: unknown;
+    try {
+      candidate = JSON.parse(raw);
+    } catch {
+      throw new UserFacingError("The camera path data is not valid JSON.");
+    }
+    const parsed = cameraPathSchema.safeParse(candidate);
+    if (!parsed.success) throw new UserFacingError("The camera path data is not valid.");
+    const problems = validateCameraPath(parsed.data);
+    if (problems.length > 0) throw new UserFacingError(problems[0]);
+
+    const user = await requireUser();
+    const data = await requireProjectFresh(slug);
+    const shot = data.shots.find((x) => x.id === shotId);
+    if (!shot) throw new UserFacingError("That shot no longer exists.");
+    if (!data.locations.some((l) => l.id === locationId))
+      throw new UserFacingError("That location is not in this project.");
+    if (shot.spatial.locationId && shot.spatial.locationId !== locationId)
+      throw new UserFacingError("This shot is set in another location.");
+    const previs = await getPrevisRepo();
+    const scene = await previs.getSceneForLocation(locationId);
+    if (!scene || scene.projectId !== data.project.id)
+      throw new UserFacingError("Save the 3D set before saving camera motion.");
+
+    const saved = await previs.saveCameraPath({
+      id: randomUUID(),
+      projectId: data.project.id,
+      shotId,
+      locationId,
+      sceneDocumentId: scene.id,
+      sceneRevision: scene.revision,
+      sceneFingerprint: scene.sceneFingerprint,
+      path: parsed.data,
+      expectedRevision: expectedRaw === "" ? null : Number(expectedRaw),
+      userId: actorOf(user),
+      now: new Date().toISOString(),
+    });
+    if (!shot.spatial.locationId) {
+      const repo = await getRepo();
+      await repo.upsert(
+        data.project.id,
+        "shots",
+        shotSchema.parse({
+          ...shot,
+          spatial: { ...shot.spatial, locationId },
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+    }
+    refresh(slug);
+    return { ok: true, pathId: saved.id, revision: saved.revision, fingerprint: saved.pathFingerprint };
+  });
+}
+
+/**
+ * Stores a locally rendered, locally encoded previs video as a PRIVATE asset with camera-path + scene provenance.
+ * The server re-derives everything it can: the saved path must be the revision the client rendered, must be
+ * current for the live set, and the file must really be a video of the stated container.
+ */
+export async function recordPrevisClip(
+  form: FormData,
+): Promise<PrevisResult<{ clipId: string; assetId: string }>> {
+  return guarded(async () => {
+    const slug = str(form, "projectSlug");
+    const shotId = str(form, "shotId");
+    const locationId = str(form, "locationId");
+    const pathRevision = Number(str(form, "pathRevision"));
+    const container = str(form, "container");
+    const codec = str(form, "codec");
+    const width = Number(str(form, "renderWidth"));
+    const height = Number(str(form, "renderHeight"));
+    const file = form.get("file");
+    if (!(file instanceof File) || file.size === 0)
+      throw new UserFacingError("No rendered previs was received.");
+    if (container !== "mp4" && container !== "webm")
+      throw new UserFacingError("Unsupported video container.");
+    if (!/^[a-z0-9.]{2,32}$/i.test(codec)) throw new UserFacingError("Unsupported video codec.");
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 64 || height < 32 || width > 1912)
+      throw new UserFacingError("The previs dimensions are not valid.");
+    if (Math.abs(width / height - PREVIS_PRODUCTION_FRAME.width / PREVIS_PRODUCTION_FRAME.height) > 0.02)
+      throw new UserFacingError("The previs must be rendered in the 2.39:1 production frame.");
+    if (file.size > MAX_PREVIS_BYTES) throw new UserFacingError("The previs file is too large.");
+
+    const user = await requireUser();
+    const data = await requireProjectFresh(slug);
+    if (!data.shots.some((x) => x.id === shotId)) throw new UserFacingError("That shot no longer exists.");
+    const previs = await getPrevisRepo();
+    const path = await previs.getCameraPathForShot(shotId);
+    if (!path || path.projectId !== data.project.id)
+      throw new UserFacingError("Save the camera path before rendering a previs.");
+    if (path.revision !== pathRevision)
+      throw new PrevisError(
+        "conflict",
+        "The camera path changed after this previs was rendered. Render again.",
+      );
+    const scene = await previs.getSceneForLocation(locationId);
+    if (!scene || scene.projectId !== data.project.id || scene.id !== path.sceneDocumentId)
+      throw new UserFacingError("Save the 3D set before recording a previs.");
+    if (scene.sceneFingerprint !== path.sceneFingerprint)
+      throw new UserFacingError("The set changed since this camera path was saved. Re-save the path first.");
+
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const claimedMime = container === "mp4" ? "video/mp4" : "video/webm";
+    const check = checkUpload({ name: `previs.${container}`, size: file.size, claimedMime }, bytes, [
+      "video",
+    ]);
+    if (!check.ok || check.mime !== claimedMime)
+      throw new UserFacingError(check.reason ?? `The file is not a ${container} video.`);
+
+    const stamp = new Date().toISOString();
+    const assetId = randomUUID();
+    const objectPath = buildObjectPath(data.project.id, assetId, `previs.${container}`);
+    const storage = await getUploadStorage();
+    await storage.put(objectPath, bytes, claimedMime);
+    const shot = data.shots.find((x) => x.id === shotId)!;
+    const asset = assetSchema.parse({
+      id: assetId,
+      projectId: data.project.id,
+      createdBy: actorOf(user),
+      type: "video",
+      purpose: "video_reference",
+      source: "local_previs",
+      name: `Shot ${shot.shotCode} — local previs r${path.revision}`,
+      originalFilename: `previs.${container}`,
+      storageProvider: storage.name,
+      bucket: storage.bucket,
+      objectPath,
+      mime: claimedMime,
+      byteSize: bytes.length,
+      checksum: checksum(bytes),
+      width,
+      height,
+      durationMs: path.durationMs,
+      frameRate: path.frameRate,
+      sampleRate: null,
+      channels: null,
+      tags: ["previs", "local_previs", "camera_motion"],
+      notes: "",
+      metadata: {
+        previs: {
+          source: "local_previs",
+          projectId: data.project.id,
+          shotId,
+          locationId,
+          sceneDocumentId: scene.id,
+          sceneRevision: scene.revision,
+          sceneFingerprint: scene.sceneFingerprint,
+          cameraPathId: path.id,
+          cameraPathRevision: path.revision,
+          cameraPathFingerprint: path.pathFingerprint,
+          durationMs: path.durationMs,
+          frameRate: path.frameRate,
+          renderWidth: width,
+          renderHeight: height,
+          container,
+          codec,
+          audioAssetId: null,
+          renderedAt: stamp,
+        },
+      },
+      createdAt: stamp,
+      updatedAt: stamp,
+    });
+
+    const repo = await getRepo();
+    try {
+      await repo.upsert(data.project.id, "assets", asset);
+      const clip = await previs.recordPrevisClip({
+        id: randomUUID(),
+        projectId: data.project.id,
+        shotId,
+        locationId,
+        cameraPathId: path.id,
+        pathRevision: path.revision,
+        pathFingerprint: path.pathFingerprint,
+        sceneDocumentId: scene.id,
+        sceneRevision: scene.revision,
+        sceneFingerprint: scene.sceneFingerprint,
+        assetId,
+        frameRate: path.frameRate,
+        durationMs: path.durationMs,
+        renderWidth: width,
+        renderHeight: height,
+        container,
+        codec,
+        hasAudio: false,
+        audioAssetId: null,
+        renderedAt: stamp,
+        userId: actorOf(user),
+      });
+      refresh(slug);
+      return { ok: true, clipId: clip.id, assetId };
+    } catch (err) {
+      try {
+        const st = await storageForAsset(asset);
+        if (st && asset.objectPath) await st.remove(asset.objectPath);
+      } catch {
+        /* orphaned object: harmless, never referenced */
+      }
+      throw err;
+    }
   });
 }
