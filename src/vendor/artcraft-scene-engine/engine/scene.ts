@@ -1,19 +1,14 @@
 import * as THREE from "three";
 import { GLTFLoader, GLTF } from "three/addons/loaders/GLTFLoader.js";
-import { MMDLoader } from "three/addons/loaders/MMDLoader.js";
 
 import { Font } from "three/examples/jsm/loaders/FontLoader.js";
 import { generateUUID } from "three/src/math/MathUtils.js";
 import { LoadingPlaceHolderManager } from "./placeholder_manager";
-import { MMDAnimationHelper, Water } from "three/examples/jsm/Addons.js";
 import { MediaFileType } from "../enums";
-import { ChromaKeyMaterial } from "./chromakey";
 import { getShapeFactory } from "../shims/shape-factory";
 import { InfiniteGridHelper } from "./InfiniteGridHelper";
 import type { Camera } from "../shims/common";
 import toast from "../shims/toast";
-import { SplatMesh } from "@sparkjsdev/spark";
-import { ensureInternalBbox } from "./internalBbox";
 import {
   collectObjectTextures,
   disposeObject3D,
@@ -63,7 +58,8 @@ class Scene {
   // global names
   camera_name: string;
 
-  shader_objects: Water[] = [];
+  // PRISM PATCH: kept (always empty) for the editor tick; upstream's Water/MMD paths are not vendored
+  shader_objects: Array<THREE.Mesh & { material: THREE.ShaderMaterial }> = [];
   video_planes: HTMLVideoElement[] = [];
 
   skybox: string;
@@ -72,7 +68,6 @@ class Scene {
   placeholder_manager: LoadingPlaceHolderManager | undefined;
 
   updateSurfaceIdAttributeToMesh: Function;
-  helper!: MMDAnimationHelper;
   ambientLight: THREE.AmbientLight | undefined;
   hemisphereLight: THREE.HemisphereLight | undefined;
   directional_light: THREE.DirectionalLight | undefined;
@@ -119,9 +114,6 @@ class Scene {
     this._create_base_lighting();
     this._create_skybox();
     this._create_camera_obj();
-
-    this.helper = new MMDAnimationHelper({ afterglow: 0.0 });
-    this.scene.userData["helper"] = this.helper;
   }
 
   // Apply a grid visibility change. Pure THREE-side mutation — the
@@ -158,17 +150,10 @@ class Scene {
   }
 
   // Free an object tree that has left the scene for good: its GPU
-  // resources, plus its entries in the per-object registries (Water
-  // shaders ticked every frame, video elements, MMD animation).
+  // resources, plus its entries in the per-object registries (video elements).
   disposeObject(root: THREE.Object3D) {
     const inTree = new Set<THREE.Object3D>();
     root.traverse((child) => inTree.add(child));
-    this.shader_objects = this.shader_objects.filter(
-      (water) => !inTree.has(water),
-    );
-    for (const mesh of [...(this.helper?.meshes ?? [])]) {
-      if (inTree.has(mesh)) this.helper.remove(mesh);
-    }
 
     const videos = new Set<HTMLVideoElement>();
     for (const texture of collectObjectTextures(root)) {
@@ -219,8 +204,6 @@ class Scene {
       const factory = getShapeFactory(name)!;
       geometry = factory.geometry();
       if (factory.doubleSided) material.side = THREE.DoubleSide;
-    } else if (name == "Water") {
-      geometry = new THREE.PlaneGeometry(100, 100);
     } else if (name == "PointLight") {
       geometry = new THREE.SphereGeometry(0.06, 18, 12);
     } else if (name.includes("Image::")) {
@@ -228,62 +211,13 @@ class Scene {
     }
 
     let obj;
-    if (name == "Water" && geometry) {
-      obj = new Water(geometry, {
-        textureWidth: 1024,
-        textureHeight: 1024,
-        waterNormals: new THREE.TextureLoader().load(
-          "https://threejs.org/examples/textures/waternormals.jpg",
-          function (texture) {
-            texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-          },
-        ),
-        sunDirection: new THREE.Vector3(),
-        sunColor: 0xffffff,
-        waterColor: 0x00d8ff,
-        distortionScale: 0.3,
-        fog: this.scene.fog !== undefined,
-      });
-      obj.material.uniforms.size.value = 4.1;
-      obj.rotation.x = -Math.PI / 2;
-      obj.userData["water"] = true;
-      obj.userData["color"] = new THREE.Color(0x00d8ff).getHex();
-      obj.userData["base"] = new THREE.Color(0x00d8ff).getHex();
-      this.shader_objects.push(obj);
-      obj.userData["media_id"] = "Parim";
-    } else if (name.includes("Image::")) {
+    if (name.includes("Image::")) {
       const image_token = name.replace("Image::", "");
       let texture;
 
+      // PRISM PATCH: video planes (and the forum-sourced chroma-key shader) are not vendored
       if (image_token.includes(".mp4")) {
-        const Video_token = name.replace("Image::", "");
-        const videoElement = document.createElement("video");
-        videoElement.controls = true;
-        videoElement.muted = true;
-        //videoElement.loop = true;
-        videoElement.crossOrigin = "anonymous";
-        videoElement.preload = "auto";
-        videoElement.src = Video_token;
-        videoElement.preload = "auto";
-        videoElement.playbackRate = 6;
-        //await videoElement.play();
-        this.video_planes.push(videoElement);
-
-        texture = new THREE.VideoTexture(videoElement);
-
-        texture.colorSpace = THREE.SRGBColorSpace;
-        const image_material = new ChromaKeyMaterial(
-          texture,
-          0x00ff00,
-          1920,
-          1080,
-          0.159,
-          0.082,
-          0.0,
-        );
-        obj = new THREE.Mesh(geometry, image_material);
-        obj.userData["media_id"] = name;
-        obj.userData["media_file_type"] = MediaFileType.Video;
+        throw new Error("Video planes are not supported in Prism 3D sets.");
       } else {
         const loader = new THREE.TextureLoader();
         // NB(bt,2025-08-26): Images loaded throughout the rest of ArtCraft with the <img> tag set
@@ -625,15 +559,10 @@ class Scene {
     //     texture/material colors untouched; the picker does not flatten
     //     it. userData.color is still recorded so the inspector swatch
     //     stays controlled.
-    //   water → its dedicated shader-uniform path, unchanged.
     const isShape = object.userData["isShape"] === true;
     const picked = new THREE.Color(hex_color);
     object.traverse((c: THREE.Object3D) => {
       if (!(c instanceof THREE.Mesh)) return;
-      if (c.userData["water"]) {
-        c.material.uniforms.waterColor.value = new THREE.Color(hex_color);
-        return;
-      }
       if (!isShape) return;
       if (c.material.color === undefined) return;
       c.material.color.set(picked);
@@ -652,60 +581,6 @@ class Scene {
       object.visible = visible;
       object.userData["visible"] = object.visible;
     }
-  }
-
-  async loadMMDWithPlaceholder(
-    media_id: string,
-    name: string,
-    auto_add: boolean = true,
-    position: THREE.Vector3 = new THREE.Vector3(-0.5, 1.5, 0),
-  ): Promise<THREE.Object3D> {
-    if (this.placeholder_manager === undefined) {
-      throw Error("Place holder Manager is undefined");
-    }
-    const url = await this.getMediaURL(media_id);
-    const key = media_id + name + generateUUID();
-    await this.placeholder_manager.add(key, `Loading: ${name}`, position);
-    const mmd = await this.load_mmd_wrapped(url, async (progress) => {
-      const total_loaded = progress.loaded / progress.total;
-      if (total_loaded == 1.0) {
-        if (this.placeholder_manager === undefined) {
-          throw Error("Place holder Manager is undefined");
-        }
-        await this.placeholder_manager.remove(key);
-      }
-    }).catch((error: Error) => {
-      throw error;
-    });
-    mmd.traverse((c: THREE.Object3D) => {
-      if (c instanceof THREE.Mesh) {
-        c.material.metalness = 0.0;
-        c.material.specular = 0.5;
-        c.material.shininess = 0.0;
-        c.castShadow = true;
-        c.receiveShadow = true;
-        c.frustumCulled = false;
-        c.material.transparent = false;
-      }
-    });
-    mmd.castShadow = true;
-    mmd.receiveShadow = true;
-    mmd.frustumCulled = false;
-    mmd.name = "MMD" + name;
-    mmd.frustumCulled = false;
-    mmd.userData["media_id"] = media_id;
-    mmd.userData["color"] = "#FFFFFF";
-    mmd.userData["metalness"] = 0.0;
-    mmd.userData["shininess"] = 0.5;
-    mmd.userData["specular"] = 0.5;
-    mmd.userData["locked"] = false;
-    mmd.userData["media_file_type"] = MediaFileType.MMD;
-    mmd.layers.enable(0);
-    mmd.layers.enable(1);
-    mmd.position.copy(position);
-    this.scene.add(mmd);
-    this.updateSurfaceIdAttributeToMesh(this.scene);
-    return mmd;
   }
 
   async loadObjectFromUrl(
@@ -741,13 +616,9 @@ class Scene {
   ): Promise<THREE.Object3D> {
     const url = await this.getMediaURL(media_id);
 
+    // PRISM PATCH: MMD (.pmd/.pmx) is not supported
     if (url.includes(".pmd") || url.includes(".pmx")) {
-      return await this.loadMMDWithPlaceholder(
-        media_id,
-        name,
-        auto_add,
-        position,
-      );
+      throw new Error("MMD models are not supported in Prism 3D sets.");
     } else if (
       url.includes(".png") ||
       url.includes(".jpg") ||
@@ -765,13 +636,8 @@ class Scene {
       }
       return obj;
     } else if (url.includes(".spz")) {
-      return await this.loadSplatWithPlaceholder(
-        media_id,
-        name,
-        auto_add,
-        position,
-        signal,
-      );
+      // PRISM PATCH: Gaussian splats (and @sparkjsdev/spark) are not part of M1
+      throw new Error("Gaussian splats are not supported in Prism 3D sets yet.");
     }
 
     return await this.loadGlbWithPlaceholder(
@@ -804,66 +670,6 @@ class Scene {
       }
     }
     return false;
-  }
-
-  async loadSplatWithPlaceholder(
-    media_id: string,
-    name: string,
-    auto_add: boolean = true,
-    position: THREE.Vector3 = new THREE.Vector3(-0.5, 1.5, 0),
-    signal?: AbortSignal,
-  ): Promise<THREE.Object3D> {
-    if (this.placeholder_manager === undefined) {
-      throw Error("Place holder Manager is undefined");
-    }
-
-    const url = await this.getMediaURL(media_id);
-    const key = media_id + name + generateUUID();
-    await this.placeholder_manager.add(key, `Loading: ${name}`, position);
-
-    const splat: SplatMesh = await this.load_splat_wrapped_no_cors(
-      url,
-      async () => {
-        if (this.placeholder_manager === undefined) {
-          throw Error("Place holder Manager is undefined");
-        }
-        await this.placeholder_manager.remove(key);
-      },
-      signal,
-    ).catch(async (error) => {
-      if (this.placeholder_manager !== undefined) {
-        await this.placeholder_manager.remove(key);
-      }
-      // Don't toast aborts — those are us cancelling a superseded load.
-      if ((error as { name?: string })?.name !== "AbortError") {
-        toast.error("Failed to load splat.");
-      }
-      throw error;
-    });
-
-    splat.rotation.z = Math.PI;
-    splat.position.copy(position);
-    splat.userData["media_id"] = media_id;
-    splat.userData["media_file_type"] = MediaFileType.SPZ;
-
-    // Build the selection bbox child once. SplatMesh.initialized
-    // resolves after the gaussian data is fully ready, so
-    // getBoundingBox() returns real local-space extents. The wireframe
-    // is hidden by default; SelectionOutlinePass flips its visibility
-    // on select/deselect. ensureInternalBbox no-ops if an identical
-    // child is already present.
-    try {
-      await splat.initialized;
-      ensureInternalBbox(splat, splat.getBoundingBox());
-    } catch (e) {
-      console.warn("Splat bbox skipped: initialized promise rejected", e);
-    }
-
-    if (auto_add) {
-      this.scene.add(splat);
-    }
-    this.updateSurfaceIdAttributeToMesh(this.scene);
-    return splat;
   }
 
   async loadGlbWithPlaceholder(
@@ -1064,43 +870,6 @@ class Scene {
   }
 
   /**
-   * Load a full media_url via Tauri (without browser cors)
-   * @param media_url
-   * @param onComplete
-   * @returns
-   */
-  private async load_splat_wrapped_no_cors(
-    media_url: string,
-    onComplete: () => void,
-    signal?: AbortSignal,
-  ): Promise<SplatMesh> {
-    return new Promise(async (resolve, reject) => {
-      let buffer;
-      try {
-        // Host-supplied CORS-bypassed binary fetch (FetchProxy under
-        // Tauri; plain fetch under web hosts that allow it).
-        buffer = await (
-          await this.deps.fetchAsset(media_url, { signal })
-        ).arrayBuffer();
-      } catch (error) {
-        if ((error as { name?: string })?.name !== "AbortError") {
-          console.error("load Splat from Tauri error:", error);
-        }
-        reject(error);
-        return;
-      }
-
-      new SplatMesh({
-        fileBytes: buffer,
-        onLoad: (mesh) => {
-          resolve(mesh);
-          onComplete();
-        },
-      });
-    });
-  }
-
-  /**
    * Using a constructed media_url load a glb, grab the progress.
    * @param media_url
    * @param progress
@@ -1116,54 +885,6 @@ class Scene {
         media_url,
         (gltf) => {
           resolve(gltf);
-        },
-        progress,
-        (error) => {
-          reject(error);
-        },
-      );
-    });
-  }
-
-  // This allows to wait for Ammo to fully load.
-  delay_mmd(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  private async load_mmd_wrapped(
-    media_url: string,
-    progress: (event: ProgressEvent) => void,
-  ): Promise<THREE.SkinnedMesh> {
-    // TODO: When converted to ts remove this and make ammo await instead.
-    await this.delay_mmd(100);
-
-    console.log("Load MMD");
-    const scriptModule = document.createElement("script");
-    scriptModule.type = "module";
-
-    scriptModule.textContent = `
-      Ammo().then(function (AmmoLib) {
-        Ammo = AmmoLib;
-    });
-    `;
-    document.head.appendChild(scriptModule);
-
-    // TODO: When converted to ts remove this and make ammo await instead.
-    await this.delay_mmd(500);
-
-    return new Promise((resolve, reject) => {
-      const mmdLoader = new MMDLoader();
-      mmdLoader.loadWithAnimation(
-        media_url,
-        ["/resources/pose/Lumine Idle cycle.vmd"],
-        (mmd) => {
-          this.helper.add(mmd.mesh, {
-            animation: mmd.animation,
-            physics: false,
-          });
-
-          mmd.mesh.scale.set(0.1, 0.1, 0.1);
-          resolve(mmd.mesh);
         },
         progress,
         (error) => {

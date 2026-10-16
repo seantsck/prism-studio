@@ -12,6 +12,7 @@ import {
   type SceneObjectView,
   type SpatialSceneAdapter,
 } from "@/lib/previs/scene-adapter";
+import { installPrevisTestHook } from "@/lib/previs/test-hook";
 import { useFreeCam } from "@/vendor/artcraft-scene-engine/hooks/useFreeCam";
 import { useViewportPointer } from "@/vendor/artcraft-scene-engine/hooks/useViewportPointer";
 import type Editor from "@/vendor/artcraft-scene-engine/engine/editor";
@@ -97,6 +98,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
     const adapter = new ArtCraftSceneAdapter({ resolveAssetUrl: (id) => `/api/assets/${id}` });
     adapterRef.current = adapter;
     let cancelled = false;
+    let removeTestHook = () => {};
 
     const sync = () => {
       if (cancelled) return;
@@ -115,6 +117,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
         if (cancelled) return;
         setEditor(adapter.getEditor());
         setCanvasEl(editorCanvas);
+        removeTestHook = installPrevisTestHook(adapter, editorCanvas);
         setReady(true);
         sync();
       })
@@ -124,6 +127,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
 
     return () => {
       cancelled = true;
+      removeTestHook();
       unsubscribe();
       adapter.dispose();
       adapterRef.current = null;
@@ -285,7 +289,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
       return setStatus({ tone: "error", text: "Use the production camera for this shot first." });
     setStatus({ tone: "busy", text: "Rendering master frame…" });
     try {
-      const frame = await adapter().captureMasterFrame();
+      const frame = await adapter().captureMasterFrame(bookmark.value);
       const fd = new FormData();
       fd.set("projectSlug", props.projectSlug);
       fd.set("shotId", shotId);
@@ -480,6 +484,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
               <li key={o.id}>
                 <button
                   data-testid="outliner-item"
+                  data-object-id={o.id}
                   data-selected={o.id === selectedId ? "true" : "false"}
                   className={`w-full truncate rounded px-2 py-1 text-left ${o.id === selectedId ? "bg-accent/20" : "hover:bg-panel"}`}
                   onClick={() => adapter().select(o.id)}

@@ -47,3 +47,40 @@ export function cameraFromBookmark(id: string, label: string, b: CameraBookmarkV
     focalLengthMm: b.focalLengthMm,
   };
 }
+
+/** Everything needed to render the production frame; derived only from a frozen bookmark, never from the editor camera. */
+export interface ProductionRenderSpec {
+  position: { x: number; y: number; z: number };
+  /** Euler XYZ radians, as the engine stores camera rotation. */
+  rotation: { x: number; y: number; z: number };
+  fovVerticalDegrees: number;
+  aspect: number;
+  width: number;
+  height: number;
+  near: number;
+  far: number;
+}
+
+/**
+ * The isolated render camera for a master frame. The lens comes from the bookmark's focal length on the
+ * declared sensor basis and the framing from the Production Frame, so neither the operator's navigation
+ * camera nor the viewport's aspect can influence the capture.
+ */
+export function productionRenderSpec(b: CameraBookmarkValue): ProductionRenderSpec {
+  if (b.focalLengthBasis !== "vertical-sensor-24mm") {
+    throw new Error(`Unsupported focal length basis: ${String(b.focalLengthBasis)}`);
+  }
+  if (b.projection !== "perspective") throw new Error(`Unsupported projection: ${String(b.projection)}`);
+  if (!(b.focalLengthMm > 0)) throw new Error("The production camera has no valid focal length.");
+  const { width, height } = PREVIS_PRODUCTION_FRAME;
+  return {
+    position: { ...b.position },
+    rotation: { ...b.rotation },
+    fovVerticalDegrees: focalLengthToFovDegrees(b.focalLengthMm),
+    aspect: width / height,
+    width,
+    height,
+    near: 0.05,
+    far: 2000,
+  };
+}

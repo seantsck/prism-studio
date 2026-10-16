@@ -56,7 +56,11 @@ panel width, the editor navigation camera, lock state or object order. Pinned by
 
 ## Master frame
 
-Rendered locally in the browser (`snapShotOfCurrentFrame` after entering camera view on the production lens), 1912×800.
+Rendered locally in the browser, 1912×800, through a **dedicated production render camera**: a fresh perspective camera
+built from the shot's frozen bookmark (pose, Euler rotation, focal length on the `vertical-sensor-24mm` basis,
+2.39:1 aspect; see `productionRenderSpec`) and handed to the engine's `snapShotOfCurrentFrame(false, camera)`. The
+editor/navigation camera, the look-through toggle and the viewport lens are neither read nor changed, so the frame is the
+same wherever the operator has navigated.
 The server validates PNG magic bytes and exact dimensions, re-derives revision/fingerprint from the saved scene,
 stores the file in the private bucket (`purpose=storyboard`, `source=3d_render`) and writes provenance both to
 `scene_master_frames` and the asset's `metadata.previs`. **Capturing never changes the approved storyboard.**
@@ -79,14 +83,16 @@ impossible; owner-only RLS; no worker role has any grant. Verified by `npm run d
 
 ## Tests
 
-| Layer                                                 | File                                                               |
-| ----------------------------------------------------- | ------------------------------------------------------------------ |
-| schema, URL refusal, fingerprint, camera maths        | `src/domain/previs/__tests__/previs-document.test.ts`              |
-| package snapshot, optionality, immutability, adoption | `src/domain/previs/__tests__/spatial-package.test.ts`              |
-| engine boundary, asset-id resolution                  | `src/lib/previs/__tests__/scene-adapter.test.ts`, `shapes.test.ts` |
-| Postgres, RLS, isolation, guards, cleanup             | `scripts/db-previs.mts` (`npm run db:previs`)                      |
-| UI end to end + WebGL release (memory)                | `e2e/zzzzz-previs.spec.ts`                                         |
-| UI end to end on Supabase + private storage           | `e2e/supabase-previs.spec.ts`                                      |
+| Layer                                                 | File                                                                                                       |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| schema, URL refusal, fingerprint, camera maths        | `src/domain/previs/__tests__/previs-document.test.ts`                                                      |
+| package snapshot, optionality, immutability, adoption | `src/domain/previs/__tests__/spatial-package.test.ts`                                                      |
+| engine boundary, asset-id resolution                  | `src/lib/previs/__tests__/scene-adapter.test.ts`, `shapes.test.ts`                                         |
+| Postgres, RLS, isolation, guards, cleanup             | `scripts/db-previs.mts` (`npm run db:previs`)                                                              |
+| UI end to end + WebGL release (memory)                | `e2e/zzzzz-previs.spec.ts`                                                                                 |
+| gizmo drags, production-camera capture, same-origin   | `e2e/zzzzzz-previs-controls.spec.ts`                                                                       |
+| production render camera selection                    | `src/lib/previs/__tests__/capture-camera.test.ts`, `src/domain/previs/__tests__/production-render.test.ts` |
+| UI end to end on Supabase + private storage           | `e2e/supabase-previs.spec.ts`                                                                              |
 
 Playwright runs Chromium with the software rasteriser (`--use-angle=swiftshader`); GPU is not required.
 
@@ -99,8 +105,6 @@ Playwright runs Chromium with the software rasteriser (`--use-angle=swiftshader`
 - The outliner has no rename, reorder or grouping; the engine has no hierarchy UI.
 - GLBs must be single-file (`.glb`, no Draco/KTX2/Meshopt, no external resources) and are added through the normal
   Assets upload with any purpose.
-- Camera-view framing uses the viewport camera at the production lens; it has been verified visually and by
-  dimensions, not by a pixel diff against an independent render-camera pass.
 - Master-frame capture needs the set to be saved and the shot's camera linked first (the server enforces both).
 
 ## M2 reuse (investigated, not built)
@@ -113,9 +117,9 @@ Playwright runs Chromium with the software rasteriser (`--use-angle=swiftshader`
 | Character posing                | `KinHelpers/{FKHelper,BoneJSONHelper}`, `SkeletonHelperController`                                                             | a Prism mannequin with `mixamorig:*`-compatible bones (rig is name-matched); pose presets as JSON                                   |
 | Pose presets                    | `BoneJSONHelper.toJSON/poseFromBoneJSON`                                                                                       | Prism-authored preset library                                                                                                       |
 | Local previs video              | `engine/recording/TimelineRecorder.ts` (deterministic frame stepping)                                                          | `mediabunny` (MPL-2.0, WebCodecs); store as a derived asset with provenance                                                         |
-| Depth pass                      | `CustomOutlinePass` + `FindSurfaces` already render depth/surface-id via override materials                                    | expose as export; PNG sequence                                                                                                      |
+| Depth pass                      | none vendored (`CustomOutlinePass`/`FindSurfaces` were removed: provenance not established)                                    | write a Prism depth override material (three.js `MeshDepthMaterial`); PNG sequence                                                  |
 | Object-id / character masks     | surface-id material exists; per-object id pass does not                                                                        | new override material mapping `uuid → colour`; ties to mannequin `characterId`                                                      |
-| Gaussian splats                 | `SplatMesh` + `@sparkjsdev/spark` already wired                                                                                | asset pipeline for `.spz`; licence/provenance of splat sources                                                                      |
+| Gaussian splats                 | removed in the pre-PR hardening (the engine's loader and the `@sparkjsdev/spark` dependency)                                   | re-add `@sparkjsdev/spark` and the upstream loader behind a feature flag; asset pipeline for `.spz`; licence of splat sources       |
 | Image-to-location / image-to-3D | none locally (ArtCraft calls its own backend)                                                                                  | a Prism provider adapter behind the existing generation spend gates                                                                 |
 
 M2 recommendation order: focal-length keyframes + slerp → camera path UI → local previs video → depth/object-id

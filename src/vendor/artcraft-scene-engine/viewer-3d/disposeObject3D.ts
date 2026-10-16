@@ -1,10 +1,10 @@
 import * as THREE from "three";
-import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 
 // Free the GPU resources held by an object tree that is leaving the scene
 // for good: geometries, materials, the textures those materials reference
-// (Material.dispose() does not free its maps), skeleton bone textures and
-// Spark splat buffers. Call it after the tree has been removed.
+// (Material.dispose() does not free its maps) and skeleton bone textures.
+// Call it after the tree has been removed. PRISM PATCH: the Spark splat
+// branches were removed with the dependency.
 //
 // Textures are found both as material properties (map, normalMap, ...) and
 // as ShaderMaterial uniforms (Water's normal and mirror samplers, Spark's
@@ -19,8 +19,6 @@ import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 // objects from their snapshot rather than reusing the instance.
 export function disposeObject3D(root: THREE.Object3D): void {
   root.traverse((child) => {
-    if (child instanceof SplatMesh) child.dispose();
-    if (child instanceof SparkRenderer) disposeSparkRenderer(child);
     if (child instanceof THREE.SkinnedMesh) child.skeleton?.dispose();
     (child as Partial<THREE.Mesh>).geometry?.dispose();
   });
@@ -37,19 +35,6 @@ export function collectObjectTextures(
   root: THREE.Object3D,
 ): Set<THREE.Texture> {
   return collectMaterialTextures(collectMaterials(root));
-}
-
-// A SparkRenderer is added to the scene automatically the first time a
-// splat renders. Its viewpoint render targets and splat accumulators are
-// not reachable from its material, so free them explicitly. The viewpoint
-// goes first: disposing it returns its accumulators to the free list.
-function disposeSparkRenderer(spark: SparkRenderer): void {
-  spark.defaultView.dispose();
-  spark.active.splats.dispose();
-  const { freeAccumulators } = spark as unknown as {
-    freeAccumulators: SparkRenderer["active"][];
-  };
-  for (const accumulator of freeAccumulators) accumulator.splats.dispose();
 }
 
 function collectMaterials(root: THREE.Object3D): Set<THREE.Material> {

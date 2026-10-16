@@ -29,7 +29,6 @@ import { CreateAction } from "./editor/actions/CreateAction";
 import { ModalTransformController } from "./editor/ModalTransformController";
 
 import Stats from "three/examples/jsm/libs/stats.module.js";
-import { SparkRenderer } from "@sparkjsdev/spark";
 import { usePageSceneStore } from "../PageSceneStore";
 import { ensureAmmoLoaded } from "./ammoLoader";
 import { EngineEventBus } from "./events/EngineEventBus";
@@ -61,8 +60,6 @@ class Editor {
   version: number;
   activeScene: Scene;
   renderer: THREE.WebGLRenderer | undefined;
-  sparkRenderer: SparkRenderer | null = null;
-  rawRenderer: THREE.WebGLRenderer | undefined;
   clock: THREE.Clock | undefined;
 
   raycaster: THREE.Raycaster | undefined;
@@ -505,11 +502,8 @@ class Editor {
     //   autoUpdate: true,
     // });
 
-    this.rawRenderer = new THREE.WebGLRenderer({
-      antialias: true,
-      canvas: this.viewport.canvasRenderCamReference,
-      preserveDrawingBuffer: true,
-    });
+    // PRISM PATCH: the second ("raw") WebGL context only fed the removed raw composer
+    // (see PostProcessingPipeline); master frames render through the main renderer.
 
     this.renderer.shadowMap.enabled = true;
     this.clock = new THREE.Clock();
@@ -680,14 +674,6 @@ class Editor {
       onloadCallback();
     }
 
-    this.postProcessing.configureRaw(
-      this.rawRenderer,
-      this.activeScene.scene,
-      this.cameraController.render_camera,
-      this.viewport.canvasRenderCamReference?.width || 1,
-      this.viewport.canvasRenderCamReference?.height || 1,
-    );
-
     this.bus.emit(new EngineInitializedEvent(true));
 
     // This will enable all event and render loops
@@ -712,8 +698,14 @@ class Editor {
   }
 
   // Captures the scene without the grid
-  public snapShotOfCurrentFrame(shouldDownload: boolean = true) {
-    const camera = this.cameraController.camera;
+  // PRISM PATCH: `cameraOverride` renders the frame through an isolated camera
+  // (the frozen production camera) instead of the viewport/navigation camera,
+  // which is left completely untouched.
+  public snapShotOfCurrentFrame(
+    shouldDownload: boolean = true,
+    cameraOverride?: THREE.PerspectiveCamera,
+  ) {
+    const camera = cameraOverride ?? this.cameraController.camera;
     const renderCamera = this.cameraController.render_camera;
     if (!this.renderer?.domElement || !camera) {
       console.error("Error: Renderer or camera not available.");
@@ -738,6 +730,9 @@ class Editor {
     // the forward scene render, so a disabled pass yields a gray frame.
     const selectionPass = this.postProcessing.selectionPass;
     selectionPass?.setOutlineSuppressed(true);
+    // PRISM PATCH: point the forward pass at the override camera for this render only
+    const viewportCamera = selectionPass?.getCamera();
+    if (cameraOverride) selectionPass?.setCamera(cameraOverride);
 
     // High quality dimensions for each aspect ratio
     let targetWidth: number;
@@ -858,6 +853,7 @@ class Editor {
 
     // Restore outline overlay + splat bbox
     selectionPass?.setOutlineSuppressed(false);
+    if (cameraOverride && viewportCamera) selectionPass?.setCamera(viewportCamera);
 
     if (shouldDownload) {
       const link = document.createElement("a");
@@ -996,11 +992,8 @@ class Editor {
   async renderScene() {
     const { render_camera, render_width, render_height } =
       this.cameraController;
-    if (
-      this.postProcessing.composer != null &&
-      this.rawRenderer &&
-      this.postProcessing.render_composer
-    ) {
+    // PRISM PATCH: no raw composer (see PostProcessingPipeline)
+    if (this.postProcessing.composer != null) {
       this.postProcessing.composer.render();
     } else if (this.renderer && render_camera) {
       this.renderer.setSize(render_width, render_height);
@@ -1146,14 +1139,12 @@ class Editor {
     // Fix: dispose 3D contexts
     this.renderer?.dispose();
     this.postProcessing.dispose();
-    this.rawRenderer?.dispose();
     // dispose() leaves the GL objects themselves (render targets, programs)
     // in the context. Leaving the page detaches the canvases, and the
     // context then lingers until garbage collection, two per visit. A
     // scene change keeps the canvases mounted and the next Editor reuses
     // their contexts, so only release a context whose canvas is gone.
     releaseContextIfDetached(this.renderer);
-    releaseContextIfDetached(this.rawRenderer);
 
     this.isMounted = false;
     this.bus.emit(new EngineInitializedEvent(false));

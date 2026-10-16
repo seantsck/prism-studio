@@ -22,19 +22,49 @@ licenses in `package-lock.json`.
 
 ### Material inside the vendored code with its own provenance
 
-- `engine/TransformControls.js` and `engine/CustomOutlinePass.js` follow the structure of the
-  three.js examples (`TransformControls`, outline post-processing). three.js is MIT licensed,
-  Copyright © 2010-2026 three.js authors. The upstream files carry no header of their own; this notice preserves it.
-- `viewer-3d/disposeObject3D.ts` interoperates with `@sparkjsdev/spark` (MIT).
+- `engine/TransformControls.js` is a copy of **three.js** `examples/jsm/controls/TransformControls.js`
+  (MIT, Copyright © 2010-2024 three.js authors, https://github.com/mrdoob/three.js) with one ArtCraft modification
+  (a drag `sensitivity` multiplier). It matches that file as published in three r163/r164 apart from formatting and
+  that change (token comparison; details in `src/vendor/artcraft-scene-engine/UPSTREAM.md`). The licence text is
+  reproduced below and a header in the file points here.
+- ArtCraft's outline post-processing (`CustomOutlinePass.js`, `FindSurfaces.js`) and chroma-key shader
+  (`chromakey.js`, `shaders.js`) were **removed** from the vendored tree because their provenance could not be
+  established from the files alone and Prism does not use them (their comments cite a social-media post, the third-party
+  `webgl-outlines` project and a three.js forum post that itself cites a `libretro/glsl-shaders` routine). Nothing in this repository derives from them.
+
+#### three.js (applies to `engine/TransformControls.js`)
+
+```
+The MIT License
+
+Copyright © 2010-2024 three.js authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
 
 ## npm packages added with the 3D set
 
-| Package             | License | Why                                                                                                 |
-| ------------------- | ------- | --------------------------------------------------------------------------------------------------- |
-| `three`             | MIT     | Three.js renderer used by the vendored engine                                                       |
-| `@types/three`      | MIT     | typings (dev)                                                                                       |
-| `zustand`           | MIT     | the vendored engine's state store                                                                   |
-| `@sparkjsdev/spark` | MIT     | imported by the vendored scene/editor modules (Gaussian-splat support is not exposed in Prism's UI) |
+| Package        | License | Why                                           |
+| -------------- | ------- | --------------------------------------------- |
+| `three`        | MIT     | Three.js renderer used by the vendored engine |
+| `@types/three` | MIT     | typings (dev)                                 |
+| `zustand`      | MIT     | the vendored engine's state store             |
 
 `mediabunny` (MPL-2.0, used upstream only for video recording) is **not** added; it is deferred to the camera-path /
 local previs video milestone.

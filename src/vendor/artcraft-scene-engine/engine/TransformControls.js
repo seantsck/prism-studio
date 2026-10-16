@@ -1,3 +1,8 @@
+// PRISM PATCH (provenance header; no behavioural change).
+// Derived from three.js examples/jsm/controls/TransformControls.js (as published in three r163/r164),
+// Copyright © 2010-2024 three.js authors, MIT License — https://github.com/mrdoob/three.js
+// The ArtCraft modification is a `sensitivity` multiplier on the drag delta. Full licence text and the evidence for
+// this attribution: THIRD_PARTY_NOTICES.md and src/vendor/artcraft-scene-engine/UPSTREAM.md.
 import {
   BoxGeometry,
   BufferGeometry,

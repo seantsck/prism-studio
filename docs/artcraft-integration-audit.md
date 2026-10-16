@@ -17,7 +17,7 @@ update procedure live next to the code in `src/vendor/artcraft-scene-engine/UPST
 ## 2. Reused paths (see UPSTREAM.md for the table)
 
 `pagescene/src/lib/{engine,proxy,enums,datastructures,actions(12),hooks(2)}`, `PageSceneStore.ts`,
-`sceneMetadata.ts`, `models/sceneGenerationMetadata.ts`, and `viewer-3d/.../disposeObject3D.ts`. 13.3k lines, 98 files.
+`sceneMetadata.ts`, `models/sceneGenerationMetadata.ts`, and `viewer-3d/.../disposeObject3D.ts`. 13.3k lines / 98 files at first import; **12.3k lines / 91 files** after the pre-PR hardening cut (§10).
 
 Reused implementations (not rebuilt): `Scene`/`StoryTellerProxyScene` (scene graph + JSON), `CameraController`
 (viewport vs render camera, `::CAM::` proxy, camera view, frame projection), `GizmoController` + `TransformControls`
@@ -33,9 +33,9 @@ and **every** non-code asset (sound, memes, skyboxes, MMD/VMD, Mixamo GIFs, avat
 
 ## 4. Dependency closure
 
-Added: `three@^0.171`, `@types/three@^0.171` (dev), `zustand@^5`, `@sparkjsdev/spark@^0.1.10` (MIT; imported by the
-hard-wired `scene.ts`/`editor.ts`/`SelectionOutlinePass`/dispose, so removing it would have meant rewriting vendored
-files; its splat feature is not exposed).
+Added: `three@^0.171`, `@types/three@^0.171` (dev), `zustand@^5`. `@sparkjsdev/spark` was added at first import (the
+engine hard-wired it) and **removed in the pre-PR hardening**: its four import sites were a splat loader, an
+`instanceof SplatMesh` check, a dispose helper and a type-only field, all unreachable from M1 (§10).
 Deferred: `mediabunny` (MPL-2.0; only the video recorder), `react-hot-toast` (replaced by a shim),
 `@storyteller/*` (replaced by shims), `lucide-react` (already in Prism).
 
@@ -65,19 +65,17 @@ Verified in Chromium (software WebGL) against the production build of Next 16 / 
 
 ## 7. Known risks
 
-| Risk                                                                                                                 | Status                                                                                                                                                                                            |
-| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hidden global state: `PageSceneStore` is a module singleton                                                          | mitigated: the adapter resets scene state on every mount; two editors on one page are unsupported                                                                                                 |
-| `snapShotOfCurrentFrame` renders the **viewport** camera (upstream flagged render-camera reconciliation as deferred) | mitigated: capture first enters camera view, sets the viewport lens to the production focal length and waits two frames; verified visually, no pixel-diff against a second render-camera pass yet |
-| Focal length is not keyframed upstream                                                                               | M2 (see virtual-set.md)                                                                                                                                                                           |
-| Euler (not quaternion) rotation                                                                                      | stored as Euler XYZ radians; M2 slerp for camera paths                                                                                                                                            |
-| `mixamorig:*` bone names for FK posing                                                                               | not used in M1; the mannequin is a single merged mesh                                                                                                                                             |
-| GLB only, no Draco/KTX2/Meshopt, external resources unsupported                                                      | M1 accepts plain GLBs from Prism's asset library; upload of `.glb` is not yet in the Assets UI (see Known gaps)                                                                                   |
-| `@sparkjsdev/spark` pre-1.0                                                                                          | pinned by lockfile; not on any M1 code path at runtime                                                                                                                                            |
-| Dormant `Water`/MMD code compiled in                                                                                 | unreachable from Prism UI; `Water` would fetch a texture from threejs.org if instantiated                                                                                                         |
-| Bundle size (three + spark + postprocessing)                                                                         | the editor is `next/dynamic` with `ssr:false`, so it only loads on the 3D route                                                                                                                   |
-| Upstream JSON format has only a `version` number                                                                     | wrapped in `prism.previs.v1`; the engine payload is opaque to the DB                                                                                                                              |
-| Engine logs verbosely (`console.log/debug`)                                                                          | harmless; left unpatched to keep the diff small                                                                                                                                                   |
+| Risk                                                                                                             | Status                                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Hidden global state: `PageSceneStore` is a module singleton                                                      | mitigated: the adapter resets scene state on every mount; two editors on one page are unsupported                                 |
+| `snapShotOfCurrentFrame` renders the viewport camera (upstream flagged render-camera reconciliation as deferred) | **resolved in §10**: capture passes an isolated camera built from the frozen bookmark; the viewport camera is not read or changed |
+| Focal length is not keyframed upstream                                                                           | M2 (see virtual-set.md)                                                                                                           |
+| Euler (not quaternion) rotation                                                                                  | stored as Euler XYZ radians; M2 slerp for camera paths                                                                            |
+| `mixamorig:*` bone names for FK posing                                                                           | not used in M1; the mannequin is a single merged mesh                                                                             |
+| GLB only, no Draco/KTX2/Meshopt, external resources unsupported                                                  | M1 accepts plain GLBs uploaded through the normal Assets flow                                                                     |
+| Bundle size (three + postprocessing)                                                                             | the editor is `next/dynamic` with `ssr:false`, so it only loads on the 3D route                                                   |
+| Upstream JSON format has only a `version` number                                                                 | wrapped in `prism.previs.v1`; the engine payload is opaque to the DB                                                              |
+| Engine logs verbosely (`console.log/debug`)                                                                      | harmless; left unpatched to keep the diff small                                                                                   |
 
 ## 8. Licensing / provenance checklist
 
@@ -86,9 +84,41 @@ Verified in Chromium (software WebGL) against the production build of Next 16 / 
 - [x] trademark not used (feature is "3D Set")
 - [x] no upstream asset copied; mannequin and Hotel Canopy set are procedural and Prism-authored
 - [x] `THIRD_PARTY_NOTICES.md` updated
-- [ ] `engine/TransformControls.js`, `CustomOutlinePass.js`: no header upstream; believed three.js-derived (MIT) — noted
-      in THIRD_PARTY_NOTICES; confirm with upstream if redistribution outside this repo is planned
+- [x] `engine/TransformControls.js`: three.js (MIT) — identified by token comparison against r140–r181 (§10), header and
+      licence text added
+- [x] `CustomOutlinePass.js`, `FindSurfaces.js`, `chromakey.js`, `shaders.js`: provenance not establishable from the
+      files (they cite a social-media post, the `webgl-outlines` project and a forum post that cites a libretro shader). **Removed**, not
+      shipped
 
 ## 9. Update procedure
 
 See `src/vendor/artcraft-scene-engine/UPSTREAM.md`.
+
+## 10. Pre-PR hardening (after the first M1 report)
+
+**Master frame uses the production camera.** `Editor.snapShotOfCurrentFrame` rendered `cameraController.camera` (the
+viewport camera), which the capture code pushed to the production pose by entering camera view. That worked but made the
+editor camera the source of the image. It now takes an optional camera: `ArtCraftSceneAdapter.captureMasterFrame(bookmark)`
+builds a fresh `PerspectiveCamera` from the frozen shot bookmark (`productionRenderSpec`: position, Euler rotation,
+vertical FOV from the focal length on the declared `vertical-sensor-24mm` basis, 1912×800 aspect, proxy layer excluded)
+and the main composer renders through it for that one call. The viewport camera, the look-through state and the
+editor/navigation pose are never touched. Evidence: `production-render.test.ts`, `capture-camera.test.ts` (unit);
+`e2e/zzzzzz-previs-controls.spec.ts` moves the navigation camera across the scene between two captures and requires the
+frames to match, then changes the production camera and requires them to differ.
+
+**Real gizmos.** The same e2e file drives the reused `TransformControls` by mouse (translate along one axis, rotate a
+ring), saves, reloads and checks persistence. Scale is asserted to remain available (not drag-tested).
+
+**Dead code.** See `UPSTREAM.md` "Removed after the first import": Water, MMD, splats (and `@sparkjsdev/spark`), the raw
+composer + second WebGL context, `CustomOutlinePass`/`FindSurfaces`, chroma key. The vendor tree went from 98 files /
+13.3k lines to 91 files / 12.3k lines, one WebGL context per mount, and no executable path to a non-same-origin URL
+(asserted by the e2e "same-origin requests" test).
+
+**Remaining coupling, documented.** `scene.ts` still imports the `three/examples/jsm/Addons.js` barrel for the two camera
+controls in `keybinds_controls.ts` (a tree-shaken import, not a dependency); `editor.ts` imports three's `stats.module`
+(never attached). Both are three.js and MIT.
+
+**Package immutability.** A GenerationPackage is persisted only inside a provider attempt (`packageSnapshot`), and no
+non-provider path stores one, so the A→B→A read-back was not added as a database test (that would need a second
+persistence mechanism or a real attempt). The existing unit proof (`spatial-package.test.ts`) freezes a package, edits the
+scene, freezes another and shows the first unchanged; the attempt row stores the JSON snapshot by value.

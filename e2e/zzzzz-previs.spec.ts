@@ -330,12 +330,12 @@ test.describe("persistent 3D set", () => {
       await expect(page.getByTestId("virtual-set")).toHaveAttribute("data-ready", "true", {
         timeout: 30_000,
       });
-      expect(await live()).toBe(2); // the editor canvas + the camera-view canvas, nothing leaked
+      expect(await live()).toBe(1); // the single editor renderer; nothing leaked
       await page.getByRole("link", { name: "← Locations" }).click();
       await page.waitForURL(/\/locations$/);
       await expect.poll(live).toBe(0);
     }
-    // each mount builds at most two contexts; none of the four mounts left one behind
-    expect(await total()).toBeLessThanOrEqual(8);
+    // each mount builds one context; none of the four mounts left one behind
+    expect(await total()).toBeLessThanOrEqual(4);
   });
 });

@@ -25,7 +25,8 @@ is included, and the engine makes **no** request to any ArtCraft service.
 | `hooks/{useFreeCam,useViewportPointer}.ts` | `hooks/` | |
 | `viewer-3d/.../disposeObject3D.ts` | `viewer-3d/disposeObject3D.ts` | GPU resource disposal |
 
-Approximately 13.3k lines in 98 files (TypeScript/JS, including Prism shims and declarations).
+Approximately 12.3k lines in 91 files (TypeScript/JS, including Prism shims and declarations). The M1 hardening pass
+removed ~1k lines of code Prism never reaches (see "Removed after the first import" below).
 
 ## What was excluded
 
@@ -33,7 +34,7 @@ Approximately 13.3k lines in 98 files (TypeScript/JS, including Prism shims and 
   prompt box, pricing, help — and every `@storyteller/*` workspace package they use.
 - Assets: skyboxes, sound effects (Nintendo SFX), memes, MMD motion data, Mixamo GIFs, avatars, characters, logos,
   fonts, videos, `ammo.wasm`. **No upstream asset of any kind is in this repository.**
-- `engine/entrance*` (Spark "dyno" polish effect), `engine/ammoLoader.ts` (MMD physics blob),
+- `engine/entrance*` (Spark "dyno" polish effect; stubbed), `engine/ammoLoader.ts` (MMD physics blob),
   `engine/recording/TimelineRecorder.ts` (needs `mediabunny`, MPL-2.0, M2), `engine/keymap.ts` and
   `hooks/useViewportKeyboard.ts` (need `@storyteller/keybinds`), the legacy `engine/EditorState/**`, all `*.spec.ts`.
 
@@ -53,10 +54,54 @@ commit, line endings normalised to LF). Summary:
 5. **No-asset stubs**: `ammoLoader`, `entranceAnimation` are no-op stubs; the loading-text placeholder no longer
    fetches a font (`placeholder_manager.ts`).
 6. **Free-cam keys**: fixed defaults instead of the keybind registry (`hooks/useFreeCam.ts`).
-7. **Typing only**: `.d.ts` files for the four JS modules and `// @ts-nocheck` on five files compiled against looser
-   three typings upstream. Behaviour is unchanged.
-8. **Left in place, dormant**: `Water` primitive (fetches a texture from threejs.org if instantiated) and the MMD
-   helper are still compiled but unreachable from Prism's UI.
+7. **Typing only**: a `.d.ts` for the one remaining JS module (`TransformControls.js`) and `// @ts-nocheck` on the files compiled against
+   looser three typings upstream. Behaviour is unchanged.
+8. **Isolated production render camera**: `Editor.snapShotOfCurrentFrame(download, cameraOverride?)` renders through
+   a caller-supplied camera (the selection pass is pointed at it for that render only), so a master frame never
+   reads or mutates the viewport/navigation camera. `SelectionOutlinePass` gained `getCamera/setCamera`.
+9. **No second renderer**: the upstream "raw" `WebGLRenderer` + composer (a second WebGL context) is not created;
+   `renderScene()` no longer waits on it.
+10. **Unsupported media types fail loudly**: `.pmd/.pmx` (MMD), `.spz` (splat) and `.mp4` video planes throw
+    "not supported" instead of loading.
+11. **`TransformControls.js` header**: provenance and the three.js MIT notice were added (see below).
+
+## Removed after the first import (M1 hardening)
+
+| Removed | Why it was safe |
+| --- | --- |
+| `Water` primitive (`scene.ts`, `Water` import, `shader_objects` registry now always empty) | fetched `https://threejs.org/examples/textures/waternormals.jpg` when instantiated; no Prism UI or document can create one |
+| MMD loader, animation helper, Ammo bootstrap (`scene.ts`) | anime-character path; needed a wasm blob that was never vendored |
+| `engine/CustomOutlinePass.js`, `engine/FindSurfaces.js` and the "raw" composer in `PostProcessingPipeline.ts` | only fed the removed raw render path; the live outline is `SelectionOutlinePass` (upstream-written). Also removes a file with no establishable provenance |
+| `engine/chromakey.js`, `engine/shaders.js`, the video-plane branch of `Scene.instantiate` | forum-sourced chroma-key shader whose conversion routine cites a `libretro/glsl-shaders` file (licence not established); video planes are not a Prism feature |
+| Spark splats: `SplatMesh` loader (`scene.ts`), `instanceof SplatMesh` (`SelectionOutlinePass.ts`), `SparkRenderer`/`SplatMesh` disposal (`disposeObject3D.ts`), the `SparkRenderer` field (`editor.ts`) | splats are not exposed in M1. **`@sparkjsdev/spark` is no longer a dependency** |
+| second `THREE.WebGLRenderer` (`rawRenderer`) | only fed the removed raw composer; one WebGL context per mount instead of two |
+
+What remains compiled but unused on Prism's paths: the `Image::` plane branch (png/jpg textures; the URL is always
+the adapter-resolved `/api/assets/<id>`), the timeline/keyframe model and FK helpers (M2 basis), and
+`InfiniteGridHelper`. The three.js addon `three/examples/jsm/libs/stats.module.js` is imported by `editor.ts`
+(FPS counter, never attached to the DOM by Prism). Nothing in the vendor tree contains a remote URL on an executable
+path; `placeholder_manager.ts` and `scene.ts` request only same-origin `/resources/…` paths for skyboxes and are covered
+by the e2e "same-origin requests, none missing" test.
+
+## Third-party code inside the vendor tree
+
+- `engine/TransformControls.js` — **three.js** `examples/jsm/controls/TransformControls.js`, MIT,
+  Copyright © 2010-2024 three.js authors, https://github.com/mrdoob/three.js. Established by token comparison
+  (comments, whitespace, quote style, semicolons and trailing commas normalised) of the vendored file against the file
+  as published in the `three` npm package for r140–r181: r163 and r164 differ by 45 tokens out of ~8 500, r162 and
+  r165–r168 by 45–48, r158–r160 by 96, r140–r155 by 309–409, r169 by 626, r170–r181 by 1 150–1 381. The 45 differing tokens are formatter parentheses and
+  one ArtCraft addition (a `sensitivity` multiplier on the drag delta, two sites). Closest releases: **three r163 /
+  r164** (identical in this file). The upstream ArtCraft repository's history for the file begins at its "fresh start"
+  commit, so no further origin is recorded there. three.js's examples carry no per-file header; the licence is the
+  repository's MIT `LICENSE`, reproduced in `THIRD_PARTY_NOTICES.md`.
+- `engine/SelectionOutlinePass.ts` — written by ArtCraft (its own header comment says so); depends on three.js
+  addons `EffectComposer`/`Pass`/`FullScreenQuad` (MIT, npm dependency).
+
+## Dependency edges that remain
+
+`three`, `zustand`. Addons imported: `controls/{OrbitControls,PointerLockControls}`, `geometries/TextGeometry`,
+`loaders/GLTFLoader`, `postprocessing/{EffectComposer,OutputPass,Pass,RenderPass}`,
+`examples/jsm/Addons.js` (barrel; `keybinds_controls.ts` for the same two controls), `FontLoader`, `libs/stats.module`.
 
 ## Prism-written code (outside this directory)
 
@@ -69,7 +114,10 @@ Nothing outside `src/lib/previs/scene-adapter.ts` and the two vendored hooks imp
 1. `git fetch` the new upstream SHA into a scratch clone (never into this repo). Verify `LICENSE-*`, `NOTICE` and the
    README license section are unchanged in substance.
 2. Re-export the same path list at the new SHA; normalise line endings to LF.
-3. Re-apply `patches/prism-vendor.patch` (`patch -p0 --dry-run` first). Resolve rejects by hand and regenerate the patch.
+3. Re-apply `patches/prism-vendor.patch` from this directory (`patch -p1 --dry-run < patches/prism-vendor.patch`
+   against a tree laid out like the vendored one, containing the upstream versions of every file listed in the patch).
+   Resolve rejects by hand and regenerate the patch (`diff -ruN --strip-trailing-cr a b` between the LF-normalised
+   upstream export `a` and this tree `b`, excluding `patches`, `UPSTREAM.md`, licences).
 4. Bump `PREVIS_UPSTREAM_COMMIT` in `src/domain/previs/types.ts`. Stored documents keep the commit they were saved with.
 5. Run `npm run typecheck`, `npx vitest run src/domain/previs`, `npm run db:previs`, and the 3D e2e
    (`e2e/zzzzz-previs.spec.ts`, `e2e/supabase-previs.spec.ts`). The engine's JSON format is versioned only by a

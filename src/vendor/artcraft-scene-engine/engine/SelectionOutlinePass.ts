@@ -39,7 +39,6 @@
 
 import * as THREE from "three";
 import { Pass, FullScreenQuad } from "three/addons/postprocessing/Pass.js";
-import { SplatMesh } from "@sparkjsdev/spark";
 import { MediaFileType } from "../enums";
 import { findInternalBbox } from "./internalBbox";
 import {
@@ -58,18 +57,14 @@ const OUTLINE_THICKNESS = 1;
 // "selected geometry rasterized here."
 const FAR_DEPTH_THRESHOLD = 0.999999;
 
-// Walk the parent chain looking for a splat. Primary detector is
-// `instanceof SplatMesh` — robust across JSON reload because the
-// SplatMesh instance is freshly constructed by Scene.loadObject
-// regardless of saved userData. The userData tag check is a secondary
-// fallback for future non-SparkJS splat backends, and so we don't
-// regress if someone wraps a SplatMesh in a Group.
+// Walk the parent chain looking for a splat, by its userData tag.
+// PRISM PATCH: the `instanceof SplatMesh` detector went with the
+// @sparkjsdev/spark dependency (splats are not part of Prism M1).
 function findSplatAncestor(
   obj: THREE.Object3D,
-): SplatMesh | THREE.Object3D | undefined {
+): THREE.Object3D | undefined {
   let cur: THREE.Object3D | null = obj;
   while (cur) {
-    if (cur instanceof SplatMesh) return cur;
     if (cur.userData?.["media_file_type"] === MediaFileType.SPZ) return cur;
     cur = cur.parent;
   }
@@ -78,7 +73,7 @@ function findSplatAncestor(
 
 export class SelectionOutlinePass extends Pass {
   private readonly scene: THREE.Scene;
-  private readonly camera: THREE.PerspectiveCamera;
+  private camera: THREE.PerspectiveCamera;
 
   // Cached partition results — written by setSelectedObjects on each
   // selection change; read by render() each frame. No per-frame work.
@@ -141,6 +136,14 @@ export class SelectionOutlinePass extends Pass {
     }
     this.outlineTarget = outlineTarget;
     this.toggleSplatBbox(splatTarget);
+  }
+
+  // PRISM PATCH: let a snapshot render through an isolated camera.
+  getCamera(): THREE.PerspectiveCamera {
+    return this.camera;
+  }
+  setCamera(camera: THREE.PerspectiveCamera): void {
+    this.camera = camera;
   }
 
   // Snapshot hook: keep the Step-1 scene render but drop the outline

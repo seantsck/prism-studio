@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { assetIdFromToken, assetTokenFor, PRISM_USER_DATA } from "@/domain/previs/document";
-import type { PrevisCamera, Vec3 } from "@/domain/previs/types";
+import { productionRenderSpec } from "@/domain/previs/camera";
+import type { CameraBookmarkValue, PrevisCamera, Vec3 } from "@/domain/previs/types";
 import { addObject } from "@/vendor/artcraft-scene-engine/actions/addObject";
 import { addShape } from "@/vendor/artcraft-scene-engine/actions/addShape";
 import { deleteObject } from "@/vendor/artcraft-scene-engine/actions/deleteObject";
@@ -65,7 +66,11 @@ export interface SpatialSceneAdapter {
   setProductionCamera(camera: PrevisCamera): void;
   lookThroughProductionCamera(on: boolean): void;
   isLookingThroughProductionCamera(): boolean;
-  captureMasterFrame(): Promise<CapturedFrame>;
+  /**
+   * Renders the Production Frame through an isolated camera built from the frozen bookmark. The editor/navigation
+   * camera, its pose and the look-through state are not read and not changed.
+   */
+  captureMasterFrame(bookmark: CameraBookmarkValue): Promise<CapturedFrame>;
   undo(): Promise<void>;
   redo(): Promise<void>;
   canUndo(): boolean;
@@ -357,25 +362,22 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     return this.editor?.cameraController.camera_person_mode === true;
   }
 
-  async captureMasterFrame(): Promise<CapturedFrame> {
+  async captureMasterFrame(bookmark: CameraBookmarkValue): Promise<CapturedFrame> {
     const editor = this.requireEditor();
-    const cc = editor.cameraController;
-    const wasLooking = cc.camera_person_mode;
-    const cfg = usePageSceneStore.getState().cameras.find((c) => c.id !== "main");
-    if (cfg) usePageSceneStore.getState().setSelectedCameraId(cfg.id);
-    if (!wasLooking) cc.enterCameraView();
-    try {
-      // let the per-frame tick apply the production lens to the viewport camera before rendering
-      await new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      );
-      const dims = cc.getRenderDimensions();
-      const snap = editor.snapShotOfCurrentFrame(false);
-      if (!snap) throw new Error("The 3D set could not render a frame.");
-      return { blob: snap.file, width: dims.width, height: dims.height };
-    } finally {
-      if (!wasLooking) cc.exitCameraView();
+    const spec = productionRenderSpec(bookmark);
+    const dims = editor.cameraController.getRenderDimensions();
+    if (dims.width !== spec.width || dims.height !== spec.height) {
+      throw new Error(`The set is not framed at the Production Frame (${dims.width}×${dims.height}).`);
     }
+    // a dedicated camera: the viewport/navigation camera is never the source of the capture
+    const cam = new THREE.PerspectiveCamera(spec.fovVerticalDegrees, spec.aspect, spec.near, spec.far);
+    cam.position.set(spec.position.x, spec.position.y, spec.position.z);
+    cam.rotation.set(spec.rotation.x, spec.rotation.y, spec.rotation.z, "XYZ");
+    cam.layers.disable(1); // the camera proxy lives on layer 1, as in the engine's own render camera
+    cam.updateMatrixWorld(true);
+    const snap = editor.snapShotOfCurrentFrame(false, cam);
+    if (!snap) throw new Error("The 3D set could not render a frame.");
+    return { blob: snap.file, width: spec.width, height: spec.height };
   }
 
   async undo() {
