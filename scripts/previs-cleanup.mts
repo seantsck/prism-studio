@@ -1,9 +1,10 @@
 // Removes 3D-set test data from the dev user's projects: scene documents, shot camera bookmarks, master frames,
-// camera paths, previs clips, their render assets (and stored files) and the storyboard frames created by
+// camera paths, shot character blocking, previs clips, their render assets (and stored files) and the storyboard frames created by
 // "Use as Master Frame".
 //   npx tsx --env-file=.env.local scripts/previs-cleanup.mts --yes          delete
 //   npx tsx --env-file=.env.local scripts/previs-cleanup.mts --report       print provenance of master frames (JSON)
 //   npx tsx --env-file=.env.local scripts/previs-cleanup.mts --report-clips  print provenance of previs clips (JSON)
+//   npx tsx --env-file=.env.local scripts/previs-cleanup.mts --report-blocking  print stored shot character blocking (JSON)
 // Development/test tidy-up only. Never touches rows outside the dev user's own projects.
 import pg from "pg";
 import { createOutputSink } from "../src/generation/sink";
@@ -13,7 +14,8 @@ import { startScript } from "./lib/safety.mjs";
 const dev = readDevUserEnv();
 const report = process.argv.includes("--report");
 const reportClips = process.argv.includes("--report-clips");
-if (!report && !reportClips)
+const reportBlocking = process.argv.includes("--report-blocking");
+if (!report && !reportClips && !reportBlocking)
   startScript({
     mode: "3D set cleanup (deletes scene documents, bookmarks, master frames)",
     devOwner: dev.id,
@@ -21,11 +23,27 @@ if (!report && !reportClips)
 const pool = new pg.Pool({ connectionString: dev.url, ssl: { rejectUnauthorized: false }, max: 2 });
 await assertDevUserExists(pool, dev);
 
+if (reportBlocking) {
+  const rows = await pool.query(
+    `select b.id, b.shot_id, b.character_id, b.location_id, b.scene_document_id, b.scene_revision, b.scene_fingerprint,
+            b.schema_version, b.rig_version, b.revision, b.root_position, b.root_orientation, b.root_scale::float as root_scale,
+            b.pose_json, b.visible, b.pose_fingerprint, b.blocking_fingerprint,
+            (select scene_fingerprint from location_scene_documents d where d.id = b.scene_document_id) as live_scene_fingerprint
+       from shot_character_blocking b
+       join projects p on p.id = b.project_id
+      where p.user_id = $1 order by b.created_at`,
+    [dev.id],
+  );
+  console.log(JSON.stringify(rows.rows));
+  await pool.end();
+  process.exit(0);
+}
+
 if (reportClips) {
   const rows = await pool.query(
     `select c.id, c.asset_id, c.path_revision, c.path_fingerprint, c.scene_revision, c.scene_fingerprint,
             c.frame_rate::float as frame_rate, c.duration_ms, c.render_width, c.render_height, c.container, c.codec,
-            c.has_audio, c.audio_asset_id, c.audio_mix_fingerprint, c.audio_mix_json, c.source, a.bucket, a.object_path, a.source as asset_source, a.purpose as asset_purpose,
+            c.has_audio, c.audio_asset_id, c.audio_mix_fingerprint, c.audio_mix_json, c.blocking_fingerprint, c.blocking_json, c.source, a.bucket, a.object_path, a.source as asset_source, a.purpose as asset_purpose,
             a.type as asset_type, a.mime, a.byte_size, a.metadata->'previs' as provenance,
             (select public from storage.buckets b where b.id = a.bucket) as bucket_public
        from shot_previs_clips c
@@ -43,7 +61,7 @@ if (report) {
   const rows = await pool.query(
     `select f.id, f.asset_id, f.scene_revision, f.scene_fingerprint, f.camera_bookmark_id, f.render_width,
             f.render_height, f.production_aspect_ratio, f.source, f.adopted_at is not null as adopted,
-            f.adopted_frame_id, a.bucket, a.object_path, a.source as asset_source, a.purpose as asset_purpose,
+            f.adopted_frame_id, f.blocking_fingerprint, f.blocking_json, a.bucket, a.object_path, a.source as asset_source, a.purpose as asset_purpose,
             a.width as asset_width, a.height as asset_height, a.mime, a.metadata->'previs' as provenance,
             (select public from storage.buckets b where b.id = a.bucket) as bucket_public
        from scene_master_frames f
@@ -78,12 +96,13 @@ const counts = (
     `select (select count(*)::int from location_scene_documents d join projects p on p.id = d.project_id where p.user_id = $1) as scenes,
             (select count(*)::int from shot_camera_bookmarks b join projects p on p.id = b.project_id where p.user_id = $1) as bookmarks,
             (select count(*)::int from shot_camera_paths c join projects p on p.id = c.project_id where p.user_id = $1) as paths,
-            (select count(*)::int from shot_previs_clips c join projects p on p.id = c.project_id where p.user_id = $1) as clips`,
+            (select count(*)::int from shot_previs_clips c join projects p on p.id = c.project_id where p.user_id = $1) as clips,
+            (select count(*)::int from shot_character_blocking c join projects p on p.id = c.project_id where p.user_id = $1) as blocking`,
     [dev.id],
   )
 ).rows[0];
 console.log(
-  `scenes: ${counts.scenes}, bookmarks: ${counts.bookmarks}, camera paths: ${counts.paths}, previs clips: ${counts.clips}, previs/master-frame assets: ${assets.length}, storyboard frames: ${frames.length}`,
+  `scenes: ${counts.scenes}, bookmarks: ${counts.bookmarks}, camera paths: ${counts.paths}, previs clips: ${counts.clips}, character blocking: ${counts.blocking}, previs/master-frame assets: ${assets.length}, storyboard frames: ${frames.length}`,
 );
 if (!process.argv.includes("--yes")) {
   console.log("dry run; pass --yes to delete");
@@ -95,6 +114,10 @@ if (frames.length) await pool.query("delete from storyboard_frames where id = an
 // previs clips and master frames reference assets (no cascade): remove them with their scenes first
 await pool.query(
   `delete from shot_previs_clips where project_id in (select id from projects where user_id = $1)`,
+  [dev.id],
+);
+await pool.query(
+  `delete from shot_character_blocking where project_id in (select id from projects where user_id = $1)`,
   [dev.id],
 );
 await pool.query(

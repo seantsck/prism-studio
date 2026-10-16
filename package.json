@@ -35,6 +35,7 @@
     "continuity:db:provision": "tsx --env-file=.env.local scripts/continuity-db-provision.mts",
     "db:candidates": "tsx --env-file=.env.local scripts/db-candidates.mts",
     "db:previs": "tsx --env-file=.env.local scripts/db-previs.mts",
+    "db:blocking": "tsx --env-file=.env.local scripts/db-blocking.mts",
     "db:continuity-analysis": "tsx --env-file=.env.local scripts/db-continuity-analysis.mts",
     "continuity:worker": "tsx --env-file=.env.local scripts/continuity-worker.mts",
     "continuity:pre-paid:check": "tsx --env-file=.env.local scripts/continuity-pre-paid-check.mts",

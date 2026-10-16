@@ -1,4 +1,5 @@
 import type { StoredAudioMix } from "@/domain/previs/audio-mix";
+import type { RenderedBlockingFigure, ShotBlockingEntry } from "@/domain/previs/blocking";
 import type { CameraPath } from "@/domain/previs/camera-path";
 import type { SpatialReference } from "@/domain/previs/spatial";
 import type { CameraBookmarkValue, PrevisDocument } from "@/domain/previs/types";
@@ -53,6 +54,10 @@ export interface MasterFrameRecord {
   capturedAt: string;
   adoptedAt: string | null;
   adoptedFrameId: string | null;
+  /** identity of the character-blocking layer the picture showed (null = no character proxies) */
+  blockingFingerprint: string | null;
+  /** which stored blocking each figure was rendered from (by value; never a URL) */
+  blocking: RenderedBlockingFigure[] | null;
   createdBy: string | null;
   createdAt: string;
 }
@@ -120,12 +125,20 @@ export interface PrevisClipRecord {
   /** the frozen mix provenance (ids + checksums, never URLs); null for a silent previs */
   audioMix: StoredAudioMix | null;
   audioMixFingerprint: string | null;
+  /** identity of the character-blocking layer the previs showed (null = no character proxies) */
+  blockingFingerprint: string | null;
+  blocking: RenderedBlockingFigure[] | null;
   renderedAt: string;
   createdBy: string | null;
   createdAt: string;
 }
 
-export type NewPrevisClip = Omit<PrevisClipRecord, "source" | "createdAt" | "createdBy"> & {
+export type NewPrevisClip = Omit<
+  PrevisClipRecord,
+  "source" | "createdAt" | "createdBy" | "blockingFingerprint" | "blocking"
+> & {
+  blockingFingerprint?: string | null;
+  blocking?: RenderedBlockingFigure[] | null;
   userId: string | null;
 };
 
@@ -178,7 +191,50 @@ export interface NewMasterFrame {
   renderHeight: number;
   productionAspectRatio: string;
   capturedAt: string;
+  blockingFingerprint?: string | null;
+  blocking?: RenderedBlockingFigure[] | null;
   userId: string | null;
+}
+
+/**
+ * One Character's blocking in ONE Shot: root placement + skeletal pose, tied to the Set state it was authored
+ * against. CAS on `revision`. The proxy carries no identity.
+ */
+export interface ShotBlockingRecord {
+  id: string;
+  projectId: string;
+  shotId: string;
+  characterId: string;
+  locationId: string;
+  sceneDocumentId: string;
+  sceneRevision: number;
+  sceneFingerprint: string;
+  schemaVersion: string;
+  rigVersion: string;
+  revision: number;
+  entry: ShotBlockingEntry;
+  poseFingerprint: string;
+  blockingFingerprint: string;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveShotBlockingInput {
+  id: string;
+  projectId: string;
+  shotId: string;
+  characterId: string;
+  locationId: string;
+  sceneDocumentId: string;
+  /** the LIVE set state the blocking is authored against (looked up server-side, never trusted from the client) */
+  sceneRevision: number;
+  sceneFingerprint: string;
+  entry: ShotBlockingEntry;
+  /** null = first save for this (shot, character); otherwise the revision the editor loaded */
+  expectedRevision: number | null;
+  userId: string | null;
+  now: string;
 }
 
 export interface PrevisRepository {
@@ -205,6 +261,28 @@ export interface PrevisRepository {
   getCameraPathForShot(shotId: string): Promise<CameraPathRecord | null>;
   /** Insert or compare-and-set update; throws PrevisError("conflict") on a stale expectedRevision. */
   saveCameraPath(input: SaveCameraPathInput): Promise<CameraPathRecord>;
+
+  listShotBlocking(shotId: string): Promise<ShotBlockingRecord[]>;
+  /** Insert or compare-and-set update of ONE Character's blocking in ONE Shot. Other Shots are never touched. */
+  saveShotBlocking(input: SaveShotBlockingInput): Promise<ShotBlockingRecord>;
+  /** Removes one Character's blocking from one Shot (CAS on revision). */
+  removeShotBlocking(input: {
+    projectId: string;
+    shotId: string;
+    characterId: string;
+    expectedRevision: number;
+  }): Promise<void>;
+  /**
+   * The explicit "Re-anchor to current set": records the CURRENT set revision/fingerprint on the Shot's blocking
+   * WITHOUT changing any root transform or pose. Never automatic.
+   */
+  reanchorShotBlocking(input: {
+    projectId: string;
+    shotId: string;
+    sceneDocumentId: string;
+    userId: string | null;
+    now: string;
+  }): Promise<ShotBlockingRecord[]>;
 
   listPrevisClips(shotId: string): Promise<PrevisClipRecord[]>;
   getPrevisClip(id: string): Promise<PrevisClipRecord | null>;

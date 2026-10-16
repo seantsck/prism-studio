@@ -1,5 +1,13 @@
 import type { Pool, PoolClient } from "pg";
 import { pickCurrentClip, type StoredAudioMix } from "@/domain/previs/audio-mix";
+import {
+  blockingFingerprint,
+  buildShotBlockingReference,
+  parseBlockingEntry,
+  renderedBlockingFingerprint,
+  type RenderedBlockingFigure,
+} from "@/domain/previs/blocking";
+import { poseFingerprint } from "@/domain/previs/pose";
 import { bookmarkFromCamera } from "@/domain/previs/camera";
 import { cameraPathFingerprint, cameraPathSchema, validateCameraPath } from "@/domain/previs/camera-path";
 import { sceneFingerprint } from "@/domain/previs/document";
@@ -20,6 +28,8 @@ import {
   type NewPrevisClip,
   type PrevisClipRecord,
   type SaveCameraPathInput,
+  type SaveShotBlockingInput,
+  type ShotBlockingRecord,
   type PrevisRepository,
   type SaveSceneInput,
   type SceneDocumentRecord,
@@ -89,8 +99,40 @@ const mapFrame = (r: Row): MasterFrameRecord => ({
   capturedAt: iso(r.captured_at),
   adoptedAt: isoOrNull(r.adopted_at),
   adoptedFrameId: str(r.adopted_frame_id),
+  blockingFingerprint: str(r.blocking_fingerprint),
+  blocking: (r.blocking_json as RenderedBlockingFigure[] | null) ?? null,
   createdBy: str(r.created_by),
   createdAt: iso(r.created_at),
+});
+
+const mapBlocking = (r: Row): ShotBlockingRecord => ({
+  id: String(r.id),
+  projectId: String(r.project_id),
+  shotId: String(r.shot_id),
+  characterId: String(r.character_id),
+  locationId: String(r.location_id),
+  sceneDocumentId: String(r.scene_document_id),
+  sceneRevision: Number(r.scene_revision),
+  sceneFingerprint: String(r.scene_fingerprint),
+  schemaVersion: String(r.schema_version),
+  rigVersion: String(r.rig_version),
+  revision: Number(r.revision),
+  entry: parseBlockingEntry({
+    schema: r.schema_version,
+    characterId: String(r.character_id),
+    root: {
+      position: r.root_position,
+      orientation: r.root_orientation,
+      scale: Number(r.root_scale),
+    },
+    pose: r.pose_json,
+    visibility: Boolean(r.visible),
+  }),
+  poseFingerprint: String(r.pose_fingerprint),
+  blockingFingerprint: String(r.blocking_fingerprint),
+  createdBy: str(r.created_by),
+  createdAt: iso(r.created_at),
+  updatedAt: iso(r.updated_at),
 });
 
 const mapPath = (r: Row): CameraPathRecord => ({
@@ -135,6 +177,8 @@ const mapClip = (r: Row): PrevisClipRecord => ({
   audioAssetId: str(r.audio_asset_id),
   audioMix: (r.audio_mix_json as StoredAudioMix | null) ?? null,
   audioMixFingerprint: str(r.audio_mix_fingerprint),
+  blockingFingerprint: str(r.blocking_fingerprint),
+  blocking: (r.blocking_json as RenderedBlockingFigure[] | null) ?? null,
   renderedAt: iso(r.rendered_at),
   createdBy: str(r.created_by),
   createdAt: iso(r.created_at),
@@ -290,11 +334,25 @@ export class PostgresPrevisData implements PrevisRepository {
     return this.tx(async (c) => {
       const b = await c.query("select * from shot_camera_bookmarks where project_id = $1", [projectId]);
       const p = await c.query("select * from shot_camera_paths where project_id = $1", [projectId]);
+      const bl = await c.query("select * from shot_character_blocking where project_id = $1", [projectId]);
       const out: Record<string, SpatialReference> = {};
-      if (b.rows.length === 0 && p.rows.length === 0) return out;
+      if (b.rows.length === 0 && p.rows.length === 0 && bl.rows.length === 0) return out;
+      const blockingByShot = new Map<string, ShotBlockingRecord[]>();
+      for (const r of bl.rows) {
+        const rec = mapBlocking(r);
+        const list = blockingByShot.get(rec.shotId) ?? [];
+        list.push(rec);
+        blockingByShot.set(rec.shotId, list);
+      }
+      const nameRows = bl.rows.length
+        ? await c.query("select id, name from characters where project_id = $1", [projectId])
+        : { rows: [] as Row[] };
+      const names = Object.fromEntries(nameRows.rows.map((r) => [String(r.id), String(r.name)]));
       const bookmarks = new Map(b.rows.map((r) => [String(r.shot_id), mapBookmark(r)]));
       const paths = new Map(p.rows.map((r) => [String(r.shot_id), mapPath(r)]));
-      const sceneIds = [...new Set([...b.rows, ...p.rows].map((r) => String(r.scene_document_id)))];
+      const sceneIds = [
+        ...new Set([...b.rows, ...p.rows, ...bl.rows].map((r) => String(r.scene_document_id))),
+      ];
       const s = await c.query("select * from location_scene_documents where id = any($1::uuid[])", [
         sceneIds,
       ]);
@@ -306,7 +364,8 @@ export class PostgresPrevisData implements PrevisRepository {
       );
       const adopted = new Map(f.rows.map((r) => [String(r.shot_id), String(r.asset_id)]));
       const k = await c.query(
-        `select shot_id, path_fingerprint, asset_id, has_audio, audio_mix_fingerprint, rendered_at
+        `select shot_id, path_fingerprint, asset_id, has_audio, audio_mix_fingerprint, blocking_fingerprint,
+                rendered_at
            from shot_previs_clips where project_id = $1`,
         [projectId],
       );
@@ -318,6 +377,7 @@ export class PostgresPrevisData implements PrevisRepository {
           assetId: string;
           hasAudio: boolean;
           audioMixFingerprint: string | null;
+          blockingFingerprint: string | null;
           renderedAt: string;
         }>
       >();
@@ -329,20 +389,33 @@ export class PostgresPrevisData implements PrevisRepository {
           assetId: String(r.asset_id),
           hasAudio: Boolean(r.has_audio),
           audioMixFingerprint: str(r.audio_mix_fingerprint),
+          blockingFingerprint: str(r.blocking_fingerprint),
           renderedAt: iso(r.rendered_at),
         });
         clipsByShot.set(String(r.shot_id), list);
       }
-      for (const shotId of new Set([...bookmarks.keys(), ...paths.keys()])) {
+      for (const shotId of new Set([...bookmarks.keys(), ...paths.keys(), ...blockingByShot.keys()])) {
         const bm = bookmarks.get(shotId) ?? null;
         const path = paths.get(shotId) ?? null;
-        const scene = scenes.get((bm?.sceneDocumentId ?? path?.sceneDocumentId) as string);
+        const blockRecs = (blockingByShot.get(shotId) ?? []).sort((x, y) =>
+          x.characterId < y.characterId ? -1 : 1,
+        );
+        const scene = scenes.get(
+          (bm?.sceneDocumentId ?? path?.sceneDocumentId ?? blockRecs[0]?.sceneDocumentId) as string,
+        );
         if (!scene) continue;
+        const currentBlockingFp = blockRecs.length
+          ? renderedBlockingFingerprint(
+              blockRecs.map((x) => x.entry),
+              { locationId: scene.locationId },
+            )
+          : null;
         const clip = path
           ? pickCurrentClip(
               clipsByShot.get(shotId) ?? [],
               path.pathFingerprint,
               currentAudioMix?.(shotId, path.durationMs) ?? null,
+              currentBlockingFp,
             )
           : null;
         const cameraMotion: CameraMotionReference | null = path
@@ -389,6 +462,7 @@ export class PostgresPrevisData implements PrevisRepository {
             : null,
           adoptedMasterFrameAssetId: adopted.get(shotId) ?? null,
           cameraMotion,
+          shotBlocking: buildShotBlockingReference(blockRecs, names, { locationId: scene.locationId }),
         });
       }
       return out;
@@ -418,8 +492,8 @@ export class PostgresPrevisData implements PrevisRepository {
         `insert into scene_master_frames
            (id, project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint,
             camera_bookmark_id, asset_id, render_width, render_height, production_aspect_ratio, captured_at,
-            created_by, created_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$13) returning *`,
+            created_by, created_at, blocking_fingerprint, blocking_json)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$13,$15,$16::jsonb) returning *`,
         [
           input.id,
           input.projectId,
@@ -435,6 +509,8 @@ export class PostgresPrevisData implements PrevisRepository {
           input.productionAspectRatio,
           input.capturedAt,
           input.userId,
+          input.blockingFingerprint ?? null,
+          input.blocking ? JSON.stringify(input.blocking) : null,
         ],
       );
       return mapFrame(r.rows[0]);
@@ -528,6 +604,150 @@ export class PostgresPrevisData implements PrevisRepository {
     });
   }
 
+  async listShotBlocking(shotId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        "select * from shot_character_blocking where shot_id = $1 order by character_id",
+        [shotId],
+      );
+      return r.rows.map(mapBlocking);
+    });
+  }
+
+  async saveShotBlocking(input: SaveShotBlockingInput) {
+    let entry;
+    try {
+      entry = parseBlockingEntry(input.entry);
+    } catch (err) {
+      throw new PrevisError("invalid", `Invalid character blocking: ${(err as Error).message}`);
+    }
+    if (entry.characterId !== input.characterId)
+      throw new PrevisError("invalid", "The blocking is for a different character.");
+    const poseFp = poseFingerprint(entry.pose);
+    const fp = blockingFingerprint(entry, { locationId: input.locationId });
+    const conflict = new PrevisError(
+      "conflict",
+      "This character's blocking was changed elsewhere. Reload before saving.",
+    );
+    return this.tx(async (c) => {
+      const s = await c.query(
+        "select id from location_scene_documents where id = $1 and project_id = $2 and location_id = $3",
+        [input.sceneDocumentId, input.projectId, input.locationId],
+      );
+      if (!s.rows[0]) throw new PrevisError("not_found", "That 3D set was not found for this location.");
+      if (input.expectedRevision === null) {
+        const r = await c.query(
+          `insert into shot_character_blocking
+             (id, project_id, shot_id, character_id, location_id, scene_document_id, scene_revision,
+              scene_fingerprint, schema_version, rig_version, revision, root_position, root_orientation,
+              root_scale, pose_json, visible, pose_fingerprint, blocking_fingerprint, created_by, created_at,
+              updated_at)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11::jsonb,$12::jsonb,$13,$14::jsonb,$15,$16,$17,$18,$19,$19)
+           on conflict (shot_id, character_id) do nothing returning *`,
+          [
+            input.id,
+            input.projectId,
+            input.shotId,
+            input.characterId,
+            input.locationId,
+            input.sceneDocumentId,
+            input.sceneRevision,
+            input.sceneFingerprint,
+            entry.schema,
+            entry.pose.rig,
+            JSON.stringify(entry.root.position),
+            JSON.stringify(entry.root.orientation),
+            entry.root.scale,
+            JSON.stringify(entry.pose),
+            entry.visibility,
+            poseFp,
+            fp,
+            input.userId,
+            input.now,
+          ],
+        );
+        if (!r.rows[0]) throw conflict;
+        return mapBlocking(r.rows[0]);
+      }
+      const r = await c.query(
+        `update shot_character_blocking
+            set revision = revision + 1, location_id = $4, scene_document_id = $5, scene_revision = $6,
+                scene_fingerprint = $7, root_position = $8::jsonb, root_orientation = $9::jsonb, root_scale = $10,
+                pose_json = $11::jsonb, visible = $12, pose_fingerprint = $13, blocking_fingerprint = $14
+          where shot_id = $1 and character_id = $2 and project_id = $3 and revision = $15
+          returning *`,
+        [
+          input.shotId,
+          input.characterId,
+          input.projectId,
+          input.locationId,
+          input.sceneDocumentId,
+          input.sceneRevision,
+          input.sceneFingerprint,
+          JSON.stringify(entry.root.position),
+          JSON.stringify(entry.root.orientation),
+          entry.root.scale,
+          JSON.stringify(entry.pose),
+          entry.visibility,
+          poseFp,
+          fp,
+          input.expectedRevision,
+        ],
+      );
+      if (!r.rows[0]) throw conflict;
+      return mapBlocking(r.rows[0]);
+    });
+  }
+
+  async removeShotBlocking(input: {
+    projectId: string;
+    shotId: string;
+    characterId: string;
+    expectedRevision: number;
+  }) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        `delete from shot_character_blocking
+          where shot_id = $1 and character_id = $2 and project_id = $3 and revision = $4 returning id`,
+        [input.shotId, input.characterId, input.projectId, input.expectedRevision],
+      );
+      if (!r.rows[0]) {
+        const exists = await c.query(
+          "select 1 from shot_character_blocking where shot_id = $1 and character_id = $2 and project_id = $3",
+          [input.shotId, input.characterId, input.projectId],
+        );
+        throw exists.rows[0]
+          ? new PrevisError("conflict", "This character's blocking was changed elsewhere. Reload first.")
+          : new PrevisError("not_found", "That character has no blocking in this shot.");
+      }
+    });
+  }
+
+  async reanchorShotBlocking(input: {
+    projectId: string;
+    shotId: string;
+    sceneDocumentId: string;
+    userId: string | null;
+    now: string;
+  }) {
+    return this.tx(async (c) => {
+      const s = await c.query("select * from location_scene_documents where id = $1 and project_id = $2", [
+        input.sceneDocumentId,
+        input.projectId,
+      ]);
+      if (!s.rows[0]) throw new PrevisError("not_found", "That 3D set was not found.");
+      const scene = mapScene(s.rows[0]);
+      const r = await c.query(
+        `update shot_character_blocking
+            set revision = revision + 1, scene_revision = $3, scene_fingerprint = $4
+          where shot_id = $1 and project_id = $2 and scene_document_id = $5
+          returning *`,
+        [input.shotId, input.projectId, scene.revision, scene.sceneFingerprint, scene.id],
+      );
+      return r.rows.map(mapBlocking);
+    });
+  }
+
   async listPrevisClips(shotId: string) {
     return this.tx(async (c) => {
       const r = await c.query(
@@ -552,8 +772,8 @@ export class PostgresPrevisData implements PrevisRepository {
            (id, project_id, shot_id, location_id, camera_path_id, path_revision, path_fingerprint,
             scene_document_id, scene_revision, scene_fingerprint, asset_id, frame_rate, duration_ms,
             render_width, render_height, container, codec, has_audio, audio_asset_id, rendered_at,
-            created_by, created_at, audio_mix_json, audio_mix_fingerprint)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$20,$22,$23)
+            created_by, created_at, audio_mix_json, audio_mix_fingerprint, blocking_fingerprint, blocking_json)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$20,$22,$23,$24,$25::jsonb)
          returning *`,
         [
           input.id,
@@ -579,6 +799,8 @@ export class PostgresPrevisData implements PrevisRepository {
           input.userId,
           input.audioMix ? JSON.stringify(input.audioMix) : null,
           input.audioMixFingerprint,
+          input.blockingFingerprint ?? null,
+          input.blocking ? JSON.stringify(input.blocking) : null,
         ],
       );
       return mapClip(r.rows[0]);
