@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/ui";
 import { VirtualSetLoader } from "@/components/previs/virtual-set-loader";
 import { buildShotContext } from "@/domain/context";
-import { buildAudioCues } from "@/lib/previs/performance-audio";
+import type { TimelineCue } from "@/domain/previs/audio-mix";
+import { shotTimelineCues } from "@/domain/previs/audio-mix-shot";
 import { getPrevisRepo } from "@/server/previs";
 import { requireProject } from "@/server/repo";
 
@@ -46,22 +47,24 @@ export default async function VirtualSetPage({
     durationMs: number;
     source: string;
     frameRate: number;
-    audioCues: Array<{ assetId: string; startMs: number; durationMs: number }>;
+    timelineCues: TimelineCue[];
+    assetNames: Record<string, string>;
   } | null = null;
   if (activeShotId) {
     const shot = data.shots.find((s) => s.id === activeShotId);
     if (shot) {
       const ctx = buildShotContext(data, activeShotId);
-      const cues = buildAudioCues({
-        preRollMs: ctx.shot.audio.preRollMs,
-        interLineGapMs: ctx.shot.audio.interLineGapMs,
-        takes: ctx.lines.map((l) => l.selectedTake ?? null),
-      });
+      // the one Shot-timeline arithmetic (layoutPerformance): interactive playback and the previs mix both use it
+      const { cues } = shotTimelineCues(data, activeShotId);
+      const assetNames: Record<string, string> = {};
+      for (const line of ctx.lines)
+        if (line.selectedAudioAsset) assetNames[line.selectedAudioAsset.id] = line.selectedAudioAsset.name;
       shotTiming = {
         durationMs: ctx.duration.durationMs,
         source: ctx.duration.source,
         frameRate: shot.generation.fps,
-        audioCues: cues,
+        timelineCues: cues,
+        assetNames,
       };
     }
   }
@@ -130,6 +133,9 @@ export default async function VirtualSetPage({
           renderHeight: c.renderHeight,
           container: c.container,
           codec: c.codec,
+          hasAudio: c.hasAudio,
+          audioMixFingerprint: c.audioMixFingerprint,
+          audioCodec: c.audioMix?.codec ?? null,
           renderedAt: c.renderedAt,
         }))}
         masterFrames={frames.map((f) => ({

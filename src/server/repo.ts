@@ -5,6 +5,8 @@ import { MemoryRepository } from "@/data/memory-repository";
 import { UserRepository } from "@/data/postgres-repository";
 import type { Repository } from "@/data/repository";
 import { persistenceMode } from "@/lib/supabase/config";
+import { audioMixFingerprint } from "@/domain/previs/audio-mix";
+import { performanceAudioPlanForShot } from "@/domain/previs/audio-mix-shot";
 import type { ProjectData } from "@/domain/schemas";
 import { UserFacingError } from "./action-result";
 import { requireUser } from "./auth";
@@ -32,9 +34,23 @@ export async function getRepo(): Promise<Repository> {
 }
 
 /** Always reads from the repository. Server actions use this: they mutate and then re-render in the same request. */
+/** The Shot's current performance-audio mix fingerprint at a render duration; null when it has no audio. */
+function safeAudioMixFingerprint(data: ProjectData, shotId: string, renderDurationMs: number): string | null {
+  try {
+    const plan = performanceAudioPlanForShot(data, shotId, renderDurationMs);
+    return plan ? audioMixFingerprint(plan) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Attach each shot's 3D set snapshot (only shots with a production camera; absent otherwise). */
 async function withSpatialReferences(data: ProjectData): Promise<ProjectData> {
-  const refs = await (await getPrevisRepo()).listSpatialReferences(data.project.id);
+  const refs = await (
+    await getPrevisRepo()
+  ).listSpatialReferences(data.project.id, (shotId, renderDurationMs) =>
+    safeAudioMixFingerprint(data, shotId, renderDurationMs),
+  );
   return Object.keys(refs).length > 0 ? { ...data, spatialReferences: refs } : data;
 }
 

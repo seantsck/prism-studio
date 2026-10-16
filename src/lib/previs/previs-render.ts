@@ -6,6 +6,7 @@ import {
   type CameraState,
 } from "@/domain/previs/camera-path";
 import type { Vec3 } from "@/domain/previs/types";
+import type { PcmTrack } from "./audio-compose";
 
 /**
  * Local previs rendering, split so each stage can be tested without the others:
@@ -34,6 +35,8 @@ export interface FrameRenderer {
 }
 
 export interface FrameEncoder {
+  /** Provide the composed performance audio. Called before start(); encoders without audio omit it. */
+  setAudio?(pcm: PcmTrack): void;
   start(opts: { width: number; height: number; frameRate: number }): Promise<void>;
   addFrame(
     frame: RenderedFrame,
@@ -41,7 +44,13 @@ export interface FrameEncoder {
     timestampSeconds: number,
     durationSeconds: number,
   ): Promise<void>;
-  finish(): Promise<{ bytes: Uint8Array; container: PrevisContainer; codec: string }>;
+  finish(): Promise<{
+    bytes: Uint8Array;
+    container: PrevisContainer;
+    codec: string;
+    /** null / absent = a silent file */
+    audioCodec?: string | null;
+  }>;
   /** Releases everything; safe to call repeatedly and after finish. */
   cancel(): Promise<void>;
 }
@@ -49,7 +58,8 @@ export interface FrameEncoder {
 export interface PrevisProgress {
   frame: number;
   total: number;
-  phase: "rendering" | "finalizing";
+  /** preparing_audio: fetch, decode and compose the performance audio; rendering: video frames; finalizing: mux */
+  phase: "preparing_audio" | "rendering" | "finalizing";
 }
 
 export class PrevisCancelled extends Error {
@@ -64,6 +74,8 @@ export interface RenderPrevisOptions {
   size: { width: number; height: number };
   renderer: FrameRenderer;
   encoder: FrameEncoder;
+  /** composed performance audio (48 kHz stereo); omit for a silent previs */
+  audio?: PcmTrack | null;
   signal?: AbortSignal;
   onProgress?: (p: PrevisProgress) => void;
   /** yields to the browser between frames so the UI (cancel button, progress) stays responsive */
@@ -74,6 +86,7 @@ export interface RenderPrevisResult {
   bytes: Uint8Array;
   container: PrevisContainer;
   codec: string;
+  audioCodec: string | null;
   width: number;
   height: number;
   frameRate: number;
@@ -104,6 +117,10 @@ export async function renderPrevis(opts: RenderPrevisOptions): Promise<RenderPre
 
   try {
     abortIf();
+    if (opts.audio) {
+      if (!encoder.setAudio) throw new Error("This encoder cannot write audio.");
+      encoder.setAudio(opts.audio);
+    }
     await encoder.start({ width: size.width, height: size.height, frameRate: path.frameRate });
     for (let i = 0; i < times.length; i++) {
       abortIf();
@@ -120,6 +137,7 @@ export async function renderPrevis(opts: RenderPrevisOptions): Promise<RenderPre
     const out = await encoder.finish();
     return {
       ...out,
+      audioCodec: out.audioCodec ?? null,
       width: size.width,
       height: size.height,
       frameRate: path.frameRate,

@@ -25,7 +25,7 @@ if (reportClips) {
   const rows = await pool.query(
     `select c.id, c.asset_id, c.path_revision, c.path_fingerprint, c.scene_revision, c.scene_fingerprint,
             c.frame_rate::float as frame_rate, c.duration_ms, c.render_width, c.render_height, c.container, c.codec,
-            c.has_audio, c.source, a.bucket, a.object_path, a.source as asset_source, a.purpose as asset_purpose,
+            c.has_audio, c.audio_asset_id, c.audio_mix_fingerprint, c.audio_mix_json, c.source, a.bucket, a.object_path, a.source as asset_source, a.purpose as asset_purpose,
             a.type as asset_type, a.mime, a.byte_size, a.metadata->'previs' as provenance,
             (select public from storage.buckets b where b.id = a.bucket) as bucket_public
        from shot_previs_clips c

@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { pickCurrentClip, type StoredAudioMix } from "@/domain/previs/audio-mix";
 import { bookmarkFromCamera } from "@/domain/previs/camera";
 import { cameraPathFingerprint, cameraPathSchema, validateCameraPath } from "@/domain/previs/camera-path";
 import { sceneFingerprint } from "@/domain/previs/document";
@@ -11,6 +12,7 @@ import {
 import { cameraBookmarkSchema, previsDocumentSchema } from "@/domain/previs/types";
 import {
   PrevisError,
+  type AudioMixResolver,
   type CameraBookmarkRecord,
   type CameraPathRecord,
   type MasterFrameRecord,
@@ -131,6 +133,8 @@ const mapClip = (r: Row): PrevisClipRecord => ({
   codec: String(r.codec),
   hasAudio: Boolean(r.has_audio),
   audioAssetId: str(r.audio_asset_id),
+  audioMix: (r.audio_mix_json as StoredAudioMix | null) ?? null,
+  audioMixFingerprint: str(r.audio_mix_fingerprint),
   renderedAt: iso(r.rendered_at),
   createdBy: str(r.created_by),
   createdAt: iso(r.created_at),
@@ -282,7 +286,7 @@ export class PostgresPrevisData implements PrevisRepository {
     });
   }
 
-  async listSpatialReferences(projectId: string) {
+  async listSpatialReferences(projectId: string, currentAudioMix?: AudioMixResolver) {
     return this.tx(async (c) => {
       const b = await c.query("select * from shot_camera_bookmarks where project_id = $1", [projectId]);
       const p = await c.query("select * from shot_camera_paths where project_id = $1", [projectId]);
@@ -302,16 +306,45 @@ export class PostgresPrevisData implements PrevisRepository {
       );
       const adopted = new Map(f.rows.map((r) => [String(r.shot_id), String(r.asset_id)]));
       const k = await c.query(
-        `select distinct on (shot_id, path_fingerprint) shot_id, path_fingerprint, asset_id from shot_previs_clips
-          where project_id = $1 order by shot_id, path_fingerprint, rendered_at desc`,
+        `select shot_id, path_fingerprint, asset_id, has_audio, audio_mix_fingerprint, rendered_at
+           from shot_previs_clips where project_id = $1`,
         [projectId],
       );
-      const clipFor = new Map(k.rows.map((r) => [`${r.shot_id}:${r.path_fingerprint}`, String(r.asset_id)]));
+      const clipsByShot = new Map<
+        string,
+        Array<{
+          shotId: string;
+          pathFingerprint: string;
+          assetId: string;
+          hasAudio: boolean;
+          audioMixFingerprint: string | null;
+          renderedAt: string;
+        }>
+      >();
+      for (const r of k.rows) {
+        const list = clipsByShot.get(String(r.shot_id)) ?? [];
+        list.push({
+          shotId: String(r.shot_id),
+          pathFingerprint: String(r.path_fingerprint),
+          assetId: String(r.asset_id),
+          hasAudio: Boolean(r.has_audio),
+          audioMixFingerprint: str(r.audio_mix_fingerprint),
+          renderedAt: iso(r.rendered_at),
+        });
+        clipsByShot.set(String(r.shot_id), list);
+      }
       for (const shotId of new Set([...bookmarks.keys(), ...paths.keys()])) {
         const bm = bookmarks.get(shotId) ?? null;
         const path = paths.get(shotId) ?? null;
         const scene = scenes.get((bm?.sceneDocumentId ?? path?.sceneDocumentId) as string);
         if (!scene) continue;
+        const clip = path
+          ? pickCurrentClip(
+              clipsByShot.get(shotId) ?? [],
+              path.pathFingerprint,
+              currentAudioMix?.(shotId, path.durationMs) ?? null,
+            )
+          : null;
         const cameraMotion: CameraMotionReference | null = path
           ? {
               schemaVersion: CAMERA_MOTION_SCHEMA_VERSION,
@@ -325,7 +358,16 @@ export class PostgresPrevisData implements PrevisRepository {
               interpolation: path.path.interpolation,
               focalLengthBasis: "vertical-sensor-24mm",
               keyframes: path.path.keyframes,
-              previsAssetId: clipFor.get(`${shotId}:${path.pathFingerprint}`) ?? null,
+              previsAssetId: clip?.assetId ?? null,
+              ...(clip
+                ? {
+                    previs: {
+                      assetId: clip.assetId,
+                      hasAudio: clip.hasAudio,
+                      audioMixFingerprint: clip.audioMixFingerprint,
+                    },
+                  }
+                : {}),
             }
           : null;
         out[shotId] = buildSpatialReference({
@@ -510,8 +552,8 @@ export class PostgresPrevisData implements PrevisRepository {
            (id, project_id, shot_id, location_id, camera_path_id, path_revision, path_fingerprint,
             scene_document_id, scene_revision, scene_fingerprint, asset_id, frame_rate, duration_ms,
             render_width, render_height, container, codec, has_audio, audio_asset_id, rendered_at,
-            created_by, created_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$20)
+            created_by, created_at, audio_mix_json, audio_mix_fingerprint)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$20,$22,$23)
          returning *`,
         [
           input.id,
@@ -535,6 +577,8 @@ export class PostgresPrevisData implements PrevisRepository {
           input.audioAssetId,
           input.renderedAt,
           input.userId,
+          input.audioMix ? JSON.stringify(input.audioMix) : null,
+          input.audioMixFingerprint,
         ],
       );
       return mapClip(r.rows[0]);

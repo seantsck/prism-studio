@@ -217,3 +217,98 @@ describe("path overlay and playback pose (adapter)", () => {
     expect(scene.getObjectByName("::PRISM_PATH_OVERLAY::")).toBeUndefined();
   });
 });
+
+describe("renderPrevis with performance audio", () => {
+  class AudioEncoder extends FakeEncoder {
+    audio: unknown = null;
+    order: string[] = [];
+    setAudio(pcm: unknown) {
+      this.audio = pcm;
+      this.order.push("setAudio");
+    }
+    async start(o: { width: number; height: number; frameRate: number }) {
+      this.order.push("start");
+      await super.start(o);
+    }
+    async finish() {
+      const out = await super.finish();
+      return { ...out, audioCodec: "aac" };
+    }
+  }
+  const pcm = {
+    sampleRate: 48000,
+    channels: [new Float32Array(48000), new Float32Array(48000)],
+    frames: 48000,
+  };
+
+  it("hands the composed audio to the encoder before it starts and reports the audio codec", async () => {
+    const e = new AudioEncoder();
+    const out = await renderPrevis({
+      path: path(),
+      size: { width: 956, height: 400 },
+      renderer: new FakeRenderer(),
+      encoder: e,
+      audio: pcm,
+      yieldToUi: noYield,
+    });
+    expect(e.audio).toBe(pcm);
+    expect(e.order).toEqual(["setAudio", "start"]);
+    expect(out.audioCodec).toBe("aac");
+    expect(out.durationMs).toBe(1000); // the video's duration stays the camera path's
+  });
+
+  it("a silent render has no audio codec and never touches setAudio", async () => {
+    const e = new AudioEncoder();
+    const out = await renderPrevis({
+      path: path(),
+      size: { width: 956, height: 400 },
+      renderer: new FakeRenderer(),
+      encoder: e,
+      yieldToUi: noYield,
+    });
+    expect(e.order).toEqual(["start"]);
+    const silentEncoder = new FakeEncoder();
+    const silent = await renderPrevis({
+      path: path(),
+      size: { width: 956, height: 400 },
+      renderer: new FakeRenderer(),
+      encoder: silentEncoder,
+      yieldToUi: noYield,
+    });
+    expect(silent.audioCodec).toBeNull();
+    expect(out.frameCount).toBe(24);
+  });
+
+  it("refuses audio on an encoder that cannot write it, and releases the encoder", async () => {
+    const e = new FakeEncoder();
+    await expect(
+      renderPrevis({
+        path: path(),
+        size: { width: 956, height: 400 },
+        renderer: new FakeRenderer(),
+        encoder: e,
+        audio: pcm,
+        yieldToUi: noYield,
+      }),
+    ).rejects.toThrow(/cannot write audio/);
+    expect(e.cancelled).toBe(1);
+  });
+
+  it("cancelling mid-render cancels the audio-capable encoder", async () => {
+    const e = new AudioEncoder();
+    const ac = new AbortController();
+    await expect(
+      renderPrevis({
+        path: path(),
+        size: { width: 956, height: 400 },
+        renderer: new FakeRenderer(),
+        encoder: e,
+        audio: pcm,
+        signal: ac.signal,
+        yieldToUi: async () => ac.abort(),
+      }),
+    ).rejects.toBeInstanceOf(PrevisCancelled);
+    expect(e.cancelled).toBe(1);
+    expect(e.finished).toBe(false);
+  });
+});
