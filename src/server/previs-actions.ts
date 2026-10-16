@@ -5,6 +5,8 @@ import { revalidatePath } from "next/cache";
 import { ZodError } from "zod";
 import { PrevisError } from "@/data/previs-repository";
 import { assetSchema, shotSchema, storyboardFrameSchema } from "@/domain/schemas";
+import { audioMixFingerprint, type StoredAudioMix } from "@/domain/previs/audio-mix";
+import { performanceAudioPlanForShot } from "@/domain/previs/audio-mix-shot";
 import { cameraPathSchema, validateCameraPath } from "@/domain/previs/camera-path";
 import { buildPrevisDocument } from "@/domain/previs/document";
 import { PREVIS_PRODUCTION_FRAME } from "@/domain/previs/types";
@@ -24,6 +26,18 @@ import { checksum, getUploadStorage, storageForAsset } from "./storage";
 export type PrevisResult<T> = ({ ok: true } & T) | { ok: false; error: string; conflict?: boolean };
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
+const optStr = (f: FormData, k: string) => str(f, k) || null;
+
+/**
+ * Container-level check that a file carries an audio track: an MP4 'soun' handler with an AAC ('mp4a') entry, or a
+ * WebM Opus track. This is a plausibility check on a file the browser made, not a decode.
+ */
+function containerHasAudioTrack(bytes: Uint8Array, container: "mp4" | "webm"): boolean {
+  const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return container === "mp4"
+    ? buf.includes("soun", 0, "latin1") && buf.includes("mp4a", 0, "latin1")
+    : buf.includes("A_OPUS", 0, "latin1");
+}
 const MAX_SCENE_JSON_BYTES = 4 * 1024 * 1024;
 const actorOf = (user: Awaited<ReturnType<typeof requireUser>>) =>
   user.kind === "supabase" ? user.id : null;
@@ -427,6 +441,8 @@ export async function recordPrevisClip(
     const codec = str(form, "codec");
     const width = Number(str(form, "renderWidth"));
     const height = Number(str(form, "renderHeight"));
+    const claimedMix = optStr(form, "audioMixFingerprint");
+    const audioCodec = optStr(form, "audioCodec");
     const file = form.get("file");
     if (!(file instanceof File) || file.size === 0)
       throw new UserFacingError("No rendered previs was received.");
@@ -457,6 +473,30 @@ export async function recordPrevisClip(
     if (scene.sceneFingerprint !== path.sceneFingerprint)
       throw new UserFacingError("The set changed since this camera path was saved. Re-save the path first.");
 
+    // performance audio: the server derives the mix itself from the Shot's CURRENT selected takes and timing; the
+    // client only says which mix it rendered. A mismatch means the takes changed during the render.
+    let mix: StoredAudioMix | null = null;
+    if (claimedMix || audioCodec) {
+      if (!claimedMix || !audioCodec) throw new UserFacingError("The previs audio details are incomplete.");
+      if (!/^[0-9a-f]{64}$/.test(claimedMix)) throw new UserFacingError("The previs audio mix is not valid.");
+      const okPair =
+        (container === "mp4" && audioCodec === "aac") || (container === "webm" && audioCodec === "opus");
+      if (!okPair) throw new UserFacingError("That audio codec cannot be stored in this container.");
+      const plan = performanceAudioPlanForShot(data, shotId, path.durationMs);
+      if (!plan)
+        throw new PrevisError(
+          "conflict",
+          "This Shot no longer has selected performance audio. Render again.",
+        );
+      const current = audioMixFingerprint(plan);
+      if (current !== claimedMix)
+        throw new PrevisError(
+          "conflict",
+          "The selected performance audio changed while the previs was rendering. Render again.",
+        );
+      mix = { ...plan, codec: audioCodec, mixFingerprint: current };
+    }
+
     const bytes = new Uint8Array(await file.arrayBuffer());
     const claimedMime = container === "mp4" ? "video/mp4" : "video/webm";
     const check = checkUpload({ name: `previs.${container}`, size: file.size, claimedMime }, bytes, [
@@ -464,6 +504,10 @@ export async function recordPrevisClip(
     ]);
     if (!check.ok || check.mime !== claimedMime)
       throw new UserFacingError(check.reason ?? `The file is not a ${container} video.`);
+
+    // a file that claims audio must really carry an audio track (container-level marker, not a decode)
+    if (mix && !containerHasAudioTrack(bytes, container))
+      throw new UserFacingError("The rendered file does not contain an audio track.");
 
     const stamp = new Date().toISOString();
     const assetId = randomUUID();
@@ -490,9 +534,11 @@ export async function recordPrevisClip(
       height,
       durationMs: path.durationMs,
       frameRate: path.frameRate,
-      sampleRate: null,
-      channels: null,
-      tags: ["previs", "local_previs", "camera_motion"],
+      sampleRate: mix ? mix.sampleRate : null,
+      channels: mix ? mix.channels : null,
+      tags: mix
+        ? ["previs", "local_previs", "camera_motion", "performance_audio"]
+        : ["previs", "local_previs", "camera_motion"],
       notes: "",
       metadata: {
         previs: {
@@ -513,6 +559,19 @@ export async function recordPrevisClip(
           container,
           codec,
           audioAssetId: null,
+          hasAudio: mix !== null,
+          // ids/fingerprint only; the full cue list lives on the previs clip row
+          ...(mix
+            ? {
+                audio: {
+                  codec: mix.codec,
+                  sampleRate: mix.sampleRate,
+                  channels: mix.channels,
+                  mixFingerprint: mix.mixFingerprint,
+                  cueCount: mix.cues.length,
+                },
+              }
+            : {}),
           renderedAt: stamp,
         },
       },
@@ -541,8 +600,10 @@ export async function recordPrevisClip(
         renderHeight: height,
         container,
         codec,
-        hasAudio: false,
+        hasAudio: mix !== null,
         audioAssetId: null,
+        audioMix: mix,
+        audioMixFingerprint: mix ? mix.mixFingerprint : null,
         renderedAt: stamp,
         userId: actorOf(user),
       });

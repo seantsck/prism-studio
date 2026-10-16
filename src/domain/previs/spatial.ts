@@ -52,6 +52,11 @@ export interface CameraMotionReference {
   keyframes: CameraKeyframe[];
   /** the latest local previs rendered from exactly this path (an Asset id; never a URL), or null */
   previsAssetId: string | null;
+  /**
+   * Present only when `previsAssetId` is: whether that previs contains the performance audio, and the identity of
+   * that mix. Additive and optional, so earlier packages (and silent-era shapes) are unchanged.
+   */
+  previs?: { assetId: string; hasAudio: boolean; audioMixFingerprint: string | null };
 }
 
 export interface SpatialSources {

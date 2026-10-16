@@ -104,6 +104,8 @@ describe("camera motion in the GenerationPackage (Phase 2F M2A)", () => {
       codec: "avc",
       hasAudio: false,
       audioAssetId: null,
+      audioMix: null,
+      audioMixFingerprint: null,
       renderedAt: iso,
       userId: null,
     });

@@ -1,5 +1,5 @@
 // Integration tests for the Phase 2F 3D production set against the REAL dedicated Prism Studio database
-// (migrations 0030 + 0031: sets, bookmarks, master frames, camera paths, previs clips).
+// (migrations 0030 + 0031 + 0032: sets, bookmarks, master frames, camera paths, previs clips).
 //   npm run db:previs
 //
 // Exercises (with real rows, cleaned up afterwards): scene save/reload with compare-and-set revisions, the
@@ -7,6 +7,7 @@
 // explicit adoption, owner-only RLS (owner / stranger / anon), cross-project isolation through composite foreign
 // keys, the guards behind them, the guarantee that NEITHER worker role has any access, no ephemeral URL in
 // stored JSON, and cascade cleanup. Requires `npm run db:seed` first (uses the demo project). No provider call.
+import { isDeepStrictEqual } from "node:util";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { PostgresPrevisData } from "../src/data/previs-postgres";
@@ -590,6 +591,8 @@ try {
     codec: "avc1.42E01F",
     hasAudio: false,
     audioAssetId: null,
+    audioMix: null,
+    audioMixFingerprint: null,
     userId: dev.id,
   };
   const clip = await owner.recordPrevisClip({
@@ -622,17 +625,117 @@ try {
       motion.sceneFingerprint === saved2.sceneFingerprint &&
       refs[shot.id].sceneFingerprint === saved3.sceneFingerprint,
   );
-  const clip2 = await expectError(() =>
+  // ── performance-audio mix provenance (0032): several takes, ids + checksums by value, never a URL ──
+  const mixFp = "a".repeat(64);
+  const mix = {
+    schema: "prism.previs-audio-mix.v1" as const,
+    sampleRate: 48000,
+    channels: 2,
+    durationMs: 4000,
+    shotDurationMs: 4500,
+    codec: "aac",
+    mixFingerprint: mixFp,
+    cues: [
+      {
+        assetId: randomUUID(),
+        assetChecksum: "b".repeat(64),
+        timelineStartMs: 800,
+        sourceStartMs: 0,
+        durationMs: 1200,
+      },
+      {
+        assetId: randomUUID(),
+        assetChecksum: "c".repeat(64),
+        timelineStartMs: 2300,
+        sourceStartMs: 0,
+        durationMs: 900,
+      },
+    ],
+  };
+  const noMix = await expectError(() =>
     owner.recordPrevisClip({
       ...clipBase,
       id: randomUUID(),
       assetId: clipAsset,
       hasAudio: true,
-      audioAssetId: null,
       renderedAt: now(),
     }),
   );
-  check("has_audio without an audio asset is rejected", clip2 !== null);
+  check("has_audio without an audio mix is rejected", noMix !== null);
+  const oneAsset = await expectError(() =>
+    owner.recordPrevisClip({
+      ...clipBase,
+      id: randomUUID(),
+      assetId: clipAsset,
+      hasAudio: true,
+      audioAssetId: mix.cues[0]!.assetId,
+      audioMix: { ...mix },
+      audioMixFingerprint: mixFp,
+      renderedAt: now(),
+    }),
+  );
+  check("a multi-take mix cannot be recorded as one audio asset", oneAsset !== null);
+  const mixOnly = await expectError(() =>
+    owner.recordPrevisClip({
+      ...clipBase,
+      id: randomUUID(),
+      assetId: clipAsset,
+      hasAudio: false,
+      audioMix: { ...mix },
+      audioMixFingerprint: mixFp,
+      renderedAt: now(),
+    }),
+  );
+  check("an audio mix on a clip that says it is silent is rejected", mixOnly !== null);
+  const audioAssetRow = randomUUID();
+  await pool.query(
+    `insert into assets (id, project_id, name, type, purpose, source, storage_provider, mime, width, height, metadata)
+     values ($1,$2,$3,'video','video_reference','local_previs','none','video/mp4',956,400,'{"previs":{"test":true,"hasAudio":true}}'::jsonb)`,
+    [audioAssetRow, projectId, "db:previs audio clip"],
+  );
+  created.assetIds.push(audioAssetRow);
+  const audioClip = await owner.recordPrevisClip({
+    ...clipBase,
+    id: randomUUID(),
+    assetId: audioAssetRow,
+    hasAudio: true,
+    audioAssetId: null,
+    audioMix: mix,
+    audioMixFingerprint: mixFp,
+    renderedAt: now(),
+  });
+  check(
+    "an audio previs stores its mix by value with ids/checksums and no URL",
+    audioClip.hasAudio &&
+      audioClip.audioMixFingerprint === mixFp &&
+      audioClip.audioMix?.cues.length === 2 &&
+      audioClip.audioMix?.cues[1]?.timelineStartMs === 2300 &&
+      audioClip.audioMix?.codec === "aac" &&
+      !/https?:|blob:|token=/i.test(JSON.stringify(audioClip.audioMix)),
+  );
+  const reread = await owner.getPrevisClip(audioClip.id);
+  check(
+    "the mix reads back identically and the silent clip is unchanged",
+    isDeepStrictEqual(reread?.audioMix, mix) && // jsonb does not preserve key order, only content
+      (await owner.getPrevisClip(clip.id))?.hasAudio === false &&
+      (await owner.getPrevisClip(clip.id))?.audioMix === null,
+  );
+  // the package references the latest CURRENT clip: the audio one while its mix is current, the silent one when not
+  const refsWith = await owner.listSpatialReferences(projectId, () => mixFp);
+  const refsChanged = await owner.listSpatialReferences(projectId, () => "d".repeat(64));
+  const refsNoAudio = await owner.listSpatialReferences(projectId, () => null);
+  check(
+    "the spatial reference points at the audio previs while its mix is current",
+    refsWith[shot.id]?.cameraMotion?.previs?.assetId === audioAssetRow &&
+      refsWith[shot.id]?.cameraMotion?.previs?.hasAudio === true &&
+      refsWith[shot.id]?.cameraMotion?.previs?.audioMixFingerprint === mixFp,
+  );
+  check(
+    "when the mix changes, the package falls back to the silent previs (camera tests stay valid)",
+    refsChanged[shot.id]?.cameraMotion?.previsAssetId === clipAsset &&
+      refsChanged[shot.id]?.cameraMotion?.previs?.hasAudio === false &&
+      refsNoAudio[shot.id]?.cameraMotion?.previsAssetId === clipAsset,
+  );
 
   // RLS and isolation
   check("stranger cannot read the camera path", (await strangerRepo.getCameraPathForShot(shot.id)) === null);

@@ -10,6 +10,8 @@
  * The encoded previs file is silent; muxing this audio is a separate, later increment.
  */
 
+import { layoutTimelineCues } from "@/domain/previs/audio-mix";
+
 export interface AudioCue {
   assetId: string;
   startMs: number;
@@ -24,19 +26,18 @@ export interface CueSource {
 }
 
 /**
- * Cue positions follow the Shot duration: every selected take advances the cursor by its duration plus the gap,
- * whether or not it has an audio asset (a take without audio is silent but still occupies its time).
+ * Interactive cues are the audio-bearing part of the shared Shot timeline (layoutTimelineCues → layoutPerformance,
+ * the same arithmetic as computeShotDuration and the offline previs mix). A take without audio is silent but still
+ * occupies its time.
  */
 export function buildAudioCues(source: CueSource): AudioCue[] {
-  const cues: AudioCue[] = [];
-  let cursor = source.preRollMs;
-  for (const take of source.takes) {
-    if (!take) continue;
-    if (take.audioAssetId)
-      cues.push({ assetId: take.audioAssetId, startMs: cursor, durationMs: take.durationMs });
-    cursor += take.durationMs + source.interLineGapMs;
-  }
-  return cues;
+  return layoutTimelineCues(
+    source.preRollMs,
+    source.interLineGapMs,
+    source.takes.map((t) =>
+      t ? { assetId: t.audioAssetId ?? null, assetChecksum: null, durationMs: t.durationMs } : null,
+    ),
+  ).flatMap((c) => (c.assetId ? [{ assetId: c.assetId, startMs: c.startMs, durationMs: c.durationMs }] : []));
 }
 
 /** The part of HTMLAudioElement the scheduler uses, so tests can inject a fake. */

@@ -2,6 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  audioMixFingerprint,
+  buildPerformanceAudioPlan,
+  previsStaleReasons,
+  STALE_REASON_LABEL,
+  type TimelineCue,
+} from "@/domain/previs/audio-mix";
 import { focalLengthToFovDegrees } from "@/domain/previs/camera";
 import {
   CAMERA_EASINGS,
@@ -23,6 +30,12 @@ import {
 } from "@/domain/previs/camera-path";
 import { buildHotelCanopyCameraPath } from "@/domain/previs/hotel-canopy";
 import type { PrevisCamera } from "@/domain/previs/types";
+import {
+  AudioPrepError,
+  browserPrepareEnv,
+  prepareAudioTrack,
+  type PcmTrack,
+} from "@/lib/previs/audio-compose";
 import { detectPrevisEncoding, MediaBunnyEncoder } from "@/lib/previs/mediabunny-encoder";
 import {
   PREVIS_RENDER_SIZE,
@@ -39,7 +52,10 @@ export interface ShotTimingInfo {
   durationMs: number;
   source: string;
   frameRate: number;
-  audioCues: Array<{ assetId: string; startMs: number; durationMs: number }>;
+  /** every selected take on the Shot timeline (the shared arithmetic); takes without audio have assetId null */
+  timelineCues: TimelineCue[];
+  /** display names of the take audio assets, for error messages */
+  assetNames: Record<string, string>;
 }
 
 export interface CameraPathInfo {
@@ -64,6 +80,9 @@ export interface PrevisClipInfo {
   renderHeight: number;
   container: string;
   codec: string;
+  hasAudio: boolean;
+  audioMixFingerprint: string | null;
+  audioCodec: string | null;
   renderedAt: string;
 }
 
@@ -153,6 +172,8 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<PrevisProgress | null>(null);
   const [overlayOn, setOverlayOn] = useState(true);
+  /** null = follow the default (on when the Shot has selected performance audio) */
+  const [includeAudioChoice, setIncludeAudioChoice] = useState<boolean | null>(null);
 
   const pathRef = useRef<CameraPath | null>(path);
   useEffect(() => {
@@ -175,6 +196,35 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
   const keys = useMemo(() => (path ? sortedKeyframes(path) : []), [path]);
   const selected = keys.find((k) => k.id === selectedId) ?? null;
   const durationMs = path?.durationMs ?? timingDuration ?? DEFAULT_DURATION_MS;
+
+  // the performance audio plan on the SAME Shot timeline as the camera path (one arithmetic, shared with playback)
+  const audioCues = useMemo(
+    () =>
+      (props.timing?.timelineCues ?? []).flatMap((c) =>
+        c.assetId ? [{ assetId: c.assetId, startMs: c.startMs, durationMs: c.durationMs }] : [],
+      ),
+    [props.timing],
+  );
+  const planFor = (renderDurationMs: number) =>
+    props.timing
+      ? buildPerformanceAudioPlan({
+          renderDurationMs,
+          shotDurationMs: props.timing.durationMs,
+          cues: props.timing.timelineCues,
+        })
+      : null;
+  const audioPlan = useMemo(
+    () => planFor(path?.durationMs ?? timingDuration ?? DEFAULT_DURATION_MS),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [props.timing, path?.durationMs],
+  );
+  const hasPerformanceAudio = !!audioPlan;
+  const includeAudio = hasPerformanceAudio && (includeAudioChoice ?? true);
+  // freshness of previs files is judged against the SAVED path and the Shot's current selected audio
+  const currentMixFp = (() => {
+    const p = saved ? planFor(saved.path.durationMs) : null;
+    return p ? audioMixFingerprint(p) : null;
+  })();
   const durationDrift = !!path && !!timingDuration && path.durationMs !== timingDuration;
 
   const snapshotOf = (c: PrevisCamera) => ({
@@ -235,10 +285,10 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
     (fromMs: number) => {
       // created lazily so a StrictMode remount (which disposes) gets a fresh scheduler
       const audio = (audioRef.current ??= new PerformanceAudioScheduler(browserSchedulerEnv(), []));
-      audio.setCues(props.timing?.audioCues ?? []);
+      audio.setCues(audioCues);
       audio.start(fromMs);
     },
-    [props.timing],
+    [audioCues],
   );
 
   const stopPlayback = useCallback(() => {
@@ -478,10 +528,15 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
 
   // ── local previs render ──
   const latestClip = clips[0] ?? null;
-  const clipStale = (c: PrevisClipInfo) =>
-    !saved ||
-    c.pathFingerprint !== saved.pathFingerprint ||
-    (!!props.savedSceneFingerprint && c.sceneFingerprint !== props.savedSceneFingerprint);
+  /** A previs is judged by what it contains: silent = scene + camera; with audio = scene + camera + audio mix. */
+  const clipReasons = (c: PrevisClipInfo) =>
+    previsStaleReasons({
+      clip: c,
+      currentSceneFingerprint: props.savedSceneFingerprint,
+      currentPathFingerprint: saved?.pathFingerprint ?? null,
+      currentAudioMixFingerprint: currentMixFp,
+    });
+  const clipStale = (c: PrevisClipInfo) => clipReasons(c).length > 0;
 
   const renderPreviewVideo = async () => {
     const reasons: string[] = [];
@@ -500,7 +555,12 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
     const ac = new AbortController();
     abortRef.current = ac;
     try {
-      const support = await detectPrevisEncoding(PREVIS_RENDER_SIZE);
+      // the plan is built from the Shot's selected takes on the same timeline as the camera path
+      const plan = includeAudio ? planFor(path.durationMs) : null;
+      const support = await detectPrevisEncoding(
+        PREVIS_RENDER_SIZE,
+        plan ? { sampleRate: plan.sampleRate, channels: plan.channels } : null,
+      );
       if (!support) {
         setStatus({
           tone: "error",
@@ -508,16 +568,36 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
         });
         return;
       }
-      setStatus({ tone: "busy", text: `Rendering previs (${support.container} / ${support.codec})…` });
+      let audioTrack: PcmTrack | null = null;
+      let silentNote = "";
+      if (plan && support.audioCodec) {
+        // fetch (authenticated), verify, decode and compose locally; a take that cannot be read stops the render
+        setProgress({ frame: 0, total: Math.max(1, plan.cues.length), phase: "preparing_audio" });
+        setStatus({ tone: "busy", text: "Preparing performance audio…" });
+        audioTrack = await prepareAudioTrack(plan, browserPrepareEnv(props.timing?.assetNames), {
+          signal: ac.signal,
+          onProgress: (p) =>
+            setProgress({ frame: p.done, total: Math.max(1, plan.cues.length), phase: "preparing_audio" }),
+        });
+      } else if (plan) {
+        silentNote =
+          " This browser cannot encode audio together with the video (AAC for MP4, Opus for WebM), so this previs is silent.";
+      }
+      setStatus({
+        tone: "busy",
+        text: `Rendering previs (${support.container} / ${support.codec}${support.audioCodec ? ` + ${support.audioCodec}` : ""})…`,
+      });
       const a = props.adapter();
       const out = await renderPrevis({
         path,
         size: PREVIS_RENDER_SIZE,
         renderer: { renderFrame: (pose, size) => a.renderPrevisFrame(pose, size) },
         encoder: new MediaBunnyEncoder(support),
+        audio: audioTrack,
         signal: ac.signal,
         onProgress: setProgress,
       });
+      audioTrack = null; // composed samples are no longer needed once the file is muxed
       setStatus({ tone: "busy", text: "Storing previs privately…" });
       const fd = new FormData();
       fd.set("projectSlug", props.projectSlug);
@@ -528,6 +608,11 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
       fd.set("codec", out.codec);
       fd.set("renderWidth", String(out.width));
       fd.set("renderHeight", String(out.height));
+      const mixFp = plan && out.audioCodec ? audioMixFingerprint(plan) : null;
+      if (mixFp && out.audioCodec) {
+        fd.set("audioMixFingerprint", mixFp);
+        fd.set("audioCodec", out.audioCodec);
+      }
       const mime = out.container === "mp4" ? "video/mp4" : "video/webm";
       fd.set("file", new File([out.bytes as BlobPart], `previs.${out.container}`, { type: mime }));
       const r = await recordPrevisClip(fd);
@@ -549,17 +634,22 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
           renderHeight: out.height,
           container: out.container,
           codec: out.codec,
+          hasAudio: mixFp !== null,
+          audioMixFingerprint: mixFp,
+          audioCodec: mixFp ? out.audioCodec : null,
           renderedAt: new Date().toISOString(),
         },
         ...c,
       ]);
       setStatus({
         tone: "ok",
-        text: `Previs saved privately (${out.width}×${out.height}, ${out.frameCount} frames, ${out.container}/${out.codec})`,
+        text: `Previs saved privately (${out.width}×${out.height}, ${out.frameCount} frames, ${out.container}/${out.codec}${mixFp ? ` + ${out.audioCodec}, with performance audio` : ", silent"}).${silentNote}`,
       });
       router.refresh();
     } catch (err) {
-      if (err instanceof PrevisCancelled) setStatus({ tone: "idle", text: "Previs render cancelled." });
+      if (err instanceof PrevisCancelled || (err instanceof DOMException && err.name === "AbortError"))
+        setStatus({ tone: "idle", text: "Previs render cancelled." });
+      else if (err instanceof AudioPrepError) setStatus({ tone: "error", text: err.message });
       else
         setStatus({ tone: "error", text: err instanceof Error ? err.message : "The previs render failed." });
     } finally {
@@ -887,13 +977,41 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
               <div className="text-xs text-muted">
                 {progress.phase === "finalizing"
                   ? "Finalizing…"
-                  : `Frame ${progress.frame} / ${progress.total}`}
+                  : progress.phase === "preparing_audio"
+                    ? `Preparing audio ${progress.frame} / ${progress.total}`
+                    : `Frame ${progress.frame} / ${progress.total}`}
               </div>
             </div>
           ) : null}
+          <label className="mt-1.5 flex items-center gap-1.5 text-xs" data-testid="include-audio-row">
+            <input
+              type="checkbox"
+              checked={includeAudio}
+              disabled={!hasPerformanceAudio || busy}
+              onChange={(e) => setIncludeAudioChoice(e.target.checked)}
+              data-testid="include-audio"
+            />
+            Include selected performance audio
+          </label>
+          {!hasPerformanceAudio ? (
+            <div className="text-xs text-muted" data-testid="include-audio-disabled">
+              No selected performance audio for this Shot.
+            </div>
+          ) : null}
+          <div className="mt-1 text-xs text-muted" data-testid="previs-render-summary">
+            <div>
+              Video: {PREVIS_RENDER_SIZE.width}×{PREVIS_RENDER_SIZE.height} · {path.frameRate} fps
+            </div>
+            <div data-testid="previs-audio-summary">
+              Audio:{" "}
+              {includeAudio && audioPlan
+                ? `Selected performance · ${audioPlan.sampleRate / 1000} kHz ${audioPlan.channels === 2 ? "stereo" : audioPlan.channels + " ch"}`
+                : "Silent"}
+            </div>
+          </div>
           <p className="mt-1 text-xs text-muted">
             Rendered in this browser from an isolated production camera, encoded locally and stored privately.
-            Silent: no audio is synthesised.
+            Performance audio is composed locally from the Shot&apos;s selected takes; nothing is synthesised.
           </p>
         </div>
       )}
@@ -916,7 +1034,15 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
               className="mb-1 rounded border border-warn px-1.5 py-0.5 text-xs text-warn"
               data-testid="previs-stale"
             >
-              STALE PREVIS — the camera path or the set changed after this render.
+              STALE PREVIS —{" "}
+              {clipReasons(latestClip)
+                .map((r) => STALE_REASON_LABEL[r])
+                .join(" · ")}
+              : the{" "}
+              {clipReasons(latestClip)
+                .map((r) => (r === "scene" ? "set" : r === "camera" ? "camera path" : "performance audio"))
+                .join(", ")}{" "}
+              changed after this render.
             </div>
           ) : (
             <div className="mb-1 text-xs text-pass" data-testid="previs-current">
@@ -934,7 +1060,7 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
           <div className="mt-0.5 text-xs text-muted">
             path r{latestClip.pathRevision} · set r{latestClip.sceneRevision} · {latestClip.renderWidth}×
             {latestClip.renderHeight} · {(latestClip.durationMs / 1000).toFixed(2)} s · {latestClip.container}
-            /{latestClip.codec}
+            /{latestClip.codec} · {latestClip.hasAudio ? `with audio (${latestClip.audioCodec})` : "silent"}
           </div>
         </div>
       ) : null}
@@ -947,6 +1073,7 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
               className="rounded border border-line px-1.5 py-1"
             >
               {new Date(c.renderedAt).toLocaleString()} · path r{c.pathRevision} · set r{c.sceneRevision}
+              {c.hasAudio ? " · with audio" : " · silent"}
               {clipStale(c) ? " · stale" : ""}{" "}
               <a className="underline" href={`/api/assets/${c.assetId}`} target="_blank" rel="noreferrer">
                 open

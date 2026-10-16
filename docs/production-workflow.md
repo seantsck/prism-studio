@@ -143,3 +143,7 @@ can be rendered in the browser and is kept as a private asset with the path and 
 - **Frozen in the package.** `spatialReference.cameraMotion` carries the path by value plus the asset id of the previs
   rendered from exactly that path. It is context for future provider adapters; nothing is injected into prompts.
 - **Stale, not deleted.** Changing the set after a path/previs was made marks them stale; history is kept.
+- **Performance audio in the previs (M2A.1).** "Include selected performance audio" muxes the Shot's selected takes into
+  the previs on the same timeline as the camera (pre-roll, takes, gaps, post-roll). It is composed and encoded locally;
+  with no compatible audio encoder the previs is rendered silent and says so. A previs with audio goes stale
+  ("STALE AUDIO") when the selected takes or timing change; a silent previs does not, since it never contained the audio.

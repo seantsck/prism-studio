@@ -1,3 +1,4 @@
+import { pickCurrentClip } from "@/domain/previs/audio-mix";
 import { bookmarkFromCamera } from "@/domain/previs/camera";
 import { cameraPathFingerprint, validateCameraPath } from "@/domain/previs/camera-path";
 import { sceneFingerprint } from "@/domain/previs/document";
@@ -10,6 +11,7 @@ import {
 import type { MemoryProjectsAccess } from "./generation-memory";
 import {
   PrevisError,
+  type AudioMixResolver,
   type CameraBookmarkRecord,
   type CameraPathRecord,
   type MasterFrameRecord,
@@ -132,12 +134,14 @@ export class MemoryPrevisService implements PrevisRepository {
     return clone(rec);
   }
 
-  private cameraMotionFor(shotId: string): CameraMotionReference | null {
+  private cameraMotionFor(shotId: string, currentAudioMix?: AudioMixResolver): CameraMotionReference | null {
     const p = this.paths.get(shotId);
     if (!p) return null;
-    const clip = [...this.clips.values()]
-      .filter((c) => c.shotId === shotId && c.pathFingerprint === p.pathFingerprint)
-      .sort((x, y) => (x.renderedAt < y.renderedAt ? 1 : -1))[0];
+    const clip = pickCurrentClip(
+      [...this.clips.values()].filter((c) => c.shotId === shotId),
+      p.pathFingerprint,
+      currentAudioMix?.(shotId, p.durationMs) ?? null,
+    );
     return {
       schemaVersion: CAMERA_MOTION_SCHEMA_VERSION,
       cameraPathId: p.id,
@@ -151,10 +155,19 @@ export class MemoryPrevisService implements PrevisRepository {
       focalLengthBasis: "vertical-sensor-24mm",
       keyframes: structuredClone(p.path.keyframes),
       previsAssetId: clip?.assetId ?? null,
+      ...(clip
+        ? {
+            previs: {
+              assetId: clip.assetId,
+              hasAudio: clip.hasAudio,
+              audioMixFingerprint: clip.audioMixFingerprint,
+            },
+          }
+        : {}),
     };
   }
 
-  async listSpatialReferences(projectId: string) {
+  async listSpatialReferences(projectId: string, currentAudioMix?: AudioMixResolver) {
     const out: Record<string, SpatialReference> = {};
     const shotIds = new Set<string>();
     for (const [shotId, b] of this.bookmarks) if (b.projectId === projectId) shotIds.add(shotId);
@@ -186,7 +199,7 @@ export class MemoryPrevisService implements PrevisRepository {
             }
           : null,
         adoptedMasterFrameAssetId: adopted?.assetId ?? null,
-        cameraMotion: this.cameraMotionFor(shotId),
+        cameraMotion: this.cameraMotionFor(shotId, currentAudioMix),
       });
     }
     return structuredClone(out);
@@ -303,6 +316,13 @@ export class MemoryPrevisService implements PrevisRepository {
     this.requireShot(input.projectId, input.shotId);
     this.requireLocation(input.projectId, input.locationId);
     const { userId, ...rest } = input;
+    if (
+      input.hasAudio !== (input.audioMix !== null) ||
+      input.hasAudio !== (input.audioMixFingerprint !== null)
+    )
+      throw new PrevisError("invalid", "A previs with audio needs its audio mix provenance (and only then).");
+    if (input.audioAssetId !== null)
+      throw new PrevisError("invalid", "A performance-audio mix is not a single audio asset.");
     const rec: PrevisClipRecord = {
       ...rest,
       source: "local_previs",

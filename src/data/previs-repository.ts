@@ -1,3 +1,4 @@
+import type { StoredAudioMix } from "@/domain/previs/audio-mix";
 import type { CameraPath } from "@/domain/previs/camera-path";
 import type { SpatialReference } from "@/domain/previs/spatial";
 import type { CameraBookmarkValue, PrevisDocument } from "@/domain/previs/types";
@@ -112,8 +113,13 @@ export interface PrevisClipRecord {
   renderHeight: number;
   container: "mp4" | "webm";
   codec: string;
+  /** true when the file contains the performance audio described by `audioMix` */
   hasAudio: boolean;
+  /** legacy single-asset field: always null (a mix of several takes is not one asset) */
   audioAssetId: string | null;
+  /** the frozen mix provenance (ids + checksums, never URLs); null for a silent previs */
+  audioMix: StoredAudioMix | null;
+  audioMixFingerprint: string | null;
   renderedAt: string;
   createdBy: string | null;
   createdAt: string;
@@ -122,6 +128,9 @@ export interface PrevisClipRecord {
 export type NewPrevisClip = Omit<PrevisClipRecord, "source" | "createdAt" | "createdBy"> & {
   userId: string | null;
 };
+
+/** The Shot's CURRENT performance-audio mix fingerprint at a render duration (null = no selected audio). */
+export type AudioMixResolver = (shotId: string, renderDurationMs: number) => string | null;
 
 export class PrevisError extends Error {
   constructor(
@@ -180,7 +189,10 @@ export interface PrevisRepository {
 
   getBookmarkForShot(shotId: string): Promise<CameraBookmarkRecord | null>;
   /** Per-shot spatial snapshot for every shot of the project that has a production camera bookmark. */
-  listSpatialReferences(projectId: string): Promise<Record<string, SpatialReference>>;
+  listSpatialReferences(
+    projectId: string,
+    currentAudioMix?: AudioMixResolver,
+  ): Promise<Record<string, SpatialReference>>;
   /** Freezes the scene's CURRENT production camera for the shot. Throws "no_camera" when the scene has none. */
   setBookmark(input: SetBookmarkInput): Promise<CameraBookmarkRecord>;
 

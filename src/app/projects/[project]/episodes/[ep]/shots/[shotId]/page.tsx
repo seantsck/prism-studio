@@ -1,5 +1,7 @@
 import { notFound } from "next/navigation";
 import { ShotPrepView } from "@/components/views/shot-prep-view";
+import { audioMixFingerprint } from "@/domain/previs/audio-mix";
+import { performanceAudioPlanForShot } from "@/domain/previs/audio-mix-shot";
 import { getPrevisRepo } from "@/server/previs";
 import { requireProject } from "@/server/repo";
 
@@ -18,6 +20,8 @@ export default async function ShotPrepPage({
   const previs = await getPrevisRepo();
   const clips = await previs.listPrevisClips(shotId);
   const path = await previs.getCameraPathForShot(shotId);
+  // what the Shot's selected performance audio would currently render as (null = none): judges audio previs freshness
+  const plan = path ? performanceAudioPlanForShot(data, shotId, path.durationMs) : null;
   return (
     <ShotPrepView
       data={data}
@@ -29,6 +33,7 @@ export default async function ShotPrepPage({
         pathRevision: path?.revision ?? null,
         keyframeCount: path?.path.keyframes.length ?? 0,
         durationMs: path?.durationMs ?? null,
+        currentAudioMixFingerprint: plan ? audioMixFingerprint(plan) : null,
         clips: clips.map((c) => ({
           id: c.id,
           assetId: c.assetId,
@@ -38,6 +43,8 @@ export default async function ShotPrepPage({
           renderedAt: c.renderedAt,
           container: c.container,
           codec: c.codec,
+          hasAudio: c.hasAudio,
+          audioMixFingerprint: c.audioMixFingerprint,
         })),
       }}
     />

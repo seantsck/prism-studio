@@ -25,6 +25,7 @@ import {
 import { SHOT_SECTION_SPECS, getByPath, type EditableSectionKey, type FieldSpec } from "@/domain/shot-fields";
 import { shortFingerprint } from "@/domain/hash";
 import { timelineFromContext } from "@/domain/timeline";
+import { previsStaleReasons, STALE_REASON_LABEL } from "@/domain/previs/audio-mix";
 import { episodePath, shotPath } from "@/lib/paths";
 import { assetUrl, cn } from "@/lib/utils";
 import {
@@ -262,6 +263,7 @@ export function ShotPrepView({
     pathRevision: number | null;
     keyframeCount: number;
     durationMs: number | null;
+    currentAudioMixFingerprint: string | null;
     clips: Array<{
       id: string;
       assetId: string;
@@ -271,12 +273,24 @@ export function ShotPrepView({
       renderedAt: string;
       container: string;
       codec: string;
+      hasAudio: boolean;
+      audioMixFingerprint: string | null;
     }>;
   };
 }) {
   const ctx: ShotContext = buildShotContext(data, shotId);
   const { shot } = ctx;
   const report = runPreflight(ctx);
+  // a previs is judged by what it contains: silent = scene + camera; with audio = scene + camera + audio mix
+  const staleReasons =
+    previs && previs.clips[0]
+      ? previsStaleReasons({
+          clip: previs.clips[0],
+          currentSceneFingerprint: ctx.spatial?.sceneFingerprint ?? null,
+          currentPathFingerprint: previs.pathFingerprint,
+          currentAudioMixFingerprint: previs.currentAudioMixFingerprint,
+        })
+      : [];
   const slug = data.project.slug;
   const hidden = (
     <>
@@ -782,10 +796,16 @@ export function ShotPrepView({
                     <div className="mb-1 flex items-center gap-2 text-[11.5px]">
                       Latest previs · path r{previs.clips[0].pathRevision} ·{" "}
                       {new Date(previs.clips[0].renderedAt).toLocaleString()}
-                      {previs.clips[0].pathFingerprint !== previs.pathFingerprint ||
-                      (ctx.spatial && previs.clips[0].sceneFingerprint !== ctx.spatial.sceneFingerprint) ? (
+                      {previs.clips[0].hasAudio ? (
+                        <Badge tone="neutral">with audio</Badge>
+                      ) : (
+                        <Badge tone="neutral">silent</Badge>
+                      )}
+                      {staleReasons.length > 0 ? (
                         <span data-testid="shot-previs-stale">
-                          <Badge tone="warn">stale previs</Badge>
+                          <Badge tone="warn">
+                            stale previs · {staleReasons.map((r) => STALE_REASON_LABEL[r]).join(" · ")}
+                          </Badge>
                         </span>
                       ) : (
                         <Badge tone="pass">current</Badge>

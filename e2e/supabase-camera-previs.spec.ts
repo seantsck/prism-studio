@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { expect, request as pwRequest, test, type Page } from "@playwright/test";
 import { getPrismStudioDevCredentials } from "./dev-credentials";
 
@@ -35,6 +36,29 @@ const tsx = (args: string[]) =>
     shell: process.platform === "win32",
   });
 
+/** 16-bit mono PCM WAV tone synthesised here (no audio fixture is committed). */
+function wav(freq: number, ms: number): Buffer {
+  const rate = 48_000;
+  const n = Math.round((ms / 1000) * rate);
+  const data = Buffer.alloc(n * 2);
+  for (let i = 0; i < n; i++)
+    data.writeInt16LE(Math.round(0.6 * 32767 * Math.sin((2 * Math.PI * freq * i) / rate)), i * 2);
+  const head = Buffer.alloc(44);
+  head.write("RIFF", 0);
+  head.writeUInt32LE(36 + data.length, 4);
+  head.write("WAVEfmt ", 8);
+  head.writeUInt32LE(16, 16);
+  head.writeUInt16LE(1, 20);
+  head.writeUInt16LE(1, 22);
+  head.writeUInt32LE(rate, 24);
+  head.writeUInt32LE(rate * 2, 28);
+  head.writeUInt16LE(2, 32);
+  head.writeUInt16LE(16, 34);
+  head.write("data", 36);
+  head.writeUInt32LE(data.length, 40);
+  return Buffer.concat([head, data]);
+}
+
 async function signIn(page: Page) {
   await page.goto("/login");
   await page.getByLabel("Email").fill(EMAIL);
@@ -59,6 +83,9 @@ test.describe("camera motion + local previs (signed in, Postgres + private Stora
       /* best effort; idempotent */
     }
   });
+
+  let setUrlShared = "";
+  let shotIdShared = "";
 
   test("path → save → reload → previs render → private asset → stale → package", async ({
     page,
@@ -85,6 +112,8 @@ test.describe("camera motion + local previs (signed in, Postgres + private Stora
     await page.getByTestId("open-in-3d-set").click();
     await page.waitForURL(/\/locations\/[0-9a-f-]{36}\/3d\?shot=/);
     const setUrl = page.url();
+    setUrlShared = setUrl;
+    shotIdShared = shotId;
     const set = page.getByTestId("virtual-set");
     await expect(set).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
 
@@ -109,6 +138,8 @@ test.describe("camera motion + local previs (signed in, Postgres + private Stora
     await expect(page.getByTestId("path-state")).toContainText("Saved revision 1");
 
     // local previs: rendered and encoded in the browser, stored in the private bucket
+    // (this first previs is the silent camera test; audio is covered by the next test)
+    await page.getByTestId("include-audio").uncheck();
     await page.getByTestId("render-previs").click();
     await expect(page.getByTestId("path-status")).toContainText(/Previs saved privately \(956×400/, {
       timeout: 300_000,
@@ -191,5 +222,110 @@ test.describe("camera motion + local previs (signed in, Postgres + private Stora
     await expect(page.getByTestId("shot-previs")).toBeVisible();
     await expect(page.getByTestId("shot-previs-stale")).toBeVisible();
     expect(foreign, "no request leaves the app origin / Supabase").toEqual([]);
+  });
+
+  test("previs WITH performance audio: private asset, audio-mix provenance, history kept, anon refused", async ({
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(420_000);
+    test.skip(!setUrlShared, "needs the first test");
+    const origin = new URL(baseURL!).origin;
+    await signIn(page);
+    // the dev project's seeded take audio has no stored file: serve synthesised tones to the app's own asset fetch
+    const served: string[] = [];
+    await page.route(/\/api\/assets\/[0-9a-f-]{36}$/, async (route) => {
+      if (route.request().resourceType() !== "fetch") return route.fallback();
+      const id = route.request().url().split("/").pop()!;
+      served.push(id);
+      const freq = 300 + (createHash("sha1").update(id).digest()[0]! % 5) * 110;
+      await route.fulfill({ status: 200, contentType: "audio/wav", body: wav(freq, 6000) });
+    });
+    await page.goto(setUrlShared);
+    const set = page.getByTestId("virtual-set");
+    await expect(set).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
+    const support = await page.evaluate(async () => {
+      const ok = async (codec: string) => {
+        try {
+          return Boolean(
+            (
+              await AudioEncoder.isConfigSupported({
+                codec,
+                numberOfChannels: 2,
+                sampleRate: 48000,
+                bitrate: 128000,
+              })
+            ).supported,
+          );
+        } catch {
+          return false;
+        }
+      };
+      return (await ok("mp4a.40.2")) || (await ok("opus"));
+    });
+    test.skip(!support, "no browser audio encoder in this Chromium");
+
+    await expect(page.getByTestId("include-audio")).toBeChecked();
+    await page.getByTestId("render-previs").click();
+    await expect(page.getByTestId("path-status")).toContainText("with performance audio", {
+      timeout: 300_000,
+    });
+    expect(served.length).toBeGreaterThan(0);
+
+    const clips = JSON.parse(tsx(["--report-clips"]).trim().split("\n").pop()!) as Array<
+      Record<string, unknown>
+    >;
+    expect(clips.length).toBeGreaterThanOrEqual(2); // the silent one is retained
+    const c = clips[0]!; // newest first
+    expect(c.has_audio).toBe(true);
+    expect(c.audio_asset_id).toBeNull(); // a mix is not one source asset
+    expect(c.audio_mix_fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    const mix = c.audio_mix_json as {
+      schema: string;
+      sampleRate: number;
+      channels: number;
+      codec: string;
+      mixFingerprint: string;
+      cues: Array<{ assetId: string; timelineStartMs: number; sourceStartMs: number; durationMs: number }>;
+    };
+    expect(mix.schema).toBe("prism.previs-audio-mix.v1");
+    expect(mix.sampleRate).toBe(48000);
+    expect(mix.channels).toBe(2);
+    expect(["aac", "opus"]).toContain(mix.codec);
+    expect(mix.mixFingerprint).toBe(c.audio_mix_fingerprint);
+    expect(mix.cues.length).toBeGreaterThan(0);
+    expect(mix.cues[0]!.timelineStartMs).toBeGreaterThanOrEqual(0);
+    expect(mix.cues[0]!.sourceStartMs).toBe(0);
+    expect(JSON.stringify(mix)).not.toMatch(/https?:|blob:|token=|X-Amz|\/object\/sign\//i);
+    const prov = c.provenance as Record<string, unknown> & { audio?: Record<string, unknown> };
+    expect(prov.hasAudio).toBe(true);
+    expect(prov.audio?.mixFingerprint).toBe(c.audio_mix_fingerprint);
+    expect(prov.audio?.cueCount).toBe(mix.cues.length);
+    expect(JSON.stringify(prov)).not.toMatch(/https?:|blob:|token=/i);
+    expect(c.bucket_public).toBe(false);
+    const older = clips.find((x) => x.has_audio === false);
+    expect(older, "the earlier silent previs is retained").toBeTruthy();
+
+    // private: unauthenticated reads are refused; the signed-in app can read it
+    const src = (await page.getByTestId("previs-video").getAttribute("src"))!;
+    const anon = await pwRequest.newContext({ baseURL: origin });
+    expect([401, 403, 404]).toContain((await anon.get(src, { maxRedirects: 0 })).status());
+    await anon.dispose();
+    expect((await page.request.get(src)).status()).toBe(200);
+
+    // the package references the audio previs and says it has audio
+    const r = await page.request.get(`/api/projects/ojousama/shots/${shotIdShared}/package`);
+    const pkg = (await r.json()) as {
+      spatialReference?: {
+        cameraMotion?: {
+          previs?: { assetId: string; hasAudio: boolean; audioMixFingerprint: string | null };
+        };
+      };
+    };
+    expect(pkg.spatialReference?.cameraMotion?.previs).toMatchObject({
+      assetId: c.asset_id,
+      hasAudio: true,
+      audioMixFingerprint: c.audio_mix_fingerprint,
+    });
   });
 });

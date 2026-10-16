@@ -207,6 +207,11 @@ test.describe("camera motion and local previs", () => {
       if ((await page.getByTestId("camera-motion").getAttribute("data-playing")) === "false") break;
       await page.waitForTimeout(60);
     }
+    // the loop reads the lens BEFORE it checks the playing flag, so the last frame can land in between:
+    // read the settled end state once playback has actually stopped
+    await expect(page.getByTestId("camera-motion")).toHaveAttribute("data-playing", "false");
+    const settled = await prod(page);
+    if (settled) lenses.push(settled.focalLengthMm);
     expect(lenses.length).toBeGreaterThan(5);
     for (let i = 1; i < lenses.length; i++) expect(lenses[i]).toBeGreaterThanOrEqual(lenses[i - 1] - 1e-6);
     expect(lenses.some((l) => l > 36 && l < 69)).toBe(true);
@@ -255,6 +260,9 @@ test.describe("camera motion and local previs", () => {
     await page.goto(setUrl);
     await expect(page.getByTestId("virtual-set")).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
     const navBefore = JSON.stringify(await nav(page));
+    // the seeded take audio has no stored file; audio previs is covered by zzzzzzzz-previs-audio.spec.ts
+    if (await page.getByTestId("include-audio").isEnabled())
+      await page.getByTestId("include-audio").uncheck();
     await page.getByTestId("render-previs").click();
     await expect(page.getByTestId("previs-progress")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("path-status")).toContainText(/Previs saved privately \(956×400/, {
@@ -299,6 +307,9 @@ test.describe("camera motion and local previs", () => {
 
     await page.goto(setUrl);
     await expect(page.getByTestId("virtual-set")).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
+    // the seeded take audio has no stored file; audio previs is covered by zzzzzzzz-previs-audio.spec.ts
+    if (await page.getByTestId("include-audio").isEnabled())
+      await page.getByTestId("include-audio").uncheck();
     await page.getByTestId("render-previs").click();
     await expect(page.getByTestId("path-status")).toContainText(/Previs saved privately/, {
       timeout: 220_000,

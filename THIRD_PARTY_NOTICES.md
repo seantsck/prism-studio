@@ -66,4 +66,4 @@ THE SOFTWARE.
 | `@types/three` | MIT     | typings (dev)                                 |
 | `zustand`      | MIT     | the vendored engine's state store             |
 
-| `mediabunny` | MPL-2.0 | local MP4/WebM encoding of previs renders (Phase 2F M2A). Used unmodified as an npm dependency and lazily imported; its source is not vendored. MPL-2.0 file-level terms apply to MediaBunny's own files only. |
+| `mediabunny` | MPL-2.0 | local MP4/WebM encoding of previs renders (Phase 2F M2A), including the AAC/Opus performance-audio track (M2A.1). Used unmodified as an npm dependency and lazily imported; its source is not vendored. MPL-2.0 file-level terms apply to MediaBunny's own files only. |
