@@ -213,9 +213,27 @@ current for the saved set, the file must sniff as the claimed container, and the
 private asset (`type video`, `purpose video_reference`, `source local_previs`, `metadata.previs` provenance). No URL is
 stored; players use `/api/assets/<id>` (authorised per request, Range supported).
 
-**Audio.** Previs files are silent (nothing is synthesised and no provider is called). The Shot's selected performance
-takes are scheduled against the playhead during _interactive_ playback (`audioCues`: pre-roll, take durations and
-gaps). Muxing that audio into the encoded file is the next narrow increment (MediaBunny `AudioBufferSource`).
+**Audio.**
+
+| Surface                                | Audio                                          |
+| -------------------------------------- | ---------------------------------------------- |
+| Interactive playback (camera timeline) | camera + the Shot's selected performance takes |
+| Rendered previs file                   | **silent** (not muxed in M2A)                  |
+
+Muxing the performance audio into the encoded file is the next narrow follow-up (MediaBunny `AudioBufferSource`).
+
+**One playback clock.** The camera timeline playhead is the only clock. Camera motion (`evaluateCameraPath(path, t)`) and
+performance audio are both consumers of it: the scheduler (`src/lib/previs/performance-audio.ts`) owns no timer that
+advances time, only one-shot starts armed relative to the playhead at the moment of play/seek, and they are cancelled
+on every pause, seek, end and unmount. Timing authority is unchanged: Shot duration comes from `computeShotDuration`
+(`buildShotContext(...).duration`) and cue offsets are computed by `buildAudioCues` with the same arithmetic
+(pre-roll, then each selected take followed by the inter-line gap; a take without audio is silent but still occupies its
+time). Behaviour: play from 0 waits through the pre-roll; seeking into a take starts it at the correct source offset;
+seeking into a gap plays nothing until the next take; pause stops all audio; resume starts from the current playhead;
+the timeline end stops audio; every start first stops everything so scrubbing never overlaps nodes; unmounting the
+editor disposes the scheduler (pauses, releases media elements, clears timers). Covered by deterministic fake-audio
+unit tests (`performance-audio.test.ts`); there is no browser audio test (it would need a committed audio fixture and
+autoplay permission).
 
 ### GenerationPackage
 

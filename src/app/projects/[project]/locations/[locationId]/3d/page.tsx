@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/ui";
 import { VirtualSetLoader } from "@/components/previs/virtual-set-loader";
 import { buildShotContext } from "@/domain/context";
+import { buildAudioCues } from "@/lib/previs/performance-audio";
 import { getPrevisRepo } from "@/server/previs";
 import { requireProject } from "@/server/repo";
 
@@ -51,14 +52,11 @@ export default async function VirtualSetPage({
     const shot = data.shots.find((s) => s.id === activeShotId);
     if (shot) {
       const ctx = buildShotContext(data, activeShotId);
-      const cues: Array<{ assetId: string; startMs: number; durationMs: number }> = [];
-      let cursor = ctx.shot.audio.preRollMs;
-      for (const line of ctx.lines) {
-        const take = line.selectedTake;
-        if (!take?.audioAssetId) continue;
-        cues.push({ assetId: take.audioAssetId, startMs: cursor, durationMs: take.durationMs });
-        cursor += take.durationMs + ctx.shot.audio.interLineGapMs;
-      }
+      const cues = buildAudioCues({
+        preRollMs: ctx.shot.audio.preRollMs,
+        interLineGapMs: ctx.shot.audio.interLineGapMs,
+        takes: ctx.lines.map((l) => l.selectedTake ?? null),
+      });
       shotTiming = {
         durationMs: ctx.duration.durationMs,
         source: ctx.duration.source,

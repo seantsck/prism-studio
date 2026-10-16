@@ -32,6 +32,7 @@ import {
   type PrevisProgress,
 } from "@/lib/previs/previs-render";
 import type { PathOverlay, SpatialSceneAdapter } from "@/lib/previs/scene-adapter";
+import { browserSchedulerEnv, PerformanceAudioScheduler } from "@/lib/previs/performance-audio";
 import { recordPrevisClip, saveShotCameraPath } from "@/server/previs-actions";
 
 export interface ShotTimingInfo {
@@ -161,7 +162,8 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
   const committedRef = useRef<{ position: number[]; rotation: number[]; focal: number } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const rafRef = useRef<number | null>(null);
-  const audioRef = useRef<{ els: HTMLAudioElement[]; timers: number[] }>({ els: [], timers: [] });
+  // performance audio is a consumer of the same playhead as the camera: no clock of its own
+  const audioRef = useRef<PerformanceAudioScheduler | null>(null);
 
   const dirty = useMemo(() => {
     if (!path) return false;
@@ -227,38 +229,16 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
     [props],
   );
 
-  const stopAudio = useCallback(() => {
-    for (const t of audioRef.current.timers) window.clearTimeout(t);
-    for (const a of audioRef.current.els) {
-      a.pause();
-      a.removeAttribute("src");
-      a.load();
-    }
-    audioRef.current = { els: [], timers: [] };
-  }, []);
+  const stopAudio = useCallback(() => audioRef.current?.stop(), []);
 
   const startAudio = useCallback(
     (fromMs: number) => {
-      stopAudio();
-      for (const cue of props.timing?.audioCues ?? []) {
-        const end = cue.startMs + cue.durationMs;
-        if (fromMs >= end) continue;
-        const el = new Audio(`/api/assets/${cue.assetId}`);
-        el.preload = "auto";
-        audioRef.current.els.push(el);
-        const begin = () => {
-          el.currentTime = Math.max(0, (fromMs - cue.startMs) / 1000);
-          void el.play().catch(() => undefined);
-        };
-        if (fromMs >= cue.startMs) begin();
-        else {
-          audioRef.current.timers.push(
-            window.setTimeout(() => void el.play().catch(() => undefined), cue.startMs - fromMs),
-          );
-        }
-      }
+      // created lazily so a StrictMode remount (which disposes) gets a fresh scheduler
+      const audio = (audioRef.current ??= new PerformanceAudioScheduler(browserSchedulerEnv(), []));
+      audio.setCues(props.timing?.audioCues ?? []);
+      audio.start(fromMs);
     },
-    [props.timing, stopAudio],
+    [props.timing],
   );
 
   const stopPlayback = useCallback(() => {
@@ -324,10 +304,11 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
   useEffect(
     () => () => {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-      stopAudio();
+      audioRef.current?.dispose();
+      audioRef.current = null;
       abortRef.current?.abort();
     },
-    [stopAudio],
+    [],
   );
 
   // ── editor-only overlay of the path ──
