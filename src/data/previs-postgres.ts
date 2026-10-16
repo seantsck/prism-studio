@@ -1,13 +1,23 @@
 import type { Pool, PoolClient } from "pg";
 import { bookmarkFromCamera } from "@/domain/previs/camera";
+import { cameraPathFingerprint, cameraPathSchema, validateCameraPath } from "@/domain/previs/camera-path";
 import { sceneFingerprint } from "@/domain/previs/document";
-import { buildSpatialReference, type SpatialReference } from "@/domain/previs/spatial";
+import {
+  buildSpatialReference,
+  CAMERA_MOTION_SCHEMA_VERSION,
+  type CameraMotionReference,
+  type SpatialReference,
+} from "@/domain/previs/spatial";
 import { cameraBookmarkSchema, previsDocumentSchema } from "@/domain/previs/types";
 import {
   PrevisError,
   type CameraBookmarkRecord,
+  type CameraPathRecord,
   type MasterFrameRecord,
   type NewMasterFrame,
+  type NewPrevisClip,
+  type PrevisClipRecord,
+  type SaveCameraPathInput,
   type PrevisRepository,
   type SaveSceneInput,
   type SceneDocumentRecord,
@@ -77,6 +87,51 @@ const mapFrame = (r: Row): MasterFrameRecord => ({
   capturedAt: iso(r.captured_at),
   adoptedAt: isoOrNull(r.adopted_at),
   adoptedFrameId: str(r.adopted_frame_id),
+  createdBy: str(r.created_by),
+  createdAt: iso(r.created_at),
+});
+
+const mapPath = (r: Row): CameraPathRecord => ({
+  id: String(r.id),
+  projectId: String(r.project_id),
+  shotId: String(r.shot_id),
+  locationId: String(r.location_id),
+  sceneDocumentId: String(r.scene_document_id),
+  sceneRevision: Number(r.scene_revision),
+  sceneFingerprint: String(r.scene_fingerprint),
+  schemaVersion: String(r.schema_version),
+  revision: Number(r.revision),
+  durationMs: Number(r.duration_ms),
+  frameRate: Number(r.frame_rate),
+  path: cameraPathSchema.parse(r.path_json),
+  pathFingerprint: String(r.path_fingerprint),
+  createdBy: str(r.created_by),
+  createdAt: iso(r.created_at),
+  updatedAt: iso(r.updated_at),
+});
+
+const mapClip = (r: Row): PrevisClipRecord => ({
+  id: String(r.id),
+  projectId: String(r.project_id),
+  shotId: String(r.shot_id),
+  locationId: String(r.location_id),
+  cameraPathId: str(r.camera_path_id),
+  pathRevision: Number(r.path_revision),
+  pathFingerprint: String(r.path_fingerprint),
+  sceneDocumentId: String(r.scene_document_id),
+  sceneRevision: Number(r.scene_revision),
+  sceneFingerprint: String(r.scene_fingerprint),
+  assetId: String(r.asset_id),
+  source: "local_previs",
+  frameRate: Number(r.frame_rate),
+  durationMs: Number(r.duration_ms),
+  renderWidth: Number(r.render_width),
+  renderHeight: Number(r.render_height),
+  container: String(r.container) as "mp4" | "webm",
+  codec: String(r.codec),
+  hasAudio: Boolean(r.has_audio),
+  audioAssetId: str(r.audio_asset_id),
+  renderedAt: iso(r.rendered_at),
   createdBy: str(r.created_by),
   createdAt: iso(r.created_at),
 });
@@ -230,9 +285,12 @@ export class PostgresPrevisData implements PrevisRepository {
   async listSpatialReferences(projectId: string) {
     return this.tx(async (c) => {
       const b = await c.query("select * from shot_camera_bookmarks where project_id = $1", [projectId]);
+      const p = await c.query("select * from shot_camera_paths where project_id = $1", [projectId]);
       const out: Record<string, SpatialReference> = {};
-      if (b.rows.length === 0) return out;
-      const sceneIds = [...new Set(b.rows.map((r) => String(r.scene_document_id)))];
+      if (b.rows.length === 0 && p.rows.length === 0) return out;
+      const bookmarks = new Map(b.rows.map((r) => [String(r.shot_id), mapBookmark(r)]));
+      const paths = new Map(p.rows.map((r) => [String(r.shot_id), mapPath(r)]));
+      const sceneIds = [...new Set([...b.rows, ...p.rows].map((r) => String(r.scene_document_id)))];
       const s = await c.query("select * from location_scene_documents where id = any($1::uuid[])", [
         sceneIds,
       ]);
@@ -243,11 +301,34 @@ export class PostgresPrevisData implements PrevisRepository {
         [projectId],
       );
       const adopted = new Map(f.rows.map((r) => [String(r.shot_id), String(r.asset_id)]));
-      for (const row of b.rows) {
-        const bm = mapBookmark(row);
-        const scene = scenes.get(bm.sceneDocumentId);
+      const k = await c.query(
+        `select distinct on (shot_id, path_fingerprint) shot_id, path_fingerprint, asset_id from shot_previs_clips
+          where project_id = $1 order by shot_id, path_fingerprint, rendered_at desc`,
+        [projectId],
+      );
+      const clipFor = new Map(k.rows.map((r) => [`${r.shot_id}:${r.path_fingerprint}`, String(r.asset_id)]));
+      for (const shotId of new Set([...bookmarks.keys(), ...paths.keys()])) {
+        const bm = bookmarks.get(shotId) ?? null;
+        const path = paths.get(shotId) ?? null;
+        const scene = scenes.get((bm?.sceneDocumentId ?? path?.sceneDocumentId) as string);
         if (!scene) continue;
-        out[bm.shotId] = buildSpatialReference({
+        const cameraMotion: CameraMotionReference | null = path
+          ? {
+              schemaVersion: CAMERA_MOTION_SCHEMA_VERSION,
+              cameraPathId: path.id,
+              cameraPathRevision: path.revision,
+              cameraPathFingerprint: path.pathFingerprint,
+              sceneRevision: path.sceneRevision,
+              sceneFingerprint: path.sceneFingerprint,
+              durationMs: path.durationMs,
+              frameRate: path.frameRate,
+              interpolation: path.path.interpolation,
+              focalLengthBasis: "vertical-sensor-24mm",
+              keyframes: path.path.keyframes,
+              previsAssetId: clipFor.get(`${shotId}:${path.pathFingerprint}`) ?? null,
+            }
+          : null;
+        out[shotId] = buildSpatialReference({
           locationId: scene.locationId,
           scene: {
             id: scene.id,
@@ -255,14 +336,17 @@ export class PostgresPrevisData implements PrevisRepository {
             sceneFingerprint: scene.sceneFingerprint,
             document: scene.document,
           },
-          bookmark: {
-            id: bm.id,
-            cameraLabel: bm.cameraLabel,
-            sceneRevision: bm.sceneRevision,
-            sceneFingerprint: bm.sceneFingerprint,
-            value: bm.value,
-          },
-          adoptedMasterFrameAssetId: adopted.get(bm.shotId) ?? null,
+          bookmark: bm
+            ? {
+                id: bm.id,
+                cameraLabel: bm.cameraLabel,
+                sceneRevision: bm.sceneRevision,
+                sceneFingerprint: bm.sceneFingerprint,
+                value: bm.value,
+              }
+            : null,
+          adoptedMasterFrameAssetId: adopted.get(shotId) ?? null,
+          cameraMotion,
         });
       }
       return out;
@@ -323,6 +407,137 @@ export class PostgresPrevisData implements PrevisRepository {
       );
       if (!r.rows[0]) throw new PrevisError("not_found", "That master frame was not found.");
       return mapFrame(r.rows[0]);
+    });
+  }
+
+  async getCameraPathForShot(shotId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query("select * from shot_camera_paths where shot_id = $1", [shotId]);
+      return r.rows[0] ? mapPath(r.rows[0]) : null;
+    });
+  }
+
+  async saveCameraPath(input: SaveCameraPathInput) {
+    const problems = validateCameraPath(input.path);
+    if (problems.length > 0) throw new PrevisError("invalid", problems.join("; "));
+    const fp = cameraPathFingerprint(input.path);
+    const json = JSON.stringify(input.path);
+    const conflict = new PrevisError(
+      "conflict",
+      "This camera path was changed elsewhere. Reload before saving.",
+    );
+    return this.tx(async (c) => {
+      const s = await c.query(
+        "select id from location_scene_documents where id = $1 and project_id = $2 and location_id = $3",
+        [input.sceneDocumentId, input.projectId, input.locationId],
+      );
+      if (!s.rows[0]) throw new PrevisError("not_found", "That 3D set was not found for this location.");
+      if (input.expectedRevision === null) {
+        const r = await c.query(
+          `insert into shot_camera_paths
+             (id, project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint,
+              schema_version, revision, duration_ms, frame_rate, path_json, path_fingerprint, created_by,
+              created_at, updated_at)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,1,$9,$10,$11::jsonb,$12,$13,$14,$14)
+           on conflict (shot_id) do nothing returning *`,
+          [
+            input.id,
+            input.projectId,
+            input.shotId,
+            input.locationId,
+            input.sceneDocumentId,
+            input.sceneRevision,
+            input.sceneFingerprint,
+            input.path.schema,
+            input.path.durationMs,
+            input.path.frameRate,
+            json,
+            fp,
+            input.userId,
+            input.now,
+          ],
+        );
+        if (!r.rows[0]) throw conflict;
+        return mapPath(r.rows[0]);
+      }
+      const r = await c.query(
+        `update shot_camera_paths
+            set revision = revision + 1, location_id = $3, scene_document_id = $4, scene_revision = $5,
+                scene_fingerprint = $6, duration_ms = $7, frame_rate = $8, path_json = $9::jsonb,
+                path_fingerprint = $10
+          where shot_id = $1 and project_id = $11 and revision = $2
+          returning *`,
+        [
+          input.shotId,
+          input.expectedRevision,
+          input.locationId,
+          input.sceneDocumentId,
+          input.sceneRevision,
+          input.sceneFingerprint,
+          input.path.durationMs,
+          input.path.frameRate,
+          json,
+          fp,
+          input.projectId,
+        ],
+      );
+      if (!r.rows[0]) throw conflict;
+      return mapPath(r.rows[0]);
+    });
+  }
+
+  async listPrevisClips(shotId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        "select * from shot_previs_clips where shot_id = $1 order by rendered_at desc",
+        [shotId],
+      );
+      return r.rows.map(mapClip);
+    });
+  }
+
+  async getPrevisClip(id: string) {
+    return this.tx(async (c) => {
+      const r = await c.query("select * from shot_previs_clips where id = $1", [id]);
+      return r.rows[0] ? mapClip(r.rows[0]) : null;
+    });
+  }
+
+  async recordPrevisClip(input: NewPrevisClip) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        `insert into shot_previs_clips
+           (id, project_id, shot_id, location_id, camera_path_id, path_revision, path_fingerprint,
+            scene_document_id, scene_revision, scene_fingerprint, asset_id, frame_rate, duration_ms,
+            render_width, render_height, container, codec, has_audio, audio_asset_id, rendered_at,
+            created_by, created_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$20)
+         returning *`,
+        [
+          input.id,
+          input.projectId,
+          input.shotId,
+          input.locationId,
+          input.cameraPathId,
+          input.pathRevision,
+          input.pathFingerprint,
+          input.sceneDocumentId,
+          input.sceneRevision,
+          input.sceneFingerprint,
+          input.assetId,
+          input.frameRate,
+          input.durationMs,
+          input.renderWidth,
+          input.renderHeight,
+          input.container,
+          input.codec,
+          input.hasAudio,
+          input.audioAssetId,
+          input.renderedAt,
+          input.userId,
+        ],
+      );
+      return mapClip(r.rows[0]);
     });
   }
 }

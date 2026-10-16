@@ -1,12 +1,22 @@
 import { bookmarkFromCamera } from "@/domain/previs/camera";
+import { cameraPathFingerprint, validateCameraPath } from "@/domain/previs/camera-path";
 import { sceneFingerprint } from "@/domain/previs/document";
-import { buildSpatialReference, type SpatialReference } from "@/domain/previs/spatial";
+import {
+  buildSpatialReference,
+  CAMERA_MOTION_SCHEMA_VERSION,
+  type CameraMotionReference,
+  type SpatialReference,
+} from "@/domain/previs/spatial";
 import type { MemoryProjectsAccess } from "./generation-memory";
 import {
   PrevisError,
   type CameraBookmarkRecord,
+  type CameraPathRecord,
   type MasterFrameRecord,
   type NewMasterFrame,
+  type NewPrevisClip,
+  type PrevisClipRecord,
+  type SaveCameraPathInput,
   type PrevisRepository,
   type SaveSceneInput,
   type SceneDocumentRecord,
@@ -20,6 +30,8 @@ export class MemoryPrevisService implements PrevisRepository {
   private scenes = new Map<string, SceneDocumentRecord>(); // by location id
   private bookmarks = new Map<string, CameraBookmarkRecord>(); // by shot id
   private frames = new Map<string, MasterFrameRecord>();
+  private paths = new Map<string, CameraPathRecord>(); // by shot id
+  private clips = new Map<string, PrevisClipRecord>();
 
   constructor(private readonly access: MemoryProjectsAccess) {}
 
@@ -120,11 +132,38 @@ export class MemoryPrevisService implements PrevisRepository {
     return clone(rec);
   }
 
+  private cameraMotionFor(shotId: string): CameraMotionReference | null {
+    const p = this.paths.get(shotId);
+    if (!p) return null;
+    const clip = [...this.clips.values()]
+      .filter((c) => c.shotId === shotId && c.pathFingerprint === p.pathFingerprint)
+      .sort((x, y) => (x.renderedAt < y.renderedAt ? 1 : -1))[0];
+    return {
+      schemaVersion: CAMERA_MOTION_SCHEMA_VERSION,
+      cameraPathId: p.id,
+      cameraPathRevision: p.revision,
+      cameraPathFingerprint: p.pathFingerprint,
+      sceneRevision: p.sceneRevision,
+      sceneFingerprint: p.sceneFingerprint,
+      durationMs: p.durationMs,
+      frameRate: p.frameRate,
+      interpolation: p.path.interpolation,
+      focalLengthBasis: "vertical-sensor-24mm",
+      keyframes: structuredClone(p.path.keyframes),
+      previsAssetId: clip?.assetId ?? null,
+    };
+  }
+
   async listSpatialReferences(projectId: string) {
     const out: Record<string, SpatialReference> = {};
-    for (const [shotId, b] of this.bookmarks) {
-      if (b.projectId !== projectId) continue;
-      const scene = [...this.scenes.values()].find((s) => s.id === b.sceneDocumentId);
+    const shotIds = new Set<string>();
+    for (const [shotId, b] of this.bookmarks) if (b.projectId === projectId) shotIds.add(shotId);
+    for (const [shotId, p] of this.paths) if (p.projectId === projectId) shotIds.add(shotId);
+    for (const shotId of shotIds) {
+      const b = this.bookmarks.get(shotId) ?? null;
+      const p = this.paths.get(shotId) ?? null;
+      const sceneId = b?.sceneDocumentId ?? p?.sceneDocumentId;
+      const scene = [...this.scenes.values()].find((x) => x.id === sceneId);
       if (!scene) continue;
       const adopted = [...this.frames.values()]
         .filter((f) => f.shotId === shotId && f.adoptedAt)
@@ -137,14 +176,17 @@ export class MemoryPrevisService implements PrevisRepository {
           sceneFingerprint: scene.sceneFingerprint,
           document: scene.document,
         },
-        bookmark: {
-          id: b.id,
-          cameraLabel: b.cameraLabel,
-          sceneRevision: b.sceneRevision,
-          sceneFingerprint: b.sceneFingerprint,
-          value: b.value,
-        },
+        bookmark: b
+          ? {
+              id: b.id,
+              cameraLabel: b.cameraLabel,
+              sceneRevision: b.sceneRevision,
+              sceneFingerprint: b.sceneFingerprint,
+              value: b.value,
+            }
+          : null,
         adoptedMasterFrameAssetId: adopted?.assetId ?? null,
+        cameraMotion: this.cameraMotionFor(shotId),
       });
     }
     return structuredClone(out);
@@ -195,5 +237,79 @@ export class MemoryPrevisService implements PrevisRepository {
     const next = { ...f, adoptedAt: now, adoptedFrameId: storyboardFrameId };
     this.frames.set(id, next);
     return clone(next);
+  }
+
+  async getCameraPathForShot(shotId: string) {
+    const p = this.paths.get(shotId);
+    return p ? clone(p) : null;
+  }
+
+  async saveCameraPath(input: SaveCameraPathInput) {
+    this.requireShot(input.projectId, input.shotId);
+    this.requireLocation(input.projectId, input.locationId);
+    const problems = validateCameraPath(input.path);
+    if (problems.length > 0) throw new PrevisError("invalid", problems.join("; "));
+    const scene = await this.getScene(input.sceneDocumentId);
+    if (!scene || scene.projectId !== input.projectId || scene.locationId !== input.locationId)
+      throw new PrevisError("not_found", "That 3D set was not found for this location.");
+    const existing = this.paths.get(input.shotId);
+    const base = {
+      projectId: input.projectId,
+      shotId: input.shotId,
+      locationId: input.locationId,
+      sceneDocumentId: scene.id,
+      sceneRevision: input.sceneRevision,
+      sceneFingerprint: input.sceneFingerprint,
+      schemaVersion: input.path.schema,
+      durationMs: input.path.durationMs,
+      frameRate: input.path.frameRate,
+      path: clone(input.path),
+      pathFingerprint: cameraPathFingerprint(input.path),
+      updatedAt: input.now,
+    };
+    if (!existing) {
+      if (input.expectedRevision !== null)
+        throw new PrevisError("conflict", "This camera path was changed elsewhere. Reload before saving.");
+      const rec: CameraPathRecord = {
+        id: input.id,
+        revision: 1,
+        createdBy: input.userId,
+        createdAt: input.now,
+        ...base,
+      };
+      this.paths.set(input.shotId, rec);
+      return clone(rec);
+    }
+    if (input.expectedRevision !== existing.revision)
+      throw new PrevisError("conflict", "This camera path was changed elsewhere. Reload before saving.");
+    const next: CameraPathRecord = { ...existing, ...base, revision: existing.revision + 1 };
+    this.paths.set(input.shotId, next);
+    return clone(next);
+  }
+
+  async listPrevisClips(shotId: string) {
+    return [...this.clips.values()]
+      .filter((c) => c.shotId === shotId)
+      .sort((a, b) => (a.renderedAt < b.renderedAt ? 1 : -1))
+      .map(clone);
+  }
+
+  async getPrevisClip(id: string) {
+    const c = this.clips.get(id);
+    return c ? clone(c) : null;
+  }
+
+  async recordPrevisClip(input: NewPrevisClip) {
+    this.requireShot(input.projectId, input.shotId);
+    this.requireLocation(input.projectId, input.locationId);
+    const { userId, ...rest } = input;
+    const rec: PrevisClipRecord = {
+      ...rest,
+      source: "local_previs",
+      createdBy: userId,
+      createdAt: input.renderedAt,
+    };
+    this.clips.set(rec.id, rec);
+    return clone(rec);
   }
 }

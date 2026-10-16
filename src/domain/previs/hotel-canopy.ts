@@ -1,3 +1,4 @@
+import { emptyCameraPath, keyframeFromCamera, upsertKeyframe, type CameraPath } from "./camera-path";
 import { PRISM_USER_DATA, assetTokenFor } from "./document";
 
 /**
@@ -180,3 +181,31 @@ export function buildHotelCanopyEngineScene(opts: { characterId?: string } = {})
 }
 
 export { assetTokenFor };
+
+/**
+ * A synthetic 4 s / 24 fps camera path for the Hotel Canopy Test Set: a slow push toward the doorway that also
+ * rides the lens 35 → 50 → 70 mm. Procedural; used by tests and the "sample path" fixture button.
+ */
+export function buildHotelCanopyCameraPath(): CameraPath {
+  let p = emptyCameraPath(4000, 24);
+  const key = (
+    id: string,
+    t: number,
+    x: number,
+    y: number,
+    z: number,
+    yaw: number,
+    f: number,
+    easing: "ease_in_out" | "linear",
+  ) =>
+    keyframeFromCamera(
+      id,
+      t,
+      { position: { x, y, z }, rotation: { x: 0, y: yaw, z: 0 }, focalLengthMm: f },
+      easing,
+    );
+  p = upsertKeyframe(p, key("hotel-kf-1", 0, 3, 1.7, 9, 0.2, 35, "ease_in_out"));
+  p = upsertKeyframe(p, key("hotel-kf-2", 2000, 1.4, 1.6, 4, 0.1, 50, "ease_in_out"));
+  p = upsertKeyframe(p, key("hotel-kf-3", 4000, 0, 1.5, 0.5, 0, 70, "linear"));
+  return p;
+}

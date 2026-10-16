@@ -251,11 +251,28 @@ export function ShotPrepView({
   episode,
   shotId,
   openSection,
+  previs,
 }: {
   data: ProjectData;
   episode: Episode;
   shotId: string;
   openSection?: string;
+  previs?: {
+    pathFingerprint: string | null;
+    pathRevision: number | null;
+    keyframeCount: number;
+    durationMs: number | null;
+    clips: Array<{
+      id: string;
+      assetId: string;
+      pathRevision: number;
+      pathFingerprint: string;
+      sceneFingerprint: string;
+      renderedAt: string;
+      container: string;
+      codec: string;
+    }>;
+  };
 }) {
   const ctx: ShotContext = buildShotContext(data, shotId);
   const { shot } = ctx;
@@ -749,6 +766,45 @@ export function ShotPrepView({
                     <span>No production camera linked yet.</span>
                   )}
                 </div>
+                {previs && previs.pathRevision !== null ? (
+                  <div className="mt-2" data-testid="shot-camera-motion">
+                    Camera motion · {previs.keyframeCount} keyframes ·{" "}
+                    {previs.durationMs ? `${(previs.durationMs / 1000).toFixed(2)} s` : ""} · path r
+                    {previs.pathRevision}
+                    {ctx.spatial?.cameraMotion &&
+                    ctx.spatial.cameraMotion.sceneFingerprint !== ctx.spatial.sceneFingerprint ? (
+                      <Badge tone="warn">set changed since the path was saved</Badge>
+                    ) : null}
+                  </div>
+                ) : null}
+                {previs && previs.clips[0] ? (
+                  <div className="mt-2 max-w-md" data-testid="shot-previs">
+                    <div className="mb-1 flex items-center gap-2 text-[11.5px]">
+                      Latest previs · path r{previs.clips[0].pathRevision} ·{" "}
+                      {new Date(previs.clips[0].renderedAt).toLocaleString()}
+                      {previs.clips[0].pathFingerprint !== previs.pathFingerprint ||
+                      (ctx.spatial && previs.clips[0].sceneFingerprint !== ctx.spatial.sceneFingerprint) ? (
+                        <span data-testid="shot-previs-stale">
+                          <Badge tone="warn">stale previs</Badge>
+                        </span>
+                      ) : (
+                        <Badge tone="pass">current</Badge>
+                      )}
+                    </div>
+                    <video
+                      src={`/api/assets/${previs.clips[0].assetId}`}
+                      controls
+                      preload="metadata"
+                      className="w-full border border-line"
+                      data-testid="shot-previs-video"
+                    />
+                    {previs.clips.length > 1 ? (
+                      <div className="mt-1 text-[11px] text-faint">
+                        {previs.clips.length - 1} earlier previs kept in history.
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </SectionChrome>

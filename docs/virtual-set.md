@@ -109,18 +109,145 @@ Playwright runs Chromium with the software rasteriser (`--use-angle=swiftshader`
 
 ## M2 reuse (investigated, not built)
 
-| Capability                      | Upstream basis                                                                                                                 | What Prism must add                                                                                                                 |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Camera timeline / path          | `engine/timeline/{types,interpolation}.ts`, `TimelineController` (`::CAM::` is already a keyframe target, cubic-bezier easing) | a Prism UI; persist `timeline` inside the document; include it in the fingerprint                                                   |
-| **Focal-length keyframing**     | **not supported upstream** (keyframes store `TransformSnap` only)                                                              | patch: add an optional `focalLength` channel to `TimelineTrack`/`interpolation.ts`; evaluate into `cameras[].focalLength` each tick |
-| Quaternion/slerp rotation       | upstream lerps Euler angles (documented)                                                                                       | patch interpolation to slerp camera quaternions; store Euler for display                                                            |
-| Character posing                | `KinHelpers/{FKHelper,BoneJSONHelper}`, `SkeletonHelperController`                                                             | a Prism mannequin with `mixamorig:*`-compatible bones (rig is name-matched); pose presets as JSON                                   |
-| Pose presets                    | `BoneJSONHelper.toJSON/poseFromBoneJSON`                                                                                       | Prism-authored preset library                                                                                                       |
-| Local previs video              | `engine/recording/TimelineRecorder.ts` (deterministic frame stepping)                                                          | `mediabunny` (MPL-2.0, WebCodecs); store as a derived asset with provenance                                                         |
-| Depth pass                      | none vendored (`CustomOutlinePass`/`FindSurfaces` were removed: provenance not established)                                    | write a Prism depth override material (three.js `MeshDepthMaterial`); PNG sequence                                                  |
-| Object-id / character masks     | surface-id material exists; per-object id pass does not                                                                        | new override material mapping `uuid → colour`; ties to mannequin `characterId`                                                      |
-| Gaussian splats                 | removed in the pre-PR hardening (the engine's loader and the `@sparkjsdev/spark` dependency)                                   | re-add `@sparkjsdev/spark` and the upstream loader behind a feature flag; asset pipeline for `.spz`; licence of splat sources       |
-| Image-to-location / image-to-3D | none locally (ArtCraft calls its own backend)                                                                                  | a Prism provider adapter behind the existing generation spend gates                                                                 |
+| Capability                      | Upstream basis                                                                                                                                            | What Prism must add                                                                                                           |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Camera timeline / path          | **Built in M2A** as a Prism-owned `prism.camera-path.v1` evaluator (see "Camera motion and local previs"); the engine timeline is not used for the camera | M2B may use the engine timeline for object animation                                                                          |
+| **Focal-length keyframing**     | **Done in M2A** in the Prism evaluator (not by patching the engine timeline)                                                                              | —                                                                                                                             |
+| Quaternion/slerp rotation       | **Done in M2A** (`slerpQuaternion`, shortest arc)                                                                                                         | —                                                                                                                             |
+| Character posing                | `KinHelpers/{FKHelper,BoneJSONHelper}`, `SkeletonHelperController`                                                                                        | a Prism mannequin with `mixamorig:*`-compatible bones (rig is name-matched); pose presets as JSON                             |
+| Pose presets                    | `BoneJSONHelper.toJSON/poseFromBoneJSON`                                                                                                                  | Prism-authored preset library                                                                                                 |
+| Local previs video              | **Done in M2A** with MediaBunny (WebCodecs)                                                                                                               | audio muxing                                                                                                                  |
+| Depth pass                      | none vendored (`CustomOutlinePass`/`FindSurfaces` were removed: provenance not established)                                                               | write a Prism depth override material (three.js `MeshDepthMaterial`); PNG sequence                                            |
+| Object-id / character masks     | surface-id material exists; per-object id pass does not                                                                                                   | new override material mapping `uuid → colour`; ties to mannequin `characterId`                                                |
+| Gaussian splats                 | removed in the pre-PR hardening (the engine's loader and the `@sparkjsdev/spark` dependency)                                                              | re-add `@sparkjsdev/spark` and the upstream loader behind a feature flag; asset pipeline for `.spz`; licence of splat sources |
+| Image-to-location / image-to-3D | none locally (ArtCraft calls its own backend)                                                                                                             | a Prism provider adapter behind the existing generation spend gates                                                           |
 
-M2 recommendation order: focal-length keyframes + slerp → camera path UI → local previs video → depth/object-id
-passes → mannequin rig/poses → splats → image-to-location.
+M2 recommendation order: ~~focal-length keyframes + slerp → camera path UI → local previs video~~ (M2A, done) → mannequin
+rig/poses (M2B) → depth/object-id passes (M2C) → splats and image-to-location (M2D).
+
+## Camera motion and local previs (Phase 2F M2A)
+
+```
+Shot → camera path (keyframes: pose + lens) → deterministic playback → local previs render
+     → private previs Asset → frozen `cameraMotion` in the GenerationPackage
+```
+
+**EDITOR CAMERA ≠ PRODUCTION CAMERA ≠ CAMERA PATH.** The editor/navigation camera is how you fly around; the production
+camera is the Shot's camera at an instant; the camera path is the production camera over time. Playback, scrubbing
+and rendering write only the production camera. The navigation camera is moved only by the operator (and follows the
+path only while "Look through production camera" is on). Nothing is ever screen-recorded.
+
+### `prism.camera-path.v1`
+
+```
+{ schema, durationMs, frameRate, interpolation: "linear" | "smooth",
+  keyframes[]: { id, timeMs, position{x,y,z}, orientation{quaternion{x,y,z,w}},
+                 focalLengthMm, focalLengthBasis: "vertical-sensor-24mm",
+                 easing: linear | ease_in | ease_out | ease_in_out | hold } }
+```
+
+- Orientation is a unit quaternion; Euler angles are an editor-facing view (`quaternionToEuler`). Interpolation is
+  shortest-arc, normalised slerp (three.js `Quaternion.slerp` after a sign flip when the dot product is negative), so
+  350° → 10° travels 20°, and `q` / `−q` are one rotation.
+- Position: `linear` (piecewise) or `smooth` (three.js `CatmullRomCurve3`, passes through every keyframe).
+- Lens: **focal length** is interpolated (mm) and FOV is derived with the M1 basis
+  (`2·atan(12 / f)`). Averaging FOV would give a different (wrong) lens.
+- Easing belongs to the segment that **starts** at the keyframe and shapes its progress for position, orientation and
+  lens alike. `hold` keeps the previous keyframe until the next one.
+- Keyframes sort by time, ids are stable, two keyframes may not share a time, and none may be after the duration.
+- One evaluator: `evaluateCameraPath(path, timeMs)` in `src/domain/previs/camera-path.ts`. Timeline scrubbing,
+  interactive playback and the previs renderer all call it (the renderer additionally samples frame `n` at
+  `n / frameRate`).
+- Fingerprint: `cameraPathFingerprint` (SHA-256 over schema, duration, frame rate, interpolation and the
+  sign-normalised, 1e-5-rounded keyframes). Playhead, selection, zoom, overlay and the editor camera are not in a path
+  and cannot affect it.
+
+The ArtCraft `TimelineController` is **not** used for camera motion. Its tracks key object transforms with Euler
+lerp and have no lens channel; adding one would put a second interpolation implementation next to Prism's evaluator,
+which the single-evaluator rule forbids. The engine still _executes_ the motion: each evaluated state is written to the
+engine's `::CAM::` object and lens (`ArtCraftSceneAdapter.applyCameraState`), so gizmos, camera view, frame overlay and
+snapshots behave as in M1. The engine timeline stays available for M2B object animation.
+
+### Timing authority
+
+`Shot duration` is `computeShotDuration` (selected performance takes + pre/post-roll + gaps, else the manual target)
+and the frame rate is the Shot's own `generation.fps`. A new path takes both. When the Shot has no duration yet the
+panel says so and uses an explicit 4 s starting value (never silently). If the path's duration is changed it is shown
+as "not the Shot's duration".
+
+### Persistence (migration 0031)
+
+`shot_camera_paths` (one current editable path per Shot, compare-and-set `revision`, the set revision + fingerprint it
+was authored against, the path JSON and its fingerprint) and `shot_previs_clips` (every rendered previs, newest first,
+with path revision/fingerprint, scene revision/fingerprint, asset id, fps, duration, dimensions, container, codec).
+Owner-only RLS; composite `(id, project_id)` FKs; no worker grant. `assets.source` gains `local_previs`.
+
+**Staleness is computed, never destructive.** A path is stale when the live set fingerprint differs from the one it was
+saved against; a previs is stale when its path fingerprint or set fingerprint differs from the current ones. Stale
+paths and clips stay readable; "Re-save against the current set" re-anchors a path without changing its keyframes.
+
+### Authoring and playback in the editor
+
+Create path → (scrub, move the production camera, **Add keyframe at playhead**) → Save. Camera edits that are not yet
+keyed are tracked: scrubbing/playing will not silently overwrite them ("unkeyed edit"). Playing never makes the scene
+"dirty": the adapter remembers the authored camera and serialises that, not the playback pose.
+The path line, keyframe markers (start green, end red, selected white) and the current position are drawn on the
+editor-only layer 1; the production render camera disables layer 1, so they are absent from master frames and previs
+(asserted by an e2e that compares captures with the overlay on and off).
+
+### Local previs
+
+`renderPrevis` samples the path, asks the adapter to render each frame through an **isolated** `PerspectiveCamera`
+(`renderPrevisFrame` → `Editor.snapShotOfCurrentFrame(false, camera, size)`) and hands frames to a `FrameEncoder`.
+Default size is **956 × 400** (2.39:1 at half the 1912 × 800 Production Frame); the dimensions are recorded in
+provenance. Stages are separate so tests never encode video: frame sampling and camera evaluation are pure, the
+renderer and encoder are interfaces with fakes in unit tests, persistence is a server action.
+
+Encoding uses **MediaBunny 1.60.0** (MPL-2.0, npm dependency, not vendored, lazily imported on first render) over
+WebCodecs. Support is detected, not assumed: MP4/H.264 first, then WebM VP9, then WebM VP8; the container and codec
+that were really used are stored. A browser with none gets a clear "cannot encode" message and nothing is uploaded.
+Cancel stops the loop, cancels the muxer and frees the private canvas; unmount aborts a running render.
+
+The server (`recordPrevisClip`) re-derives what it can: the saved path must be the revision that was rendered, must be
+current for the saved set, the file must sniff as the claimed container, and the aspect must be 2.39:1. The video is a
+private asset (`type video`, `purpose video_reference`, `source local_previs`, `metadata.previs` provenance). No URL is
+stored; players use `/api/assets/<id>` (authorised per request, Range supported).
+
+**Audio.**
+
+| Surface                                | Audio                                          |
+| -------------------------------------- | ---------------------------------------------- |
+| Interactive playback (camera timeline) | camera + the Shot's selected performance takes |
+| Rendered previs file                   | **silent** (not muxed in M2A)                  |
+
+Muxing the performance audio into the encoded file is the next narrow follow-up (MediaBunny `AudioBufferSource`).
+
+**One playback clock.** The camera timeline playhead is the only clock. Camera motion (`evaluateCameraPath(path, t)`) and
+performance audio are both consumers of it: the scheduler (`src/lib/previs/performance-audio.ts`) owns no timer that
+advances time, only one-shot starts armed relative to the playhead at the moment of play/seek, and they are cancelled
+on every pause, seek, end and unmount. Timing authority is unchanged: Shot duration comes from `computeShotDuration`
+(`buildShotContext(...).duration`) and cue offsets are computed by `buildAudioCues` with the same arithmetic
+(pre-roll, then each selected take followed by the inter-line gap; a take without audio is silent but still occupies its
+time). Behaviour: play from 0 waits through the pre-roll; seeking into a take starts it at the correct source offset;
+seeking into a gap plays nothing until the next take; pause stops all audio; resume starts from the current playhead;
+the timeline end stops audio; every start first stops everything so scrubbing never overlaps nodes; unmounting the
+editor disposes the scheduler (pauses, releases media elements, clears timers). Covered by deterministic fake-audio
+unit tests (`performance-audio.test.ts`); there is no browser audio test (it would need a committed audio fixture and
+autoplay permission).
+
+### GenerationPackage
+
+`spatialReference.cameraMotion` (optional; the key is absent without a saved path, so M1 packages and non-3D packages
+keep their exact fingerprints) freezes, by value: path id/revision/fingerprint, the set revision/fingerprint it was
+authored against, duration, frame rate, interpolation, lens basis, every keyframe, and `previsAssetId` — the latest
+previs rendered from exactly this path (null when none). Camera motion is **not** translated into provider prompts.
+
+### Tests
+
+| Layer                                                                        | File                                                        |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| evaluator, slerp, easing, fingerprint, sampling                              | `src/domain/previs/__tests__/camera-path.test.ts`           |
+| renderer pipeline, cancel/cleanup, overlay layers                            | `src/lib/previs/__tests__/previs-render.test.ts`            |
+| package freeze, immutability, staleness, memory-store rules                  | `src/domain/previs/__tests__/camera-motion-package.test.ts` |
+| Postgres, RLS, isolation, guards (0031)                                      | `scripts/db-previs.mts`                                     |
+| authoring, persistence, playback, overlay, real local encode, stale, package | `e2e/zzzzzzz-camera-previs.spec.ts`                         |

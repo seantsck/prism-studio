@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { ShotPrepView } from "@/components/views/shot-prep-view";
+import { getPrevisRepo } from "@/server/previs";
 import { requireProject } from "@/server/repo";
 
 export default async function ShotPrepPage({
@@ -14,5 +15,31 @@ export default async function ShotPrepPage({
   const data = await requireProject(slug);
   const episode = data.episodes.find((e) => e.slug === ep);
   if (!episode || !data.shots.some((s) => s.id === shotId)) notFound();
-  return <ShotPrepView data={data} episode={episode} shotId={shotId} openSection={section} />;
+  const previs = await getPrevisRepo();
+  const clips = await previs.listPrevisClips(shotId);
+  const path = await previs.getCameraPathForShot(shotId);
+  return (
+    <ShotPrepView
+      data={data}
+      episode={episode}
+      shotId={shotId}
+      openSection={section}
+      previs={{
+        pathFingerprint: path?.pathFingerprint ?? null,
+        pathRevision: path?.revision ?? null,
+        keyframeCount: path?.path.keyframes.length ?? 0,
+        durationMs: path?.durationMs ?? null,
+        clips: clips.map((c) => ({
+          id: c.id,
+          assetId: c.assetId,
+          pathRevision: c.pathRevision,
+          pathFingerprint: c.pathFingerprint,
+          sceneFingerprint: c.sceneFingerprint,
+          renderedAt: c.renderedAt,
+          container: c.container,
+          codec: c.codec,
+        })),
+      }}
+    />
+  );
 }

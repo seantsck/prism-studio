@@ -1,5 +1,5 @@
 // Integration tests for the Phase 2F 3D production set against the REAL dedicated Prism Studio database
-// (migration 0030).
+// (migrations 0030 + 0031: sets, bookmarks, master frames, camera paths, previs clips).
 //   npm run db:previs
 //
 // Exercises (with real rows, cleaned up afterwards): scene save/reload with compare-and-set revisions, the
@@ -12,6 +12,12 @@ import pg from "pg";
 import { PostgresPrevisData } from "../src/data/previs-postgres";
 import { PrevisError } from "../src/data/previs-repository";
 import { AdminRepository, rlsPreamble } from "../src/data/postgres-repository";
+import {
+  cameraPathFingerprint,
+  emptyCameraPath,
+  keyframeFromCamera,
+  upsertKeyframe,
+} from "../src/domain/previs/camera-path";
 import { buildPrevisDocument, sceneFingerprint } from "../src/domain/previs/document";
 import { buildHotelCanopyEngineScene } from "../src/domain/previs/hotel-canopy";
 import { assertDevUserExists, readDevUserEnv } from "./lib/dev-user.mjs";
@@ -31,7 +37,13 @@ const owner = new PostgresPrevisData(pool, rlsPreamble({ sub: dev.id }));
 const strangerRepo = new PostgresPrevisData(pool, rlsPreamble({ sub: stranger }));
 const anonRepo = new PostgresPrevisData(pool, rlsPreamble(null, "anon"));
 
-const TABLES = ["location_scene_documents", "shot_camera_bookmarks", "scene_master_frames"];
+const TABLES = [
+  "location_scene_documents",
+  "shot_camera_bookmarks",
+  "scene_master_frames",
+  "shot_camera_paths",
+  "shot_previs_clips",
+];
 const now = () => new Date().toISOString();
 
 async function raw(preamble: string, sql: string, params: unknown[] = []) {
@@ -72,8 +84,8 @@ try {
     [TABLES],
   );
   check(
-    "the three Phase 2F tables exist with row-level security enabled",
-    rls.rowCount === 3 && rls.rows.every((r) => r.relrowsecurity === true),
+    "the five Phase 2F tables exist with row-level security enabled",
+    rls.rowCount === 5 && rls.rows.every((r) => r.relrowsecurity === true),
   );
   const pol = await pool.query(
     "select tablename from pg_policies where schemaname = 'public' and tablename = any($1::text[]) and 'authenticated' = any(roles)",
@@ -81,7 +93,7 @@ try {
   );
   check(
     "each table has an owner policy for authenticated users",
-    new Set(pol.rows.map((r) => r.tablename)).size === 3,
+    new Set(pol.rows.map((r) => r.tablename)).size === 5,
   );
   for (const role of ["prism_generation_worker", "prism_continuity_worker"]) {
     const exists = await pool.query("select 1 from pg_roles where rolname = $1", [role]);
@@ -417,6 +429,278 @@ try {
   );
   check("bookmarking an unknown scene is a typed not_found", typed !== null);
   void PrevisError;
+
+  // ── 7. camera paths (0031) ──
+  const mkPath = (extra = 0) => {
+    let p = emptyCameraPath(4000, 24);
+    p = upsertKeyframe(
+      p,
+      keyframeFromCamera(
+        "kf-a",
+        0,
+        { position: { x: 0, y: 1.6, z: 8 }, rotation: { x: 0, y: 0, z: 0 }, focalLengthMm: 35 },
+        "ease_in_out",
+      ),
+    );
+    p = upsertKeyframe(
+      p,
+      keyframeFromCamera(
+        "kf-b",
+        2000,
+        { position: { x: 1 + extra, y: 1.6, z: 4 }, rotation: { x: 0, y: 0.3, z: 0 }, focalLengthMm: 50 },
+        "ease_in_out",
+      ),
+    );
+    p = upsertKeyframe(
+      p,
+      keyframeFromCamera(
+        "kf-c",
+        4000,
+        { position: { x: 1, y: 1.6, z: 1 }, rotation: { x: 0, y: 0.6, z: 0 }, focalLengthMm: 70 },
+        "linear",
+      ),
+    );
+    return p;
+  };
+  const pathBase = {
+    projectId,
+    shotId: shot.id,
+    locationId: tmpLocation,
+    sceneDocumentId: sceneId,
+    sceneRevision: 2,
+    sceneFingerprint: saved2.sceneFingerprint,
+    userId: dev.id,
+  };
+  const path1 = mkPath();
+  const savedPath = await owner.saveCameraPath({
+    ...pathBase,
+    id: randomUUID(),
+    path: path1,
+    expectedRevision: null,
+    now: now(),
+  });
+  check(
+    "first camera-path save creates revision 1 with the domain fingerprint",
+    savedPath.revision === 1 && savedPath.pathFingerprint === cameraPathFingerprint(path1),
+  );
+  const readBack = await owner.getCameraPathForShot(shot.id);
+  check(
+    "the path reads back keyframe-for-keyframe (quaternion + focal length persisted)",
+    !!readBack &&
+      readBack.path.keyframes.length === 3 &&
+      readBack.path.keyframes[1].focalLengthMm === 50 &&
+      cameraPathFingerprint(readBack.path) === savedPath.pathFingerprint &&
+      readBack.sceneRevision === 2,
+  );
+  const pathJson = await pool.query("select path_json::text as t from shot_camera_paths where id = $1", [
+    savedPath.id,
+  ]);
+  check(
+    "no URL or credential-shaped value is stored in path_json",
+    !/https?:\/\/|blob:|X-Amz|signature=/i.test(String(pathJson.rows[0].t)),
+  );
+  const path2 = mkPath(0.5);
+  const savedPath2 = await owner.saveCameraPath({
+    ...pathBase,
+    id: randomUUID(),
+    path: path2,
+    expectedRevision: 1,
+    now: now(),
+  });
+  check(
+    "a compare-and-set save advances to revision 2 on the same row with a new fingerprint",
+    savedPath2.revision === 2 &&
+      savedPath2.id === savedPath.id &&
+      savedPath2.pathFingerprint !== savedPath.pathFingerprint,
+  );
+  const stalePath = await expectError(() =>
+    owner.saveCameraPath({ ...pathBase, id: randomUUID(), path: path1, expectedRevision: 1, now: now() }),
+  );
+  check(
+    "a stale camera-path revision is a conflict",
+    stalePath !== null && /changed elsewhere/.test(stalePath),
+  );
+  const dupPath = await expectError(() =>
+    owner.saveCameraPath({ ...pathBase, id: randomUUID(), path: path1, expectedRevision: null, now: now() }),
+  );
+  check("a second first-save for the same shot is a conflict", dupPath !== null);
+  const badPath = await expectError(() =>
+    owner.saveCameraPath({
+      ...pathBase,
+      id: randomUUID(),
+      path: { ...path2, durationMs: 1000 },
+      expectedRevision: 2,
+      now: now(),
+    }),
+  );
+  check(
+    "a keyframe after the end is rejected before the database",
+    badPath !== null && /after the end/.test(badPath),
+  );
+
+  // staleness is computed, never destructive: changing the set leaves the path intact
+  const doc3 = buildPrevisDocument({
+    engineScene: (() => {
+      const sc = buildHotelCanopyEngineScene({ characterId: "char-test" });
+      sc.scene[4].position = { x: 9, y: 0.75, z: -2 };
+      return sc;
+    })(),
+  });
+  const saved3 = await owner.saveScene({
+    id: randomUUID(),
+    projectId,
+    locationId: tmpLocation,
+    document: doc3,
+    expectedRevision: 2,
+    engineVersion: "test",
+    userId: dev.id,
+    now: now(),
+  });
+  const afterSceneChange = await owner.getCameraPathForShot(shot.id);
+  check(
+    "after the set changes the path still exists and records the older scene fingerprint (stale, not deleted)",
+    !!afterSceneChange &&
+      afterSceneChange.sceneFingerprint === saved2.sceneFingerprint &&
+      afterSceneChange.sceneFingerprint !== saved3.sceneFingerprint,
+  );
+
+  // previs clip provenance + private asset
+  const clipAsset = randomUUID();
+  await pool.query(
+    `insert into assets (id, project_id, name, type, purpose, source, storage_provider, mime, width, height, metadata)
+     values ($1,$2,$3,'video','video_reference','local_previs','none','video/mp4',956,400,'{"previs":{"test":true}}'::jsonb)`,
+    [clipAsset, projectId, "db:previs clip"],
+  );
+  created.assetIds.push(clipAsset);
+  const clipBase = {
+    projectId,
+    shotId: shot.id,
+    locationId: tmpLocation,
+    cameraPathId: savedPath2.id,
+    pathRevision: 2,
+    pathFingerprint: savedPath2.pathFingerprint,
+    sceneDocumentId: sceneId,
+    sceneRevision: 2,
+    sceneFingerprint: saved2.sceneFingerprint,
+    frameRate: 24,
+    durationMs: 4000,
+    renderWidth: 956,
+    renderHeight: 400,
+    container: "mp4" as const,
+    codec: "avc1.42E01F",
+    hasAudio: false,
+    audioAssetId: null,
+    userId: dev.id,
+  };
+  const clip = await owner.recordPrevisClip({
+    ...clipBase,
+    id: randomUUID(),
+    assetId: clipAsset,
+    renderedAt: now(),
+  });
+  check(
+    "a previs clip records path + scene provenance, codec and dimensions",
+    clip.source === "local_previs" &&
+      clip.pathFingerprint === savedPath2.pathFingerprint &&
+      clip.sceneFingerprint === saved2.sceneFingerprint &&
+      clip.container === "mp4" &&
+      clip.renderWidth === 956,
+  );
+  check(
+    "clips list newest first and read back by id",
+    (await owner.listPrevisClips(shot.id))[0]?.id === clip.id &&
+      (await owner.getPrevisClip(clip.id))?.assetId === clipAsset,
+  );
+  const refs = await owner.listSpatialReferences(projectId);
+  const motion = refs[shot.id]?.cameraMotion;
+  check(
+    "the spatial reference freezes cameraMotion by value with the matching previs asset",
+    !!motion &&
+      motion.cameraPathFingerprint === savedPath2.pathFingerprint &&
+      motion.keyframes.length === 3 &&
+      motion.previsAssetId === clipAsset &&
+      motion.sceneFingerprint === saved2.sceneFingerprint &&
+      refs[shot.id].sceneFingerprint === saved3.sceneFingerprint,
+  );
+  const clip2 = await expectError(() =>
+    owner.recordPrevisClip({
+      ...clipBase,
+      id: randomUUID(),
+      assetId: clipAsset,
+      hasAudio: true,
+      audioAssetId: null,
+      renderedAt: now(),
+    }),
+  );
+  check("has_audio without an audio asset is rejected", clip2 !== null);
+
+  // RLS and isolation
+  check("stranger cannot read the camera path", (await strangerRepo.getCameraPathForShot(shot.id)) === null);
+  check("stranger cannot read previs clips", (await strangerRepo.listPrevisClips(shot.id)).length === 0);
+  const strangerPathWrite = await expectError(() =>
+    strangerRepo.saveCameraPath({
+      ...pathBase,
+      id: randomUUID(),
+      path: path1,
+      expectedRevision: 2,
+      userId: stranger,
+      now: now(),
+    }),
+  );
+  check("stranger cannot mutate the camera path", strangerPathWrite !== null);
+  const strangerClip = await expectError(() =>
+    strangerRepo.recordPrevisClip({
+      ...clipBase,
+      id: randomUUID(),
+      assetId: clipAsset,
+      userId: stranger,
+      renderedAt: now(),
+    }),
+  );
+  check("stranger cannot record a previs clip", strangerClip !== null);
+  const crossPath = await asOwner(
+    `insert into shot_camera_paths (project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint,
+        schema_version, duration_ms, frame_rate, path_json, path_fingerprint)
+     values ($1,$2,$3,$4,1,$5,'prism.camera-path.v1',1000,24,'{}'::jsonb,$5)`,
+    [otherProject, shot.id, otherLocation, sceneId, "0".repeat(64)],
+  );
+  check(
+    "a camera path cannot mix a shot, location and scene from different projects",
+    crossPath.error !== null,
+  );
+  const movePath = await pool
+    .query("update shot_camera_paths set shot_id = gen_random_uuid() where id = $1", [savedPath.id])
+    .then(
+      () => null,
+      (e: Error) => e.message,
+    );
+  check("a camera path cannot move to another shot", movePath !== null);
+  const pathBack = await pool
+    .query("update shot_camera_paths set revision = 1 where id = $1", [savedPath.id])
+    .then(
+      () => null,
+      (e: Error) => e.message,
+    );
+  check("the camera-path revision cannot decrease", pathBack !== null && /cannot decrease/.test(pathBack));
+  const badPathSchema = await pool
+    .query(
+      `insert into shot_camera_paths (project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint,
+          schema_version, duration_ms, frame_rate, path_json, path_fingerprint)
+       values ($1,$2,$3,$4,1,$5,'other.v2',1000,24,'{}'::jsonb,$5)`,
+      [projectId, noCamLoc, tmpLocation, sceneId, "0".repeat(64)],
+    )
+    .then(
+      () => null,
+      (e: Error) => e.message,
+    );
+  check("an unknown camera-path schema_version is rejected", badPathSchema !== null);
+  const badContainer = await pool
+    .query("update shot_previs_clips set container = 'avi' where id = $1", [clip.id])
+    .then(
+      () => null,
+      (e: Error) => e.message,
+    );
+  check("an unknown previs container is rejected", badContainer !== null);
 } finally {
   // ── cleanup (cascade removes scenes, bookmarks and master frames) ──
   for (const id of created.projectIds)
@@ -436,7 +720,7 @@ const leftover = await pool.query(
 );
 const l = leftover.rows[0];
 check(
-  "cleanup left no test rows (cascade removed scenes, bookmarks, master frames)",
+  "cleanup left no test rows (cascade removed scenes, bookmarks, master frames, paths, clips)",
   l.scenes === 0 && l.assets === 0 && l.locations === 0 && l.projects === 0,
   JSON.stringify(l),
 );

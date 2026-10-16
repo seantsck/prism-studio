@@ -58,6 +58,8 @@ const expectedTables = [
   "location_scene_documents",
   "shot_camera_bookmarks",
   "scene_master_frames",
+  "shot_camera_paths",
+  "shot_previs_clips",
 ];
 const tables = (await rows("select tablename, rowsecurity from pg_tables where schemaname='public'")).filter(
   (t) => t.tablename !== "prism_migrations",

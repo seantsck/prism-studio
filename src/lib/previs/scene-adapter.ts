@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { assetIdFromToken, assetTokenFor, PRISM_USER_DATA } from "@/domain/previs/document";
-import { productionRenderSpec } from "@/domain/previs/camera";
+import { focalLengthToFovDegrees, productionRenderSpec } from "@/domain/previs/camera";
 import type { CameraBookmarkValue, PrevisCamera, Vec3 } from "@/domain/previs/types";
 import { addObject } from "@/vendor/artcraft-scene-engine/actions/addObject";
 import { addShape } from "@/vendor/artcraft-scene-engine/actions/addShape";
@@ -71,6 +71,23 @@ export interface SpatialSceneAdapter {
    * camera, its pose and the look-through state are not read and not changed.
    */
   captureMasterFrame(bookmark: CameraBookmarkValue): Promise<CapturedFrame>;
+  /**
+   * Plays one evaluated camera-path state onto the PRODUCTION camera (and, only while looking through it, the
+   * viewport). The navigation camera is otherwise untouched. The authored camera pose is remembered so that
+   * serialising the scene never records a playback pose; `restoreAuthoredCamera` puts it back.
+   */
+  applyCameraState(state: { position: Vec3; rotation: Vec3; focalLengthMm: number }): void;
+  restoreAuthoredCamera(): void;
+  /** Editor-only path line + keyframe markers on a non-production layer; null removes them. */
+  setPathOverlay(overlay: PathOverlay | null): void;
+  /**
+   * Renders one frame through an isolated production camera built from a camera-path state. Used by the previs
+   * renderer; never reads or mutates the editor/navigation camera.
+   */
+  renderPrevisFrame(
+    state: { position: Vec3; rotation: Vec3; focalLengthMm: number },
+    size: { width: number; height: number },
+  ): Promise<HTMLCanvasElement | OffscreenCanvas>;
   undo(): Promise<void>;
   redo(): Promise<void>;
   canUndo(): boolean;
@@ -96,11 +113,25 @@ const PRODUCTION_ASPECT = CameraAspectRatio.HORIZONTAL_2_39_1;
 const SCENE_META = { positivePrompt: "", cameraAspectRatio: PRODUCTION_ASPECT };
 const toVec = (v: { x: number; y: number; z: number }): Vec3 => ({ x: v.x, y: v.y, z: v.z });
 
+/** Editor-only visualisation of a camera path (never rendered into master frames or previs). */
+export interface PathOverlay {
+  line: Vec3[];
+  keys: Array<{ position: Vec3; selected: boolean; role: "start" | "end" | "mid" }>;
+  current: Vec3 | null;
+}
+
+/** Overlay objects live on layer 1 only: the viewport sees layers 0 and 1, the production render camera only 0. */
+const EDITOR_ONLY_LAYER = 1;
+const OVERLAY_NAME = "::PRISM_PATH_OVERLAY::";
+
 export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
   private editor: Editor | null = null;
   private listeners = new Set<() => void>();
   private unsubscribers: Array<() => void> = [];
   private disposed = false;
+  private authoredCamera: { position: Vec3; rotation: Vec3; focalLengthMm: number } | null = null;
+  private overlay: THREE.Group | null = null;
+  private notifyQueued = false;
 
   constructor(private readonly options: AdapterOptions) {}
 
@@ -127,6 +158,22 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     for (const l of this.listeners) l();
   };
 
+  /**
+   * Store updates caused by camera playback arrive on every frame; those are coalesced to one notification per
+   * animation frame. Everything else (inspector edits, selection) notifies synchronously, as in M1.
+   */
+  private notifyFromStore = () => {
+    if (!this.authoredCamera) return this.notify();
+    if (this.notifyQueued) return;
+    this.notifyQueued = true;
+    const run = () => {
+      this.notifyQueued = false;
+      this.notify();
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+    else queueMicrotask(run);
+  };
+
   async mount(targets: MountTargets, engineScene: object | null): Promise<void> {
     registerPrevisShapes();
     const store = usePageSceneStore.getState();
@@ -150,7 +197,7 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     this.unsubscribers.push(
       editor.bus.subscribe(OutlinerRefreshedEvent, this.notify),
       editor.bus.subscribe(SelectionChangedEvent, this.notify),
-      usePageSceneStore.subscribe(this.notify),
+      usePageSceneStore.subscribe(this.notifyFromStore),
     );
     if (this.disposed) this.dispose();
   }
@@ -184,9 +231,145 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
 
   serializeScene() {
     const editor = this.requireEditor();
-    return JSON.parse(
-      JSON.stringify(editor.save_manager.getSceneJson({ sceneGenerationMetadata: SCENE_META })),
-    ) as Record<string, unknown>;
+    // while a path is being played the live production camera is a playback pose, not authored truth
+    const live = this.authoredCamera ? this.readCamera() : null;
+    if (this.authoredCamera) this.writeCamera(this.authoredCamera);
+    try {
+      return JSON.parse(
+        JSON.stringify(editor.save_manager.getSceneJson({ sceneGenerationMetadata: SCENE_META })),
+      ) as Record<string, unknown>;
+    } finally {
+      if (live) this.writeCamera(live);
+    }
+  }
+
+  private readCamera(): { position: Vec3; rotation: Vec3; focalLengthMm: number } | null {
+    const cc = this.editor?.cameraController;
+    const cfg = usePageSceneStore.getState().cameras.find((c) => c.id !== "main");
+    if (!cc || !cc.cam_obj || !cfg) return null;
+    const pose = cc.camera_person_mode && cc.camera ? cc.camera : cc.cam_obj;
+    return {
+      position: toVec(pose.position),
+      rotation: { x: pose.rotation.x, y: pose.rotation.y, z: pose.rotation.z },
+      focalLengthMm: cfg.focalLength,
+    };
+  }
+
+  private writeCamera(c: { position: Vec3; rotation: Vec3; focalLengthMm: number }) {
+    const cc = this.editor?.cameraController;
+    const store = usePageSceneStore.getState();
+    const cfg = store.cameras.find((x) => x.id !== "main");
+    if (!cc || !cc.cam_obj || !cfg) return;
+    // while looking through the camera the viewport camera IS the production pose (the tick mirrors it back)
+    const targets = [cc.cam_obj, ...(cc.camera_person_mode && cc.camera ? [cc.camera] : [])];
+    for (const t of targets) {
+      t.position.set(c.position.x, c.position.y, c.position.z);
+      t.rotation.set(c.rotation.x, c.rotation.y, c.rotation.z);
+      t.updateMatrixWorld(true);
+    }
+    store.updateCamera(cfg.id, {
+      focalLength: c.focalLengthMm,
+      position: toVec(c.position),
+      rotation: toVec(c.rotation),
+    });
+  }
+
+  applyCameraState(state: { position: Vec3; rotation: Vec3; focalLengthMm: number }) {
+    this.requireEditor();
+    if (!this.authoredCamera) this.authoredCamera = this.readCamera();
+    this.writeCamera(state);
+  }
+
+  restoreAuthoredCamera() {
+    if (!this.authoredCamera || !this.editor) return;
+    const base = this.authoredCamera;
+    this.authoredCamera = null;
+    this.writeCamera(base);
+    this.notify();
+  }
+
+  setPathOverlay(overlay: PathOverlay | null) {
+    const editor = this.editor;
+    if (!editor) return;
+    const scene = editor.activeScene.scene;
+    if (this.overlay) {
+      scene.remove(this.overlay);
+      this.overlay.traverse((o) => {
+        const m = o as THREE.Mesh | THREE.Line;
+        m.geometry?.dispose();
+        (m.material as THREE.Material | undefined)?.dispose();
+      });
+      this.overlay = null;
+    }
+    if (!overlay) return;
+    const group = new THREE.Group();
+    group.name = OVERLAY_NAME;
+    group.userData.prismEditorOnly = true; // no media_id: never serialised, listed or fingerprinted
+    const mark = (o: THREE.Object3D) => {
+      o.layers.set(EDITOR_ONLY_LAYER);
+      o.raycast = () => undefined; // not pickable
+    };
+    if (overlay.line.length >= 2) {
+      const geo = new THREE.BufferGeometry().setFromPoints(
+        overlay.line.map((p) => new THREE.Vector3(p.x, p.y, p.z)),
+      );
+      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xf2b84b }));
+      mark(line);
+      group.add(line);
+    }
+    const colour = { start: 0x4ade80, end: 0xf87171, mid: 0xf2b84b } as const;
+    for (const k of overlay.keys) {
+      const m = new THREE.Mesh(
+        new THREE.SphereGeometry(k.selected ? 0.12 : 0.08, 12, 8),
+        new THREE.MeshBasicMaterial({ color: k.selected ? 0xffffff : colour[k.role] }),
+      );
+      m.position.set(k.position.x, k.position.y, k.position.z);
+      mark(m);
+      group.add(m);
+    }
+    if (overlay.current) {
+      const c = new THREE.Mesh(
+        new THREE.SphereGeometry(0.06, 10, 8),
+        new THREE.MeshBasicMaterial({ color: 0x60a5fa }),
+      );
+      c.position.set(overlay.current.x, overlay.current.y, overlay.current.z);
+      mark(c);
+      group.add(c);
+    }
+    mark(group);
+    scene.add(group);
+    this.overlay = group;
+  }
+
+  async renderPrevisFrame(
+    state: { position: Vec3; rotation: Vec3; focalLengthMm: number },
+    size: { width: number; height: number },
+  ) {
+    const editor = this.requireEditor();
+    const renderer = editor.renderer;
+    if (!renderer) throw new Error("The 3D set is not ready to render.");
+    // an isolated camera at the previs resolution, rendered straight to a canvas copy (the viewport is untouched)
+    const cam = new THREE.PerspectiveCamera(
+      focalLengthToFovDegrees(state.focalLengthMm),
+      size.width / size.height,
+      0.05,
+      2000,
+    );
+    cam.position.set(state.position.x, state.position.y, state.position.z);
+    cam.rotation.set(state.rotation.x, state.rotation.y, state.rotation.z, "XYZ");
+    cam.layers.disable(EDITOR_ONLY_LAYER);
+    cam.updateMatrixWorld(true);
+    const snap = editor.snapShotOfCurrentFrame(false, cam, size);
+    if (!snap) throw new Error("The 3D set could not render a frame.");
+    const bitmap = await createImageBitmap(snap.file);
+    const canvas = document.createElement("canvas");
+    canvas.width = size.width;
+    canvas.height = size.height;
+    const g = canvas.getContext("2d");
+    if (!g) throw new Error("A 2D canvas is not available.");
+    g.drawImage(bitmap, 0, 0, size.width, size.height);
+    bitmap.close();
+    return canvas;
   }
 
   private sceneObjects(): THREE.Object3D[] {
@@ -324,6 +507,8 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
   }
 
   setProductionCamera(camera: PrevisCamera) {
+    // an explicit edit adopts the new pose as the authored camera and ends any playback override
+    this.authoredCamera = null;
     const editor = this.requireEditor();
     const cc = editor.cameraController;
     const wasLooking = cc.camera_person_mode;
@@ -343,7 +528,8 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
         position: toVec(camera.position),
         rotation: toVec(camera.rotation),
       });
-      store.setSelectedCameraId(cfg.id);
+      // the viewport lens follows the production lens only while looking through the production camera
+      store.setSelectedCameraId(wasLooking ? cfg.id : "main");
     }
     if (wasLooking) cc.enterCameraView();
     this.notify();
@@ -352,7 +538,8 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
   lookThroughProductionCamera(on: boolean) {
     const cc = this.requireEditor().cameraController;
     const cfg = usePageSceneStore.getState().cameras.find((c) => c.id !== "main");
-    if (cfg) usePageSceneStore.getState().setSelectedCameraId(cfg.id); // viewport FOV follows the production lens
+    // the viewport lens follows the production lens only while looking through it; the navigation camera keeps its own
+    if (cfg) usePageSceneStore.getState().setSelectedCameraId(on ? cfg.id : "main");
     if (on) cc.enterCameraView();
     else cc.exitCameraView();
     this.notify();
@@ -403,6 +590,8 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
   dispose() {
     this.disposed = true;
     for (const u of this.unsubscribers.splice(0)) u();
+    this.setPathOverlay(null);
+    this.authoredCamera = null;
     this.listeners.clear();
     const editor = this.editor;
     this.editor = null;

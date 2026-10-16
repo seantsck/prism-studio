@@ -13,6 +13,12 @@ import {
   type SpatialSceneAdapter,
 } from "@/lib/previs/scene-adapter";
 import { installPrevisTestHook } from "@/lib/previs/test-hook";
+import {
+  CameraMotionPanel,
+  type CameraPathInfo,
+  type PrevisClipInfo,
+  type ShotTimingInfo,
+} from "./camera-motion-panel";
 import { useFreeCam } from "@/vendor/artcraft-scene-engine/hooks/useFreeCam";
 import { useViewportPointer } from "@/vendor/artcraft-scene-engine/hooks/useViewportPointer";
 import type Editor from "@/vendor/artcraft-scene-engine/engine/editor";
@@ -51,6 +57,9 @@ export interface VirtualSetProps {
     capturedAt: string;
     adopted: boolean;
   }>;
+  shotTiming: ShotTimingInfo | null;
+  cameraPath: CameraPathInfo | null;
+  previsClips: PrevisClipInfo[];
 }
 
 const RAD = Math.PI / 180;
@@ -694,6 +703,25 @@ export function VirtualSetEditor(props: VirtualSetProps) {
           ) : (
             <p className="mt-2 text-xs text-muted">No production camera is linked to this shot yet.</p>
           )}
+
+          {shotId ? (
+            <CameraMotionPanel
+              key={shotId}
+              adapter={adapter}
+              ready={ready}
+              projectSlug={props.projectSlug}
+              locationId={props.locationId}
+              shotId={shotId}
+              camera={camera}
+              looking={looking}
+              timing={shotId === props.activeShotId ? props.shotTiming : null}
+              initialPath={shotId === props.activeShotId ? props.cameraPath : null}
+              initialClips={shotId === props.activeShotId ? props.previsClips : []}
+              savedSceneFingerprint={savedFingerprint}
+              sceneDirty={dirty}
+              ensureSceneSaved={ensureSaved}
+            />
+          ) : null}
 
           <h2 className="mb-1 mt-4 text-xs uppercase tracking-wide text-muted">Master frame</h2>
           <button

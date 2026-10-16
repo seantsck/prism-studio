@@ -41,6 +41,7 @@ export const ASSET_SOURCES = [
   "storyboard",
   "provider_output",
   "derived",
+  "local_previs",
 ] as const;
 /** What an asset is FOR (type says what it is). Drives the library filters and storage conventions. */
 export const ASSET_PURPOSES = [

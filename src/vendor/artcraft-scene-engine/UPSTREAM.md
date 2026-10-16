@@ -63,7 +63,9 @@ commit, line endings normalised to LF). Summary:
    `renderScene()` no longer waits on it.
 10. **Unsupported media types fail loudly**: `.pmd/.pmx` (MMD), `.spz` (splat) and `.mp4` video planes throw
     "not supported" instead of loading.
-11. **`TransformControls.js` header**: provenance and the three.js MIT notice were added (see below).
+11. **Snapshot output size (M2A)**: `snapShotOfCurrentFrame(download, camera?, size?)` accepts an explicit output size so
+    local previs frames can render below the full production frame through the same isolated camera.
+12. **`TransformControls.js` header**: provenance and the three.js MIT notice were added (see below).
 
 ## Removed after the first import (M1 hardening)
 

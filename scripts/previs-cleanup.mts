@@ -1,7 +1,9 @@
 // Removes 3D-set test data from the dev user's projects: scene documents, shot camera bookmarks, master frames,
-// their render assets (and stored files) and the storyboard frames created by "Use as Master Frame".
+// camera paths, previs clips, their render assets (and stored files) and the storyboard frames created by
+// "Use as Master Frame".
 //   npx tsx --env-file=.env.local scripts/previs-cleanup.mts --yes          delete
 //   npx tsx --env-file=.env.local scripts/previs-cleanup.mts --report       print provenance of master frames (JSON)
+//   npx tsx --env-file=.env.local scripts/previs-cleanup.mts --report-clips  print provenance of previs clips (JSON)
 // Development/test tidy-up only. Never touches rows outside the dev user's own projects.
 import pg from "pg";
 import { createOutputSink } from "../src/generation/sink";
@@ -10,13 +12,32 @@ import { startScript } from "./lib/safety.mjs";
 
 const dev = readDevUserEnv();
 const report = process.argv.includes("--report");
-if (!report)
+const reportClips = process.argv.includes("--report-clips");
+if (!report && !reportClips)
   startScript({
     mode: "3D set cleanup (deletes scene documents, bookmarks, master frames)",
     devOwner: dev.id,
   });
 const pool = new pg.Pool({ connectionString: dev.url, ssl: { rejectUnauthorized: false }, max: 2 });
 await assertDevUserExists(pool, dev);
+
+if (reportClips) {
+  const rows = await pool.query(
+    `select c.id, c.asset_id, c.path_revision, c.path_fingerprint, c.scene_revision, c.scene_fingerprint,
+            c.frame_rate::float as frame_rate, c.duration_ms, c.render_width, c.render_height, c.container, c.codec,
+            c.has_audio, c.source, a.bucket, a.object_path, a.source as asset_source, a.purpose as asset_purpose,
+            a.type as asset_type, a.mime, a.byte_size, a.metadata->'previs' as provenance,
+            (select public from storage.buckets b where b.id = a.bucket) as bucket_public
+       from shot_previs_clips c
+       join projects p on p.id = c.project_id
+       join assets a on a.id = c.asset_id
+      where p.user_id = $1 order by c.rendered_at desc`,
+    [dev.id],
+  );
+  console.log(JSON.stringify(rows.rows));
+  await pool.end();
+  process.exit(0);
+}
 
 if (report) {
   const rows = await pool.query(
@@ -39,7 +60,9 @@ if (report) {
 const assets = (
   await pool.query(
     `select a.id, a.object_path from assets a join projects p on p.id = a.project_id
-      where p.user_id = $1 and a.source = '3d_render' and 'master_frame' = any(a.tags)`,
+      where p.user_id = $1
+        and ((a.source = '3d_render' and 'master_frame' = any(a.tags))
+          or (a.source = 'local_previs' and 'previs' = any(a.tags)))`,
     [dev.id],
   )
 ).rows;
@@ -53,12 +76,14 @@ const frames = (
 const counts = (
   await pool.query(
     `select (select count(*)::int from location_scene_documents d join projects p on p.id = d.project_id where p.user_id = $1) as scenes,
-            (select count(*)::int from shot_camera_bookmarks b join projects p on p.id = b.project_id where p.user_id = $1) as bookmarks`,
+            (select count(*)::int from shot_camera_bookmarks b join projects p on p.id = b.project_id where p.user_id = $1) as bookmarks,
+            (select count(*)::int from shot_camera_paths c join projects p on p.id = c.project_id where p.user_id = $1) as paths,
+            (select count(*)::int from shot_previs_clips c join projects p on p.id = c.project_id where p.user_id = $1) as clips`,
     [dev.id],
   )
 ).rows[0];
 console.log(
-  `scenes: ${counts.scenes}, bookmarks: ${counts.bookmarks}, master-frame assets: ${assets.length}, storyboard frames: ${frames.length}`,
+  `scenes: ${counts.scenes}, bookmarks: ${counts.bookmarks}, camera paths: ${counts.paths}, previs clips: ${counts.clips}, previs/master-frame assets: ${assets.length}, storyboard frames: ${frames.length}`,
 );
 if (!process.argv.includes("--yes")) {
   console.log("dry run; pass --yes to delete");
@@ -67,7 +92,15 @@ if (!process.argv.includes("--yes")) {
 }
 
 if (frames.length) await pool.query("delete from storyboard_frames where id = any($1::uuid[])", [frames]);
-// scene_master_frames reference assets (no cascade): remove them with their scenes first
+// previs clips and master frames reference assets (no cascade): remove them with their scenes first
+await pool.query(
+  `delete from shot_previs_clips where project_id in (select id from projects where user_id = $1)`,
+  [dev.id],
+);
+await pool.query(
+  `delete from shot_camera_paths where project_id in (select id from projects where user_id = $1)`,
+  [dev.id],
+);
 await pool.query(
   `delete from scene_master_frames where project_id in (select id from projects where user_id = $1)`,
   [dev.id],

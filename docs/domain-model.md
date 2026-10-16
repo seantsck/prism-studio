@@ -106,3 +106,14 @@ unique positions and at most one `primary`. See [generation-architecture](genera
 Distinct concerns: Production Shot · Generation Package · Generation Adaptation Plan · Provider Output ·
 Delivery Conform · Continuity QA · Creative Approval. See [framing-adaptation](framing-adaptation.md),
 [delivery-conform](delivery-conform.md), [continuity-qa](continuity-qa.md).
+
+## Camera motion entities (Phase 2F M2A)
+
+| Entity                | Table / column                                                    | Nature                                                                                                                                                               |
+| --------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CameraPath            | `shot_camera_paths` (`path_json`, `revision`, `path_fingerprint`) | One current editable path per Shot; quaternion keyframes + focal length; compare-and-set revision; tied to the set revision/fingerprint it was authored against      |
+| PrevisClip            | `shot_previs_clips`                                               | One locally rendered previs: path revision/fingerprint, set revision/fingerprint, private asset id, fps, duration, dimensions, container, codec; append-only history |
+| CameraMotionReference | `GenerationPackage.spatialReference.cameraMotion`                 | Frozen copy (by value) of the path used for a package; optional                                                                                                      |
+
+Distinct concerns: Editor camera · Production camera · Camera path · Camera bookmark (M1) · Master frame · Previs clip.
+See [virtual-set](virtual-set.md).

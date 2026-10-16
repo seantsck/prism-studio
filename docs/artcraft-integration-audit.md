@@ -122,3 +122,17 @@ controls in `keybinds_controls.ts` (a tree-shaken import, not a dependency); `ed
 non-provider path stores one, so the A→B→A read-back was not added as a database test (that would need a second
 persistence mechanism or a real attempt). The existing unit proof (`spatial-package.test.ts`) freezes a package, edits the
 scene, freezes another and shows the first unchanged; the attempt row stores the JSON snapshot by value.
+
+## 11. M2A: camera motion (decision record)
+
+- **Engine timeline vs Prism evaluator.** The upstream `TimelineController` keys `TransformSnap` (position, Euler
+  rotation, scale) per object with Euler lerp and no lens channel. M2A needs quaternion slerp, a focal-length channel,
+  Catmull-Rom position and easing that apply identically to previews, scrubbing and rendering. Patching the engine
+  timeline would have left two interpolation implementations. Prism owns the path and its evaluator; the engine still
+  executes the result (the `::CAM::` object, lens, camera view, snapshots). No upstream file was changed for motion.
+- **Vendor patches added in M2A (1):** `Editor.snapShotOfCurrentFrame(download, camera?, size?)` gained an optional
+  output `size` so a previs can render below the production frame through the same isolated camera path as master
+  frames. `UPSTREAM.md`/`prism-vendor.patch` were regenerated.
+- **Dependency added:** `mediabunny@1.60.0` (MPL-2.0), as an npm dependency only; used for local MP4/WebM encoding.
+  MPL-2.0 file-level copyleft applies to modifications of MediaBunny's own files, which Prism does not make.
+- **Spark/splats** remain removed (M2D).
