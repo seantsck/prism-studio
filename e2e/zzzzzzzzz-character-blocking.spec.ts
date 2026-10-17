@@ -679,6 +679,11 @@ test.describe("shot character blocking", () => {
     await expect(page.getByTestId("character-blocking")).toHaveAttribute("data-loaded", "true", {
       timeout: 60_000,
     });
+    // earlier specs link the production camera, which is a legitimate Set change: start from re-anchored blocking
+    if ((await page.getByTestId("blocking-stale").count()) > 0) {
+      await page.getByTestId("reanchor-blocking").click();
+      await expect(page.getByTestId("blocking-status")).toContainText("re-anchored", { timeout: 60_000 });
+    }
     await expect(page.getByTestId("blocking-stale")).toHaveCount(0);
     const layerBefore = await page.getByTestId("character-blocking").getAttribute("data-saved-fingerprint");
     const figureBefore = await page.getByTestId("blocking-figure").count();
