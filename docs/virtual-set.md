@@ -305,3 +305,127 @@ and a previs file is not needed to compile it. Camera motion is **not** translat
 | Postgres, RLS, isolation, guards, audio-mix provenance (0031, 0032)           | `scripts/db-previs.mts`                                     |
 | authoring, persistence, playback, overlay, real local encode, stale, package  | `e2e/zzzzzzz-camera-previs.spec.ts`                         |
 | real audio mux (tracks, timing, stale audio vs silent), gap, fallback (M2A.1) | `e2e/zzzzzzzz-previs-audio.spec.ts`                         |
+
+## Character blocking (Phase 2F M2B)
+
+A Shot knows **where each Character stands and how their body is posed**. This is a layer of the _Shot_, never of the
+Location's persistent set.
+
+```
+Character → neutral rigged proxy → Shot blocking (root + FK pose) → production camera → master frame / local previs
+                                                   └→ frozen GenerationPackage `spatialReference.shotBlocking`
+```
+
+**CHARACTER IDENTITY ≠ MANNEQUIN APPEARANCE.** The proxy carries position, facing, height, pose and nothing else. Face,
+hair, wardrobe, skin tone and likeness stay in the Character's Prism references (Look, identity refs).
+
+### Ownership: Set vs Shot
+
+|                     | Owns                                                                       | Stored                                                                      |
+| ------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| **Location's Set**  | architecture, props, environment, fixed set state                          | `location_scene_documents` (`prism.previs.v1`)                              |
+| **Shot's blocking** | which Characters are present, root placement, root facing, height, FK pose | `shot_character_blocking` (`prism.shot-blocking.v1`), one row per Shot+Char |
+
+Shots 3A, 3B and 5A can use the same Set with different blocking; editing one never touches another (proved in
+`scripts/db-blocking.mts` and `e2e/zzzzzzzzz-character-blocking.spec.ts`). The proxies are a **runtime overlay** in the
+engine's THREE scene: they carry no `media_id`, so the engine's scene save never serialises them, they are not in the
+outliner, and adding one does not make the Set "dirty". Switching Shot swaps the overlay without reloading the Set. With
+no Shot selected, only the base Set shows.
+
+M1's scene-level `Mannequin` objects stay readable and untouched (they appear in the package's legacy
+`characterBlocking` list). They are treated as generic Set figures; there is no automatic conversion. (An explicit "Use
+as Shot Blocking" copy action was not built; see Known gaps.)
+
+### Rig: `prism.humanoid-rig.v1`
+
+Prism's own semantic model (`src/domain/previs/rig.ts`): `root, hips, spine, chest, neck, head`, and per side
+`Shoulder, UpperArm, LowerArm, Hand` and `UpperLeg, LowerLeg, Foot` (20 joints; toes were left out). Y up, the figure
+faces +Z at yaw 0, so its left is +X. Offsets are metres for a 1.70 m reference figure; blocking scales the whole figure
+uniformly (no per-limb stretching).
+
+The **runtime** (`src/lib/previs/humanoid-rig.ts`) is a procedural `THREE.Bone` hierarchy (one bone per joint except
+`root`, which is the proxy group itself) with rigid primitives (boxes, cylinders, a sphere head with a nose wedge)
+attached to the bones. No Mixamo, ArtCraft or other third-party mesh, texture or animation is used.
+
+### Pose: `prism.pose.v1`
+
+`{ schema, rig, joints: { <jointId>: {x,y,z,w} } }`. **Quaternions are authoritative** (Euler angles exist only in the
+editor fields). Only joints that differ from neutral are stored, quaternion sign is canonical (`q` and `-q` are one
+pose), values are rounded to 6 decimals, keys are in rig order. `poseFingerprint` changes with any joint rotation and
+the rig version, and with nothing else.
+
+### Root ≠ pose
+
+Moving a figure three metres, turning its whole body, or changing its height is **root blocking**
+(`position`, `orientation` quaternion, uniform `scale`; height = scale × 1.70 m; the UI exposes position XYZ, body yaw
+and height in metres). Turning the head or bending an elbow is a **pose edit**. A pose preset never moves the root,
+except one documented vertical difference: _Seated_ lowers the hips by 0.42 m (at reference height), applied as the
+**difference from the preset the figure was previously in**, so stand → sit → stand returns to the same height.
+
+Height defaults to 1.70 m and is labelled a proxy default. Characters have no recorded height in the data model, so no
+height is invented for a real Character.
+
+### Blocking fingerprint
+
+`blockingFingerprint(entry, {locationId})` = character id, location, root position/orientation/scale, rig version, pose
+fingerprint, visibility. It does **not** change with the selected bone, pose-panel state, gizmo mode, orbit camera,
+timeline position, helper or skeleton visibility. `renderedBlockingFingerprint` is the identity of the Shot's _visible_
+layer (null when no proxy is visible, which is also the identity of every pre-M2B render).
+
+### FK posing and reuse of ArtCraft (see `artcraft-integration-audit.md` §12)
+
+Pose Mode uses the vendored `FKHelper` (rotate gizmo on bone spheres) and the engine's own selection, root gizmo and
+undo/redo. The upstream helper looks for `mixamorig:*` bone names, so the Prism rig carries an **explicit alias table**
+(`mixamoAlias` per joint); Prism code reads the semantic id (`bone.userData.prismJoint`). Joint limits are **editor
+safety constraints** (elbows and knees fold one way, the head cannot spin around), clamped as a bone is dragged; they are
+not anatomical. The stored quaternion stays authoritative, and a stored pose is never silently rewritten by the limits.
+
+FK only. There is no IK, foot planting, physics or pose animation in M2B.
+
+### Presets
+
+`Neutral Stand`, `Seated`, `Walk A`, `Walk B` and `Hands on Hips`: procedural quaternion data in
+`src/domain/previs/pose.ts`, not animation files. They are starting points, all inside the joint limits.
+
+### Staleness
+
+Blocking stores the Set revision and fingerprint it was authored against. When the Set changes it is **STALE BLOCKING**
+(never deleted). **Re-anchor to current set** is an explicit action that records the live revision/fingerprint without
+changing any root transform or pose. Saving only writes the _changed_ figures, so saving never silently re-anchors a
+stale one.
+
+A master frame or previs records the blocking it showed (`blocking_fingerprint` + per-figure `{characterId, blockingId,
+revision, fingerprint}`; ids and fingerprints only). A render is current only while that equals the Shot's current
+rendered layer. A silent previs still ignores audio changes but **not** blocking changes. Historical renders are kept.
+
+### Rendering
+
+The proxies are production-blocking content: they appear in master frames and local previs (the previs renders the
+Shot's **static** saved pose for the whole clip; there is no pose animation). Editor helpers never do: bone spheres and
+skeleton lines are on the editor-only layer 1, and the FK gizmo is hidden for the duration of a render. The server
+rejects a master frame or previs whose claimed blocking is not the saved blocking.
+
+### GenerationPackage
+
+`spatialReference.shotBlocking` (optional; absent without blocking, so earlier packages are byte-identical) freezes by
+value, per figure: `characterId`, `blockingId`, `revision`, `fingerprint`, visibility, the Set revision/fingerprint it
+was authored against, `root {position, orientation, scale, heightMeters}`, `rigVersion`,
+`pose {schemaVersion, poseFingerprint, joints}` and a deterministic text `summary` (not model generated, no emotion
+inferred, not injected into provider prompts). Identity (Character/Look references) is a separate channel. M1's
+`characterBlocking` keeps its meaning and shape.
+
+### Persistence (migration 0033)
+
+`shot_character_blocking` (owner-only RLS, no worker grants, unique `(shot_id, character_id)`, composite project-safe
+foreign keys including a new `characters (id, project_id)` key, compare-and-set `revision`, immutable
+project/shot/character). `scene_master_frames` and `shot_previs_clips` gain `blocking_fingerprint` + `blocking_json`.
+
+### Tests (M2B)
+
+| Layer                                                                | File                                                     |
+| -------------------------------------------------------------------- | -------------------------------------------------------- |
+| rig, quaternions, pose schema/fingerprint, limits, presets, blocking | `src/domain/previs/__tests__/rig-pose-blocking.test.ts`  |
+| persistence rules, Shot isolation, staleness, re-anchor, package     | `src/domain/previs/__tests__/shot-blocking-repo.test.ts` |
+| procedural three.js rig: hierarchy, FK propagation, disposal         | `src/lib/previs/__tests__/humanoid-rig.test.ts`          |
+| Postgres, RLS, isolation, constraints, render provenance             | `scripts/db-blocking.mts` (`npm run db:blocking`)        |
+| real gizmos, persistence, undo, Shot isolation, renders, package     | `e2e/zzzzzzzzz-character-blocking.spec.ts`               |

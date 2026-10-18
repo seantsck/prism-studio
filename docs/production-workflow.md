@@ -147,3 +147,18 @@ can be rendered in the browser and is kept as a private asset with the path and 
   the previs on the same timeline as the camera (pre-roll, takes, gaps, post-roll). It is composed and encoded locally;
   with no compatible audio encoder the previs is rendered silent and says so. A previs with audio goes stale
   ("STALE AUDIO") when the selected takes or timing change; a silent previs does not, since it never contained the audio.
+
+## Character blocking in the 3D Set (Phase 2F M2B)
+
+In a Shot's 3D Set, **Add Character Proxy** places a neutral rigged mannequin for a Project Character; move and turn it
+with the root gizmo (or position / body yaw / height fields) and pose it in **Pose Mode** (click a joint, drag the
+rotate gizmo; presets: Neutral Stand, Seated, Walk A/B, Hands on Hips; head yaw/pitch). Save the blocking; it belongs to
+that Shot only. The proxy shows where and how the Character stands, not who they are.
+
+- **Renders.** Master frames and local previs show the proxies (static pose through the clip); editor helpers never
+  appear. Each render records the blocking it showed.
+- **Stale, not deleted.** Changing the blocking stales earlier master frames and previs ("STALE BLOCKING"); changing the
+  set stales the blocking itself, which you can **Re-anchor to current set** explicitly. History is kept.
+- **Not a freshness part.** Blocking does not change the 13 shot freshness parts or any existing approval.
+- **Frozen in the package.** `spatialReference.shotBlocking` carries each figure's root and pose by value plus a
+  deterministic summary. Nothing is injected into provider prompts in M2B.

@@ -1,4 +1,11 @@
 import { pickCurrentClip } from "@/domain/previs/audio-mix";
+import {
+  blockingFingerprint,
+  buildShotBlockingReference,
+  parseBlockingEntry,
+  renderedBlockingFingerprint,
+} from "@/domain/previs/blocking";
+import { poseFingerprint } from "@/domain/previs/pose";
 import { bookmarkFromCamera } from "@/domain/previs/camera";
 import { cameraPathFingerprint, validateCameraPath } from "@/domain/previs/camera-path";
 import { sceneFingerprint } from "@/domain/previs/document";
@@ -19,6 +26,8 @@ import {
   type NewPrevisClip,
   type PrevisClipRecord,
   type SaveCameraPathInput,
+  type SaveShotBlockingInput,
+  type ShotBlockingRecord,
   type PrevisRepository,
   type SaveSceneInput,
   type SceneDocumentRecord,
@@ -34,6 +43,7 @@ export class MemoryPrevisService implements PrevisRepository {
   private frames = new Map<string, MasterFrameRecord>();
   private paths = new Map<string, CameraPathRecord>(); // by shot id
   private clips = new Map<string, PrevisClipRecord>();
+  private blocking = new Map<string, ShotBlockingRecord>(); // by `${shotId}:${characterId}`
 
   constructor(private readonly access: MemoryProjectsAccess) {}
 
@@ -49,6 +59,27 @@ export class MemoryPrevisService implements PrevisRepository {
   private requireShot(projectId: string, shotId: string) {
     if (!this.project(projectId).shots.some((s) => s.id === shotId))
       throw new PrevisError("not_found", "That shot is not in this project.");
+  }
+
+  private requireCharacter(projectId: string, characterId: string) {
+    if (!this.project(projectId).characters.some((c) => c.id === characterId))
+      throw new PrevisError("not_found", "That character is not in this project.");
+  }
+
+  private blockingFor(shotId: string): ShotBlockingRecord[] {
+    return [...this.blocking.values()]
+      .filter((b) => b.shotId === shotId)
+      .sort((a, b) => (a.characterId < b.characterId ? -1 : 1));
+  }
+
+  /** What the Shot's picture shows of its blocking right now (visible figures only; null = none). */
+  private currentBlockingFingerprint(shotId: string): string | null {
+    const recs = this.blockingFor(shotId);
+    if (recs.length === 0) return null;
+    return renderedBlockingFingerprint(
+      recs.map((r) => r.entry),
+      { locationId: recs[0].locationId },
+    );
   }
 
   async getSceneForLocation(locationId: string) {
@@ -141,6 +172,7 @@ export class MemoryPrevisService implements PrevisRepository {
       [...this.clips.values()].filter((c) => c.shotId === shotId),
       p.pathFingerprint,
       currentAudioMix?.(shotId, p.durationMs) ?? null,
+      this.currentBlockingFingerprint(shotId),
     );
     return {
       schemaVersion: CAMERA_MOTION_SCHEMA_VERSION,
@@ -172,10 +204,12 @@ export class MemoryPrevisService implements PrevisRepository {
     const shotIds = new Set<string>();
     for (const [shotId, b] of this.bookmarks) if (b.projectId === projectId) shotIds.add(shotId);
     for (const [shotId, p] of this.paths) if (p.projectId === projectId) shotIds.add(shotId);
+    for (const b of this.blocking.values()) if (b.projectId === projectId) shotIds.add(b.shotId);
     for (const shotId of shotIds) {
       const b = this.bookmarks.get(shotId) ?? null;
       const p = this.paths.get(shotId) ?? null;
-      const sceneId = b?.sceneDocumentId ?? p?.sceneDocumentId;
+      const blockRecs = this.blockingFor(shotId);
+      const sceneId = b?.sceneDocumentId ?? p?.sceneDocumentId ?? blockRecs[0]?.sceneDocumentId;
       const scene = [...this.scenes.values()].find((x) => x.id === sceneId);
       if (!scene) continue;
       const adopted = [...this.frames.values()]
@@ -200,6 +234,11 @@ export class MemoryPrevisService implements PrevisRepository {
           : null,
         adoptedMasterFrameAssetId: adopted?.assetId ?? null,
         cameraMotion: this.cameraMotionFor(shotId, currentAudioMix),
+        shotBlocking: buildShotBlockingReference(
+          blockRecs,
+          Object.fromEntries(this.project(projectId).characters.map((c) => [c.id, c.name])),
+          { locationId: scene.locationId },
+        ),
       });
     }
     return structuredClone(out);
@@ -237,6 +276,8 @@ export class MemoryPrevisService implements PrevisRepository {
       capturedAt: input.capturedAt,
       adoptedAt: null,
       adoptedFrameId: null,
+      blockingFingerprint: input.blockingFingerprint ?? null,
+      blocking: input.blocking ? clone(input.blocking) : null,
       createdBy: input.userId,
       createdAt: input.capturedAt,
     };
@@ -300,6 +341,105 @@ export class MemoryPrevisService implements PrevisRepository {
     return clone(next);
   }
 
+  async listShotBlocking(shotId: string) {
+    return this.blockingFor(shotId).map(clone);
+  }
+
+  async saveShotBlocking(input: SaveShotBlockingInput) {
+    this.requireShot(input.projectId, input.shotId);
+    this.requireLocation(input.projectId, input.locationId);
+    this.requireCharacter(input.projectId, input.characterId);
+    const scene = await this.getScene(input.sceneDocumentId);
+    if (!scene || scene.projectId !== input.projectId || scene.locationId !== input.locationId)
+      throw new PrevisError("not_found", "That 3D set was not found for this location.");
+    let entry;
+    try {
+      entry = parseBlockingEntry(input.entry);
+    } catch (err) {
+      throw new PrevisError("invalid", `Invalid character blocking: ${(err as Error).message}`);
+    }
+    if (entry.characterId !== input.characterId)
+      throw new PrevisError("invalid", "The blocking is for a different character.");
+    const key = `${input.shotId}:${input.characterId}`;
+    const existing = this.blocking.get(key);
+    const base = {
+      projectId: input.projectId,
+      shotId: input.shotId,
+      characterId: input.characterId,
+      locationId: input.locationId,
+      sceneDocumentId: scene.id,
+      sceneRevision: input.sceneRevision,
+      sceneFingerprint: input.sceneFingerprint,
+      schemaVersion: entry.schema,
+      rigVersion: entry.pose.rig,
+      entry: clone(entry),
+      poseFingerprint: poseFingerprint(entry.pose),
+      blockingFingerprint: blockingFingerprint(entry, { locationId: input.locationId }),
+      updatedAt: input.now,
+    };
+    const conflict = new PrevisError(
+      "conflict",
+      "This character's blocking was changed elsewhere. Reload before saving.",
+    );
+    if (!existing) {
+      if (input.expectedRevision !== null) throw conflict;
+      const rec: ShotBlockingRecord = {
+        id: input.id,
+        revision: 1,
+        createdBy: input.userId,
+        createdAt: input.now,
+        ...base,
+      };
+      this.blocking.set(key, rec);
+      return clone(rec);
+    }
+    if (input.expectedRevision !== existing.revision) throw conflict;
+    const next: ShotBlockingRecord = { ...existing, ...base, revision: existing.revision + 1 };
+    this.blocking.set(key, next);
+    return clone(next);
+  }
+
+  async removeShotBlocking(input: {
+    projectId: string;
+    shotId: string;
+    characterId: string;
+    expectedRevision: number;
+  }) {
+    const key = `${input.shotId}:${input.characterId}`;
+    const existing = this.blocking.get(key);
+    if (!existing || existing.projectId !== input.projectId)
+      throw new PrevisError("not_found", "That character has no blocking in this shot.");
+    if (existing.revision !== input.expectedRevision)
+      throw new PrevisError("conflict", "This character's blocking was changed elsewhere. Reload first.");
+    this.blocking.delete(key);
+  }
+
+  async reanchorShotBlocking(input: {
+    projectId: string;
+    shotId: string;
+    sceneDocumentId: string;
+    userId: string | null;
+    now: string;
+  }) {
+    const scene = await this.getScene(input.sceneDocumentId);
+    if (!scene || scene.projectId !== input.projectId)
+      throw new PrevisError("not_found", "That 3D set was not found.");
+    const out: ShotBlockingRecord[] = [];
+    for (const rec of this.blockingFor(input.shotId)) {
+      if (rec.projectId !== input.projectId || rec.sceneDocumentId !== scene.id) continue;
+      const next: ShotBlockingRecord = {
+        ...rec,
+        sceneRevision: scene.revision,
+        sceneFingerprint: scene.sceneFingerprint,
+        revision: rec.revision + 1,
+        updatedAt: input.now,
+      };
+      this.blocking.set(`${rec.shotId}:${rec.characterId}`, next);
+      out.push(clone(next));
+    }
+    return out;
+  }
+
   async listPrevisClips(shotId: string) {
     return [...this.clips.values()]
       .filter((c) => c.shotId === shotId)
@@ -325,6 +465,8 @@ export class MemoryPrevisService implements PrevisRepository {
       throw new PrevisError("invalid", "A performance-audio mix is not a single audio asset.");
     const rec: PrevisClipRecord = {
       ...rest,
+      blockingFingerprint: input.blockingFingerprint ?? null,
+      blocking: input.blocking ? clone(input.blocking) : null,
       source: "local_previs",
       createdBy: userId,
       createdAt: input.renderedAt,

@@ -7,6 +7,13 @@ import { PrevisError } from "@/data/previs-repository";
 import { assetSchema, shotSchema, storyboardFrameSchema } from "@/domain/schemas";
 import { audioMixFingerprint, type StoredAudioMix } from "@/domain/previs/audio-mix";
 import { performanceAudioPlanForShot } from "@/domain/previs/audio-mix-shot";
+import {
+  blockingFingerprint,
+  parseBlockingEntry,
+  type BlockingFigureData,
+  renderedBlockingProvenance,
+  type ShotBlockingEntry,
+} from "@/domain/previs/blocking";
 import { cameraPathSchema, validateCameraPath } from "@/domain/previs/camera-path";
 import { buildPrevisDocument } from "@/domain/previs/document";
 import { PREVIS_PRODUCTION_FRAME } from "@/domain/previs/types";
@@ -190,6 +197,7 @@ export async function captureMasterFrame(
     const shotId = str(form, "shotId");
     const locationId = str(form, "locationId");
     const claimedRevision = Number(str(form, "sceneRevision"));
+    const claimedBlocking = optStr(form, "blockingFingerprint");
     const file = form.get("file");
     if (!(file instanceof File) || file.size === 0)
       throw new UserFacingError("No rendered frame was received.");
@@ -206,6 +214,15 @@ export async function captureMasterFrame(
     const bookmark = await previs.getBookmarkForShot(shotId);
     if (!bookmark || bookmark.sceneDocumentId !== scene.id)
       throw new UserFacingError("Use the production camera for this shot before capturing.");
+
+    // the character blocking the picture shows must be the SAVED blocking (the server derives it, the client claims)
+    const blockingRecords = await previs.listShotBlocking(shotId);
+    const blockingProv = renderedBlockingProvenance(blockingRecords, { locationId });
+    if ((blockingProv?.fingerprint ?? null) !== claimedBlocking)
+      throw new PrevisError(
+        "conflict",
+        "The character blocking changed after this frame was rendered. Save the blocking and capture again.",
+      );
 
     const bytes = new Uint8Array(await file.arrayBuffer());
     const check = checkUpload(
@@ -268,6 +285,8 @@ export async function captureMasterFrame(
           productionAspectRatio: PREVIS_PRODUCTION_FRAME.ratio,
           capturedAt: stamp,
           upstreamCommit: scene.upstreamCommit,
+          // ids + fingerprints only: which saved blocking this frame shows (no pose data, no URLs)
+          ...(blockingProv ? { blocking: blockingProv } : {}),
         },
       },
       createdAt: stamp,
@@ -291,6 +310,8 @@ export async function captureMasterFrame(
         renderHeight: dims.height,
         productionAspectRatio: PREVIS_PRODUCTION_FRAME.ratio,
         capturedAt: stamp,
+        blockingFingerprint: blockingProv?.fingerprint ?? null,
+        blocking: blockingProv?.figures ?? null,
         userId: actorOf(user),
       });
       refresh(slug);
@@ -443,6 +464,7 @@ export async function recordPrevisClip(
     const height = Number(str(form, "renderHeight"));
     const claimedMix = optStr(form, "audioMixFingerprint");
     const audioCodec = optStr(form, "audioCodec");
+    const claimedBlocking = optStr(form, "blockingFingerprint");
     const file = form.get("file");
     if (!(file instanceof File) || file.size === 0)
       throw new UserFacingError("No rendered previs was received.");
@@ -472,6 +494,14 @@ export async function recordPrevisClip(
       throw new UserFacingError("Save the 3D set before recording a previs.");
     if (scene.sceneFingerprint !== path.sceneFingerprint)
       throw new UserFacingError("The set changed since this camera path was saved. Re-save the path first.");
+
+    // the character blocking the previs shows must be the SAVED blocking (static pose for the whole clip)
+    const blockingProv = renderedBlockingProvenance(await previs.listShotBlocking(shotId), { locationId });
+    if ((blockingProv?.fingerprint ?? null) !== claimedBlocking)
+      throw new PrevisError(
+        "conflict",
+        "The character blocking changed while the previs was rendering. Save the blocking and render again.",
+      );
 
     // performance audio: the server derives the mix itself from the Shot's CURRENT selected takes and timing; the
     // client only says which mix it rendered. A mismatch means the takes changed during the render.
@@ -560,6 +590,7 @@ export async function recordPrevisClip(
           codec,
           audioAssetId: null,
           hasAudio: mix !== null,
+          ...(blockingProv ? { blocking: blockingProv } : {}),
           // ids/fingerprint only; the full cue list lives on the previs clip row
           ...(mix
             ? {
@@ -604,6 +635,8 @@ export async function recordPrevisClip(
         audioAssetId: null,
         audioMix: mix,
         audioMixFingerprint: mix ? mix.mixFingerprint : null,
+        blockingFingerprint: blockingProv?.fingerprint ?? null,
+        blocking: blockingProv?.figures ?? null,
         renderedAt: stamp,
         userId: actorOf(user),
       });
@@ -618,5 +651,206 @@ export async function recordPrevisClip(
       }
       throw err;
     }
+  });
+}
+
+const MAX_BLOCKING_JSON_BYTES = 512 * 1024;
+
+export interface SavedBlockingFigure {
+  characterId: string;
+  blockingId: string;
+  revision: number;
+  fingerprint: string;
+  sceneRevision: number;
+  sceneFingerprint: string;
+}
+
+/**
+ * Saves the CHANGED figures of one Shot's character blocking (compare-and-set per figure) and removes the ones the
+ * editor dropped. Blocking belongs to the Shot: nothing here touches the Location's set or any other Shot. The
+ * set revision/fingerprint a figure is authored against is read from the LIVE saved set on the server. A figure
+ * whose blocking did not change is left exactly as it was, so saving never silently re-anchors a stale figure.
+ */
+export async function saveShotBlocking(
+  form: FormData,
+): Promise<PrevisResult<{ figures: SavedBlockingFigure[] }>> {
+  return guarded(async () => {
+    const slug = str(form, "projectSlug");
+    const shotId = str(form, "shotId");
+    const locationId = str(form, "locationId");
+    const raw = String(form.get("blockingJson") ?? "");
+    if (raw.length === 0 || raw.length > MAX_BLOCKING_JSON_BYTES)
+      throw new UserFacingError("The character blocking is empty or too large to save.");
+    let candidate: { save?: unknown; remove?: unknown };
+    try {
+      candidate = JSON.parse(raw);
+    } catch {
+      throw new UserFacingError("The character blocking data is not valid JSON.");
+    }
+    const saves = Array.isArray(candidate.save) ? (candidate.save as unknown[]) : [];
+    const removes = Array.isArray(candidate.remove) ? (candidate.remove as unknown[]) : [];
+    if (saves.length + removes.length === 0) throw new UserFacingError("There is no blocking to save.");
+    if (saves.length + removes.length > 32) throw new UserFacingError("Too many characters in one shot.");
+
+    const user = await requireUser();
+    const data = await requireProjectFresh(slug);
+    const shot = data.shots.find((x) => x.id === shotId);
+    if (!shot) throw new UserFacingError("That shot no longer exists.");
+    if (!data.locations.some((l) => l.id === locationId))
+      throw new UserFacingError("That location is not in this project.");
+    if (shot.spatial.locationId && shot.spatial.locationId !== locationId)
+      throw new UserFacingError("This shot is set in another location.");
+    const previs = await getPrevisRepo();
+    const scene = await previs.getSceneForLocation(locationId);
+    if (!scene || scene.projectId !== data.project.id)
+      throw new UserFacingError("Save the 3D set before saving character blocking.");
+
+    const existing = new Map((await previs.listShotBlocking(shotId)).map((r) => [r.characterId, r]));
+    const out: SavedBlockingFigure[] = [];
+    const now = new Date().toISOString();
+
+    for (const item of saves) {
+      const it = item as { entry?: unknown; expectedRevision?: unknown };
+      let entry: ShotBlockingEntry;
+      try {
+        entry = parseBlockingEntry(it.entry);
+      } catch {
+        throw new UserFacingError("A character's blocking data is not valid.");
+      }
+      if (!data.characters.some((c) => c.id === entry.characterId))
+        throw new UserFacingError("That character is not in this project.");
+      const expected = it.expectedRevision === null ? null : Number(it.expectedRevision);
+      if (expected !== null && !Number.isInteger(expected)) throw new UserFacingError("Invalid revision.");
+      const cur = existing.get(entry.characterId);
+      // unchanged blocking is left alone: saving must never silently re-anchor a stale figure
+      if (
+        cur &&
+        cur.blockingFingerprint === blockingFingerprint(entry, { locationId }) &&
+        cur.revision === expected
+      ) {
+        out.push({
+          characterId: cur.characterId,
+          blockingId: cur.id,
+          revision: cur.revision,
+          fingerprint: cur.blockingFingerprint,
+          sceneRevision: cur.sceneRevision,
+          sceneFingerprint: cur.sceneFingerprint,
+        });
+        continue;
+      }
+      const saved = await previs.saveShotBlocking({
+        id: randomUUID(),
+        projectId: data.project.id,
+        shotId,
+        characterId: entry.characterId,
+        locationId,
+        sceneDocumentId: scene.id,
+        sceneRevision: scene.revision,
+        sceneFingerprint: scene.sceneFingerprint,
+        entry,
+        expectedRevision: expected,
+        userId: actorOf(user),
+        now,
+      });
+      out.push({
+        characterId: saved.characterId,
+        blockingId: saved.id,
+        revision: saved.revision,
+        fingerprint: saved.blockingFingerprint,
+        sceneRevision: saved.sceneRevision,
+        sceneFingerprint: saved.sceneFingerprint,
+      });
+    }
+    for (const item of removes) {
+      const it = item as { characterId?: unknown; expectedRevision?: unknown };
+      await previs.removeShotBlocking({
+        projectId: data.project.id,
+        shotId,
+        characterId: String(it.characterId ?? ""),
+        expectedRevision: Number(it.expectedRevision),
+      });
+    }
+    if (!shot.spatial.locationId) {
+      const repo = await getRepo();
+      await repo.upsert(
+        data.project.id,
+        "shots",
+        shotSchema.parse({
+          ...shot,
+          spatial: { ...shot.spatial, locationId },
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+    }
+    refresh(slug);
+    return { ok: true, figures: out };
+  });
+}
+
+/**
+ * The explicit "Re-anchor to current set": records the live set revision/fingerprint on this Shot's blocking
+ * WITHOUT changing any root transform or pose. Only ever called by a deliberate user action.
+ */
+export async function reanchorShotBlocking(
+  form: FormData,
+): Promise<PrevisResult<{ figures: SavedBlockingFigure[] }>> {
+  return guarded(async () => {
+    const slug = str(form, "projectSlug");
+    const shotId = str(form, "shotId");
+    const locationId = str(form, "locationId");
+    const user = await requireUser();
+    const data = await requireProjectFresh(slug);
+    if (!data.shots.some((x) => x.id === shotId)) throw new UserFacingError("That shot no longer exists.");
+    const previs = await getPrevisRepo();
+    const scene = await previs.getSceneForLocation(locationId);
+    if (!scene || scene.projectId !== data.project.id)
+      throw new UserFacingError("Save the 3D set before re-anchoring character blocking.");
+    const recs = await previs.reanchorShotBlocking({
+      projectId: data.project.id,
+      shotId,
+      sceneDocumentId: scene.id,
+      userId: actorOf(user),
+      now: new Date().toISOString(),
+    });
+    refresh(slug);
+    return {
+      ok: true,
+      figures: recs.map((r) => ({
+        characterId: r.characterId,
+        blockingId: r.id,
+        revision: r.revision,
+        fingerprint: r.blockingFingerprint,
+        sceneRevision: r.sceneRevision,
+        sceneFingerprint: r.sceneFingerprint,
+      })),
+    };
+  });
+}
+
+/** The stored blocking of one Shot (used when the editor switches shot without leaving the page). */
+export async function loadShotBlocking(
+  form: FormData,
+): Promise<PrevisResult<{ figures: BlockingFigureData[] }>> {
+  return guarded(async () => {
+    const slug = str(form, "projectSlug");
+    const shotId = str(form, "shotId");
+    await requireUser();
+    const data = await requireProjectFresh(slug);
+    if (!data.shots.some((x) => x.id === shotId)) throw new UserFacingError("That shot no longer exists.");
+    const previs = await getPrevisRepo();
+    const recs = await previs.listShotBlocking(shotId);
+    return {
+      ok: true,
+      figures: recs.map((r) => ({
+        characterId: r.characterId,
+        name: data.characters.find((c) => c.id === r.characterId)?.name ?? "Character",
+        blockingId: r.id,
+        revision: r.revision,
+        fingerprint: r.blockingFingerprint,
+        sceneRevision: r.sceneRevision,
+        sceneFingerprint: r.sceneFingerprint,
+        entry: r.entry,
+      })),
+    };
   });
 }

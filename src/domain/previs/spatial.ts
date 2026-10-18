@@ -1,4 +1,5 @@
 import type { CameraInterpolation, CameraKeyframe } from "./camera-path";
+import type { ShotBlockingReference } from "./blocking";
 import { characterBlocking } from "./document";
 import type { CameraBookmarkValue, PrevisDocument } from "./types";
 
@@ -29,6 +30,11 @@ export interface SpatialReference {
   productionFrame: { ratio: string; width: number; height: number };
   /** optional and omitted (not null) when the Shot has no camera path, so M1 packages are byte-identical */
   cameraMotion?: CameraMotionReference;
+  /**
+   * The Shot's own character blocking (M2B), frozen by value. Optional and omitted when the Shot has none, so
+   * earlier packages are byte-identical. `characterBlocking` above is the legacy scene-level proxy list (M1).
+   */
+  shotBlocking?: ShotBlockingReference;
 }
 
 export const CAMERA_MOTION_SCHEMA_VERSION = 1 as const;
@@ -71,6 +77,7 @@ export interface SpatialSources {
   } | null;
   adoptedMasterFrameAssetId: string | null;
   cameraMotion?: CameraMotionReference | null;
+  shotBlocking?: ShotBlockingReference | null;
 }
 
 export function buildSpatialReference(src: SpatialSources): SpatialReference {
@@ -94,6 +101,7 @@ export function buildSpatialReference(src: SpatialSources): SpatialReference {
     productionFrame: { ...src.scene.document.productionFrame },
   };
   if (src.cameraMotion) ref.cameraMotion = structuredClone(src.cameraMotion);
+  if (src.shotBlocking) ref.shotBlocking = structuredClone(src.shotBlocking);
   return ref;
 }
 
@@ -105,4 +113,9 @@ export function isCameraMotionStale(ref: SpatialReference): boolean {
 /** True when the Shot's camera was authored against an older state of the set than the live one. */
 export function isBookmarkStale(ref: SpatialReference): boolean {
   return !!ref.cameraBookmark && ref.cameraBookmark.sceneFingerprint !== ref.sceneFingerprint;
+}
+
+/** True when any figure of the Shot's blocking was authored against an older state of the set than the live one. */
+export function isShotBlockingStale(ref: SpatialReference): boolean {
+  return !!ref.shotBlocking?.figures.some((f) => f.sceneFingerprint !== ref.sceneFingerprint);
 }

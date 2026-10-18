@@ -17,6 +17,7 @@ import {
 } from "@/vendor/artcraft-scene-engine/engine/events/EngineEvent";
 import { usePageSceneStore, type TransformMode } from "@/vendor/artcraft-scene-engine/PageSceneStore";
 import type { PageSceneAdapter } from "@/vendor/artcraft-scene-engine/adapter";
+import { BlockingOverlay } from "./blocking-overlay";
 import { registerPrevisShapes } from "./shapes";
 
 /**
@@ -88,6 +89,11 @@ export interface SpatialSceneAdapter {
     state: { position: Vec3; rotation: Vec3; focalLengthMm: number },
     size: { width: number; height: number },
   ): Promise<HTMLCanvasElement | OffscreenCanvas>;
+  /**
+   * The selected Shot's character-blocking layer (rigged proxies + FK posing). A runtime overlay: it is never part of
+   * the serialised set. It shares the editor's undo/redo, selection and gizmos.
+   */
+  readonly blocking: BlockingOverlay;
   undo(): Promise<void>;
   redo(): Promise<void>;
   canUndo(): boolean;
@@ -132,8 +138,14 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
   private authoredCamera: { position: Vec3; rotation: Vec3; focalLengthMm: number } | null = null;
   private overlay: THREE.Group | null = null;
   private notifyQueued = false;
+  readonly blocking: BlockingOverlay;
 
-  constructor(private readonly options: AdapterOptions) {}
+  constructor(private readonly options: AdapterOptions) {
+    this.blocking = new BlockingOverlay(
+      () => this.editor,
+      () => this.notify(),
+    );
+  }
 
   private engineAdapter(): PageSceneAdapter {
     const doFetch = this.options.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
@@ -226,6 +238,8 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     const editor = this.requireEditor();
     await editor.applyJson(JSON.stringify(engineScene));
     setCameraAspect(editor, PRODUCTION_ASPECT);
+    // loading replaces every scene child; the Shot's blocking overlay is not part of the loaded set
+    this.blocking.reattachAll();
     this.notify();
   }
 
@@ -359,7 +373,7 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     cam.rotation.set(state.rotation.x, state.rotation.y, state.rotation.z, "XYZ");
     cam.layers.disable(EDITOR_ONLY_LAYER);
     cam.updateMatrixWorld(true);
-    const snap = editor.snapShotOfCurrentFrame(false, cam, size);
+    const snap = await this.blocking.cleanRender(() => editor.snapShotOfCurrentFrame(false, cam, size));
     if (!snap) throw new Error("The 3D set could not render a frame.");
     const bitmap = await createImageBitmap(snap.file);
     const canvas = document.createElement("canvas");
@@ -562,7 +576,7 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     cam.rotation.set(spec.rotation.x, spec.rotation.y, spec.rotation.z, "XYZ");
     cam.layers.disable(1); // the camera proxy lives on layer 1, as in the engine's own render camera
     cam.updateMatrixWorld(true);
-    const snap = editor.snapShotOfCurrentFrame(false, cam);
+    const snap = await this.blocking.cleanRender(() => editor.snapShotOfCurrentFrame(false, cam));
     if (!snap) throw new Error("The 3D set could not render a frame.");
     return { blob: snap.file, width: spec.width, height: spec.height };
   }
@@ -591,6 +605,7 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     this.disposed = true;
     for (const u of this.unsubscribers.splice(0)) u();
     this.setPathOverlay(null);
+    this.blocking.dispose();
     this.authoredCamera = null;
     this.listeners.clear();
     const editor = this.editor;
