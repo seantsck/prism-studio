@@ -197,3 +197,30 @@ editor-only layer. M2C only adds a second, side-effect-free way to render that s
 
 **Known limits.** Alpha-blended materials are rendered as opaque geometry; instanced/batched meshes are supported by the
 shader chunks but untested; morph targets and skinned meshes use the stock three.js chunks.
+
+## 14. M2D.1: Gaussian-splat environments (decision record)
+
+**Audit of the pinned commit.** `engine/scene.ts` (`loadSplatWithPlaceholder`, `load_splat_wrapped_no_cors`, `.spz` URL
+sniffing in `loadObject`), `SelectionOutlinePass.ts` (`findSplatAncestor`, the `__bbox_internal` wireframe),
+`engine/entranceAnimation.ts` (Spark "dyno" settle effect), `internalBbox.ts`, `disposeObject3D.ts` and the commented-out
+`SparkRenderer`-on-the-camera lines in `editor.ts` were read before any code. Upstream used `@sparkjsdev/spark ^0.1.10`
+(resolves to 0.1.10, MIT, © World Labs Technologies, Inc.), loaded `.spz` **by URL** through ArtCraft's CDN-resolved media
+tokens, and rotated every splat by π about Z. The package takes the caller's `THREE.WebGLRenderer`, so it does not need a
+second context; it makes no request of its own.
+
+| Question                  | Decision                                                                                                                                                                                        |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Licence                   | MIT, read from the installed package (`LICENSE`, `package.json`). `fflate` (MIT) is its dependency and Prism's `.spz` validator                                                                 |
+| Which version             | exact `0.1.10`: the audited one; 2.x peers a newer three.js                                                                                                                                     |
+| One renderer / context?   | yes: `SparkRenderer({ renderer: editor.renderer })`; asserted by counting `getContext("webgl2")` calls in the browser                                                                           |
+| URL or bytes?             | **bytes** (`fileBytes`): authenticated Asset → ArrayBuffer → runtime. No Blob URL, so nothing to persist or revoke                                                                              |
+| Re-import the old path?   | no. Upstream's loader, bbox helper, entrance effect and URL sniffing are not used                                                                                                               |
+| Selection                 | Prism overrides `raycast` with the splat's bounding box: one production object, never per-Gaussian                                                                                              |
+| Orientation               | no automatic π flip (upstream's was a demo-asset convention); the user rotates, or uses "Flip 180° (X)"                                                                                         |
+| Formats                   | `.splat`, `.spz` (v2/v3), Gaussian binary-LE `.ply`; each parsed and tested in the browser. `.ksplat` / SOG not enabled                                                                         |
+| Vendor changes            | one `loadSplat` adapter hook, one `Scene.loadObject` branch, one `disposeObject3D` branch, the removal of the dead `.spz` URL branch (`patches/prism-m2d1.patch`)                               |
+| Production-camera sorting | Spark sorts for the viewport camera; a production render sorts a dedicated viewpoint from its own pose first. Spark's `prepare()` leaks an accumulator reference on that path; Prism returns it |
+
+**Depth composition** between mesh, splat and Character proxy was the stop condition. It is satisfied by construction (the
+splat material tests depth against the opaque pass and does not write it) and **proved** in the E2E by pixel readback from
+the production render in both orders for both a mesh and a proxy.

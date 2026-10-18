@@ -43,6 +43,39 @@ export default async function VirtualSetPage({
   const blockingRecords = activeShotId ? await previs.listShotBlocking(activeShotId) : [];
   const spatialBundles = activeShotId ? await previs.listSpatialPassBundles(activeShotId) : [];
 
+  // Gaussian-splat environments of this Location: immutable reconstruction records + their private result Assets
+  const assetById = new Map(data.assets.map((a) => [a.id, a]));
+  const splatEnvironments = (await previs.listReconstructions(location.id)).flatMap((r) => {
+    const asset = assetById.get(r.resultAssetId);
+    if (!asset || !asset.objectPath) return [];
+    return [
+      {
+        assetId: asset.id,
+        reconstructionId: r.id,
+        name: asset.name,
+        format: r.resultFormat,
+        byteSize: asset.byteSize ?? null,
+        gaussianCount: r.gaussianCount,
+        checksum: asset.checksum ?? null,
+        method: r.method,
+        sources: r.sources.map((s) => ({
+          assetId: s.assetId,
+          name: assetById.get(s.assetId)?.name ?? s.assetId,
+          checksum: s.checksum,
+        })),
+        createdAt: r.createdAt,
+      },
+    ];
+  });
+  const referenceImages = data.assets
+    .filter(
+      (a) =>
+        a.type === "image" &&
+        a.objectPath &&
+        (location.referenceAssetIds.includes(a.id) || a.purpose === "location_ref"),
+    )
+    .map((a) => ({ id: a.id, name: a.name }));
+
   // Shot timing authority: the canonical Shot duration (selected performance, else manual target) and the
   // Shot's own frame rate. Camera motion aligns to these; nothing here invents a duration.
   let shotTiming: {
@@ -96,6 +129,8 @@ export default async function VirtualSetPage({
         glbAssets={data.assets
           .filter((a) => a.mime === "model/gltf-binary" && a.objectPath)
           .map((a) => ({ id: a.id, name: a.name, checksum: a.checksum ?? null }))}
+        splatEnvironments={splatEnvironments}
+        referenceImages={referenceImages}
         shots={shots}
         activeShotId={activeShotId}
         bookmark={
