@@ -27,7 +27,17 @@ export const PRODUCTION_STATUSES = [
   "post_production",
   "complete",
 ] as const;
-export const ASSET_TYPES = ["image", "video", "audio", "document", "3d", "waveform", "reference"] as const;
+export const ASSET_TYPES = [
+  "image",
+  "video",
+  "audio",
+  "document",
+  "3d",
+  "waveform",
+  "reference",
+  /** raw machine data (e.g. spatial control rasters): never an image, never previewed as one */
+  "data",
+] as const;
 export const ASSET_SOURCES = [
   "upload",
   "generated",
@@ -59,6 +69,8 @@ export const ASSET_PURPOSES = [
   "waveform",
   "model_3d",
   "other",
+  /** depth / object-id / Character-mask rasters (Phase 2F M2C) */
+  "spatial_control",
 ] as const;
 export const STORAGE_PROVIDERS = ["none", "local", "supabase"] as const;
 export const DURATION_SOURCES = ["server_metadata", "browser_hint", "manual", "seed"] as const;
