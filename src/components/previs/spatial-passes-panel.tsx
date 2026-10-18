@@ -18,6 +18,7 @@ import {
   type ControlCameraSource,
   type SpatialCurrentState,
 } from "@/domain/previs/spatial-passes";
+import { SPLAT_PASSES_BLOCKED_MESSAGE } from "@/domain/previs/splat";
 import type { CameraBookmarkValue } from "@/domain/previs/types";
 import { renderSpatialCapture, spatialCaptureForm, type CapturedPasses } from "@/lib/previs/spatial-capture";
 import type { SpatialSceneAdapter } from "@/lib/previs/scene-adapter";
@@ -50,6 +51,8 @@ export interface SpatialPassesPanelProps {
   bookmark: { id: string; sceneFingerprint: string; value: CameraBookmarkValue } | null;
   motion: CameraMotionState | null;
   blocking: BlockingState | null;
+  /** a visible Gaussian splat is in the live set: exact passes cannot include it yet, so capture is blocked */
+  hasVisibleSplat: boolean;
 }
 
 function sourceLabel(s: ControlCameraSource): string {
@@ -158,6 +161,8 @@ export function SpatialPassesPanel(props: SpatialPassesPanelProps) {
   const savedPath = props.motion?.saved ?? null;
   const reasons: string[] = [];
   if (!props.ready) reasons.push("The 3D set is still loading.");
+  // exact depth / ids / masks cannot include a Gaussian splat yet; refuse instead of omitting the environment
+  if (props.hasVisibleSplat) reasons.push(SPLAT_PASSES_BLOCKED_MESSAGE);
   if (props.scene.dirty || !props.scene.fingerprint) reasons.push("Save the 3D set first.");
   if (!props.blocking) reasons.push("Character blocking is still loading.");
   else {

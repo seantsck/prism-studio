@@ -19,6 +19,9 @@ import * as THREE from "three";
 // objects from their snapshot rather than reusing the instance.
 export function disposeObject3D(root: THREE.Object3D): void {
   root.traverse((child) => {
+    // PRISM PATCH (M2D.1): a host-owned splat runtime object frees its own GPU buffers / workers
+    const owned = child as { isPrismSplat?: boolean; dispose?: () => void };
+    if (owned.isPrismSplat === true) owned.dispose?.();
     if (child instanceof THREE.SkinnedMesh) child.skeleton?.dispose();
     (child as Partial<THREE.Mesh>).geometry?.dispose();
   });

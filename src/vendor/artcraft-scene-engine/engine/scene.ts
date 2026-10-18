@@ -41,6 +41,12 @@ export type SceneDeps = {
   // uses this to refresh rows that were rendered before the async load
   // completed (e.g. saved-scene proxy loads).
   onGlbLoaded?: () => void;
+  // PRISM PATCH (M2D.1): host loader for Gaussian-splat tokens; returns null for a token that is not a splat.
+  loadSplat?: (
+    token: string,
+    name: string,
+    signal?: AbortSignal,
+  ) => Promise<THREE.Object3D | null>;
 };
 
 class Scene {
@@ -614,6 +620,23 @@ class Scene {
     version: number = 1.0,
     signal?: AbortSignal,
   ): Promise<THREE.Object3D> {
+    // PRISM PATCH (M2D.1): a Gaussian-splat environment is loaded by the host (Prism owns the splat runtime and keeps
+    // it on this editor's single renderer). Anything the host does not claim falls through to the model loader.
+    if (this.deps.loadSplat) {
+      const splat = await this.deps.loadSplat(media_id, name, signal);
+      if (splat) {
+        splat.name = name;
+        splat.position.copy(position);
+        splat.userData["media_id"] = media_id;
+        splat.userData["color"] = "#FFFFFF";
+        splat.userData["locked"] = false;
+        splat.userData["media_file_type"] = MediaFileType.SPZ;
+        if (auto_add) this.scene.add(splat);
+        this.deps.onGlbLoaded?.();
+        return splat;
+      }
+    }
+
     const url = await this.getMediaURL(media_id);
 
     // PRISM PATCH: MMD (.pmd/.pmx) is not supported
@@ -636,8 +659,8 @@ class Scene {
       }
       return obj;
     } else if (url.includes(".spz")) {
-      // PRISM PATCH: Gaussian splats (and @sparkjsdev/spark) are not part of M1
-      throw new Error("Gaussian splats are not supported in Prism 3D sets yet.");
+      // PRISM PATCH: splats are only ever loaded through the host `loadSplat` hook above, never by URL sniffing
+      throw new Error("Gaussian splats are loaded by the host, not from a URL.");
     }
 
     return await this.loadGlbWithPlaceholder(

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { assetIdFromToken, assetTokenFor, PRISM_USER_DATA } from "@/domain/previs/document";
+import { assetIdFromToken, assetTokenFor, extractObjects, PRISM_USER_DATA } from "@/domain/previs/document";
 import { focalLengthToFovDegrees, productionRenderSpec } from "@/domain/previs/camera";
 import type { CameraBookmarkValue, PrevisCamera, Vec3 } from "@/domain/previs/types";
 import { addObject } from "@/vendor/artcraft-scene-engine/actions/addObject";
@@ -13,12 +13,20 @@ import { CameraAspectRatio } from "@/vendor/artcraft-scene-engine/enums";
 import Editor from "@/vendor/artcraft-scene-engine/engine/editor";
 import {
   OutlinerRefreshedEvent,
+  SceneLoadedEvent,
   SelectionChangedEvent,
 } from "@/vendor/artcraft-scene-engine/engine/events/EngineEvent";
 import { usePageSceneStore, type TransformMode } from "@/vendor/artcraft-scene-engine/PageSceneStore";
 import type { PageSceneAdapter } from "@/vendor/artcraft-scene-engine/adapter";
 import type { ControlCamera, ObjectManifest } from "@/domain/previs/spatial-passes";
+import { parseCalibration, SPLAT_USER_DATA, type SplatCalibration } from "@/domain/previs/splat";
 import { BlockingOverlay } from "./blocking-overlay";
+import {
+  SplatRuntime,
+  type SplatAssetInfo,
+  type SplatLoadFailure,
+  type SplatLoadStat,
+} from "./splat-runtime";
 import { renderSpatialPasses, type PassEntity, type RenderedPasses } from "./spatial-pass-renderer";
 import { registerPrevisShapes } from "./shapes";
 
@@ -32,10 +40,13 @@ export type PrimitiveKind = "Box" | "Plane" | "Cylinder" | "Cone" | "Sphere";
 export interface SceneObjectView {
   id: string;
   name: string;
-  kind: "primitive" | "mannequin" | "glb" | "light";
+  kind: "primitive" | "mannequin" | "glb" | "light" | "splat";
   shape: string | null;
   assetId: string | null;
   characterId: string | null;
+  /** kind=splat: the immutable reconstruction this environment came from */
+  reconstructionId: string | null;
+  calibration: SplatCalibration | null;
   position: Vec3;
   rotation: Vec3;
   scale: Vec3;
@@ -59,6 +70,31 @@ export interface SpatialSceneAdapter {
   addPrimitive(kind: PrimitiveKind): Promise<string | undefined>;
   addMannequin(characterId: string | null, label?: string): Promise<string | undefined>;
   addGlb(assetId: string, name: string, checksum: string | null): Promise<string | undefined>;
+  /**
+   * Places a Gaussian-splat environment (one production object) bound to its Asset, checksum and reconstruction.
+   * Rejects with a clear message when the splat cannot be loaded; nothing is added in that case.
+   */
+  addSplat(input: {
+    assetId: string;
+    name: string;
+    checksum: string | null;
+    reconstructionId: string;
+    calibration: SplatCalibration;
+  }): Promise<string>;
+  /** Placement/scale provenance of a splat object (scene-object truth, separate from the immutable reconstruction). */
+  setSplatCalibration(id: string, calibration: SplatCalibration): void;
+  setObjectVisible(id: string, visible: boolean): void;
+  setObjectLocked(id: string, locked: boolean): void;
+  /** load facts for the splats this editor loaded (count, time, GPU estimate) */
+  splatStats(): SplatLoadStat[];
+  /** live splat roots owned by this editor (repeated navigation must never duplicate them) */
+  splatCount(): number;
+  /** Splats the loaded scene names that could not be loaded. Saving while any exist would silently drop them. */
+  splatFailures(): SplatLoadFailure[];
+  /** The user's explicit decision to drop the splats that could not load from this set. */
+  discardSplatFailures(): void;
+  /** Moves a splat so its (transformed) bounding-box bottom rests on the Set floor (y = 0). */
+  alignSplatToGround(id: string): void;
   removeObject(id: string): void;
   select(id: string | null): void;
   updateTransform(id: string, change: Partial<{ position: Vec3; rotation: Vec3; scale: Vec3 }>): void;
@@ -95,7 +131,13 @@ export interface SpatialSceneAdapter {
    * The PRODUCTION entities a spatial control pass would contain right now: visible Set objects (lights are not
    * geometry) and visible Shot Character proxies. Editor helpers never appear here.
    */
-  productionEntities(): { setObjects: Array<{ id: string; name: string }>; characterIds: string[] };
+  productionEntities(): {
+    /** mesh Set objects (ordinary THREE geometry; the only Set entities M2C passes can capture) */
+    setObjects: Array<{ id: string; name: string }>;
+    /** visible Gaussian-splat environments: spatial data the M2C passes cannot represent exactly */
+    splats: Array<{ id: string; name: string }>;
+    characterIds: string[];
+  };
   /**
    * Renders depth + object-id rasters for ONE isolated production camera (M2C). Uses the editor's existing
    * renderer with a temporary float render target; the live scene, viewport, selection and navigation camera are
@@ -126,6 +168,8 @@ export interface AdapterOptions {
   /** `/api/assets/<id>`-style resolver; the URL is used for the load only and is never persisted. */
   resolveAssetUrl: (assetId: string) => string;
   fetchImpl?: typeof fetch;
+  /** the project's Gaussian-splat Assets (id -> format); tokens naming one load through the splat runtime */
+  splatAssets?: () => Map<string, SplatAssetInfo>;
 }
 
 const PRODUCTION_ASPECT = CameraAspectRatio.HORIZONTAL_2_39_1;
@@ -151,13 +195,26 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
   private authoredCamera: { position: Vec3; rotation: Vec3; focalLengthMm: number } | null = null;
   private overlay: THREE.Group | null = null;
   private notifyQueued = false;
+  private expectedSplats: Array<{ id: string; assetId: string; name: string }> = [];
   readonly blocking: BlockingOverlay;
+  private readonly splats: SplatRuntime;
 
   constructor(private readonly options: AdapterOptions) {
     this.blocking = new BlockingOverlay(
       () => this.editor,
       () => this.notify(),
     );
+    const doFetch = options.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
+    this.splats = new SplatRuntime({
+      renderer: () => this.editor?.renderer ?? null,
+      scene: () => this.editor?.activeScene?.scene ?? null,
+      assets: () => options.splatAssets?.() ?? new Map(),
+      fetchBytes: async (assetId, signal) => {
+        const res = await doFetch(options.resolveAssetUrl(assetId), { signal, credentials: "same-origin" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.arrayBuffer();
+      },
+    });
   }
 
   private engineAdapter(): PageSceneAdapter {
@@ -169,6 +226,7 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
         if (!assetId) throw new Error("Unsupported asset token");
         return this.options.resolveAssetUrl(assetId);
       },
+      loadSplat: (token, name, signal) => this.splats.load(token, name, signal),
       // Persistence is owned by Prism (server actions); the engine never saves on its own.
       saveScene: async () => {
         throw new Error("The engine does not persist scenes; Prism does.");
@@ -207,6 +265,7 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     store.set3DPageMounted(true);
     store.setCameraAspectRatio(PRODUCTION_ASPECT);
 
+    this.expectSplats(engineScene);
     const editor = new Editor(this.engineAdapter());
     editor.initialize({
       sceneToken: "",
@@ -222,6 +281,7 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     this.unsubscribers.push(
       editor.bus.subscribe(OutlinerRefreshedEvent, this.notify),
       editor.bus.subscribe(SelectionChangedEvent, this.notify),
+      editor.bus.subscribe(SceneLoadedEvent, this.verifySplats),
       usePageSceneStore.subscribe(this.notifyFromStore),
     );
     if (this.disposed) this.dispose();
@@ -229,6 +289,44 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
 
   getEditor() {
     return this.editor;
+  }
+
+  /** The splat environments the scene JSON names, so a load that drops one is noticed instead of saved over. */
+  private expectSplats(engineScene: object | null) {
+    this.expectedSplats = engineScene
+      ? extractObjects(engineScene)
+          .filter((o) => o.kind === "splat" && o.assetId)
+          .map((o) => ({ id: o.id, assetId: o.assetId as string, name: o.name }))
+      : [];
+  }
+
+  private verifySplats = () => {
+    if (!this.editor) return;
+    const live = new Set(this.listObjects().map((o) => o.id));
+    for (const e of this.expectedSplats) if (!live.has(e.id)) this.splats.recordMissing(e.assetId, e.name);
+    this.expectedSplats = [];
+    this.notify();
+  };
+
+  splatFailures() {
+    return this.splats.failures();
+  }
+
+  discardSplatFailures() {
+    this.splats.clearFailures();
+    this.notify();
+  }
+
+  alignSplatToGround(id: string) {
+    const obj = this.requireEditor().activeScene.scene.getObjectByProperty("uuid", id) as
+      (THREE.Object3D & { getBoundingBox?: () => THREE.Box3 }) | undefined;
+    if (!obj || !obj.getBoundingBox) return;
+    obj.updateMatrixWorld(true);
+    const world = obj.getBoundingBox().clone().applyMatrix4(obj.matrixWorld);
+    const y = obj.position.y - world.min.y;
+    this.updateTransform(id, { position: { x: obj.position.x, y, z: obj.position.z } });
+    const prior = parseCalibration(obj.userData[SPLAT_USER_DATA.calibration]);
+    this.setSplatCalibration(id, { ...prior, groundOffsetMetres: Math.round(y * 1e5) / 1e5 });
   }
 
   private requireEditor(): Editor {
@@ -249,7 +347,10 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
 
   async loadScene(engineScene: object) {
     const editor = this.requireEditor();
+    this.splats.clearFailures();
+    this.expectSplats(engineScene);
     await editor.applyJson(JSON.stringify(engineScene));
+    this.verifySplats();
     setCameraAspect(editor, PRODUCTION_ASPECT);
     // loading replaces every scene child; the Shot's blocking overlay is not part of the loaded set
     this.blocking.reattachAll();
@@ -386,7 +487,10 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     cam.rotation.set(state.rotation.x, state.rotation.y, state.rotation.z, "XYZ");
     cam.layers.disable(EDITOR_ONLY_LAYER);
     cam.updateMatrixWorld(true);
-    const snap = await this.blocking.cleanRender(() => editor.snapShotOfCurrentFrame(false, cam, size));
+    // splat draw order must be sorted from THIS camera, not the viewport's
+    const snap = await this.splats.renderFromCamera(cam, () =>
+      this.blocking.cleanRender(() => editor.snapShotOfCurrentFrame(false, cam, size)),
+    );
     if (!snap) throw new Error("The 3D set could not render a frame.");
     const bitmap = await createImageBitmap(snap.file);
     const canvas = document.createElement("canvas");
@@ -402,7 +506,10 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
   productionEntities() {
     return {
       setObjects: this.listObjects()
-        .filter((o) => o.kind !== "light" && o.visible)
+        .filter((o) => o.kind !== "light" && o.kind !== "splat" && o.visible)
+        .map((o) => ({ id: o.id, name: o.name })),
+      splats: this.listObjects()
+        .filter((o) => o.kind === "splat" && o.visible)
         .map((o) => ({ id: o.id, name: o.name })),
       characterIds: this.blocking
         .list()
@@ -447,8 +554,11 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
       if (token.startsWith("Point::") || token.startsWith("Image::")) return [];
       const assetId = assetIdFromToken(token);
       const shape = token === "Parim" ? String(o.userData.shapeKey ?? o.userData.shapeType ?? o.name) : null;
+      const reconstructionId = (o.userData[SPLAT_USER_DATA.reconstructionId] as string | undefined) ?? null;
       const kind: SceneObjectView["kind"] = assetId
-        ? "glb"
+        ? reconstructionId
+          ? "splat"
+          : "glb"
         : shape === "Mannequin"
           ? "mannequin"
           : shape === "PointLight"
@@ -462,6 +572,8 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
           shape,
           assetId,
           characterId: (o.userData[PRISM_USER_DATA.characterId] as string | undefined) ?? null,
+          reconstructionId: kind === "splat" ? reconstructionId : null,
+          calibration: kind === "splat" ? parseCalibration(o.userData[SPLAT_USER_DATA.calibration]) : null,
           position: toVec(o.position),
           rotation: toVec({ x: o.rotation.x, y: o.rotation.y, z: o.rotation.z }),
           scale: toVec(o.scale),
@@ -505,6 +617,64 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     return id;
   }
 
+  async addSplat(input: {
+    assetId: string;
+    name: string;
+    checksum: string | null;
+    reconstructionId: string;
+    calibration: SplatCalibration;
+  }) {
+    const editor = this.requireEditor();
+    if (!this.options.splatAssets?.().has(input.assetId))
+      throw new Error("That splat is not an available Gaussian-splat Asset in this project.");
+    // a splat that fails to load is reported to the caller and leaves NOTHING in the set (and no pending failure)
+    const before = this.splats.failures().length;
+    let id: string | undefined;
+    try {
+      id = await addObject(editor, { media_id: assetTokenFor(input.assetId), name: input.name });
+    } catch {
+      id = undefined;
+    }
+    const failed = this.splats.failures().slice(before).pop();
+    const obj = id ? editor.activeScene.scene.getObjectByProperty("uuid", id) : undefined;
+    if (!id || !obj) {
+      this.splats.clearFailures();
+      throw new Error(failed?.message ?? "The splat could not be added to the 3D set.");
+    }
+    obj.userData[PRISM_USER_DATA.assetChecksum] = input.checksum;
+    obj.userData[SPLAT_USER_DATA.reconstructionId] = input.reconstructionId;
+    obj.userData[SPLAT_USER_DATA.calibration] = input.calibration;
+    selectObject(editor, id);
+    this.notify();
+    return id;
+  }
+
+  setSplatCalibration(id: string, calibration: SplatCalibration) {
+    const obj = this.requireEditor().activeScene.scene.getObjectByProperty("uuid", id);
+    if (!obj || !obj.userData[SPLAT_USER_DATA.reconstructionId]) return;
+    obj.userData[SPLAT_USER_DATA.calibration] = calibration;
+    this.notify();
+  }
+
+  setObjectVisible(id: string, visible: boolean) {
+    this.requireEditor().activeScene.setVisible(id, visible);
+    this.notify();
+  }
+
+  setObjectLocked(id: string, locked: boolean) {
+    // the engine's own lock semantics: sets the flag AND detaches/blocks the transform gizmo
+    this.requireEditor().selection.setLockState(id, locked);
+    this.notify();
+  }
+
+  splatStats() {
+    return this.splats.stats();
+  }
+
+  splatCount() {
+    return this.splats.liveCount();
+  }
+
   removeObject(id: string) {
     deleteObject(this.requireEditor(), id);
     this.notify();
@@ -521,6 +691,7 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     const editor = this.requireEditor();
     const obj = editor.activeScene.scene.getObjectByProperty("uuid", id);
     if (!obj) return;
+    if (obj.userData.locked === true) return; // a locked object (e.g. the spatial environment) is not transformed
     // one undoable edit per call (same mechanism as the engine's own object panel)
     const session = beginTransformSession(editor, id);
     if (change.position) obj.position.set(change.position.x, change.position.y, change.position.z);
@@ -620,7 +791,9 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     cam.rotation.set(spec.rotation.x, spec.rotation.y, spec.rotation.z, "XYZ");
     cam.layers.disable(1); // the camera proxy lives on layer 1, as in the engine's own render camera
     cam.updateMatrixWorld(true);
-    const snap = await this.blocking.cleanRender(() => editor.snapShotOfCurrentFrame(false, cam));
+    const snap = await this.splats.renderFromCamera(cam, () =>
+      this.blocking.cleanRender(() => editor.snapShotOfCurrentFrame(false, cam)),
+    );
     if (!snap) throw new Error("The 3D set could not render a frame.");
     return { blob: snap.file, width: spec.width, height: spec.height };
   }
@@ -649,6 +822,7 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     this.disposed = true;
     for (const u of this.unsubscribers.splice(0)) u();
     this.setPathOverlay(null);
+    this.splats.dispose();
     this.blocking.dispose();
     this.authoredCamera = null;
     this.listeners.clear();

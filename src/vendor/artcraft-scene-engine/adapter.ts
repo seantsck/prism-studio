@@ -15,6 +15,12 @@ export interface PageSceneAdapter {
   fetchAsset(url: string, init?: { signal?: AbortSignal }): Promise<Response>;
   getMediaUrlByToken(token: string): Promise<string>;
   getMediaUrlsByTokens?(tokens: string[]): Promise<Record<string, string>>;
+  /**
+   * PRISM PATCH (M2D.1): host-supplied loader for Gaussian-splat environments. Resolves a token to the splat
+   * object, or null when the token is not a splat (so it loads as an ordinary model). The engine bundles no splat
+   * runtime of its own; Prism owns it and keeps it on the editor's single WebGL renderer.
+   */
+  loadSplat?(token: string, name: string, signal?: AbortSignal): Promise<import("three").Object3D | null>;
   getCurrentUserToken?(): string | undefined;
   onSceneTitleChange?(meta: {
     title: string;
