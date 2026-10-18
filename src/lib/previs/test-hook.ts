@@ -1,11 +1,65 @@
 import * as THREE from "three";
+import { bookmarkFromCamera } from "@/domain/previs/camera";
+import { sha256Bytes } from "@/domain/hash";
+import {
+  buildObjectManifest,
+  controlCameraFromPose,
+  deriveCharacterMasks,
+  type ControlCamera,
+  type ObjectManifest,
+} from "@/domain/previs/spatial-passes";
 import type { SpatialSceneAdapter } from "./scene-adapter";
+import { buildPassCamera, type RenderedPasses } from "./spatial-pass-renderer";
 
 /**
  * Read/steer helpers for browser acceptance tests only. Installed solely when the page is automated
  * (`navigator.webdriver`), so ordinary operators never get a global.
  */
+export interface SpatialTestHook {
+  /** Renders depth + object ids for an explicit pose (never the navigation camera) and remembers the result. */
+  capture(pose: { position: number[]; rotation: number[]; focalLengthMm: number }): {
+    width: number;
+    height: number;
+    objects: Array<{ index: number; semanticId: string; category: string; pixels: number }>;
+    depthMin: number | null;
+    depthMax: number | null;
+    nonFinite: number;
+    negative: number;
+  };
+  /** depth (m) and object index at a pixel (row 0 = top) of the last capture */
+  sample(x: number, y: number): { depth: number; id: number };
+  /** the pixel the last capture's camera projects a world point to */
+  pixelOf(world: number[]): { x: number; y: number; inFront: boolean };
+  /** bounding box + pixel count of one object index in the last capture */
+  bbox(index: number): {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    count: number;
+    /** a pixel that really belongs to the object, as close to the bbox centre as possible */
+    anchor: { x: number; y: number };
+  } | null;
+  /** how many mask pixels a Character's derived mask has, and whether every one carries that object's id */
+  maskStats(characterId: string): { count: number; objectIndex: number } | null;
+  /** SHA-256 of the last capture's raw rasters */
+  digest(): { depth: string; ids: string };
+  /** SHA-256 of a master-frame style beauty render through the current Production Camera */
+  beautyDigest(): Promise<string>;
+  /** a digest of everything a pass capture must not change in the live scene (visibility, materials, layers) */
+  sceneStateDigest(): string;
+  renderInfo(): { textures: number; geometries: number; programs: number; canvases: number };
+  /** Live-scene setup for geometry tests (never saved; reload discards it). */
+  addBox(position: number[], scale: number[]): Promise<string>;
+  clearScene(): void;
+  placeFigure(characterId: string, position: number[]): void;
+  setFigureVisible(characterId: string, visible: boolean): void;
+  /** Re-selects a Set object (selection outline) so tests can prove selection never reaches a pass. */
+  selectObject(id: string | null): void;
+}
+
 export interface PrevisTestHook {
+  spatial: SpatialTestHook;
   /** Client-space (CSS px) position of a point `offsetWorld` away from the object's origin. */
   project(id: string, offsetWorld?: { x: number; y: number; z: number }): { x: number; y: number } | null;
   navigationCamera(): { position: number[]; rotation: number[]; fov: number } | null;
@@ -40,7 +94,177 @@ export function installPrevisTestHook(adapter: SpatialSceneAdapter, canvas: HTML
   if (typeof navigator === "undefined" || !navigator.webdriver) return () => {};
   const w = window as unknown as { __prismSet?: PrevisTestHook };
   const cam = () => adapter.getEditor()?.cameraController.camera ?? null;
+  let last: { passes: RenderedPasses; manifest: ObjectManifest; camera: ControlCamera } | null = null;
+  const requireLast = () => {
+    if (!last) throw new Error("No spatial capture has been taken yet.");
+    return last;
+  };
   w.__prismSet = {
+    spatial: {
+      capture(pose) {
+        const camera = controlCameraFromPose(
+          { x: pose.position[0], y: pose.position[1], z: pose.position[2] },
+          { x: pose.rotation[0], y: pose.rotation[1], z: pose.rotation[2] },
+          pose.focalLengthMm,
+        );
+        const e = adapter.productionEntities();
+        const manifest = buildObjectManifest({
+          setObjects: e.setObjects,
+          characters: e.characterIds.map((id) => ({ characterId: id, blockingId: `test-${id}` })),
+        });
+        const passes = adapter.captureSpatialPasses(camera, manifest);
+        last = { passes, manifest, camera };
+        const counts = new Uint32Array(manifest.objects.length + 1);
+        let min = Infinity;
+        let max = -Infinity;
+        let nonFinite = 0;
+        let negative = 0;
+        for (let i = 0; i < passes.ids.length; i++) {
+          counts[passes.ids[i]]++;
+          const d = passes.depth[i];
+          if (!Number.isFinite(d)) nonFinite++;
+          else if (d < 0) negative++;
+          else if (d > 0) {
+            if (d < min) min = d;
+            if (d > max) max = d;
+          }
+        }
+        return {
+          width: passes.width,
+          height: passes.height,
+          objects: manifest.objects.map((o) => ({
+            index: o.index,
+            semanticId: o.semanticId,
+            category: o.category,
+            pixels: counts[o.index],
+          })),
+          depthMin: Number.isFinite(min) ? min : null,
+          depthMax: Number.isFinite(max) ? max : null,
+          nonFinite,
+          negative,
+        };
+      },
+      sample(x, y) {
+        const { passes } = requireLast();
+        const i = y * passes.width + x;
+        return { depth: passes.depth[i], id: passes.ids[i] };
+      },
+      pixelOf(world) {
+        const { passes, camera } = requireLast();
+        const cam = buildPassCamera(camera);
+        const v = new THREE.Vector3(world[0], world[1], world[2]);
+        const inFront = v.clone().applyMatrix4(cam.matrixWorldInverse).z < 0;
+        v.project(cam);
+        return {
+          x: ((v.x + 1) / 2) * passes.width,
+          y: ((1 - v.y) / 2) * passes.height,
+          inFront,
+        };
+      },
+      bbox(index) {
+        const { passes } = requireLast();
+        let minX = Infinity;
+        let maxX = -1;
+        let minY = Infinity;
+        let maxY = -1;
+        let count = 0;
+        for (let y = 0; y < passes.height; y++)
+          for (let x = 0; x < passes.width; x++)
+            if (passes.ids[y * passes.width + x] === index) {
+              count++;
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+        if (!count) return null;
+        const cx = (minX + maxX) / 2;
+        const cy = (minY + maxY) / 2;
+        let best = Infinity;
+        const anchor = { x: minX, y: minY };
+        for (let y = minY; y <= maxY; y++)
+          for (let x = minX; x <= maxX; x++)
+            if (passes.ids[y * passes.width + x] === index) {
+              const d = (x - cx) ** 2 + (y - cy) ** 2;
+              if (d < best) {
+                best = d;
+                anchor.x = x;
+                anchor.y = y;
+              }
+            }
+        return { minX, maxX, minY, maxY, count, anchor };
+      },
+      maskStats(characterId) {
+        const { passes, manifest } = requireLast();
+        const m = deriveCharacterMasks(passes.ids, manifest).find((x) => x.characterId === characterId);
+        return m ? { count: m.visiblePixelCount, objectIndex: m.objectIndex } : null;
+      },
+      digest() {
+        const { passes } = requireLast();
+        return {
+          depth: sha256Bytes(
+            new Uint8Array(passes.depth.buffer, passes.depth.byteOffset, passes.depth.byteLength),
+          ),
+          ids: sha256Bytes(new Uint8Array(passes.ids.buffer, passes.ids.byteOffset, passes.ids.byteLength)),
+        };
+      },
+      async beautyDigest() {
+        const cam = adapter.getProductionCamera();
+        if (!cam) throw new Error("No production camera.");
+        const frame = await adapter.captureMasterFrame(bookmarkFromCamera(cam));
+        return sha256Bytes(new Uint8Array(await frame.blob.arrayBuffer()));
+      },
+      sceneStateDigest() {
+        const scene = adapter.getEditor()?.activeScene.scene;
+        const parts: string[] = [];
+        scene?.traverse((o) => {
+          const m = (o as THREE.Mesh).material;
+          const mats = Array.isArray(m) ? m : m ? [m] : [];
+          parts.push(
+            [o.uuid, o.visible ? 1 : 0, o.layers.mask, o.renderOrder, mats.map((x) => x.uuid).join(",")].join(
+              "|",
+            ),
+          );
+        });
+        const bg = scene?.background ? String((scene.background as THREE.Color).getHex?.() ?? "tex") : "none";
+        parts.push(`bg:${bg}|fog:${scene?.fog ? 1 : 0}|sel:${adapter.selectedId() ?? ""}`);
+        return sha256Bytes(new TextEncoder().encode(parts.join(";")));
+      },
+      async addBox(position, scale) {
+        const id = await adapter.addPrimitive("Box");
+        if (!id) throw new Error("Could not add a box.");
+        adapter.updateTransform(id, {
+          position: { x: position[0], y: position[1], z: position[2] },
+          scale: { x: scale[0], y: scale[1], z: scale[2] },
+        });
+        return id;
+      },
+      clearScene() {
+        for (const o of adapter.listObjects()) adapter.removeObject(o.id);
+        for (const f of adapter.blocking.list()) adapter.blocking.setVisible(f.characterId, false);
+      },
+      placeFigure(characterId, position) {
+        adapter.blocking.setRoot(characterId, {
+          position: { x: position[0], y: position[1], z: position[2] },
+        });
+        adapter.blocking.setVisible(characterId, true);
+      },
+      setFigureVisible(characterId, visible) {
+        adapter.blocking.setVisible(characterId, visible);
+      },
+      selectObject(id) {
+        adapter.select(id);
+      },
+      renderInfo() {
+        const r = adapter.getEditor()?.renderer;
+        return {
+          textures: r?.info.memory.textures ?? -1,
+          geometries: r?.info.memory.geometries ?? -1,
+          programs: r?.info.programs?.length ?? -1,
+          canvases: document.querySelectorAll("canvas").length,
+        };
+      },
+    },
     project(id, offset = { x: 0, y: 0, z: 0 }) {
       const c = cam();
       const o = adapter.listObjects().find((x) => x.id === id);
