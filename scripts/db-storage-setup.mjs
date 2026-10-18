@@ -17,7 +17,8 @@ try {
        'audio/wav','audio/x-wav','audio/wave','audio/mpeg','audio/mp3','audio/mp4','audio/aac','audio/ogg','audio/flac','audio/webm','audio/x-m4a',
        'video/mp4','video/webm','video/quicktime',
        'application/pdf','text/plain','application/json','model/gltf-binary',
-       'application/x-prism-depth-f32','application/x-prism-object-id-u32','application/x-prism-character-mask-u8'])
+       'application/x-prism-depth-f32','application/x-prism-object-id-u32','application/x-prism-character-mask-u8',
+       'application/x-gaussian-splat','application/x-spz','application/x-ply'])
      on conflict (id) do update
        set public = false, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types
      returning id, public, file_size_limit`,

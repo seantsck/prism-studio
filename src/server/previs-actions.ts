@@ -16,6 +16,7 @@ import {
 } from "@/domain/previs/blocking";
 import { cameraPathSchema, validateCameraPath } from "@/domain/previs/camera-path";
 import { buildPrevisDocument } from "@/domain/previs/document";
+import { isSplatMime } from "@/domain/previs/splat";
 import { PREVIS_PRODUCTION_FRAME } from "@/domain/previs/types";
 import { readImageSize } from "@/lib/image-size";
 import { buildObjectPath } from "@/lib/storage-paths";
@@ -101,13 +102,40 @@ export async function saveLocationScene(
       const id = t.slice(3, -1); // strip the leading quote, `m_` and the trailing quote
       const asset = data.assets.find((a) => a.id === id);
       if (!asset) throw new UserFacingError("The 3D set references an asset that is not in this project.");
-      if (asset.mime !== "model/gltf-binary")
-        throw new UserFacingError("Only .glb models from the asset library can be placed in a 3D set.");
+      if (asset.mime !== "model/gltf-binary" && !isSplatMime(asset.mime))
+        throw new UserFacingError("Only .glb models and imported Gaussian splats can be placed in a 3D set.");
       assetChecksums[id] = asset.checksum ?? null;
     }
 
     const document = buildPrevisDocument({ engineScene, assetChecksums });
     const repo = await getPrevisRepo();
+
+    // Gaussian-splat environments (M2D.1): a splat object must be a splat Asset of THIS project bound to an
+    // immutable reconstruction of THIS location whose result is that very Asset and content; a splat Asset can never
+    // masquerade as a model, and a model can never be called a splat. One environment per Set.
+    const splats = document.objects.filter((o) => o.kind === "splat");
+    if (splats.length > 1)
+      throw new UserFacingError(
+        "A 3D set can hold one Gaussian-splat environment. Remove the other one first.",
+      );
+    for (const o of document.objects) {
+      if (!o.assetId) continue;
+      const asset = data.assets.find((a) => a.id === o.assetId)!;
+      if (o.kind === "glb" && isSplatMime(asset.mime))
+        throw new UserFacingError("A Gaussian splat can only be placed as a splat environment.");
+      if (o.kind !== "splat") continue;
+      if (!isSplatMime(asset.mime)) throw new UserFacingError("That object is not a Gaussian-splat Asset.");
+      const recon = o.reconstructionId ? await repo.getReconstruction(o.reconstructionId) : null;
+      if (
+        !recon ||
+        recon.projectId !== data.project.id ||
+        recon.locationId !== locationId ||
+        recon.resultAssetId !== asset.id
+      )
+        throw new UserFacingError("That splat does not belong to a reconstruction of this location.");
+      if ((recon.resultChecksum ?? null) !== (asset.checksum ?? null))
+        throw new UserFacingError("The splat's content no longer matches its reconstruction record.");
+    }
     const saved = await repo.saveScene({
       id: randomUUID(),
       projectId: data.project.id,
