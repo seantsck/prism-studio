@@ -9,6 +9,10 @@ const nextConfig: NextConfig = {
   experimental: {
     // Uploads go through server actions; keep in step with MAX_BYTES in src/lib/upload-policy.ts (50 MB).
     serverActions: { bodySizeLimit: "55mb" },
+    // The proxy (src/proxy.ts) buffers request bodies for the app, and Next caps that buffer at 10 MB by default:
+    // anything larger arrives truncated ("Unexpected end of form"). Spatial control passes upload ~15 MB of raw
+    // machine rasters and previs clips may reach 50 MB, so the buffer follows the same limit as server actions.
+    proxyClientMaxBodySize: "55mb",
   },
   async headers() {
     return [

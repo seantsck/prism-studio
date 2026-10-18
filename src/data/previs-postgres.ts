@@ -17,6 +17,16 @@ import {
   type CameraMotionReference,
   type SpatialReference,
 } from "@/domain/previs/spatial";
+import {
+  bookmarkCameraFingerprint,
+  buildControlPassesReference,
+  pickCurrentBundle,
+  SPATIAL_PASS_BUNDLE_SCHEMA,
+  type CharacterMasksJson,
+  type ControlCameraSource,
+  type DepthMetadata,
+  type ObjectManifest,
+} from "@/domain/previs/spatial-passes";
 import { cameraBookmarkSchema, previsDocumentSchema } from "@/domain/previs/types";
 import {
   PrevisError,
@@ -26,6 +36,8 @@ import {
   type MasterFrameRecord,
   type NewMasterFrame,
   type NewPrevisClip,
+  type NewSpatialPassBundle,
+  type SpatialPassBundleRecord,
   type PrevisClipRecord,
   type SaveCameraPathInput,
   type SaveShotBlockingInput,
@@ -180,6 +192,35 @@ const mapClip = (r: Row): PrevisClipRecord => ({
   blockingFingerprint: str(r.blocking_fingerprint),
   blocking: (r.blocking_json as RenderedBlockingFigure[] | null) ?? null,
   renderedAt: iso(r.rendered_at),
+  createdBy: str(r.created_by),
+  createdAt: iso(r.created_at),
+});
+
+const mapBundle = (r: Row): SpatialPassBundleRecord => ({
+  id: String(r.id),
+  projectId: String(r.project_id),
+  shotId: String(r.shot_id),
+  locationId: String(r.location_id),
+  sceneDocumentId: String(r.scene_document_id),
+  sceneRevision: Number(r.scene_revision),
+  sceneFingerprint: String(r.scene_fingerprint),
+  blockingFingerprint: str(r.blocking_fingerprint),
+  camera: r.camera_json as ControlCameraSource,
+  schemaVersion: String(r.schema_version),
+  bundleFingerprint: String(r.bundle_fingerprint),
+  width: Number(r.width),
+  height: Number(r.height),
+  depth: {
+    assetId: String(r.depth_asset_id),
+    encoding: "prism.depth-f32.v1",
+    metadata: r.depth_metadata_json as DepthMetadata,
+  },
+  objectIds: {
+    assetId: String(r.object_id_asset_id),
+    encoding: "prism.object-id-u32.v1",
+    manifest: r.object_manifest_json as ObjectManifest,
+  },
+  characterMasks: r.character_masks_json as CharacterMasksJson,
   createdBy: str(r.created_by),
   createdAt: iso(r.created_at),
 });
@@ -363,6 +404,17 @@ export class PostgresPrevisData implements PrevisRepository {
         [projectId],
       );
       const adopted = new Map(f.rows.map((r) => [String(r.shot_id), String(r.asset_id)]));
+      const bundleRows = await c.query(
+        "select * from shot_spatial_pass_bundles where project_id = $1 order by created_at desc",
+        [projectId],
+      );
+      const bundlesByShot = new Map<string, SpatialPassBundleRecord[]>();
+      for (const r of bundleRows.rows) {
+        const rec = mapBundle(r);
+        const list = bundlesByShot.get(rec.shotId) ?? [];
+        list.push(rec);
+        bundlesByShot.set(rec.shotId, list);
+      }
       const k = await c.query(
         `select shot_id, path_fingerprint, asset_id, has_audio, audio_mix_fingerprint, blocking_fingerprint,
                 rendered_at
@@ -463,6 +515,15 @@ export class PostgresPrevisData implements PrevisRepository {
           adoptedMasterFrameAssetId: adopted.get(shotId) ?? null,
           cameraMotion,
           shotBlocking: buildShotBlockingReference(blockRecs, names, { locationId: scene.locationId }),
+          controlPasses: (() => {
+            const cur = pickCurrentBundle(bundlesByShot.get(shotId) ?? [], {
+              sceneFingerprint: scene.sceneFingerprint,
+              blockingFingerprint: currentBlockingFp,
+              pathFingerprint: path?.pathFingerprint ?? null,
+              bookmarkCameraFingerprint: bm ? bookmarkCameraFingerprint(bm.value) : null,
+            });
+            return cur ? buildControlPassesReference(cur) : null;
+          })(),
         });
       }
       return out;
@@ -804,6 +865,88 @@ export class PostgresPrevisData implements PrevisRepository {
         ],
       );
       return mapClip(r.rows[0]);
+    });
+  }
+
+  async listSpatialPassBundles(shotId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        "select * from shot_spatial_pass_bundles where shot_id = $1 order by created_at desc, id desc",
+        [shotId],
+      );
+      return r.rows.map(mapBundle);
+    });
+  }
+
+  async getSpatialPassBundle(id: string) {
+    return this.tx(async (c) => {
+      const r = await c.query("select * from shot_spatial_pass_bundles where id = $1", [id]);
+      return r.rows[0] ? mapBundle(r.rows[0]) : null;
+    });
+  }
+
+  async spatialPassUsesAsset(assetId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        `select 1 from shot_spatial_pass_bundles
+          where depth_asset_id = $1 or object_id_asset_id = $1 or character_masks_json::text like '%' || $1::text || '%'
+          limit 1`,
+        [assetId],
+      );
+      return (r.rowCount ?? 0) > 0;
+    });
+  }
+
+  async recordSpatialPassBundle(input: NewSpatialPassBundle) {
+    return this.tx(async (c) => {
+      const dup = await c.query(
+        "select * from shot_spatial_pass_bundles where shot_id = $1 and bundle_fingerprint = $2",
+        [input.shotId, input.bundleFingerprint],
+      );
+      if (dup.rows[0]) return { record: mapBundle(dup.rows[0]), existing: true };
+      const cam = input.camera;
+      const isPath = cam.kind === "camera_path";
+      const r = await c.query(
+        `insert into shot_spatial_pass_bundles
+           (id, project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint,
+            blocking_fingerprint, camera_source, camera_json, camera_path_id, camera_path_revision,
+            camera_path_fingerprint, time_ms, schema_version, bundle_fingerprint, width, height,
+            depth_asset_id, depth_encoding, depth_metadata_json, object_id_asset_id, object_id_encoding,
+            object_manifest_json, character_masks_json, created_by, created_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb,$22,$23,
+                 $24::jsonb,$25::jsonb,$26,$27)
+         returning *`,
+        [
+          input.id,
+          input.projectId,
+          input.shotId,
+          input.locationId,
+          input.sceneDocumentId,
+          input.sceneRevision,
+          input.sceneFingerprint,
+          input.blockingFingerprint,
+          cam.kind,
+          JSON.stringify(cam),
+          isPath ? cam.cameraPathId : null,
+          isPath ? cam.cameraPathRevision : null,
+          isPath ? cam.cameraPathFingerprint : null,
+          isPath ? cam.timeMs : null,
+          SPATIAL_PASS_BUNDLE_SCHEMA,
+          input.bundleFingerprint,
+          input.width,
+          input.height,
+          input.depth.assetId,
+          input.depth.encoding,
+          JSON.stringify(input.depth.metadata),
+          input.objectIds.assetId,
+          input.objectIds.encoding,
+          JSON.stringify(input.objectIds.manifest),
+          JSON.stringify(input.characterMasks),
+          input.userId,
+          input.createdAt,
+        ],
+      );
+      return { record: mapBundle(r.rows[0]), existing: false };
     });
   }
 }

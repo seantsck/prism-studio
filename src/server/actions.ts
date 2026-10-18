@@ -46,6 +46,7 @@ import { buildObjectPath } from "@/lib/storage-paths";
 import { checkUpload, type UploadKind } from "@/lib/upload-policy";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { getMediaQaRepo } from "./media-qa";
+import { getPrevisRepo } from "./previs";
 import { getRepo, requireProjectFresh } from "./repo";
 import { checksum, getUploadStorage, storageForAsset } from "./storage";
 import type { ProjectData } from "@/domain/schemas";
@@ -1214,6 +1215,10 @@ async function deleteAsset_impl(form: FormData) {
         .map((u) => u.label)
         .join("; ")}${usage.direct.length > 3 ? ` and ${usage.direct.length - 3} more` : ""}.`,
     );
+  }
+  // A spatial control-pass bundle is immutable historical truth: its machine assets cannot be removed.
+  if (await (await getPrevisRepo()).spatialPassUsesAsset(asset.id)) {
+    throw new UserFacingError("This asset can't be deleted: it belongs to a spatial control-pass bundle.");
   }
   // Derived-media lineage and QA history also pin an asset: nothing is orphaned silently.
   const pins = await (await getMediaQaRepo()).assetPins(asset.id);
