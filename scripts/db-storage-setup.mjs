@@ -1,4 +1,5 @@
-// Idempotent, ref-guarded bucket setup: the same upsert that migration 0010 performs, for re-asserting the
+// Idempotent, ref-guarded bucket setup: the same upsert that migration 0010 performs (plus the machine-data MIME types
+// added by 0034), for re-asserting the
 // private `prism-assets` bucket settings (never public) without a migration. Safe to re-run.
 //   npm run db:storage:setup
 import pg from "pg";
@@ -15,7 +16,8 @@ try {
        'image/png','image/jpeg','image/webp','image/gif','image/avif',
        'audio/wav','audio/x-wav','audio/wave','audio/mpeg','audio/mp3','audio/mp4','audio/aac','audio/ogg','audio/flac','audio/webm','audio/x-m4a',
        'video/mp4','video/webm','video/quicktime',
-       'application/pdf','text/plain','application/json','model/gltf-binary'])
+       'application/pdf','text/plain','application/json','model/gltf-binary',
+       'application/x-prism-depth-f32','application/x-prism-object-id-u32','application/x-prism-character-mask-u8'])
      on conflict (id) do update
        set public = false, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types
      returning id, public, file_size_limit`,

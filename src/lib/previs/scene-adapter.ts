@@ -17,7 +17,9 @@ import {
 } from "@/vendor/artcraft-scene-engine/engine/events/EngineEvent";
 import { usePageSceneStore, type TransformMode } from "@/vendor/artcraft-scene-engine/PageSceneStore";
 import type { PageSceneAdapter } from "@/vendor/artcraft-scene-engine/adapter";
+import type { ControlCamera, ObjectManifest } from "@/domain/previs/spatial-passes";
 import { BlockingOverlay } from "./blocking-overlay";
+import { renderSpatialPasses, type PassEntity, type RenderedPasses } from "./spatial-pass-renderer";
 import { registerPrevisShapes } from "./shapes";
 
 /**
@@ -89,6 +91,17 @@ export interface SpatialSceneAdapter {
     state: { position: Vec3; rotation: Vec3; focalLengthMm: number },
     size: { width: number; height: number },
   ): Promise<HTMLCanvasElement | OffscreenCanvas>;
+  /**
+   * The PRODUCTION entities a spatial control pass would contain right now: visible Set objects (lights are not
+   * geometry) and visible Shot Character proxies. Editor helpers never appear here.
+   */
+  productionEntities(): { setObjects: Array<{ id: string; name: string }>; characterIds: string[] };
+  /**
+   * Renders depth + object-id rasters for ONE isolated production camera (M2C). Uses the editor's existing
+   * renderer with a temporary float render target; the live scene, viewport, selection and navigation camera are
+   * left exactly as they were.
+   */
+  captureSpatialPasses(camera: ControlCamera, manifest: ObjectManifest): RenderedPasses;
   /**
    * The selected Shot's character-blocking layer (rigged proxies + FK posing). A runtime overlay: it is never part of
    * the serialised set. It shares the editor's undo/redo, selection and gizmos.
@@ -384,6 +397,37 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     g.drawImage(bitmap, 0, 0, size.width, size.height);
     bitmap.close();
     return canvas;
+  }
+
+  productionEntities() {
+    return {
+      setObjects: this.listObjects()
+        .filter((o) => o.kind !== "light" && o.visible)
+        .map((o) => ({ id: o.id, name: o.name })),
+      characterIds: this.blocking
+        .list()
+        .filter((f) => f.visible)
+        .map((f) => f.characterId),
+    };
+  }
+
+  captureSpatialPasses(camera: ControlCamera, manifest: ObjectManifest): RenderedPasses {
+    const editor = this.requireEditor();
+    const renderer = editor.renderer;
+    if (!renderer) throw new Error("The 3D set is not ready to render.");
+    const scene = editor.activeScene.scene;
+    const entities: PassEntity[] = manifest.objects.map((o) => {
+      const roots: THREE.Object3D[] = [];
+      if (o.category === "set_object" && o.sceneObjectId) {
+        const obj = scene.children.find((c) => c.uuid === o.sceneObjectId);
+        if (obj) roots.push(obj);
+      } else if (o.category === "character_proxy" && o.characterId) {
+        const obj = scene.children.find((c) => c.userData?.prismBlocking?.characterId === o.characterId);
+        if (obj) roots.push(obj);
+      }
+      return { index: o.index, semanticId: o.semanticId, kind: o.category, roots };
+    });
+    return renderSpatialPasses({ renderer, scene, camera, entities });
   }
 
   private sceneObjects(): THREE.Object3D[] {

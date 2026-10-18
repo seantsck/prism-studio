@@ -429,3 +429,219 @@ project/shot/character). `scene_master_frames` and `shot_previs_clips` gain `blo
 | procedural three.js rig: hierarchy, FK propagation, disposal         | `src/lib/previs/__tests__/humanoid-rig.test.ts`          |
 | Postgres, RLS, isolation, constraints, render provenance             | `scripts/db-blocking.mts` (`npm run db:blocking`)        |
 | real gizmos, persistence, undo, Shot isolation, renders, package     | `e2e/zzzzzzzzz-character-blocking.spec.ts`               |
+
+## Spatial control passes (Phase 2F M2C)
+
+Prism already knows the Set geometry, the Shot's character blocking, the production camera and (since M2A) the camera
+motion. M2C turns that into **machine-readable, pixel-aligned control data** for one exact rendered frame of a Shot:
+
+> **Do not ask a generation model to guess geometry Prism already knows.**
+
+These are _not_ beauty renders. They are deterministic facts for later conditioning, compositing, inpainting,
+occlusion control and continuity QA. **M2C creates control data only.** It sends nothing to any provider, writes no
+provider syntax into any prompt, and decides nothing about how a provider will consume it. Provider adapters come later.
+
+### Control frame: `prism.spatial-control-frame.v1`
+
+One bundle belongs to ONE control frame: the Shot, the **saved** Set (document id, revision, fingerprint), the
+**rendered** blocking layer (fingerprint, `null` = no visible proxies), an **explicit camera source**, the frame size
+(always the full Production Frame, **1912 × 800**, 2.39:1; never the viewport) and the captured time.
+
+| Camera source | Used when                        | Frozen BY VALUE                                                                                                                      |
+| ------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `camera_path` | the Shot has a saved camera path | path id, revision, fingerprint, `timeMs` (the **timeline playhead**, whole ms) and the camera the shared `evaluateCameraPath()` gave |
+| `bookmark`    | the Shot has no camera path      | bookmark id, a fingerprint of the bookmark's camera, and that camera                                                                 |
+
+The editor/navigation camera is never a valid source. There is **one** camera interpolation: the same
+`evaluateCameraPath()` that timeline playback and previs use.
+
+The camera is stored by value so rays can be reconstructed: `position`, unit `quaternion` (canonical sign, rounded to
+1e-6), `focalLengthMm`, `sensorHeightMm` (24, the engine's vertical-sensor basis), `fovVerticalDegrees`, `aspect`,
+`near` (0.05), `far` (2000), `width`, `height`.
+
+### Conventions (stored once, shared by every raster)
+
+- Every raster is `width × height`, **row-major, row 0 = the TOP row**. The single flip from WebGL's bottom-left origin
+  happens once, at readback (`spatial-pass-renderer.ts`). Flat index = `y · width + x`.
+- Multi-byte values are **little-endian** regardless of host (`encode*` / `decode*` in `spatial-passes.ts`).
+- All rasters of a bundle share exactly the same width, height, camera and framing; nothing is individually resized.
+- At every pixel `depth[x,y]`, `objectId[x,y]` and each Character mask refer to the same production ray.
+
+### Depth: `prism.depth-f32.v1`
+
+| Property   | Value                                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------------- |
+| Meaning    | **linear view-space depth**: the positive distance **along the camera's forward axis** (not ray length) |
+| Units      | **metres**                                                                                              |
+| Encoding   | Float32, little-endian, `w · h · 4` bytes                                                               |
+| Background | **0** (no geometry). Geometry can never be 0: the near plane is 0.05 m                                  |
+| Range      | `near` 0.05 … `far` 2000 (recorded in the metadata with `minDepth` / `maxDepth` / `validPixelCount`)    |
+| MIME       | `application/x-prism-depth-f32`                                                                         |
+
+The depth pass is rendered on the GPU with a temporary `RGBA32F` render target and a small shader that outputs
+`-viewPosition.z` (varyings interpolate perspective-correctly, so this is exact linear depth). It is **not** derived
+from a screenshot or from nonlinear hardware depth, and it runs with no lighting, fog, tone mapping, blending or
+postprocessing. If the browser cannot render float targets (`EXT_color_buffer_float`), the capture **stops with an
+error** instead of falling back to a lower-precision depth. The PNG/grayscale preview in the panel is display-only
+(near = dark, far = light) and is never the canonical data.
+
+Server validation: exact byte size, every value finite, non-negative and inside the near/far range.
+
+### Object IDs: `prism.object-id-u32.v1`
+
+Which stable production entity owns each visible pixel. Uint32, little-endian, `w · h · 4` bytes,
+`application/x-prism-object-id-u32`. Rendered with depth test ON, **blending OFF, no multisampling, nearest sampling,
+no lighting or tone mapping** into the float target (an exact integer round-trips through a float up to 2²⁴), so an
+index is never blended or anti-aliased. The false-colour preview is visualisation only.
+
+The manifest (`prism.object-id-manifest.v1`) and the id raster are authoritative together:
+
+```
+{ schema, objects: [{ index, semanticId, category, sceneObjectId? | characterId? + blockingId?, label?, visiblePixelCount }] }
+```
+
+- **Index 0 is the background; indices 1..N are assigned by sorting** (Set objects first, then Character proxies, each by
+  semantic key). There is no hashing into colour, so there are no collisions.
+- **Indices are BUNDLE-LOCAL. Semantic ids are persistent.** Adding an object may renumber a later bundle; its
+  fingerprint then differs. Never treat an index as globally permanent.
+- Set objects: `set_object:<scene object uuid>`. The uuid is the engine's persisted `object_uuid`: it survives save and
+  reload (verified), unlike a runtime `THREE.Object3D.uuid` for an unsaved object. A GLB with many sub-meshes is **one**
+  object.
+- Character proxies: `character_proxy:<characterId>` (with the stored `blockingId`). The whole proxy (head, torso,
+  limbs) is one object; Yumeko and Sean get different ids.
+- Categories are extensible; M2C uses only `set_object` and `character_proxy`. There is no semantic segmentation.
+- Lights are not geometry. Hidden Set objects and **hidden Character proxies are not rendered, so they have no entry**.
+- The Location's scene never gains Character objects: proxies stay a Shot overlay (M2B ownership is intact).
+
+**Only production geometry takes part.** The renderer is given an explicit registry of entity roots. Everything else in
+the scene (grid, transform gizmo, FK joint spheres, skeleton lines, camera-path overlay, camera proxy, lights, selection
+outlines) is hidden for the render and restored in `finally`; descendants of a Character proxy that are not proxy pieces
+are hidden too; layer-1 (editor-only) objects are excluded by the pass camera. Names like "helper" are not the safety rule.
+
+### Character masks: `prism.character-mask-u8.v1`
+
+One exact binary mask per **visible** blocked Character: `w · h` bytes, **0 = not this Character, 255 = this
+Character**, `application/x-prism-character-mask-u8`. A mask is **derived from the object-id raster and the manifest**
+(not a re-render), so masks and ids can never disagree; the server re-derives each mask and rejects any difference.
+No feathering, blur, dilation or erosion: **masks are geometry truth**; any provider-specific softening happens later.
+
+- Masks are **visible pixels**: if Sean stands behind Yumeko, Sean's mask excludes everything Yumeko covers (the depth
+  test does this automatically).
+- A Character enabled in the blocking but **completely hidden** behind geometry keeps its manifest entry and gets an
+  all-zero mask with `visiblePixelCount: 0`. "Proxy visibility enabled" is not "visible on camera".
+- A **hidden** proxy (visibility off) has no manifest entry and no mask.
+- `prism.character-masks.v1` maps by **Character id** (never list position):
+  `{ blockingId, blockingRevision, blockingFingerprint, objectIndex, assetId, encoding, visiblePixelCount }`.
+
+### Renderer (no second context, no side effects)
+
+`ArtCraftSceneAdapter.captureSpatialPasses()` reuses the editor's **existing** `WebGLRenderer` and scene, an isolated
+`PerspectiveCamera` built only from the frozen camera value, and one temporary `WebGLRenderTarget` (no multisampling).
+Original materials, visibility, background, environment, fog, `overrideMaterial`, the render target, clear colour/alpha
+and `autoClear` are saved and restored in a `try/finally`; temporary shader materials and the render target are
+disposed. The ordinary (beauty) picture, the navigation camera, the production camera, the selection and the scene
+graph are unchanged (checked by digests in the E2E), and repeated captures do not grow textures, geometries, shader
+programs or canvases.
+
+### Bundle: `prism.spatial-pass-bundle.v1`
+
+One capture = one **immutable** bundle (`shot_spatial_pass_bundles`): the control frame, the depth asset, the id asset,
+the manifest (with pixel counts) and the masks by Character id. The same exact control frame is stored **once**
+(deterministic rendering): capturing it again returns the existing bundle.
+
+`bundleFingerprint` covers the schema and algorithm versions, the three format versions, the Shot, the scene
+fingerprint, the rendered-blocking fingerprint, the camera source by value (path id / revision / fingerprint / time),
+the frame size and the manifest identity (indices, semantic ids, categories, ids). It does **not** depend on the
+navigation camera, selection, selected bone, helper visibility, panel state, timeline zoom, playback state, labels,
+pixel counts or any object URL.
+
+### Capture rules and the server
+
+Capture requires: the Set saved; the character blocking saved and not stale (re-anchored); the camera path saved,
+current and not playing (or a Production Camera linked and current); never ambiguous unsaved state. The panel lists
+exactly what is missing.
+
+The browser renders; the server **re-derives and validates everything it can**: the saved scene and blocking, the
+camera by value from the saved path/bookmark, the expected manifest from the saved Set + blocking, and the bundle
+fingerprint (a mismatch is a conflict); exact byte sizes; finite, in-range depth; ids inside the manifest; depth and
+ids covering the same pixels; masks containing only 0/255 and equal to the masks derived from the ids; no URLs in
+metadata. All rasters are validated **before** anything is stored. Assets are uploaded and their rows written, then the
+bundle row; if any step fails everything that capture wrote is removed, so a bundle never points at a missing asset.
+
+### Request size and bounds
+
+A two-Character capture is about 15.3 MB (depth 6.1 MB + ids 6.1 MB + 1.5 MB per mask + multipart overhead). Next buffers
+request bodies for the proxy in front of the app and, by default, **truncates anything over 10 MB** ("Unexpected end of
+form"), so `experimental.proxyClientMaxBodySize` is set to **55 MB**: the same ceiling as `serverActions.bodySizeLimit`,
+which already had to cover a 50 MB previs. That global ceiling is only the outer limit; the capture action enforces its
+own, independent of it, **before any raster byte is read**:
+
+- only the known text fields; the manifest text is at most 512 K characters before it is parsed;
+- the files must be exactly `depth`, `objectIds` and one `mask:<characterId>` per Character proxy in the manifest the
+  server re-derived from the saved Set and blocking, so the **mask count is bounded by the Shot's visible Characters**,
+  never by the client;
+- each file's size must equal the canonical length (depth and ids `1912·800·4`, each mask `1912·800`): no truncated or
+  padded raster, no duplicate or extra file, and therefore a bounded total;
+- values are validated after that (finite in-range depth, ids inside the manifest, masks 0/255 and equal to the masks
+  derived from the ids); previs clips keep their own 50 MB cap.
+
+Storage is all-or-nothing (`persistPassBundle`): objects and Asset rows are written in order, then the bundle row; any
+failure removes everything that attempt wrote (idempotently, and a cleanup error never replaces the original error).
+
+### Assets, privacy and taxonomy
+
+Every pass is a **private** Asset (no public bucket, no persisted signed URL; reads go through the authenticated
+`/api/assets/<id>` route). Raw machine data is **not** an image: assets use the new type **`data`** and purpose
+**`spatial_control`** (migration 0034 extends both checks) with the `application/x-prism-*` MIME types above, which the
+private bucket now accepts. A bundle's assets cannot be deleted from the library ("belongs to a spatial control-pass
+bundle").
+
+### Staleness
+
+| Reason           | When                                                                                                                 |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `STALE SCENE`    | the saved Set changed                                                                                                |
+| `STALE CAMERA`   | the saved camera **path** changed (path source) or the Production Camera bookmark's camera changed (bookmark source) |
+| `STALE BLOCKING` | the rendered blocking layer changed (including a proxy appearing or disappearing)                                    |
+| (never)          | **audio**: these assets contain none, so a take selection or mix change leaves a bundle current                      |
+
+History is kept: stale bundles remain stored and listed. The pure `pickCurrentBundle()` returns the latest bundle that is
+**exactly** current, never merely the newest. A bookmark capture is unaffected by a camera path being added later.
+
+### GenerationPackage
+
+`spatialReference.controlPasses` (additive, **omitted** when the Shot has no current bundle, so earlier packages stay
+byte/fingerprint compatible) freezes the **current** bundle by value: ids, fingerprint, size, camera source and camera,
+`rowOrder`, depth `{assetId, encoding, units, backgroundValue, near, far}`, object ids `{assetId, encoding, manifest}`,
+and per-Character `{characterId, assetId, encoding, objectIndex, blockingFingerprint, visiblePixelCount}`. No bytes and
+no URLs. The pass assets also appear in the package's `assets` map (type, purpose, MIME, size, checksum). A stale
+bundle is never frozen into a new package, and a compiled package never changes afterwards. Nothing is added to any
+prompt ("use this depth map" etc.): provider adapters will decide how to consume the passes.
+
+### Persistence (migration 0034)
+
+`shot_spatial_pass_bundles` (owner-only RLS, no worker grants, unique `(shot_id, bundle_fingerprint)`, composite
+project-safe foreign keys to shots, locations, scene documents, camera paths (`on delete set null`) and the depth/id
+assets; an update guard makes bundles immutable). `assets` gains type `data` and purpose `spatial_control`; the
+`prism-assets` bucket accepts the three machine MIME types (still private).
+
+### Tests (M2C)
+
+| Layer                                                                                          | File                                                          |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| formats, validation, manifest, masks, camera source, fingerprint, staleness, previews, package | `src/domain/previs/__tests__/spatial-passes.test.ts`          |
+| repository, dedupe, current selection, package freeze/immutability, staleness                  | `src/domain/previs/__tests__/spatial-passes-repo.test.ts`     |
+| Postgres, RLS, immutability, constraints, composite FKs, asset pinning, package                | `scripts/db-spatial-passes.mts` (`npm run db:spatial-passes`) |
+| real WebGL: known-distance depth, occlusion, orientation, masks, helper exclusion, state, GPU  | `e2e/zzzzzzzzzz-spatial-passes.spec.ts`                       |
+| UI + server flow, private assets, persistence, staleness, package                              | `e2e/zzzzzzzzzz-spatial-passes.spec.ts`                       |
+| Supabase: private storage, anonymous refusal, Postgres persistence                             | `e2e/supabase-spatial-passes.spec.ts`                         |
+
+### Known gaps (M2C)
+
+- One frame per capture (no per-frame sequence of passes along a clip); no normal, motion-vector or flow passes.
+- Raw, uncompressed rasters (≈ 6.1 MB depth + 6.1 MB ids + 1.5 MB per Character); no compression yet.
+- Transparent/alpha materials are treated as opaque geometry; GLB sub-meshes inherit their root's id.
+- Proxies are rigid segments, so masks follow that silhouette (a neutral stand-in, not a final Character).
+- A GLB that fails to load makes the saved Set and the live scene disagree; capture then stops with a conflict.
+- Depth needs WebGL2 float render targets (`EXT_color_buffer_float`); without it capture refuses.
+- Provider conditioning (depth/mask upload, control nets, inpainting, compositing) is intentionally not built.

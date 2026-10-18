@@ -31,6 +31,10 @@ export interface BlockingState {
   liveFingerprint: () => string | null;
   /** saves the changed figures (saving the set first when needed); resolves to the saved layer fingerprint */
   ensureSaved: () => Promise<{ fingerprint: string | null } | null>;
+  /** at least one saved figure was authored against an older state of the set */
+  stale: boolean;
+  /** the saved figures (Character, stored blocking id, visibility): the identity spatial passes record */
+  savedFigures: Array<{ characterId: string; blockingId: string; visible: boolean }>;
 }
 
 interface Saved {
@@ -243,9 +247,17 @@ export function CharacterBlockingPanel(props: CharacterBlockingPanelProps) {
           locationId: propsRef.current.locationId,
         }),
       ensureSaved: doSave,
+      stale: [...saved.values()].some(
+        (x) => !!props.savedSceneFingerprint && x.sceneFingerprint !== props.savedSceneFingerprint,
+      ),
+      savedFigures: [...saved.entries()].map(([characterId, x]) => ({
+        characterId,
+        blockingId: x.blockingId,
+        visible: x.entry.visibility,
+      })),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedFingerprint, dirty, loaded]);
+  }, [savedFingerprint, dirty, loaded, saved, props.savedSceneFingerprint]);
 
   const stale = (id: string) => {
     const s = saved.get(id);

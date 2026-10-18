@@ -162,3 +162,22 @@ that Shot only. The proxy shows where and how the Character stands, not who they
 - **Not a freshness part.** Blocking does not change the 13 shot freshness parts or any existing approval.
 - **Frozen in the package.** `spatialReference.shotBlocking` carries each figure's root and pose by value plus a
   deterministic summary. Nothing is injected into provider prompts in M2B.
+
+## Spatial control passes in the 3D Set (Phase 2F M2C)
+
+When the Set, the Shot's character blocking and the production camera are right, **Capture Control Passes** turns that
+spatial truth into machine-readable data for one frame: **depth** (linear metres), **object IDs** (which Set object or
+Character proxy owns each pixel) and an **exact mask for every visible blocked Character**, all at the full 1912×800
+Production Frame from the same camera.
+
+- **Camera source.** With a saved camera path the capture uses the **timeline playhead** ("Camera Path · 2.000 s");
+  without one it uses the Production Camera bookmark. The navigation camera is never a source.
+- **Saved state only.** The Set, the blocking and the camera path must be saved, current and not playing. The panel
+  lists what is missing, so a bundle can always be reconstructed.
+- **Stale, not deleted.** A bundle goes `STALE SCENE`, `STALE CAMERA` or `STALE BLOCKING` when what it represents
+  changes. Audio never stales it (the passes contain none). Old bundles stay.
+- **Private.** The rasters are private assets of a dedicated `data` type; previews are drawn from the stored bytes and are
+  display-only.
+- **Frozen in the package.** `spatialReference.controlPasses` carries the current bundle by value (asset ids, manifest,
+  camera, per-Character mask identity). Nothing is injected into provider prompts and no provider is called: later
+  adapters decide how to use depth and masks.

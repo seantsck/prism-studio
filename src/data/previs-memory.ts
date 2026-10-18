@@ -6,6 +6,12 @@ import {
   renderedBlockingFingerprint,
 } from "@/domain/previs/blocking";
 import { poseFingerprint } from "@/domain/previs/pose";
+import {
+  bookmarkCameraFingerprint,
+  buildControlPassesReference,
+  pickCurrentBundle,
+  SPATIAL_PASS_BUNDLE_SCHEMA,
+} from "@/domain/previs/spatial-passes";
 import { bookmarkFromCamera } from "@/domain/previs/camera";
 import { cameraPathFingerprint, validateCameraPath } from "@/domain/previs/camera-path";
 import { sceneFingerprint } from "@/domain/previs/document";
@@ -24,6 +30,8 @@ import {
   type MasterFrameRecord,
   type NewMasterFrame,
   type NewPrevisClip,
+  type NewSpatialPassBundle,
+  type SpatialPassBundleRecord,
   type PrevisClipRecord,
   type SaveCameraPathInput,
   type SaveShotBlockingInput,
@@ -44,6 +52,7 @@ export class MemoryPrevisService implements PrevisRepository {
   private paths = new Map<string, CameraPathRecord>(); // by shot id
   private clips = new Map<string, PrevisClipRecord>();
   private blocking = new Map<string, ShotBlockingRecord>(); // by `${shotId}:${characterId}`
+  private bundles = new Map<string, SpatialPassBundleRecord>();
 
   constructor(private readonly access: MemoryProjectsAccess) {}
 
@@ -199,6 +208,25 @@ export class MemoryPrevisService implements PrevisRepository {
     };
   }
 
+  /** The Shot's latest bundle that is exactly current for the saved scene, camera and rendered blocking. */
+  private currentControlPasses(
+    shotId: string,
+    sceneFingerprint: string,
+    path: CameraPathRecord | null,
+    bookmark: CameraBookmarkRecord | null,
+  ) {
+    const cur = pickCurrentBundle(
+      [...this.bundles.values()].filter((x) => x.shotId === shotId),
+      {
+        sceneFingerprint,
+        blockingFingerprint: this.currentBlockingFingerprint(shotId),
+        pathFingerprint: path?.pathFingerprint ?? null,
+        bookmarkCameraFingerprint: bookmark ? bookmarkCameraFingerprint(bookmark.value) : null,
+      },
+    );
+    return cur ? buildControlPassesReference(cur) : null;
+  }
+
   async listSpatialReferences(projectId: string, currentAudioMix?: AudioMixResolver) {
     const out: Record<string, SpatialReference> = {};
     const shotIds = new Set<string>();
@@ -239,6 +267,7 @@ export class MemoryPrevisService implements PrevisRepository {
           Object.fromEntries(this.project(projectId).characters.map((c) => [c.id, c.name])),
           { locationId: scene.locationId },
         ),
+        controlPasses: this.currentControlPasses(shotId, scene.sceneFingerprint, p, b),
       });
     }
     return structuredClone(out);
@@ -445,6 +474,44 @@ export class MemoryPrevisService implements PrevisRepository {
       .filter((c) => c.shotId === shotId)
       .sort((a, b) => (a.renderedAt < b.renderedAt ? 1 : -1))
       .map(clone);
+  }
+
+  async listSpatialPassBundles(shotId: string) {
+    return [...this.bundles.values()]
+      .filter((b) => b.shotId === shotId)
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : a.id < b.id ? 1 : -1))
+      .map(clone);
+  }
+
+  async getSpatialPassBundle(id: string) {
+    const b = this.bundles.get(id);
+    return b ? clone(b) : null;
+  }
+
+  async spatialPassUsesAsset(assetId: string) {
+    return [...this.bundles.values()].some(
+      (b) =>
+        b.depth.assetId === assetId ||
+        b.objectIds.assetId === assetId ||
+        Object.values(b.characterMasks.masks).some((m) => m.assetId === assetId),
+    );
+  }
+
+  async recordSpatialPassBundle(input: NewSpatialPassBundle) {
+    this.requireShot(input.projectId, input.shotId);
+    this.requireLocation(input.projectId, input.locationId);
+    const dup = [...this.bundles.values()].find(
+      (b) => b.shotId === input.shotId && b.bundleFingerprint === input.bundleFingerprint,
+    );
+    if (dup) return { record: clone(dup), existing: true };
+    const { userId, ...rest } = input;
+    const rec: SpatialPassBundleRecord = {
+      ...clone(rest),
+      schemaVersion: SPATIAL_PASS_BUNDLE_SCHEMA,
+      createdBy: userId,
+    };
+    this.bundles.set(rec.id, rec);
+    return { record: clone(rec), existing: false };
   }
 
   async getPrevisClip(id: string) {

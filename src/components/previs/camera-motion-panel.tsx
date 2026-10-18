@@ -140,6 +140,16 @@ function NumField(props: {
   );
 }
 
+/** What other panels (spatial control passes) may read from the camera timeline: the saved path and the playhead. */
+export interface CameraMotionState {
+  saved: CameraPathInfo | null;
+  /** the editable path differs from the saved one */
+  dirty: boolean;
+  /** the CURRENT timeline playhead, whole milliseconds */
+  timeMs: number;
+  playing: boolean;
+}
+
 export interface CameraMotionPanelProps {
   adapter: () => SpatialSceneAdapter;
   ready: boolean;
@@ -161,6 +171,8 @@ export interface CameraMotionPanelProps {
    * and the live fingerprint (what a render made right now would actually show).
    */
   blocking: { savedFingerprint: string | null; dirty: boolean; liveFingerprint: () => string | null };
+  /** published when the saved path, its dirty state or the (paused) playhead changes */
+  onMotionState?: (s: CameraMotionState) => void;
 }
 
 export function CameraMotionPanel(props: CameraMotionPanelProps) {
@@ -198,6 +210,12 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
     if (!saved) return true;
     return cameraPathFingerprint(path) !== saved.pathFingerprint;
   }, [path, saved]);
+  const onMotionState = props.onMotionState;
+  useEffect(() => {
+    // while playing the playhead moves every frame: publish only on settle/state changes, not per animation frame
+    onMotionState?.({ saved, dirty, timeMs: Math.round(timeMs), playing });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saved, dirty, playing, playing ? 0 : timeMs, onMotionState]);
   const sceneStale =
     !!saved && !!props.savedSceneFingerprint && saved.sceneFingerprint !== props.savedSceneFingerprint;
   const keys = useMemo(() => (path ? sortedKeyframes(path) : []), [path]);

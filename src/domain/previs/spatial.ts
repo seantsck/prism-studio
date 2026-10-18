@@ -1,5 +1,6 @@
 import type { CameraInterpolation, CameraKeyframe } from "./camera-path";
 import type { ShotBlockingReference } from "./blocking";
+import type { ControlPassesReference } from "./spatial-passes";
 import { characterBlocking } from "./document";
 import type { CameraBookmarkValue, PrevisDocument } from "./types";
 
@@ -35,6 +36,12 @@ export interface SpatialReference {
    * earlier packages are byte-identical. `characterBlocking` above is the legacy scene-level proxy list (M1).
    */
   shotBlocking?: ShotBlockingReference;
+  /**
+   * The Shot's CURRENT spatial control-pass bundle (M2C: depth + object ids + Character masks), frozen by value.
+   * Optional and omitted when there is no current bundle, so earlier packages are byte-identical. Provider-neutral:
+   * it records the assets; adapters decide later how to use them.
+   */
+  controlPasses?: ControlPassesReference;
 }
 
 export const CAMERA_MOTION_SCHEMA_VERSION = 1 as const;
@@ -78,6 +85,7 @@ export interface SpatialSources {
   adoptedMasterFrameAssetId: string | null;
   cameraMotion?: CameraMotionReference | null;
   shotBlocking?: ShotBlockingReference | null;
+  controlPasses?: ControlPassesReference | null;
 }
 
 export function buildSpatialReference(src: SpatialSources): SpatialReference {
@@ -102,6 +110,7 @@ export function buildSpatialReference(src: SpatialSources): SpatialReference {
   };
   if (src.cameraMotion) ref.cameraMotion = structuredClone(src.cameraMotion);
   if (src.shotBlocking) ref.shotBlocking = structuredClone(src.shotBlocking);
+  if (src.controlPasses) ref.controlPasses = structuredClone(src.controlPasses);
   return ref;
 }
 

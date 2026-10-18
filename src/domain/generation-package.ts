@@ -458,6 +458,10 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
     base.references.referenceVideoAssetId,
     base.references.referenceAudioAssetId,
     base.spatialReference?.masterFrameAssetId,
+    // M2C control passes are described by value too (checksum, size, MIME, dimensions): provider-neutral machine data
+    base.spatialReference?.controlPasses?.depth.assetId,
+    base.spatialReference?.controlPasses?.objectIds.assetId,
+    ...(base.spatialReference?.controlPasses?.characterMasks.map((m) => m.assetId) ?? []),
     base.lighting.referenceAssetId,
     ...base.references.referenceAssetIds,
     ...base.performance.map((p) => p.selectedTake?.audioAssetId),

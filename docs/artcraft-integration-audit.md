@@ -171,3 +171,29 @@ schema and puts an explicit `mixamoAlias` table on the bones; only the Three.js 
 
 **Known interaction quirk (upstream).** The engine swallows the first click after the navigation camera pose changed
 (`camera_last_pos`), so the first joint click after flying the camera may need repeating.
+
+## 13. M2C: spatial control passes (decision record)
+
+**Audit.** `Editor.snapShotOfCurrentFrame` (isolated production camera, `cameraOverride`/`sizeOverride`, composer + selection
+pass), `PostProcessing`/`SelectionOutlinePass`, `CameraController` (render camera + layers), `Scene` children model
+(`userData.media_id`, `object_uuid` persistence in `proxy/storyteller_proxy_scene.ts`), `FKHelper` layers (M2B), and the
+Prism adapter (`captureMasterFrame`, `renderPrevisFrame`, `cleanRender`) were read before any code.
+
+| Question                                      | Decision                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Which renderer?                               | The editor's **existing** `WebGLRenderer`. No second renderer, no second context, no screen recording.                                                                                                                                                                                                                   |
+| Through the composer / selection pass?        | **No.** The composer applies outlines, tone mapping and colour management. The passes render straight into a temporary float `WebGLRenderTarget`.                                                                                                                                                                        |
+| Which camera?                                 | A fresh isolated `PerspectiveCamera` built only from the frozen camera value (layer 1 disabled). The navigation/viewport camera is never read.                                                                                                                                                                           |
+| How are ids and depth emitted?                | Two tiny `ShaderMaterial`s (view-space `-z`, and a per-entity index) swapped in per mesh and restored in `finally`. No scene `overrideMaterial`.                                                                                                                                                                         |
+| Why not `MeshDepthMaterial` / hardware depth? | Hardware depth is nonlinear and 16/24-bit packed; the shader writes exact linear metres to a Float32 target.                                                                                                                                                                                                             |
+| Which objects take part?                      | An **explicit registry** of production roots (visible non-light Set objects + visible Shot Character proxies). All other scene children are hidden and restored; proxy descendants that are not proxy pieces are hidden; the pass camera excludes the editor-only layer. Names such as "helper" are not the safety rule. |
+| Stable object identity?                       | Set objects: the engine's persisted `object_uuid` (restored on load, verified). Proxies: Character id + stored blocking id. Never a runtime-only uuid.                                                                                                                                                                   |
+| Masks                                         | Derived from the id raster and manifest, not re-rendered; the server re-derives and compares.                                                                                                                                                                                                                            |
+| Float readback unavailable?                   | The capture **stops** (`EXT_color_buffer_float` is required); it never falls back to lower precision.                                                                                                                                                                                                                    |
+| Vendor changes                                | **None.** Everything is Prism code (`spatial-pass-renderer.ts`, adapter methods); no ArtCraft file was modified in M2C.                                                                                                                                                                                                  |
+
+**Why it can stay this small.** The engine already gives Prism a mutable scene graph, an isolated-camera pattern and an
+editor-only layer. M2C only adds a second, side-effect-free way to render that scene graph.
+
+**Known limits.** Alpha-blended materials are rendered as opaque geometry; instanced/batched meshes are supported by the
+shader chunks but untested; morph targets and skinned meshes use the stock three.js chunks.

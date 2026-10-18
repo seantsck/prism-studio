@@ -1,10 +1,11 @@
 // Removes 3D-set test data from the dev user's projects: scene documents, shot camera bookmarks, master frames,
-// camera paths, shot character blocking, previs clips, their render assets (and stored files) and the storyboard frames created by
+// camera paths, shot character blocking, spatial control-pass bundles, previs clips, their render assets (and stored files) and the storyboard frames created by
 // "Use as Master Frame".
 //   npx tsx --env-file=.env.local scripts/previs-cleanup.mts --yes          delete
 //   npx tsx --env-file=.env.local scripts/previs-cleanup.mts --report       print provenance of master frames (JSON)
 //   npx tsx --env-file=.env.local scripts/previs-cleanup.mts --report-clips  print provenance of previs clips (JSON)
 //   npx tsx --env-file=.env.local scripts/previs-cleanup.mts --report-blocking  print stored shot character blocking (JSON)
+//   npx tsx --env-file=.env.local scripts/previs-cleanup.mts --report-passes  print spatial control-pass bundles (JSON)
 // Development/test tidy-up only. Never touches rows outside the dev user's own projects.
 import pg from "pg";
 import { createOutputSink } from "../src/generation/sink";
@@ -15,13 +16,42 @@ const dev = readDevUserEnv();
 const report = process.argv.includes("--report");
 const reportClips = process.argv.includes("--report-clips");
 const reportBlocking = process.argv.includes("--report-blocking");
-if (!report && !reportClips && !reportBlocking)
+const reportPasses = process.argv.includes("--report-passes");
+if (!report && !reportClips && !reportBlocking && !reportPasses)
   startScript({
     mode: "3D set cleanup (deletes scene documents, bookmarks, master frames)",
     devOwner: dev.id,
   });
 const pool = new pg.Pool({ connectionString: dev.url, ssl: { rejectUnauthorized: false }, max: 2 });
 await assertDevUserExists(pool, dev);
+
+if (reportPasses) {
+  const rows = await pool.query(
+    `select b.id, b.shot_id, b.location_id, b.scene_document_id, b.scene_revision, b.scene_fingerprint,
+            b.blocking_fingerprint, b.camera_source, b.camera_path_id, b.camera_path_revision, b.camera_path_fingerprint,
+            b.time_ms, b.bundle_fingerprint, b.width, b.height, b.depth_asset_id, b.depth_encoding, b.depth_metadata_json,
+            b.object_id_asset_id, b.object_id_encoding, b.object_manifest_json, b.character_masks_json, b.created_at,
+            (select scene_fingerprint from location_scene_documents d where d.id = b.scene_document_id) as live_scene_fingerprint,
+            (select jsonb_build_object('type', a.type, 'purpose', a.purpose, 'source', a.source, 'mime', a.mime, 'byte_size', a.byte_size,
+                      'bucket', a.bucket, 'object_path', a.object_path, 'checksum', a.checksum,
+                      'bucket_public', (select public from storage.buckets bk where bk.id = a.bucket))
+               from assets a where a.id = b.depth_asset_id) as depth_asset,
+            (select jsonb_build_object('type', a.type, 'purpose', a.purpose, 'mime', a.mime, 'byte_size', a.byte_size,
+                      'object_path', a.object_path)
+               from assets a where a.id = b.object_id_asset_id) as object_id_asset,
+            (select coalesce(jsonb_agg(jsonb_build_object('type', a.type, 'purpose', a.purpose, 'mime', a.mime, 'byte_size', a.byte_size,
+                      'object_path', a.object_path)), '[]'::jsonb)
+               from assets a
+              where a.id::text in (select m.value ->> 'assetId' from jsonb_each(b.character_masks_json -> 'masks') m)) as mask_assets
+       from shot_spatial_pass_bundles b
+       join projects p on p.id = b.project_id
+      where p.user_id = $1 order by b.created_at`,
+    [dev.id],
+  );
+  console.log(JSON.stringify(rows.rows));
+  await pool.end();
+  process.exit(0);
+}
 
 if (reportBlocking) {
   const rows = await pool.query(
@@ -80,6 +110,7 @@ const assets = (
     `select a.id, a.object_path from assets a join projects p on p.id = a.project_id
       where p.user_id = $1
         and ((a.source = '3d_render' and 'master_frame' = any(a.tags))
+          or (a.source = '3d_render' and 'spatial_pass' = any(a.tags))
           or (a.source = 'local_previs' and 'previs' = any(a.tags)))`,
     [dev.id],
   )
@@ -97,12 +128,13 @@ const counts = (
             (select count(*)::int from shot_camera_bookmarks b join projects p on p.id = b.project_id where p.user_id = $1) as bookmarks,
             (select count(*)::int from shot_camera_paths c join projects p on p.id = c.project_id where p.user_id = $1) as paths,
             (select count(*)::int from shot_previs_clips c join projects p on p.id = c.project_id where p.user_id = $1) as clips,
-            (select count(*)::int from shot_character_blocking c join projects p on p.id = c.project_id where p.user_id = $1) as blocking`,
+            (select count(*)::int from shot_character_blocking c join projects p on p.id = c.project_id where p.user_id = $1) as blocking,
+            (select count(*)::int from shot_spatial_pass_bundles c join projects p on p.id = c.project_id where p.user_id = $1) as bundles`,
     [dev.id],
   )
 ).rows[0];
 console.log(
-  `scenes: ${counts.scenes}, bookmarks: ${counts.bookmarks}, camera paths: ${counts.paths}, previs clips: ${counts.clips}, character blocking: ${counts.blocking}, previs/master-frame assets: ${assets.length}, storyboard frames: ${frames.length}`,
+  `scenes: ${counts.scenes}, bookmarks: ${counts.bookmarks}, camera paths: ${counts.paths}, previs clips: ${counts.clips}, character blocking: ${counts.blocking}, spatial pass bundles: ${counts.bundles}, previs/master-frame/spatial-pass assets: ${assets.length}, storyboard frames: ${frames.length}`,
 );
 if (!process.argv.includes("--yes")) {
   console.log("dry run; pass --yes to delete");
@@ -112,6 +144,10 @@ if (!process.argv.includes("--yes")) {
 
 if (frames.length) await pool.query("delete from storyboard_frames where id = any($1::uuid[])", [frames]);
 // previs clips and master frames reference assets (no cascade): remove them with their scenes first
+await pool.query(
+  `delete from shot_spatial_pass_bundles where project_id in (select id from projects where user_id = $1)`,
+  [dev.id],
+);
 await pool.query(
   `delete from shot_previs_clips where project_id in (select id from projects where user_id = $1)`,
   [dev.id],

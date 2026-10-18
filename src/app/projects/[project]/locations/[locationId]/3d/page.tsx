@@ -41,6 +41,7 @@ export default async function VirtualSetPage({
   const cameraPath = activeShotId ? await previs.getCameraPathForShot(activeShotId) : null;
   const clips = activeShotId ? await previs.listPrevisClips(activeShotId) : [];
   const blockingRecords = activeShotId ? await previs.listShotBlocking(activeShotId) : [];
+  const spatialBundles = activeShotId ? await previs.listSpatialPassBundles(activeShotId) : [];
 
   // Shot timing authority: the canonical Shot duration (selected performance, else manual target) and the
   // Shot's own frame rate. Camera motion aligns to these; nothing here invents a duration.
@@ -148,6 +149,7 @@ export default async function VirtualSetPage({
           adopted: f.adoptedAt !== null,
           blockingFingerprint: f.blockingFingerprint,
         }))}
+        spatialBundles={spatialBundles}
         blocking={blockingRecords.map((r) => ({
           characterId: r.characterId,
           name: data.characters.find((c) => c.id === r.characterId)?.name ?? "Character",

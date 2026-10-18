@@ -2,6 +2,14 @@ import type { StoredAudioMix } from "@/domain/previs/audio-mix";
 import type { RenderedBlockingFigure, ShotBlockingEntry } from "@/domain/previs/blocking";
 import type { CameraPath } from "@/domain/previs/camera-path";
 import type { SpatialReference } from "@/domain/previs/spatial";
+import type {
+  CharacterMasksJson,
+  ControlCameraSource,
+  DepthMetadata,
+  ObjectManifest,
+  OBJECT_ID_FORMAT,
+  DEPTH_FORMAT,
+} from "@/domain/previs/spatial-passes";
 import type { CameraBookmarkValue, PrevisDocument } from "@/domain/previs/types";
 
 /** One current editable 3D scene per Location (prism.previs.v1 wrapper). */
@@ -237,6 +245,36 @@ export interface SaveShotBlockingInput {
   now: string;
 }
 
+/**
+ * One immutable spatial control-pass capture (M2C): depth + object ids + Character masks for ONE exact control
+ * frame. Historical truth: never updated in place. Assets are private machine data; nothing here is a URL.
+ */
+export interface SpatialPassBundleRecord {
+  id: string;
+  projectId: string;
+  shotId: string;
+  locationId: string;
+  sceneDocumentId: string;
+  sceneRevision: number;
+  sceneFingerprint: string;
+  /** identity of the rendered blocking layer (null = no visible proxies) */
+  blockingFingerprint: string | null;
+  camera: ControlCameraSource;
+  schemaVersion: string;
+  bundleFingerprint: string;
+  width: number;
+  height: number;
+  depth: { assetId: string; encoding: typeof DEPTH_FORMAT; metadata: DepthMetadata };
+  objectIds: { assetId: string; encoding: typeof OBJECT_ID_FORMAT; manifest: ObjectManifest };
+  characterMasks: CharacterMasksJson;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export type NewSpatialPassBundle = Omit<SpatialPassBundleRecord, "createdBy" | "schemaVersion"> & {
+  userId: string | null;
+};
+
 export interface PrevisRepository {
   getSceneForLocation(locationId: string): Promise<SceneDocumentRecord | null>;
   getScene(sceneDocumentId: string): Promise<SceneDocumentRecord | null>;
@@ -287,4 +325,17 @@ export interface PrevisRepository {
   listPrevisClips(shotId: string): Promise<PrevisClipRecord[]>;
   getPrevisClip(id: string): Promise<PrevisClipRecord | null>;
   recordPrevisClip(input: NewPrevisClip): Promise<PrevisClipRecord>;
+
+  /** Newest first. */
+  listSpatialPassBundles(shotId: string): Promise<SpatialPassBundleRecord[]>;
+  getSpatialPassBundle(id: string): Promise<SpatialPassBundleRecord | null>;
+  /** True when a stored bundle references this asset (depth, object ids or a Character mask). */
+  spatialPassUsesAsset(assetId: string): Promise<boolean>;
+  /**
+   * Records a bundle. The same exact control frame (same Shot + bundleFingerprint) is captured once: a repeat returns
+   * the existing record with existing = true and nothing is inserted.
+   */
+  recordSpatialPassBundle(
+    input: NewSpatialPassBundle,
+  ): Promise<{ record: SpatialPassBundleRecord; existing: boolean }>;
 }

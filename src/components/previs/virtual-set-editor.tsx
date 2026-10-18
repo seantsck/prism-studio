@@ -14,9 +14,12 @@ import {
   type SpatialSceneAdapter,
 } from "@/lib/previs/scene-adapter";
 import { installPrevisTestHook } from "@/lib/previs/test-hook";
+import type { SpatialPassBundleRecord } from "@/data/previs-repository";
 import { CharacterBlockingPanel, type BlockingState } from "./character-blocking-panel";
+import { SpatialPassesPanel } from "./spatial-passes-panel";
 import {
   CameraMotionPanel,
+  type CameraMotionState,
   type CameraPathInfo,
   type PrevisClipInfo,
   type ShotTimingInfo,
@@ -66,6 +69,8 @@ export interface VirtualSetProps {
   shotTiming: ShotTimingInfo | null;
   cameraPath: CameraPathInfo | null;
   previsClips: PrevisClipInfo[];
+  /** stored spatial control-pass bundles of the active shot (newest first) */
+  spatialBundles: SpatialPassBundleRecord[];
 }
 
 const RAD = Math.PI / 180;
@@ -109,6 +114,9 @@ export function VirtualSetEditor(props: VirtualSetProps) {
     blockingRef.current = b;
     setBlockingState(b);
   }, []);
+  // the camera timeline's saved path + playhead, read by the spatial control-pass panel
+  const [motionState, setMotionState] = useState<CameraMotionState | null>(null);
+  const onMotionState = useCallback((m: CameraMotionState) => setMotionState(m), []);
 
   // ── lifecycle: one adapter per mount, disposed on unmount (React strict-mode safe) ──
   useEffect(() => {
@@ -748,6 +756,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
                 dirty: blockingState?.dirty ?? false,
                 liveFingerprint: () => blockingRef.current?.liveFingerprint() ?? null,
               }}
+              onMotionState={onMotionState}
             />
           ) : null}
 
@@ -765,6 +774,27 @@ export function VirtualSetEditor(props: VirtualSetProps) {
               sceneDirty={dirty}
               ensureSceneSaved={ensureSaved}
               onState={onBlockingState}
+            />
+          ) : null}
+
+          {shotId ? (
+            <SpatialPassesPanel
+              key={`spatial:${shotId}`}
+              adapter={adapter}
+              ready={ready}
+              projectSlug={props.projectSlug}
+              locationId={props.locationId}
+              shotId={shotId}
+              characters={props.characters}
+              initialBundles={shotId === props.activeShotId ? props.spatialBundles : null}
+              scene={{ documentId: sceneDocumentId, revision, fingerprint: savedFingerprint, dirty }}
+              bookmark={
+                bookmark
+                  ? { id: bookmark.id, sceneFingerprint: bookmark.sceneFingerprint, value: bookmark.value }
+                  : null
+              }
+              motion={motionState}
+              blocking={blockingState}
             />
           ) : null}
 
