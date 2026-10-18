@@ -12,6 +12,9 @@ const nextConfig: NextConfig = {
     // The proxy (src/proxy.ts) buffers request bodies for the app, and Next caps that buffer at 10 MB by default:
     // anything larger arrives truncated ("Unexpected end of form"). Spatial control passes upload ~15 MB of raw
     // machine rasters and previs clips may reach 50 MB, so the buffer follows the same limit as server actions.
+    // This is only the OUTER ceiling: every action enforces its own exact limits (spatial passes: exact canonical raster
+    // sizes, a mask count bounded by the Shot's visible Characters, a bounded manifest; previs: MAX_PREVIS_BYTES 50 MB;
+    // library uploads: upload-policy MAX_BYTES).
     proxyClientMaxBodySize: "55mb",
   },
   async headers() {

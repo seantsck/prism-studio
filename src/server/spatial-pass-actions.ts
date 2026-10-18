@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { ZodError } from "zod";
 import { PrevisError, type SpatialPassBundleRecord } from "@/data/previs-repository";
 import { renderedBlockingProvenance } from "@/domain/previs/blocking";
-import { assetSchema, type Asset } from "@/domain/schemas";
+import { assetSchema } from "@/domain/schemas";
 import {
   CHARACTER_MASK_FORMAT,
   CHARACTER_MASKS_SCHEMA,
@@ -14,7 +14,9 @@ import {
   SPATIAL_MIME,
   cameraSourceFromBookmark,
   cameraSourceFromPath,
+  MAX_MANIFEST_JSON_CHARS,
   buildControlFrame,
+  checkUploadShape,
   countObjectPixels,
   decodeDepthF32,
   decodeObjectIdsU32,
@@ -38,6 +40,7 @@ import { UserFacingError } from "./action-result";
 import { requireUser } from "./auth";
 import { getPrevisRepo } from "./previs";
 import { getRepo, requireProjectFresh } from "./repo";
+import { persistPassBundle, type PassStoreDeps } from "./spatial-pass-store";
 import { checksum, getUploadStorage, storageForAsset } from "./storage";
 
 /**
@@ -70,6 +73,18 @@ async function guarded<T>(body: () => Promise<SpatialPassResult<T>>): Promise<Sp
   }
 }
 
+/** The only non-file fields a capture may carry. */
+const TEXT_FIELDS = new Set([
+  "projectSlug",
+  "shotId",
+  "locationId",
+  "cameraSource",
+  "timeMs",
+  "blockingFingerprint",
+  "bundleFingerprint",
+  "manifest",
+]);
+
 const bytesOf = async (form: FormData, key: string): Promise<Uint8Array> => {
   const f = form.get(key);
   if (!(f instanceof File) || f.size === 0) throw new UserFacingError(`The ${key} pass was not received.`);
@@ -93,9 +108,17 @@ export async function captureSpatialPassBundle(
     const claimedFingerprint = str(form, "bundleFingerprint");
     if (sourceKind !== "camera_path" && sourceKind !== "bookmark")
       throw new UserFacingError("Choose a camera source (camera path or Production Camera).");
+    // Bounds that do not depend on any proxy / body-size setting: the request may carry only the known text fields
+    // and only the files the saved state implies (checked below, before a single raster byte is read).
+    for (const [key, value] of form.entries())
+      if (!(value instanceof File) && !TEXT_FIELDS.has(key))
+        throw new UserFacingError(`Unexpected field ${key.slice(0, 40)}.`);
+    const manifestText = str(form, "manifest");
+    if (manifestText.length > MAX_MANIFEST_JSON_CHARS)
+      throw new UserFacingError("The object manifest is too large.");
     let claimedManifest: ObjectManifest;
     try {
-      claimedManifest = JSON.parse(str(form, "manifest")) as ObjectManifest;
+      claimedManifest = JSON.parse(manifestText) as ObjectManifest;
     } catch {
       throw new UserFacingError("The object manifest is not valid.");
     }
@@ -171,6 +194,14 @@ export async function captureSpatialPassBundle(
         "The objects in the set or shot changed (or did not all load) while the passes were rendered. Capture again.",
       );
     const { width, height } = PREVIS_PRODUCTION_FRAME;
+    // exact files, exact canonical sizes, bounded total: from File.size, before any byte is read into memory
+    const shape = checkUploadShape(
+      [...form.entries()].flatMap(([key, v]) => (v instanceof File ? [{ key, size: v.size }] : [])),
+      manifest,
+      width,
+      height,
+    );
+    if (!shape.ok) throw new UserFacingError(shape.error);
     const frame = buildControlFrame({
       shotId,
       scene: { documentId: scene.id, revision: scene.revision, fingerprint: scene.sceneFingerprint },
@@ -324,30 +355,41 @@ export async function captureSpatialPassBundle(
       return { d, rec, ...m };
     });
 
-    const attempted = [depthAsset, idAsset, ...maskAssets].map((a) => a.asset);
-    try {
-      for (const a of [depthAsset, idAsset, ...maskAssets]) {
-        await storage.put(a.objectPath, a.bytes, a.mime);
-        await repo.upsert(data.project.id, "assets", a.asset);
-      }
-      const characterMasks: CharacterMasksJson = {
-        schema: CHARACTER_MASKS_SCHEMA,
-        masks: Object.fromEntries(
-          maskAssets.map((m) => [
-            m.d.characterId,
-            {
-              blockingId: m.rec.id,
-              blockingRevision: m.rec.revision,
-              blockingFingerprint: m.rec.blockingFingerprint,
-              objectIndex: m.d.objectIndex,
-              assetId: m.assetId,
-              encoding: CHARACTER_MASK_FORMAT,
-              visiblePixelCount: m.d.visiblePixelCount,
-            },
-          ]),
-        ),
-      };
-      const out = await previs.recordSpatialPassBundle({
+    const writes = [depthAsset, idAsset, ...maskAssets].map((a) => ({
+      asset: a.asset,
+      bytes: a.bytes,
+      objectPath: a.objectPath,
+      mime: a.mime,
+    }));
+    const deps: PassStoreDeps = {
+      putObject: (path, bytes, mime) => storage.put(path, bytes, mime),
+      upsertAsset: (asset) => repo.upsert(data.project.id, "assets", asset),
+      removeAsset: (id) => repo.remove(data.project.id, "assets", id),
+      removeObject: async (asset) => {
+        const st = await storageForAsset(asset);
+        if (st && asset.objectPath) await st.remove(asset.objectPath);
+      },
+    };
+    const characterMasks: CharacterMasksJson = {
+      schema: CHARACTER_MASKS_SCHEMA,
+      masks: Object.fromEntries(
+        maskAssets.map((m) => [
+          m.d.characterId,
+          {
+            blockingId: m.rec.id,
+            blockingRevision: m.rec.revision,
+            blockingFingerprint: m.rec.blockingFingerprint,
+            objectIndex: m.d.objectIndex,
+            assetId: m.assetId,
+            encoding: CHARACTER_MASK_FORMAT,
+            visiblePixelCount: m.d.visiblePixelCount,
+          },
+        ]),
+      ),
+    };
+    // all-or-nothing: any failure (or a lost race with an identical capture) removes everything this attempt wrote
+    const out = await persistPassBundle(deps, writes, () =>
+      previs.recordSpatialPassBundle({
         id: bundleId,
         projectId: data.project.id,
         shotId,
@@ -369,36 +411,12 @@ export async function captureSpatialPassBundle(
         characterMasks,
         createdAt: stamp,
         userId: actorOf(user),
-      });
-      if (out.existing) {
-        // lost a race with an identical capture: ours are surplus
-        await removeAssets(repo, data.project.id, attempted);
-        return { ok: true, bundle: out.record, existing: true };
-      }
-      refresh(slug);
-      return { ok: true, bundle: out.record, existing: false };
-    } catch (err) {
-      await removeAssets(repo, data.project.id, attempted);
-      throw err;
-    }
+      }),
+    );
+    if (out.existing) return { ok: true, bundle: out.record, existing: true };
+    refresh(slug);
+    return { ok: true, bundle: out.record, existing: false };
   });
-}
-
-/** Best-effort removal of everything one failed capture wrote: asset rows first, then their private objects. */
-async function removeAssets(repo: Awaited<ReturnType<typeof getRepo>>, projectId: string, assets: Asset[]) {
-  for (const asset of assets) {
-    try {
-      await repo.remove(projectId, "assets", asset.id);
-    } catch {
-      /* the row may never have been written */
-    }
-    try {
-      const st = await storageForAsset(asset);
-      if (st && asset.objectPath) await st.remove(asset.objectPath);
-    } catch {
-      /* an orphaned private object is harmless and never referenced */
-    }
-  }
 }
 
 /** The stored bundles of one Shot (used when the editor switches Shot without leaving the page). */

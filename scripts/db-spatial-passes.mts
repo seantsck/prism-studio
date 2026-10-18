@@ -16,6 +16,8 @@ import { AdminRepository, rlsPreamble } from "../src/data/postgres-repository";
 import type { NewSpatialPassBundle } from "../src/data/previs-repository";
 import { newBlockingEntry, renderedBlockingProvenance } from "../src/domain/previs/blocking";
 import { buildPrevisDocument } from "../src/domain/previs/document";
+import { assetSchema } from "../src/domain/schemas";
+import { persistPassBundle, type PassStoreDeps } from "../src/server/spatial-pass-store";
 import { buildHotelCanopyCameraPath, buildHotelCanopyEngineScene } from "../src/domain/previs/hotel-canopy";
 import {
   CHARACTER_MASKS_SCHEMA,
@@ -671,6 +673,143 @@ try {
     afterPathDelete.rows[0].camera_path_id === null &&
       afterPathDelete.rows[0].camera_path_fingerprint === path.pathFingerprint &&
       afterPathDelete.rows[0].time_ms === 2000,
+  );
+
+  // ── 10. ATOMICITY on the real database: injected mid-capture failures leave nothing behind ──
+  // (real Asset rows and the real bundle table; the object store is an in-memory fake so a failure can be injected)
+  const countAtomic = async () => ({
+    assets: Number(
+      (await pool.query("select count(*)::int n from assets where name like 'db:spatial atomic%'")).rows[0].n,
+    ),
+    bundles: (await owner.listSpatialPassBundles(shotA.id)).length,
+  });
+  const atomicAssets = (tag: string, n: number) =>
+    Array.from({ length: n }, (_, i) => {
+      const id = randomUUID();
+      const asset = assetSchema.parse({
+        id,
+        projectId,
+        createdBy: null,
+        type: "data",
+        purpose: "spatial_control",
+        source: "3d_render",
+        name: `db:spatial atomic ${tag} ${i}`,
+        originalFilename: `${tag}-${i}.bin`,
+        storageProvider: "local",
+        bucket: null,
+        objectPath: `${projectId}/${id}/${tag}-${i}.bin`,
+        mime: SPATIAL_MIME.depth,
+        byteSize: 4,
+        checksum: null,
+        width: 1912,
+        height: 800,
+        durationMs: null,
+        frameRate: null,
+        sampleRate: null,
+        channels: null,
+        tags: ["spatial_pass"],
+        notes: "",
+        metadata: {},
+        createdAt: now(),
+        updatedAt: now(),
+      });
+      created.assetIds.push(id);
+      return {
+        asset,
+        bytes: new Uint8Array([i]),
+        objectPath: `${projectId}/${id}/${tag}-${i}.bin`,
+        mime: SPATIAL_MIME.depth,
+      };
+    });
+  const fakeStore = (failPutAt?: number) => {
+    const objects = new Set<string>();
+    let puts = 0;
+    const deps: PassStoreDeps = {
+      async putObject(path) {
+        puts++;
+        if (failPutAt === puts) throw new Error("injected: upload failed");
+        objects.add(path);
+      },
+      upsertAsset: (asset) => admin.upsert(projectId, "assets", asset),
+      removeAsset: (id) => admin.remove(projectId, "assets", id),
+      async removeObject(asset) {
+        if (!objects.delete(asset.objectPath ?? "")) throw new Error("no such object"); // already gone: tolerated
+      },
+    };
+    return { objects, deps, puts: () => puts };
+  };
+  const pre = await countAtomic();
+  const historicalAssets = (
+    await pool.query("select count(*)::int n from assets where id = any($1::uuid[])", [
+      [b1In.depth.assetId, b1In.objectIds.assetId],
+    ])
+  ).rows[0].n;
+
+  // (a) the third upload (the first Character mask) fails after depth + object ids were stored
+  const sa = fakeStore(3);
+  const wa = atomicAssets("mid", 4);
+  const failure = await err(() => persistPassBundle(sa.deps, wa, () => owner.recordSpatialPassBundle(bmIn)));
+  const mid = await countAtomic();
+  check(
+    "injected mid-capture upload failure is surfaced to the caller",
+    failure === "injected: upload failed",
+    String(failure),
+  );
+  check("depth and object ids really were uploaded before the failure", sa.puts() === 3);
+  check("no Asset row from the failed capture remains", mid.assets === pre.assets);
+  check("no storage object from the failed capture remains", sa.objects.size === 0);
+  check("no bundle row was written and history is unchanged", mid.bundles === pre.bundles);
+  check(
+    "historical bundles' assets are untouched",
+    (
+      await pool.query("select count(*)::int n from assets where id = any($1::uuid[])", [
+        [b1In.depth.assetId, b1In.objectIds.assetId],
+      ])
+    ).rows[0].n === historicalAssets,
+  );
+  check(
+    "the failed capture left no Character mask metadata",
+    !(await owner.spatialPassUsesAsset(wa[2]!.asset.id)),
+  );
+
+  // (b) the database write FAILS after every upload and every Asset row succeeded (a real foreign-key violation)
+  const sb = fakeStore();
+  const wb = atomicAssets("dbfail", 4);
+  const badBundle: NewSpatialPassBundle = {
+    ...bmIn,
+    id: randomUUID(),
+    sceneDocumentId: randomUUID(), // no such scene document: the bundle insert fails inside Postgres
+    bundleFingerprint: "e".repeat(64),
+    depth: { ...bmIn.depth, assetId: wb[0]!.asset.id },
+    objectIds: { ...bmIn.objectIds, assetId: wb[1]!.asset.id },
+  };
+  const dbFailure = await err(() =>
+    persistPassBundle(sb.deps, wb, () => owner.recordSpatialPassBundle(badBundle)),
+  );
+  const after = await countAtomic();
+  check(
+    "a real database failure after all uploads is surfaced",
+    dbFailure !== null && /foreign key|violates/i.test(dbFailure),
+    String(dbFailure),
+  );
+  check("…and every uploaded object was removed", sb.puts() === 4 && sb.objects.size === 0);
+  check("…and every temporary Asset row was removed", after.assets === pre.assets);
+  check("…and no bundle row exists for it", after.bundles === pre.bundles);
+
+  // (c) cleanup is idempotent and narrow: removing the same failed attempt again changes nothing else
+  const { removePassAssets } = await import("../src/server/spatial-pass-store");
+  await removePassAssets(
+    sb.deps,
+    wb.map((w) => w.asset),
+  );
+  await removePassAssets(
+    sb.deps,
+    wb.map((w) => w.asset),
+  );
+  const repeated = await countAtomic();
+  check(
+    "repeating cleanup of an already-cleaned capture damages nothing",
+    repeated.assets === pre.assets && repeated.bundles === pre.bundles,
   );
 } finally {
   // cleanup: bundles first (they pin assets), then assets, then the temporary location/projects (cascade)

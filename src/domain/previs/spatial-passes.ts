@@ -758,3 +758,54 @@ export function maskPreviewRgba(mask: Uint8Array): Uint8ClampedArray {
   }
   return out;
 }
+
+// ───────────────────────── upload shape (server-side bounds) ─────────────────────────
+
+/** The manifest travels as JSON text in the multipart body; it is bounded long before it is parsed. */
+export const MAX_MANIFEST_JSON_CHARS = 512 * 1024;
+
+export interface UploadPart {
+  key: string;
+  size: number;
+}
+
+/**
+ * Exactly the files a capture of this manifest may carry, with their canonical byte lengths: the depth raster, the
+ * object-id raster and ONE mask per Character proxy in the manifest. The manifest itself is re-derived on the server
+ * from the saved Set and blocking, so the mask count is bounded by the Shot's visible Characters, never by the client.
+ */
+export function expectedUploadParts(manifest: ObjectManifest, width: number, height: number): UploadPart[] {
+  return [
+    { key: "depth", size: expectedRasterBytes.depth(width, height) },
+    { key: "objectIds", size: expectedRasterBytes.objectIds(width, height) },
+    ...manifest.objects
+      .filter((o) => o.category === "character_proxy" && o.characterId)
+      .map((o) => ({ key: `mask:${o.characterId}`, size: expectedRasterBytes.mask(width, height) })),
+  ];
+}
+
+/**
+ * Checks the declared files BEFORE any byte is read: no extra, missing or duplicate file, every size exact (no
+ * truncated or padded raster), and therefore a bounded total. Independent of any proxy/global body limit.
+ */
+export function checkUploadShape(
+  parts: readonly UploadPart[],
+  manifest: ObjectManifest,
+  width: number,
+  height: number,
+): { ok: true; totalBytes: number } | { ok: false; error: string } {
+  const expected = expectedUploadParts(manifest, width, height);
+  const want = new Map(expected.map((p) => [p.key, p.size]));
+  const seen = new Set<string>();
+  for (const p of parts) {
+    if (seen.has(p.key)) return { ok: false, error: `The ${p.key} file was sent twice.` };
+    seen.add(p.key);
+    const size = want.get(p.key);
+    if (size === undefined) return { ok: false, error: `Unexpected file ${p.key.slice(0, 40)}.` };
+    if (p.size !== size)
+      return { ok: false, error: `The ${p.key.split(":")[0]} data must be ${size} bytes.` };
+  }
+  for (const p of expected)
+    if (!seen.has(p.key)) return { ok: false, error: `The ${p.key.split(":")[0]} pass was not received.` };
+  return { ok: true, totalBytes: expected.reduce((n, p) => n + p.size, 0) };
+}

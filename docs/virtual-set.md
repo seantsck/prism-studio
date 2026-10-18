@@ -568,6 +568,26 @@ ids covering the same pixels; masks containing only 0/255 and equal to the masks
 metadata. All rasters are validated **before** anything is stored. Assets are uploaded and their rows written, then the
 bundle row; if any step fails everything that capture wrote is removed, so a bundle never points at a missing asset.
 
+### Request size and bounds
+
+A two-Character capture is about 15.3 MB (depth 6.1 MB + ids 6.1 MB + 1.5 MB per mask + multipart overhead). Next buffers
+request bodies for the proxy in front of the app and, by default, **truncates anything over 10 MB** ("Unexpected end of
+form"), so `experimental.proxyClientMaxBodySize` is set to **55 MB**: the same ceiling as `serverActions.bodySizeLimit`,
+which already had to cover a 50 MB previs. That global ceiling is only the outer limit; the capture action enforces its
+own, independent of it, **before any raster byte is read**:
+
+- only the known text fields; the manifest text is at most 512 K characters before it is parsed;
+- the files must be exactly `depth`, `objectIds` and one `mask:<characterId>` per Character proxy in the manifest the
+  server re-derived from the saved Set and blocking, so the **mask count is bounded by the Shot's visible Characters**,
+  never by the client;
+- each file's size must equal the canonical length (depth and ids `1912·800·4`, each mask `1912·800`): no truncated or
+  padded raster, no duplicate or extra file, and therefore a bounded total;
+- values are validated after that (finite in-range depth, ids inside the manifest, masks 0/255 and equal to the masks
+  derived from the ids); previs clips keep their own 50 MB cap.
+
+Storage is all-or-nothing (`persistPassBundle`): objects and Asset rows are written in order, then the bundle row; any
+failure removes everything that attempt wrote (idempotently, and a cleanup error never replaces the original error).
+
 ### Assets, privacy and taxonomy
 
 Every pass is a **private** Asset (no public bucket, no persisted signed URL; reads go through the authenticated
