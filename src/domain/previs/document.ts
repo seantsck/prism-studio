@@ -1,4 +1,5 @@
 import { fingerprint } from "../hash";
+import { parseCalibration, SPLAT_USER_DATA } from "./splat";
 import {
   PREVIS_ENGINE,
   PREVIS_PRODUCTION_FRAME,
@@ -45,6 +46,8 @@ export function extractObjects(engineScene: unknown): PrevisObject[] {
     const id = str(raw.object_uuid);
     if (!id || token === "DirectionalLight" || raw.object_name === "::CAM::") continue;
 
+    // a Gaussian-splat environment is an asset-bound object that names its (immutable) reconstruction record
+    const reconstructionId = str(userData[SPLAT_USER_DATA.reconstructionId]);
     let kind: PrevisObject["kind"];
     let shape: string | null = null;
     let assetId: string | null = null;
@@ -55,7 +58,7 @@ export function extractObjects(engineScene: unknown): PrevisObject[] {
     } else {
       assetId = assetIdFromToken(token);
       if (!assetId) continue; // an object this schema cannot represent faithfully is never silently included
-      kind = "glb";
+      kind = reconstructionId ? "splat" : "glb";
     }
     out.push({
       id,
@@ -71,6 +74,8 @@ export function extractObjects(engineScene: unknown): PrevisObject[] {
       color: str(raw.color),
       visible: raw.visible !== false,
       locked: raw.locked === true,
+      reconstructionId: kind === "splat" ? reconstructionId : null,
+      calibration: kind === "splat" ? parseCalibration(userData[SPLAT_USER_DATA.calibration]) : null,
     });
   }
   return out;
@@ -175,6 +180,20 @@ export function spatialSnapshot(doc: Spatial) {
         scale: rv(o.scale),
         color: o.color ? o.color.toLowerCase() : null,
         visible: o.visible,
+        // Splat-only identity, added ONLY for splats so a Set without one keeps its historical fingerprint.
+        ...(o.kind === "splat"
+          ? {
+              reconstructionId: o.reconstructionId,
+              calibration: o.calibration
+                ? {
+                    units: o.calibration.units,
+                    metresPerSourceUnit: o.calibration.metresPerSourceUnit,
+                    scaleMethod: o.calibration.scaleMethod,
+                    groundOffsetMetres: r5(o.calibration.groundOffsetMetres),
+                  }
+                : null,
+            }
+          : {}),
       })),
     camera: doc.productionCamera
       ? {

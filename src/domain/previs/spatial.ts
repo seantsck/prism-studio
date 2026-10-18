@@ -2,6 +2,11 @@ import type { CameraInterpolation, CameraKeyframe } from "./camera-path";
 import type { ShotBlockingReference } from "./blocking";
 import type { ControlPassesReference } from "./spatial-passes";
 import { characterBlocking } from "./document";
+import {
+  buildSpatialEnvironment,
+  type SpatialEnvironmentReference,
+  type SpatialReconstructionRecord,
+} from "./splat";
 import type { CameraBookmarkValue, PrevisDocument } from "./types";
 
 export const SPATIAL_REFERENCE_SCHEMA_VERSION = 1 as const;
@@ -42,6 +47,12 @@ export interface SpatialReference {
    * it records the assets; adapters decide later how to use them.
    */
   controlPasses?: ControlPassesReference;
+  /**
+   * The Location's Gaussian-splat environment (M2D.1), frozen by value: asset + checksum, reconstruction identity and
+   * provenance, the object's transform and its calibration. Optional and omitted when the Set has no splat object, so
+   * earlier packages are byte-identical.
+   */
+  spatialEnvironment?: SpatialEnvironmentReference;
 }
 
 export const CAMERA_MOTION_SCHEMA_VERSION = 1 as const;
@@ -86,6 +97,8 @@ export interface SpatialSources {
   cameraMotion?: CameraMotionReference | null;
   shotBlocking?: ShotBlockingReference | null;
   controlPasses?: ControlPassesReference | null;
+  /** the Location's reconstruction records (looked up by the splat object's reconstructionId) */
+  reconstructions?: SpatialReconstructionRecord[];
 }
 
 export function buildSpatialReference(src: SpatialSources): SpatialReference {
@@ -111,6 +124,10 @@ export function buildSpatialReference(src: SpatialSources): SpatialReference {
   if (src.cameraMotion) ref.cameraMotion = structuredClone(src.cameraMotion);
   if (src.shotBlocking) ref.shotBlocking = structuredClone(src.shotBlocking);
   if (src.controlPasses) ref.controlPasses = structuredClone(src.controlPasses);
+  // one splat environment per Set (enforced when the Set is saved); a splat whose record is missing is not invented
+  const splat = src.scene.document.objects.find((o) => o.kind === "splat" && o.reconstructionId);
+  const record = splat ? src.reconstructions?.find((r) => r.id === splat.reconstructionId) : undefined;
+  if (splat && record) ref.spatialEnvironment = buildSpatialEnvironment(splat, record);
   return ref;
 }
 

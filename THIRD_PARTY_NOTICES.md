@@ -67,3 +67,16 @@ THE SOFTWARE.
 | `zustand`      | MIT     | the vendored engine's state store             |
 
 | `mediabunny` | MPL-2.0 | local MP4/WebM encoding of previs renders (Phase 2F M2A), including the AAC/Opus performance-audio track (M2A.1). Used unmodified as an npm dependency and lazily imported; its source is not vendored. MPL-2.0 file-level terms apply to MediaBunny's own files only. |
+
+## npm packages added with Gaussian-splat Locations (Phase 2F M2D.1)
+
+| Package             | Version | License | Why                                                                                                                                                                                                                                                                          |
+| ------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@sparkjsdev/spark` | 0.1.10  | MIT     | Gaussian-splat renderer for three.js (Copyright © 2025 World Labs Technologies, Inc., https://github.com/sparkjsdev/spark). Used unmodified as an npm dependency and lazily imported; its source is not vendored. It renders through Prism's existing `THREE.WebGLRenderer`. |
+| `fflate`            | 0.8.3   | MIT     | gzip decompression to validate `.spz` files (Copyright © 2023 Arjun Barrett); also a dependency of Spark. Used on the server and in the browser for structural validation and to generate synthetic test splats.                                                             |
+
+Spark's published bundle inlines a few three.js routines (MIT, Copyright 2010-2025 three.js authors) and carries no
+network URL on an executable path (the only URLs in the bundle are reference links in source comments). Spark 0.1.10
+is the version the pinned ArtCraft commit used (`^0.1.10`); Spark 2.x requires a newer three.js than Prism pins.
+No splat asset, demo scene or sample file from ArtCraft, Spark or any third party is included in this repository;
+tests generate their Gaussian data programmatically.

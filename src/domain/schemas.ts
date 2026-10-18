@@ -71,6 +71,8 @@ export const ASSET_PURPOSES = [
   "other",
   /** depth / object-id / Character-mask rasters (Phase 2F M2C) */
   "spatial_control",
+  /** a reconstructed spatial environment such as a Gaussian splat (Phase 2F M2D.1) */
+  "spatial_reconstruction",
 ] as const;
 export const STORAGE_PROVIDERS = ["none", "local", "supabase"] as const;
 export const DURATION_SOURCES = ["server_metadata", "browser_hint", "manual", "seed"] as const;

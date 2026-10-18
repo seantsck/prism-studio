@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { calibrationSchema } from "./splat";
 
 /**
  * Prism-owned 3D set ("previs") document. The ArtCraft-derived engine owns the runtime scene graph; Prism owns
@@ -21,7 +22,7 @@ const num = z.number().finite();
 export const vec3Schema = z.object({ x: num, y: num, z: num });
 export type Vec3 = z.infer<typeof vec3Schema>;
 
-export const PREVIS_OBJECT_KINDS = ["primitive", "mannequin", "glb", "light"] as const;
+export const PREVIS_OBJECT_KINDS = ["primitive", "mannequin", "glb", "light", "splat"] as const;
 export const PREVIS_PRIMITIVES = ["Box", "Plane", "Cylinder", "Cone", "Sphere", "Donut"] as const;
 export type PrevisObjectKind = (typeof PREVIS_OBJECT_KINDS)[number];
 
@@ -32,7 +33,7 @@ export const previsObjectSchema = z.object({
   /** primitive shape key (Box/Plane/...) for kind=primitive; absent otherwise */
   shape: z.string().nullable(),
   name: z.string(),
-  /** Prism Asset id for kind=glb. Never a URL. */
+  /** Prism Asset id for kind=glb or kind=splat. Never a URL. */
   assetId: z.string().nullable(),
   /** content checksum of that asset when known (so an asset replaced in place changes the fingerprint) */
   assetChecksum: z.string().nullable(),
@@ -45,6 +46,10 @@ export const previsObjectSchema = z.object({
   color: z.string().nullable(),
   visible: z.boolean(),
   locked: z.boolean(),
+  /** kind=splat: the immutable reconstruction record this environment came from (M2D.1). Null for every other kind. */
+  reconstructionId: z.string().nullable().default(null),
+  /** kind=splat: mutable placement/scale provenance. Null for every other kind. */
+  calibration: calibrationSchema.nullable().default(null),
 });
 export type PrevisObject = z.infer<typeof previsObjectSchema>;
 

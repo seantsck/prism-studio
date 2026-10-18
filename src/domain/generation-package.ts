@@ -462,6 +462,8 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
     base.spatialReference?.controlPasses?.depth.assetId,
     base.spatialReference?.controlPasses?.objectIds.assetId,
     ...(base.spatialReference?.controlPasses?.characterMasks.map((m) => m.assetId) ?? []),
+    // the Location's Gaussian-splat environment (M2D.1): described by value (checksum, size, MIME), never by URL
+    base.spatialReference?.spatialEnvironment?.assetId,
     base.lighting.referenceAssetId,
     ...base.references.referenceAssetIds,
     ...base.performance.map((p) => p.selectedTake?.audioAssetId),
