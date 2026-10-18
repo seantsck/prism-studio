@@ -128,3 +128,15 @@ See [virtual-set](virtual-set.md).
 
 Blocking is **shot-specific**: it is never part of the Location's set. The proxy carries no identity. See
 [virtual-set](virtual-set.md#character-blocking-phase-2f-m2b).
+
+## Spatial control passes (Phase 2F M2C)
+
+| Entity            | Table / column                                                                                            | Nature                                                                                                                                                                                                                                                                    |
+| ----------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SpatialPassBundle | `shot_spatial_pass_bundles` (`camera_json`, `object_manifest_json`, `character_masks_json`, fingerprints) | ONE **immutable** capture per exact control frame: Shot + saved Set state + rendered blocking + an explicit production-camera source (camera path time or Production Camera bookmark, camera by value) + 1912×800. Owner-only RLS; unique `(shot_id, bundle_fingerprint)` |
+| Pass assets       | `assets` (`type = 'data'`, `purpose = 'spatial_control'`, `application/x-prism-*`)                        | Private raw rasters: depth (`prism.depth-f32.v1`, metres), object ids (`prism.object-id-u32.v1`), one Character mask per visible blocked Character (`prism.character-mask-u8.v1`). Never an image type, never a URL                                                       |
+| ControlPassesRef  | `GenerationPackage.spatialReference.controlPasses`                                                        | Frozen copy (by value) of the **current** bundle: asset ids, manifest, camera, per-Character mask identity. Optional; provider-neutral; nothing is injected into prompts                                                                                                  |
+
+Object indices are **bundle-local**; semantic ids (`set_object:<object_uuid>`, `character_proxy:<characterId>`) are
+persistent. A bundle is stale (`SCENE` / `CAMERA` / `BLOCKING`, never audio) by fingerprint comparison; it is never
+rewritten or deleted. See [virtual-set](virtual-set.md#spatial-control-passes-phase-2f-m2c).
