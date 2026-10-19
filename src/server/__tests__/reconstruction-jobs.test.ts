@@ -606,8 +606,13 @@ describe("provider registry (free first)", () => {
       execution: "local",
       runner: "local_worker",
       cost: "free",
-      inputModes: ["multi_image", "video"],
+      // photographs only (3-300 JPEG/PNG): video is a later, separate decision
+      inputModes: ["multi_image"],
+      minInputs: 3,
+      inputMimes: ["image/jpeg", "image/png"],
       resultKinds: ["gaussian_splat"],
+      // the worker really cancels a local job (M2D.3B)
+      supportsCancel: true,
       capability: "not_installed",
       configured: false,
     });
@@ -686,7 +691,7 @@ describe("provider registry (free first)", () => {
   });
 });
 
-describe("local capture foundation (M2D.3 not implemented)", () => {
+describe("local capture (web side: the worker runs it)", () => {
   it("is free and local, and unavailable until its toolchain exists: no job, no provider call", async () => {
     const fetchSpy = vi.fn();
     const w = await world({
@@ -764,11 +769,12 @@ describe("local capture foundation (M2D.3 not implemented)", () => {
     ).rejects.toMatchObject({ code: "invalid_sources" });
   });
 
-  it("a video Asset is represented as a video input (and refused by a provider without video)", async () => {
+  it("a video Asset is represented as a video input (and refused by a provider without video, local capture included)", async () => {
     const w = await world({
       providers: () =>
         new Map<string, ReconstructionProvider>([
           ["local_capture", new LocalCaptureProvider(INSTALLED)],
+          ["video_capable", fakeProvider("video_capable", { inputModes: ["video", "multi_image"] })],
           ["mock_reconstruction", new MockReconstructionProvider({ available: true, durationMs: 0 })],
         ]),
     });
@@ -777,20 +783,46 @@ describe("local capture foundation (M2D.3 not implemented)", () => {
     const job = await createJob(w.deps, {
       locationId: w.locationId,
       sourceAssetIds: [video.id],
-      provider: "local_capture",
+      provider: "video_capable",
       model: null,
       options: {},
     });
     expect(job.sources).toMatchObject([{ ordinal: 0, kind: "video", mime: "video/mp4" }]);
-    await expect(
+    for (const provider of ["mock_reconstruction", "local_capture"])
+      await expect(
+        createJob(w.deps, {
+          locationId: w.locationId,
+          sourceAssetIds: [video.id],
+          provider,
+          model: null,
+          options: {},
+        }),
+      ).rejects.toMatchObject({ code: "invalid_sources" });
+  });
+
+  it("refuses at creation what the local engine cannot run: fewer than 3 photographs, or not JPEG/PNG", async () => {
+    const w = await world({
+      providers: () => new Map([["local_capture", new LocalCaptureProvider(INSTALLED)]]),
+    });
+    const create = (ids: string[]) =>
       createJob(w.deps, {
         locationId: w.locationId,
-        sourceAssetIds: [video.id],
-        provider: "mock_reconstruction",
+        sourceAssetIds: ids,
+        provider: "local_capture",
         model: null,
         options: {},
-      }),
-    ).rejects.toMatchObject({ code: "invalid_sources" });
+      });
+    await expect(create([w.images[0]!.id, w.images[1]!.id])).rejects.toMatchObject({
+      code: "invalid_sources",
+      message: expect.stringMatching(/at least 3/),
+    });
+    const webp = assetSchema.parse({ ...w.images[0]!, id: randomUUID(), mime: "image/webp" });
+    w.deps.projectAssets = [...w.deps.projectAssets, webp];
+    await expect(create([w.images[0]!.id, w.images[1]!.id, webp.id])).rejects.toMatchObject({
+      code: "invalid_sources",
+      message: expect.stringMatching(/JPEG or PNG/),
+    });
+    expect(await w.repo.previs.listReconstructionJobs(w.locationId)).toEqual([]);
   });
 });
 

@@ -27,6 +27,8 @@ export interface ColmapFacts {
   provenance: ColmapProvenanceState;
   compatible: boolean;
   reason: string | null;
+  /** the verified build's identity (from its provenance manifest, re-hashed just now); null unless verified */
+  fingerprint: { sourceCommit: string; binarySha256: string } | null;
 }
 
 export interface BrushFacts {
@@ -69,6 +71,7 @@ export async function probeLocalToolchain(opts: ProbeOptions = {}): Promise<Loca
     provenance: "missing",
     compatible: false,
     reason: null,
+    fingerprint: null,
   };
   let colmapCmd: ToolCommand | null = null;
   const cr = await resolveExecutable({
@@ -100,6 +103,11 @@ export async function probeLocalToolchain(opts: ProbeOptions = {}): Promise<Loca
       colmap.provenance = p.state;
       colmap.reason = p.reason;
       colmap.compatible = p.state === "verified";
+      if (p.state === "verified" && p.manifest)
+        colmap.fingerprint = {
+          sourceCommit: p.manifest.sourceCommit,
+          binarySha256: p.manifest.binary.sha256,
+        };
     }
   }
 

@@ -4,6 +4,7 @@ import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promise
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import { UNVERIFIED_MESSAGE } from "./policy";
 import { runProcess, type ToolCommand } from "./process";
 
 /**
@@ -425,8 +426,7 @@ export interface ColmapProvenanceCheck {
   manifest: ColmapProvenance | null;
 }
 
-export const UNVERIFIED_MESSAGE =
-  "COLMAP is installed but this build has not been verified for Prism Local Capture.";
+export { UNVERIFIED_MESSAGE };
 
 /**
  * Is THIS executable the verified build? `verified` needs: a manifest that parses, the approved version and source

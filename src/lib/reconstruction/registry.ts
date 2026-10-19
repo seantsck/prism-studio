@@ -71,6 +71,8 @@ export interface ProviderSummary
       | "inputModes"
       | "resultKinds"
       | "maxInputs"
+      | "minInputs"
+      | "inputMimes"
       | "defaultModel"
       | "options"
       | "supportsCancel"
@@ -98,6 +100,8 @@ export function providerSummaries(providers: ProviderRegistry): ProviderSummary[
       inputModes: [...c.inputModes],
       resultKinds: [...c.resultKinds],
       maxInputs: c.maxInputs,
+      ...(c.minInputs ? { minInputs: c.minInputs } : {}),
+      ...(c.inputMimes ? { inputMimes: [...c.inputMimes] } : {}),
       models: c.models.map((m) => ({ id: m.id, label: m.label })),
       defaultModel: c.defaultModel,
       options: c.options,

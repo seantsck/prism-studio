@@ -208,6 +208,13 @@ export async function createJob(
   if (!ok.ok) throw new JobServiceError("invalid_sources", ok.error);
   if (sources.length > caps.maxInputs)
     throw new JobServiceError("invalid_sources", `This provider accepts at most ${caps.maxInputs} inputs.`);
+  if (caps.minInputs && sources.length < caps.minInputs)
+    throw new JobServiceError("invalid_sources", `This provider needs at least ${caps.minInputs} images.`);
+  if (caps.inputMimes && sources.some((s) => !caps.inputMimes!.includes(s.mime ?? "")))
+    throw new JobServiceError(
+      "invalid_sources",
+      `This provider accepts only ${caps.inputMimes.map((m) => m.replace(/^\w+\//, "").toUpperCase()).join(" or ")} images.`,
+    );
   const mode = inputModeOf(sources);
   if (!caps.inputModes.includes(mode))
     throw new JobServiceError(

@@ -10,6 +10,7 @@ import type {
   ReconstructionResultKind,
 } from "@/domain/reconstruction/job";
 import type { SplatFormat } from "@/domain/previs/splat";
+import type { LocalRuntimeView } from "./local-capture";
 
 export type { InputMode };
 
@@ -66,6 +67,10 @@ export interface ProviderCapabilities {
   resultKinds: readonly ProviderResultKind[];
   /** most inputs one request may carry (provider-documented) */
   maxInputs: number;
+  /** fewest inputs one request needs (absent: one) */
+  minInputs?: number;
+  /** the only input MIME types accepted (absent: any image/video the input mode allows) */
+  inputMimes?: readonly string[];
   models: readonly ProviderModel[];
   defaultModel: string | null;
   options: readonly ProviderOptionSpec[];
@@ -91,6 +96,8 @@ export interface ProviderStatus {
   capability: CapabilityState;
   /** why it cannot be used right now, in user language (null when ready) */
   reason: string | null;
+  /** local execution only: worker and toolchain state as the worker last reported it (never a path or pid) */
+  local?: LocalRuntimeView;
 }
 
 /** One Prism source input, read server-side from private storage. Never a URL. */
