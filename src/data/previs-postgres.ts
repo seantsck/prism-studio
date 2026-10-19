@@ -1,6 +1,8 @@
 import type { Pool, PoolClient } from "pg";
 import {
   applyJobPatch,
+  jobActualCostSchema,
+  jobCostEstimateSchema,
   jobOptionsSchema,
   jobSourceSchema,
   JobTransitionError,
@@ -282,7 +284,8 @@ const mapJob = (r: Row): ReconstructionJobRecord => ({
   jobFingerprint: String(r.job_fingerprint),
   attempt: Number(r.attempt),
   previousJobId: str(r.previous_job_id),
-  provider: r.provider as ReconstructionJobRecord["provider"],
+  // a plain identifier: an id the registry no longer knows is still readable history
+  provider: String(r.provider),
   capability: String(r.provider_capability),
   model: str(r.provider_model),
   resultKind: r.requested_result_kind as ReconstructionJobRecord["resultKind"],
@@ -296,6 +299,8 @@ const mapJob = (r: Row): ReconstructionJobRecord => ({
   providerInputs: (r.provider_inputs_json as ReconstructionJobRecord["providerInputs"]) ?? null,
   providerResult: (r.provider_result_json as Record<string, unknown> | null) ?? null,
   resultReconstructionId: str(r.result_reconstruction_id),
+  costEstimate: r.cost_estimate_json ? jobCostEstimateSchema.parse(r.cost_estimate_json) : null,
+  actualCost: r.cost_actual_json ? jobActualCostSchema.parse(r.cost_actual_json) : null,
   errorCode: (r.error_code as ReconstructionJobRecord["errorCode"]) ?? null,
   errorMessage: str(r.error_message),
   lastPolledAt: r.last_polled_at ? iso(r.last_polled_at) : null,
@@ -1086,8 +1091,9 @@ export class PostgresPrevisData implements PrevisRepository {
           `insert into reconstruction_jobs
              (id, project_id, location_id, schema_version, job_fingerprint, attempt, previous_job_id, provider,
               provider_capability, provider_model, requested_result_kind, source_assets_json, options_json, status,
-              created_by, created_at, updated_at)
-           values ($1,$2,$3,'prism.reconstruction-job.v1',$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13,$14,$15,$15)
+              created_by, created_at, updated_at, cost_estimate_json)
+           values ($1,$2,$3,'prism.reconstruction-job.v1',$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13,$14,$15,$15,
+                   $16::jsonb)
            returning *`,
           [
             rec.id,
@@ -1105,6 +1111,7 @@ export class PostgresPrevisData implements PrevisRepository {
             rec.status,
             input.userId,
             input.now,
+            rec.costEstimate ? JSON.stringify(rec.costEstimate) : null,
           ],
         );
         return mapJob(r.rows[0]);
@@ -1151,7 +1158,7 @@ export class PostgresPrevisData implements PrevisRepository {
         `update reconstruction_jobs set
             status = $3, progress = $4, revision = $5, provider_operation_id = $6, provider_operation_json = $7::jsonb,
             provider_inputs_json = $8::jsonb, provider_result_json = $9::jsonb, error_code = $10, error_message = $11,
-            last_polled_at = $12, completed_at = $13
+            last_polled_at = $12, completed_at = $13, cost_actual_json = $14::jsonb
           where id = $1 and revision = $2
           returning *`,
         [
@@ -1168,6 +1175,7 @@ export class PostgresPrevisData implements PrevisRepository {
           next.errorMessage,
           next.lastPolledAt,
           next.completedAt,
+          next.actualCost ? JSON.stringify(next.actualCost) : null,
         ],
       );
       if (!r.rows[0]) throw new PrevisError("conflict", "The reconstruction job changed in the meantime.");

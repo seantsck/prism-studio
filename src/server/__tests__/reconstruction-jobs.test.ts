@@ -1,10 +1,19 @@
 import { randomUUID } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { MemoryRepository } from "@/data/memory-repository";
 import { PrevisError } from "@/data/previs-repository";
 import { assetSchema, type Asset } from "@/domain/schemas";
+import { FREE_COST_ESTIMATE } from "@/domain/reconstruction/job";
+import { LocalCaptureProvider, type LocalToolchain } from "@/lib/reconstruction/local-capture";
 import { MockReconstructionProvider } from "@/lib/reconstruction/mock";
-import { ProviderError, type ReconstructionProvider } from "@/lib/reconstruction/provider";
+import {
+  ProviderError,
+  type ProviderCapabilities,
+  type ReconstructionProvider,
+} from "@/lib/reconstruction/provider";
+import { buildProviders, defaultProviderId, providerSummaries } from "@/lib/reconstruction/registry";
 import { WorldLabsProvider, type WorldLabsConfig } from "@/lib/reconstruction/worldlabs";
 import { encodeSpzFile, syntheticPlane } from "@/lib/splat/synthetic";
 import type { PassStoreDeps } from "../spatial-pass-store";
@@ -520,5 +529,422 @@ describe("the live-spend gate (billable providers)", () => {
   it("the feature flag OFF blocks every provider (mock included)", async () => {
     const w = await world({ jobsEnabled: false });
     await expect(create(w)).rejects.toMatchObject({ code: "not_configured" });
+  });
+});
+
+// ───────────────────────── free-first: registry, local capture, no paid fallback ─────────────────────────
+
+/** A provider built from capabilities alone: proves the service needs no knowledge of its id. */
+function fakeProvider(
+  id: string,
+  over: Partial<ProviderCapabilities> = {},
+  opts: { available?: boolean; fail?: boolean } = {},
+): ReconstructionProvider {
+  const mock = new MockReconstructionProvider({ available: true, durationMs: 0 }, () => T0);
+  const available = opts.available ?? true;
+  return {
+    id,
+    capabilities: () => ({ ...mock.capabilities(), testOnly: false, options: [], ...over }),
+    status: () => ({
+      provider: id,
+      label: id,
+      configured: available,
+      enabled: true,
+      capability: available ? "available" : "not_installed",
+      reason: available ? null : "not installed",
+    }),
+    estimateCost: (model, mode) =>
+      (over.cost ?? "free") === "free"
+        ? FREE_COST_ESTIMATE(`${model} · ${mode}`)
+        : {
+            costClass: "unknown",
+            usd: null,
+            providerUnits: null,
+            basis: "undocumented",
+            pricingSource: null,
+            pricingCheckedAt: null,
+          },
+    prepareInputs: (i, r) => mock.prepareInputs(i, r),
+    submit: (req) =>
+      mock.submit({
+        ...req,
+        options: { ...req.options, provider: { scenario: opts.fail ? "fail" : "success" } },
+      }),
+    getOperation: (op) => mock.getOperation(op),
+    extractResult: (op) => mock.extractResult(op),
+    download: (c, max) => mock.download(c, max),
+  };
+}
+
+const worldLabsWithSpy = (fetchSpy: ReturnType<typeof vi.fn>) =>
+  new WorldLabsProvider({
+    apiKey: "wlt-test-key-not-real",
+    enabled: true,
+    baseUrl: "https://api.worldlabs.ai",
+    uploadHosts: ["storage.googleapis.com"],
+    resultHosts: ["*.worldlabs.ai"],
+    requestTimeoutMs: 1000,
+    fetchImpl: fetchSpy as unknown as typeof fetch,
+    downloader: async () => encodeSpzFile(syntheticPlane({ n: 4 })),
+  });
+const INSTALLED: LocalToolchain = { probe: () => ({ installed: true, reason: null }) };
+
+describe("provider registry (free first)", () => {
+  it("registers local capture first, World Labs as an optional paid provider, the mock only on dev/test, never Meshy or ArtCraft", () => {
+    const prod = buildProviders({ NODE_ENV: "production" });
+    expect([...prod.keys()]).toEqual(["local_capture", "worldlabs_marble"]);
+    const dev = buildProviders({ NODE_ENV: "test" });
+    expect([...dev.keys()]).toEqual(["local_capture", "worldlabs_marble", "mock_reconstruction"]);
+    for (const reg of [prod, dev]) {
+      expect(reg.has("meshy")).toBe(false);
+      expect([...reg.keys()].some((k) => /artcraft|storyteller|tripo|fal/.test(k))).toBe(false);
+      // only ingestible result kinds are advertised: no mesh, no "world_bundle"
+      for (const p of reg.values()) expect(p.capabilities().resultKinds).toEqual(["gaussian_splat"]);
+    }
+    const s = providerSummaries(dev);
+    expect(s.find((x) => x.provider === "local_capture")).toMatchObject({
+      execution: "local",
+      runner: "local_worker",
+      cost: "free",
+      inputModes: ["multi_image", "video"],
+      resultKinds: ["gaussian_splat"],
+      capability: "not_installed",
+      configured: false,
+    });
+    expect(s.find((x) => x.provider === "worldlabs_marble")).toMatchObject({
+      execution: "hosted",
+      cost: "paid",
+      configured: false,
+    });
+    expect(s.find((x) => x.provider === "mock_reconstruction")).toMatchObject({
+      execution: "mock",
+      cost: "free",
+      testOnly: true,
+    });
+  });
+
+  it("never pre-selects a paid provider (or the mock), even when it is the only ready one", () => {
+    const env = {
+      NODE_ENV: "test",
+      WLT_API_KEY: "wlt-test-key-not-real",
+      WORLDLABS_RECONSTRUCTION_ENABLED: "1",
+    };
+    const reg = buildProviders(env);
+    expect(providerSummaries(reg).find((s) => s.provider === "worldlabs_marble")!.capability).toBe(
+      "available",
+    );
+    expect(defaultProviderId(providerSummaries(reg))).toBeNull();
+    // once local capture is installed (M2D.3) it is the default
+    expect(defaultProviderId(providerSummaries(buildProviders(env, { localToolchain: INSTALLED })))).toBe(
+      "local_capture",
+    );
+  });
+
+  it("a NEW provider id works with no schema change: the registry, not a closed list, decides", async () => {
+    const w = await world({
+      providers: () => new Map([["future_reconstructor", fakeProvider("future_reconstructor")]]),
+    });
+    const job = await createJob(w.deps, {
+      locationId: w.locationId,
+      sourceAssetIds: [w.images[0]!.id, w.images[1]!.id],
+      provider: "future_reconstructor",
+      model: null,
+      options: {},
+    });
+    expect(job.provider).toBe("future_reconstructor");
+    await submitJob(w.deps, job.id);
+    expect((await runToEnd(w, job.id)).status).toBe("succeeded");
+    await expect(
+      createJob(w.deps, {
+        locationId: w.locationId,
+        sourceAssetIds: [w.images[0]!.id],
+        provider: "Not An Id",
+        model: null,
+        options: {},
+      }),
+    ).rejects.toMatchObject({ code: "invalid" });
+  });
+
+  it("a job whose provider this server no longer has stays readable: never polled, never substituted, cancellable", async () => {
+    const w = await world();
+    const job = await create(w, "slow");
+    const running = await submitJob(w.deps, job.id);
+    // the server restarts without the mock (e.g. production): the history remains
+    const fetchSpy = vi.fn();
+    w.deps.providers = new Map([["worldlabs_marble", worldLabsWithSpy(fetchSpy)]]);
+    w.clock.advance(5000);
+    expect(await refreshJob(w.deps, job.id)).toEqual(running);
+    expect((await w.repo.previs.listReconstructionJobs(w.locationId))[0]!.provider).toBe(
+      "mock_reconstruction",
+    );
+    // no NEW job can name it
+    await expect(create(w)).rejects.toMatchObject({ code: "not_configured" });
+    const c = await cancelJob(w.deps, job.id);
+    expect(c.status).toBe("cancelled");
+    expect(c.errorMessage).toMatch(/stopped tracking/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("local capture foundation (M2D.3 not implemented)", () => {
+  it("is free and local, and unavailable until its toolchain exists: no job, no provider call", async () => {
+    const fetchSpy = vi.fn();
+    const w = await world({
+      providers: () =>
+        new Map<string, ReconstructionProvider>([
+          ["local_capture", new LocalCaptureProvider()],
+          ["worldlabs_marble", worldLabsWithSpy(fetchSpy)],
+        ]),
+      paid: { enabled: true, maxUsd: 10 },
+    });
+    const local = w.deps.providers.get("local_capture")!;
+    expect(local.status()).toMatchObject({ capability: "not_installed", configured: false });
+    expect(local.status().reason).toMatch(/not installed/);
+    expect(local.estimateCost(null, "multi_image")).toMatchObject({
+      costClass: "free",
+      usd: { min: 0, max: 0 },
+    });
+    await expect(
+      createJob(w.deps, {
+        locationId: w.locationId,
+        sourceAssetIds: w.images.map((a) => a.id),
+        provider: "local_capture",
+        model: null,
+        options: {},
+      }),
+    ).rejects.toMatchObject({ code: "not_configured" });
+    // NO automatic fallback: World Labs (configured, paid on) was never touched, and no job exists
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(await w.repo.previs.listReconstructionJobs(w.locationId)).toEqual([]);
+    // the stub refuses to run even if something reached it
+    await expect(local.submit({} as never)).rejects.toMatchObject({ code: "capability_unavailable" });
+  });
+
+  it("a local job is left to the worker: web requests never execute or poll it (it survives a closed browser)", async () => {
+    const fetchSpy = vi.fn();
+    const local = new LocalCaptureProvider(INSTALLED);
+    const spies = (["prepareInputs", "submit", "getOperation"] as const).map((m) => vi.spyOn(local, m));
+    const w = await world({
+      providers: () =>
+        new Map<string, ReconstructionProvider>([
+          ["local_capture", local],
+          ["worldlabs_marble", worldLabsWithSpy(fetchSpy)],
+        ]),
+      paid: { enabled: true, maxUsd: 10 },
+    });
+    const job = await createJob(w.deps, {
+      locationId: w.locationId,
+      sourceAssetIds: w.images.map((a) => a.id),
+      provider: "local_capture",
+      model: null,
+      options: {},
+    });
+    expect(job.costEstimate).toMatchObject({ costClass: "free" });
+    expect(await submitJob(w.deps, job.id)).toMatchObject({ status: "queued", revision: job.revision });
+    w.clock.advance(60_000);
+    expect(await refreshJob(w.deps, job.id)).toMatchObject({ status: "queued", revision: job.revision });
+    for (const s of spies) expect(s).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // a queued local job can still be cancelled
+    expect((await cancelJob(w.deps, job.id)).status).toBe("cancelled");
+  });
+
+  it("needs several images (or one video); a single image is refused, never re-routed", async () => {
+    const w = await world({
+      providers: () => new Map([["local_capture", new LocalCaptureProvider(INSTALLED)]]),
+    });
+    await expect(
+      createJob(w.deps, {
+        locationId: w.locationId,
+        sourceAssetIds: [w.images[0]!.id],
+        provider: "local_capture",
+        model: null,
+        options: {},
+      }),
+    ).rejects.toMatchObject({ code: "invalid_sources" });
+  });
+
+  it("a video Asset is represented as a video input (and refused by a provider without video)", async () => {
+    const w = await world({
+      providers: () =>
+        new Map<string, ReconstructionProvider>([
+          ["local_capture", new LocalCaptureProvider(INSTALLED)],
+          ["mock_reconstruction", new MockReconstructionProvider({ available: true, durationMs: 0 })],
+        ]),
+    });
+    const video = assetSchema.parse({ ...w.images[0]!, id: randomUUID(), type: "video", mime: "video/mp4" });
+    w.deps.projectAssets = [...w.deps.projectAssets, video];
+    const job = await createJob(w.deps, {
+      locationId: w.locationId,
+      sourceAssetIds: [video.id],
+      provider: "local_capture",
+      model: null,
+      options: {},
+    });
+    expect(job.sources).toMatchObject([{ ordinal: 0, kind: "video", mime: "video/mp4" }]);
+    await expect(
+      createJob(w.deps, {
+        locationId: w.locationId,
+        sourceAssetIds: [video.id],
+        provider: "mock_reconstruction",
+        model: null,
+        options: {},
+      }),
+    ).rejects.toMatchObject({ code: "invalid_sources" });
+  });
+});
+
+describe("no automatic paid fallback", () => {
+  it("a FAILING local reconstruction fails; World Labs is never called and no other job is created", async () => {
+    const fetchSpy = vi.fn();
+    const w = await world({
+      providers: () =>
+        new Map<string, ReconstructionProvider>([
+          ["local_test", fakeProvider("local_test", { execution: "local" }, { fail: true })],
+          ["worldlabs_marble", worldLabsWithSpy(fetchSpy)],
+        ]),
+      paid: { enabled: true, maxUsd: 10 },
+    });
+    const job = await createJob(w.deps, {
+      locationId: w.locationId,
+      sourceAssetIds: [w.images[0]!.id, w.images[1]!.id],
+      provider: "local_test",
+      model: null,
+      options: {},
+    });
+    await submitJob(w.deps, job.id);
+    const done = await runToEnd(w, job.id);
+    expect(done).toMatchObject({ status: "failed", errorCode: "provider_failed", provider: "local_test" });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect((await w.repo.previs.listReconstructionJobs(w.locationId)).map((j) => j.id)).toEqual([job.id]);
+  });
+
+  it("a provider that becomes unavailable before submit fails THAT job; nothing else is tried", async () => {
+    const fetchSpy = vi.fn();
+    let available = true;
+    const flaky = fakeProvider("local_test", { execution: "local" });
+    const p: ReconstructionProvider = {
+      ...flaky,
+      status: () => ({ ...flaky.status(), capability: available ? "available" : "unavailable" }),
+    };
+    const w = await world({
+      providers: () =>
+        new Map<string, ReconstructionProvider>([
+          ["local_test", p],
+          ["worldlabs_marble", worldLabsWithSpy(fetchSpy)],
+        ]),
+      paid: { enabled: true, maxUsd: 10 },
+    });
+    const job = await createJob(w.deps, {
+      locationId: w.locationId,
+      sourceAssetIds: [w.images[0]!.id, w.images[1]!.id],
+      provider: "local_test",
+      model: null,
+      options: {},
+    });
+    available = false;
+    expect(await submitJob(w.deps, job.id)).toMatchObject({
+      status: "failed",
+      errorCode: "capability_unavailable",
+      provider: "local_test",
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect((await w.repo.previs.listReconstructionJobs(w.locationId)).length).toBe(1);
+  });
+});
+
+describe("cost provenance and declared options", () => {
+  it("persists the free estimate of a free provider", async () => {
+    const w = await world();
+    const job = await create(w);
+    expect(job.costEstimate).toMatchObject({ costClass: "free", usd: { min: 0, max: 0 } });
+    expect(job.actualCost).toBeNull();
+    expect((await w.repo.previs.getReconstructionJob(job.id))!.costEstimate).toEqual(job.costEstimate);
+  });
+
+  it("persists the documented World Labs estimate with its pricing source; no actual cost is invented", async () => {
+    const fetchSpy = vi.fn();
+    const w = await world({
+      providers: () => new Map([["worldlabs_marble", worldLabsWithSpy(fetchSpy)]]),
+      paid: { enabled: true, maxUsd: 5 },
+    });
+    const job = await createJob(w.deps, {
+      locationId: w.locationId,
+      sourceAssetIds: [w.images[0]!.id, w.images[1]!.id],
+      provider: "worldlabs_marble",
+      model: "marble-1.1",
+      options: {},
+    });
+    expect(job.costEstimate).toMatchObject({
+      costClass: "paid",
+      usd: { min: 1.28, max: 1.28 },
+      providerUnits: { unit: "credits", min: 1600, max: 1600 },
+      basis: "marble-1.1 · multi_image",
+      pricingCheckedAt: "2026-10-19",
+    });
+    expect(job.costEstimate!.pricingSource).toMatch(/World Labs/);
+    expect(job.actualCost).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled(); // creating a job calls nothing
+  });
+
+  it("an UNKNOWN cost is represented truthfully and blocks paid submission (it cannot be checked)", async () => {
+    const w = await world({
+      providers: () =>
+        new Map([["hosted_x", fakeProvider("hosted_x", { execution: "hosted", cost: "unknown" })]]),
+      paid: { enabled: true, maxUsd: 100 },
+    });
+    const p = w.deps.providers.get("hosted_x")!;
+    expect(p.estimateCost(null, "single_image")).toMatchObject({ costClass: "unknown", usd: null });
+    await expect(
+      createJob(w.deps, {
+        locationId: w.locationId,
+        sourceAssetIds: [w.images[0]!.id],
+        provider: "hosted_x",
+        model: null,
+        options: {},
+      }),
+    ).rejects.toMatchObject({ code: "spend_blocked", message: expect.stringMatching(/unknown/i) });
+  });
+
+  it("only DECLARED provider options are accepted; defaults are filled in", async () => {
+    const w = await world();
+    const job = await createJob(w.deps, {
+      locationId: w.locationId,
+      sourceAssetIds: [w.images[0]!.id],
+      provider: "mock_reconstruction",
+      model: null,
+      options: {},
+    });
+    expect(job.options.provider).toEqual({ scenario: "success" });
+    for (const provider of [{ seed: 3 }, { scenario: "explode" }])
+      await expect(
+        createJob(w.deps, {
+          locationId: w.locationId,
+          sourceAssetIds: [w.images[1]!.id],
+          provider: "mock_reconstruction",
+          model: null,
+          options: { provider },
+        }),
+      ).rejects.toMatchObject({ code: "invalid" });
+  });
+});
+
+describe("no ArtCraft dependency", () => {
+  it("no Prism source file calls an ArtCraft / storyteller endpoint", () => {
+    const root = path.resolve(__dirname, "../..");
+    const hits: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const f = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          if (e.name !== "node_modules" && e.name !== "__tests__") walk(f);
+        } else if (/\.(ts|tsx|mts|js|mjs)$/.test(e.name)) {
+          if (/storyteller\.ai|fakeyou\.com|artcraft\.ai|getartcraft|omni_gen/i.test(readFileSync(f, "utf8")))
+            hits.push(path.relative(root, f));
+        }
+      }
+    };
+    walk(root);
+    expect(hits).toEqual([]);
   });
 });

@@ -18,11 +18,27 @@ import { fingerprint, sha256 } from "../hash";
 
 export const RECONSTRUCTION_JOB_SCHEMA = "prism.reconstruction-job.v1" as const;
 
-export const RECONSTRUCTION_PROVIDER_IDS = ["worldlabs_marble", "meshy", "mock_reconstruction"] as const;
-export type ReconstructionProviderId = (typeof RECONSTRUCTION_PROVIDER_IDS)[number];
+/**
+ * A provider id is an identifier, not a closed list: the server-side provider REGISTRY decides which ids are known,
+ * enabled, local or hosted, free or paid. The database (migration 0037) only guarantees this shape, so adding a
+ * provider needs no migration, and a job naming a provider the registry no longer has stays readable history.
+ */
+export type ReconstructionProviderId = string;
+export const PROVIDER_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+export const isProviderId = (id: unknown): id is ReconstructionProviderId =>
+  typeof id === "string" && PROVIDER_ID_PATTERN.test(id);
 
+/** Result kinds the job schema can record (the database allows both). */
 export const RECONSTRUCTION_RESULT_KINDS = ["gaussian_splat", "mesh"] as const;
 export type ReconstructionResultKind = (typeof RECONSTRUCTION_RESULT_KINDS)[number];
+/**
+ * Result kinds Prism can actually INGEST today. A mesh has no trustworthy ingestion path yet, so no job may request
+ * one and no provider may advertise one.
+ */
+export const INGESTIBLE_RESULT_KINDS = [
+  "gaussian_splat",
+] as const satisfies readonly ReconstructionResultKind[];
+export type IngestibleResultKind = (typeof INGESTIBLE_RESULT_KINDS)[number];
 
 /** Job status (Prism's view). Provider operation status is separate (see ProviderOperationStatus). */
 export const JOB_STATUSES = [
@@ -105,9 +121,14 @@ export type JobEvent = (typeof JOB_EVENTS)[number];
 
 // ───────────────────────── input snapshot (frozen by value, ORDERED) ─────────────────────────
 
+/** What one input is. Every job before the free-first pass was image-only, so a stored source without it is an image. */
+export const JOB_SOURCE_KINDS = ["image", "video"] as const;
+export type JobSourceKind = (typeof JOB_SOURCE_KINDS)[number];
+
 export const jobSourceSchema = z.object({
   /** 0-based position the user chose: 0 is the primary / first image. Provider semantics may depend on it. */
   ordinal: z.number().int().nonnegative(),
+  kind: z.enum(JOB_SOURCE_KINDS).default("image"),
   assetId: z.string().min(1),
   checksum: z.string().nullable(),
   mime: z.string().nullable(),
@@ -118,25 +139,102 @@ export const jobSourceSchema = z.object({
 export type JobSource = z.infer<typeof jobSourceSchema>;
 
 /** Assigns ordinals in the given order. Order is preserved, never sorted: the first image is the primary one. */
-export function orderedSources(sources: Array<Omit<JobSource, "ordinal">>): JobSource[] {
-  return sources.map((s, i) => ({ ...s, ordinal: i }));
+export function orderedSources(
+  sources: Array<Omit<JobSource, "ordinal" | "kind"> & { kind?: JobSourceKind }>,
+): JobSource[] {
+  return sources.map((s, i) => ({ ...s, kind: s.kind ?? "image", ordinal: i }));
 }
 
-export const MAX_JOB_SOURCES = 8;
+/**
+ * Prism's own ceiling on one job's inputs (the database allows the same, migration 0037). Each provider declares a
+ * lower maximum of its own (World Labs: 8 images); a local capture needs tens to hundreds of photos.
+ */
+export const MAX_JOB_SOURCES = 300;
+
+/** How a provider receives a job's inputs. A panorama is a single image to Prism (the provider may detect it). */
+export const INPUT_MODES = ["single_image", "multi_image", "panorama", "video"] as const;
+export type InputMode = (typeof INPUT_MODES)[number];
+
+/** The input mode of an ordered source list: one video, one image, or several images. */
+export function inputModeOf(sources: Pick<JobSource, "kind">[]): InputMode {
+  if (sources.some((s) => s.kind === "video")) return "video";
+  return sources.length === 1 ? "single_image" : "multi_image";
+}
 
 export function validateSources(sources: JobSource[]): { ok: true } | { ok: false; error: string } {
   if (sources.length === 0) return { ok: false, error: "Choose at least one reference image." };
   if (sources.length > MAX_JOB_SOURCES)
-    return { ok: false, error: `At most ${MAX_JOB_SOURCES} reference images can be used.` };
+    return { ok: false, error: `At most ${MAX_JOB_SOURCES} inputs can be used.` };
   const ids = new Set<string>();
   for (const [i, s] of sources.entries()) {
     if (s.ordinal !== i) return { ok: false, error: "The reference images are not in a valid order." };
     if (ids.has(s.assetId)) return { ok: false, error: "The same reference image is listed twice." };
     ids.add(s.assetId);
-    if (!s.mime?.startsWith("image/")) return { ok: false, error: "Every source must be an image Asset." };
+    if (!s.mime?.startsWith(`${s.kind}/`))
+      return {
+        ok: false,
+        error:
+          s.kind === "video"
+            ? "A video input must be a video Asset."
+            : "Every source must be an image Asset.",
+      };
   }
+  // a video job is exactly one video; images and video are never mixed in one request
+  if (sources.some((s) => s.kind === "video") && sources.length !== 1)
+    return { ok: false, error: "A video reconstruction takes exactly one video and no images." };
   return { ok: true };
 }
+
+// ───────────────────────── cost provenance ─────────────────────────
+
+/**
+ * What a reconstruction may cost, as Prism showed and checked it BEFORE submission. Frozen with the request.
+ *   free     no money is spent (local execution, test provider)
+ *   paid     the provider charges; `usd` / `providerUnits` say how much when it is documented
+ *   unknown  Prism cannot tell; treated like paid by the spend gate (and blocked, since it cannot be checked)
+ */
+export const COST_CLASSES = ["free", "paid", "unknown"] as const;
+export type CostClass = (typeof COST_CLASSES)[number];
+
+const ordered = (r: { min: number; max: number }) => r.min <= r.max;
+
+export const jobCostEstimateSchema = z.object({
+  costClass: z.enum(COST_CLASSES),
+  /** USD, ONLY when the provider publishes an authoritative conversion; null otherwise */
+  usd: z
+    .object({ min: z.number().nonnegative(), max: z.number().nonnegative() })
+    .refine(ordered, "min must not exceed max")
+    .nullable(),
+  /** the provider's own billing units (e.g. World Labs credits), when documented */
+  providerUnits: z
+    .object({ unit: z.string().min(1).max(32), min: z.number().nonnegative(), max: z.number().nonnegative() })
+    .refine(ordered, "min must not exceed max")
+    .nullable(),
+  /** what the figure was computed from, e.g. "marble-1.1 · single_image" */
+  basis: z.string().max(200),
+  /** the price table's source (a documentation reference, never a URL with credentials) */
+  pricingSource: z.string().max(200).nullable(),
+  /** when that price table was last checked against its source (YYYY-MM-DD) */
+  pricingCheckedAt: z.string().max(32).nullable(),
+});
+export type JobCostEstimate = z.infer<typeof jobCostEstimateSchema>;
+
+/** What the provider REPORTED it charged. Recorded only when a provider reports it; never derived by Prism. */
+export const jobActualCostSchema = z.object({
+  usd: z.number().nonnegative().nullable(),
+  providerUnits: z.object({ unit: z.string().min(1).max(32), amount: z.number().nonnegative() }).nullable(),
+  reportedAt: z.string().max(40),
+});
+export type JobActualCost = z.infer<typeof jobActualCostSchema>;
+
+export const FREE_COST_ESTIMATE = (basis: string): JobCostEstimate => ({
+  costClass: "free",
+  usd: { min: 0, max: 0 },
+  providerUnits: null,
+  basis,
+  pricingSource: null,
+  pricingCheckedAt: null,
+});
 
 // ───────────────────────── options ─────────────────────────
 
@@ -144,7 +242,10 @@ export function validateSources(sources: JobSource[]): { ok: true } | { ok: fals
 export const jobOptionsSchema = z.object({
   /** human label, metadata only (never part of the fingerprint) */
   displayName: z.string().max(64).nullable().default(null),
-  /** provider-specific options (e.g. World Labs `reconstruct_images`, `seed`, mock scenario) */
+  /**
+   * Provider-specific options. Each provider DECLARES its options (ProviderCapabilities.options); the server keeps
+   * only declared keys of the declared type (normalizeProviderOptions), so this is never free-form input.
+   */
   provider: z.record(z.string(), z.unknown()).default({}),
 });
 export type JobOptions = z.infer<typeof jobOptionsSchema>;
@@ -173,6 +274,8 @@ export function jobFingerprint(j: JobIdentity): string {
     locationId: j.locationId,
     sources: j.sources.map((s) => ({
       ordinal: s.ordinal,
+      // an image is the historical default and is left out, so image jobs keep their pre-0037 fingerprints
+      ...(s.kind !== "image" ? { kind: s.kind } : {}),
       assetId: s.assetId,
       checksum: s.checksum,
       mime: s.mime,
@@ -232,6 +335,10 @@ export interface ReconstructionJobRecord {
   /** sanitised result metadata (candidate kinds, chosen resolution, scale estimate): never URLs */
   providerResult: Record<string, unknown> | null;
   resultReconstructionId: string | null;
+  /** the cost shown and checked before submission (null: none recorded, e.g. a job created before 0037) */
+  costEstimate: JobCostEstimate | null;
+  /** what the provider reported it charged (null: not reported; never derived) */
+  actualCost: JobActualCost | null;
   errorCode: JobErrorCode | null;
   errorMessage: string | null;
   lastPolledAt: string | null;
@@ -281,10 +388,13 @@ export function sanitizeProviderPayload(value: unknown, depth = 0): unknown {
 }
 
 export function sanitizeErrorMessage(message: string): string {
-  return message
-    .replace(/https?:\/\/\S+/gi, "[url]")
-    .replace(/(WLT-Api-Key|api[_-]?key|authorization)\s*[:=]\s*\S+/gi, "$1: [redacted]")
-    .slice(0, 500);
+  return (
+    message
+      .replace(/https?:\/\/\S+/gi, "[url]")
+      // any `…api-key` header or field (e.g. a provider's `X-…-Api-Key`), and authorization headers
+      .replace(/([\w-]*api[_-]?key|authorization)\s*[:=]\s*\S+/gi, "$1: [redacted]")
+      .slice(0, 500)
+  );
 }
 
 // ───────────────────────── writes ─────────────────────────
@@ -301,6 +411,8 @@ export interface NewReconstructionJob {
   resultKind: ReconstructionResultKind;
   sources: JobSource[];
   options: JobOptions;
+  /** frozen with the request; null only when no estimate exists */
+  costEstimate: JobCostEstimate | null;
   /** a job is created by an explicit action, so it starts QUEUED (draft exists for UI-held requests) */
   status: "draft" | "queued";
   userId: string | null;
@@ -318,6 +430,8 @@ export interface JobPatch {
   errorCode?: JobErrorCode | null;
   errorMessage?: string | null;
   lastPolledAt?: string | null;
+  /** set only from a provider's own report */
+  actualCost?: JobActualCost | null;
 }
 
 export class JobTransitionError extends Error {
@@ -369,6 +483,12 @@ export function applyJobPatch(
           : sanitizeErrorMessage(patch.errorMessage)
         : job.errorMessage,
     lastPolledAt: patch.lastPolledAt !== undefined ? patch.lastPolledAt : job.lastPolledAt,
+    actualCost:
+      patch.actualCost !== undefined
+        ? patch.actualCost === null
+          ? null
+          : jobActualCostSchema.parse(patch.actualCost)
+        : job.actualCost,
     revision: job.revision + 1,
     updatedAt: now,
     completedAt: isTerminal(status) ? now : null,
@@ -400,7 +520,7 @@ export function newJobRecord(input: NewReconstructionJob): ReconstructionJobReco
     capability: input.capability,
     model: input.model,
     resultKind: input.resultKind,
-    sources: input.sources.map((s) => ({ ...s })),
+    sources: input.sources.map((s) => jobSourceSchema.parse(s)),
     options: jobOptionsSchema.parse(input.options),
     status: input.status,
     progress: null,
@@ -410,6 +530,8 @@ export function newJobRecord(input: NewReconstructionJob): ReconstructionJobReco
     providerInputs: null,
     providerResult: null,
     resultReconstructionId: null,
+    costEstimate: input.costEstimate ? jobCostEstimateSchema.parse(input.costEstimate) : null,
+    actualCost: null,
     errorCode: null,
     errorMessage: null,
     lastPolledAt: null,

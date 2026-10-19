@@ -1,8 +1,9 @@
 import { assertSafeUrl, safeFetch, UnsafeUrlError, type UrlPolicy } from "@/generation/safe-fetch";
-import { sanitizeProviderPayload } from "@/domain/reconstruction/job";
+import { sanitizeProviderPayload, type JobCostEstimate } from "@/domain/reconstruction/job";
 import {
   ProviderError,
   type ExtractedResult,
+  type InputMode,
   type OperationSnapshot,
   type PreparedInput,
   type ProviderCapabilities,
@@ -36,17 +37,47 @@ import {
  */
 
 export const WORLDLABS_DEFAULT_BASE_URL = "https://api.worldlabs.ai";
-/** World Labs publishes 1,250 credits per USD (API pricing page). */
-const CREDITS_PER_USD = 1250;
-const usd = (credits: number) => Math.round((credits / CREDITS_PER_USD) * 100) / 100;
 
+/**
+ * World Labs API pricing, from the official pricing page (docs.worldlabs.ai/api/pricing), checked 2026-10-19.
+ * A request's cost is the sum of its usage events: a "pano generation" (0 credits for a panorama image, 80 for a
+ * text or non-panorama image, 100 for multi-image or video input) plus the world generation (150 draft, 1,500
+ * standard; marble-1.1-plus adds a size-dependent 0-1,500). The page publishes $1.00 per 1,250 credits.
+ * World Labs documents no per-operation cost report, so Prism records no "actual" cost for it.
+ */
+export const WORLDLABS_PRICING = {
+  source: "World Labs API pricing (docs.worldlabs.ai/api/pricing)",
+  checkedAt: "2026-10-19",
+  creditsPerUsd: 1250,
+} as const;
+const PANO_CREDITS = { panorama: 0, single_image: 80, multi_image: 100 } as const;
+const WORLD_CREDITS: Record<string, { min: number; max: number }> = {
+  "marble-1.0-draft": { min: 150, max: 150 },
+  "marble-1.0": { min: 1500, max: 1500 },
+  "marble-1.1": { min: 1500, max: 1500 },
+  "marble-1.1-plus": { min: 1500, max: 3000 },
+};
 const MODELS = [
-  { id: "marble-1.0-draft", label: "Marble 1.0 Draft", credits: { min: 150, max: 150 } },
-  { id: "marble-1.0", label: "Marble 1.0", credits: { min: 1500, max: 1500 } },
-  { id: "marble-1.1", label: "Marble 1.1", credits: { min: 1500, max: 1500 } },
-  // documented as 1,500 base + 0-1,500 variable
-  { id: "marble-1.1-plus", label: "Marble 1.1 Plus", credits: { min: 1500, max: 3000 } },
-].map((m) => ({ ...m, usd: { min: usd(m.credits.min), max: usd(m.credits.max) } }));
+  { id: "marble-1.0-draft", label: "Marble 1.0 Draft" },
+  { id: "marble-1.0", label: "Marble 1.0" },
+  { id: "marble-1.1", label: "Marble 1.1" },
+  { id: "marble-1.1-plus", label: "Marble 1.1 Plus" },
+];
+const DEFAULT_MODEL = "marble-1.1";
+
+/** Documented credits for one request. One image is sent with `is_pano: "auto"`, so it may price as a panorama. */
+export function worldLabsCredits(model: string, mode: InputMode): { min: number; max: number } | null {
+  const world = WORLD_CREDITS[model];
+  if (!world) return null;
+  const pano =
+    mode === "single_image"
+      ? { min: PANO_CREDITS.panorama, max: PANO_CREDITS.single_image }
+      : mode === "panorama"
+        ? { min: PANO_CREDITS.panorama, max: PANO_CREDITS.panorama }
+        : { min: PANO_CREDITS.multi_image, max: PANO_CREDITS.multi_image };
+  return { min: pano.min + world.min, max: pano.max + world.max };
+}
+const usd = (credits: number) => Math.round((credits / WORLDLABS_PRICING.creditsPerUsd) * 1000) / 1000;
 
 /** Preferred splat resolutions, best first. A result over Prism's cap falls back to the next one. */
 const SPZ_PREFERENCE = ["full_res", "500k", "100k"];
@@ -105,19 +136,43 @@ export class WorldLabsProvider implements ReconstructionProvider {
   capabilities(): ProviderCapabilities {
     return {
       capability: "worlds:generate",
-      inputModes: ["single_image", "multi_image", "panorama", "video"],
-      resultKinds: ["gaussian_splat", "mesh"],
-      maxImages: 8,
+      execution: "hosted",
+      runner: "provider_api",
+      cost: "paid",
+      // only what Prism actually sends: image prompts (a single image may be a panorama: `is_pano: "auto"`)
+      inputModes: ["single_image", "multi_image"],
+      // the collider mesh World Labs also returns is not ingested, so it is not advertised
+      resultKinds: ["gaussian_splat"],
+      maxInputs: 8,
       models: MODELS,
-      defaultModel: "marble-1.1",
+      defaultModel: DEFAULT_MODEL,
+      options: [
+        {
+          key: "reconstructImages",
+          kind: "boolean",
+          label: "Reconstruction mode (up to 8 images)",
+          default: false,
+        },
+      ],
       supportsCancel: false,
       supportsProgress: true,
-      supportsWebhooks: false,
+      supportsResume: true,
       supportsIdempotencyKey: false,
-      requiresPublicInputUrls: false,
-      supportsProviderAssetUpload: true,
-      billable: true,
       testOnly: false,
+    };
+  }
+
+  estimateCost(model: string | null, mode: InputMode): JobCostEstimate {
+    const id = model ?? DEFAULT_MODEL;
+    const credits = worldLabsCredits(id, mode);
+    return {
+      // a model without a documented price is UNKNOWN, never assumed cheap (the spend gate then blocks it)
+      costClass: credits ? "paid" : "unknown",
+      usd: credits ? { min: usd(credits.min), max: usd(credits.max) } : null,
+      providerUnits: credits ? { unit: "credits", ...credits } : null,
+      basis: `${id} · ${mode}`,
+      pricingSource: WORLDLABS_PRICING.source,
+      pricingCheckedAt: WORLDLABS_PRICING.checkedAt,
     };
   }
 
@@ -125,7 +180,7 @@ export class WorldLabsProvider implements ReconstructionProvider {
     const configured = !!this.config.apiKey;
     const base: Omit<ProviderStatus, "capability" | "reason"> = {
       provider: this.id,
-      label: "World Labs / Marble",
+      label: "World Labs Marble",
       configured,
       enabled: this.config.enabled,
     };
@@ -298,23 +353,17 @@ export class WorldLabsProvider implements ReconstructionProvider {
             type: "multi-image",
             reconstruct_images: reconstruct,
             // the user's order is kept: the first image is the primary one
-            multi_image_prompt: ordered.map((p) => ({
-              content: content(p),
-              azimuth:
-                typeof (providerOptions.azimuths as unknown[] | undefined)?.[p.ordinal] === "number"
-                  ? (providerOptions.azimuths as number[])[p.ordinal]
-                  : null,
-            })),
+            // Prism has no camera-direction input, so no azimuth is claimed
+            multi_image_prompt: ordered.map((p) => ({ content: content(p), azimuth: null })),
           };
     const body: Json = {
       display_name: (req.options.displayName ?? "Prism reconstruction").slice(0, 64),
-      model: req.model ?? "marble-1.1",
+      model: req.model ?? DEFAULT_MODEL,
       permission: { public: false },
       // the API has no idempotency key; this tag makes an ambiguous submission findable in the account
       tags: [req.idempotencyKey.slice(0, 32)],
       world_prompt: worldPrompt,
     };
-    if (typeof providerOptions.seed === "number") body.seed = providerOptions.seed;
     return this.toSnapshot(await this.api("POST", "/marble/v1/worlds:generate", body));
   }
 

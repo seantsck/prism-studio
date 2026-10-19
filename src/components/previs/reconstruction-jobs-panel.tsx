@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { inputModeOf, type InputMode, type JobCostEstimate } from "@/domain/reconstruction/job";
 import type { SceneObjectView, SpatialSceneAdapter } from "@/lib/previs/scene-adapter";
+import type { ProviderSummary } from "@/lib/reconstruction/registry";
 import {
   cancelReconstructionJob,
   generateReconstruction,
@@ -16,6 +18,10 @@ import type { ReferenceImageOption, SplatEnvironmentInfo } from "./splat-environ
  * Reference images → reconstruction job → spatial environment (Phase 2F M2D.2). The panel never sends a status: it
  * sends requests and polls the server, which advances jobs from their providers. A finished reconstruction changes
  * NOTHING in the Set until the user presses "Use as Spatial Environment".
+ *
+ * Everything provider-specific comes from the provider's CAPABILITIES (execution, cost class, input modes, declared
+ * options, documented estimates): the panel never branches on a provider id. Only a free, local, ready provider is
+ * pre-selected; a paid provider is used only after the user picks it AND acknowledges its cost.
  */
 
 const ACTIVE = new Set(["draft", "queued", "submitting", "running", "ingesting"]);
@@ -32,6 +38,49 @@ const STATUS_LABEL: Record<JobView["status"], string> = {
 const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const usd = (r: { min: number; max: number } | null) =>
   !r ? null : r.min === r.max ? `$${r.min.toFixed(2)}` : `$${r.min.toFixed(2)}–$${r.max.toFixed(2)}`;
+const units = (r: JobCostEstimate["providerUnits"]) =>
+  !r ? null : `${r.min === r.max ? r.min : `${r.min}–${r.max}`} ${r.unit}`;
+
+/** Cost class first, in plain words: what choosing this provider means for money and where it runs. */
+export function providerKindLabel(s: Pick<ProviderSummary, "execution" | "cost" | "testOnly">): string {
+  if (s.testOnly || s.execution === "mock") return "Development only · no cost";
+  const where = s.execution === "local" ? "runs on this machine" : "hosted service";
+  const cost = s.cost === "free" ? "Free" : s.cost === "paid" ? "Paid provider · optional" : "Cost unknown";
+  return `${cost} · ${where}`;
+}
+
+export type ProviderAvailability =
+  "ready" | "not_installed" | "not_configured" | "disabled" | "capability_unavailable";
+
+export function providerAvailability(
+  s: Pick<ProviderSummary, "capability" | "configured" | "enabled">,
+): ProviderAvailability {
+  if (s.capability === "not_installed") return "not_installed";
+  if (!s.configured) return "not_configured";
+  if (!s.enabled) return "disabled";
+  if (s.capability !== "available") return "capability_unavailable";
+  return "ready";
+}
+const AVAILABILITY_LABEL: Record<ProviderAvailability, string> = {
+  ready: "ready",
+  not_installed: "not installed yet",
+  not_configured: "not configured",
+  disabled: "configured · switched off",
+  capability_unavailable: "capability unavailable",
+};
+
+export function estimateText(e: JobCostEstimate | null | undefined, testOnly: boolean): string {
+  if (!e) return "Cost unknown for this input.";
+  if (e.costClass === "free")
+    return testOnly ? "No provider cost (test provider)." : "Free · no per-generation cost.";
+  if (e.costClass === "unknown" || !e.usd)
+    return "Cost unknown: it cannot be checked against the spend limit, so paid submission stays blocked.";
+  const u = units(e.providerUnits);
+  const source = e.pricingSource
+    ? ` Source: ${e.pricingSource}${e.pricingCheckedAt ? `, checked ${e.pricingCheckedAt}` : ""}.`
+    : "";
+  return `Documented price: about ${usd(e.usd)} per reconstruction${u ? ` (${u})` : ""}. Provider charges apply.${source}`;
+}
 
 export function ReconstructionJobsPanel(props: {
   projectSlug: string;
@@ -48,8 +97,8 @@ export function ReconstructionJobsPanel(props: {
   const [chosen, setChosen] = useState<string[]>([]);
   const [provider, setProvider] = useState<string>("");
   const [model, setModel] = useState<string>("");
-  const [reconstructImages, setReconstructImages] = useState(false);
-  const [scenario, setScenario] = useState("success");
+  /** values of the chosen provider's DECLARED options (unset = the declared default) */
+  const [optionValues, setOptionValues] = useState<Record<string, unknown>>({});
   const [ack, setAck] = useState(false);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -66,13 +115,8 @@ export function ReconstructionJobsPanel(props: {
     if (!r.ok) return setLoadError(r.error);
     setLoadError(null);
     setState(r.state);
-    setProvider(
-      (p) =>
-        p ||
-        r.state.providers.find((x) => x.capability === "available")?.provider ||
-        r.state.providers[0]?.provider ||
-        "",
-    );
+    // never "first available": only the server's free-local default, otherwise the user chooses
+    setProvider((p) => p || r.state.defaultProvider || "");
   }, []);
   const load = useCallback(async () => apply(await fetchState()), [apply, fetchState]);
 
@@ -100,20 +144,36 @@ export function ReconstructionJobsPanel(props: {
   const summary = state?.providers.find((p) => p.provider === provider) ?? null;
   const modelId = model || summary?.defaultModel || "";
   const modelInfo = summary?.models.find((m) => m.id === modelId) ?? null;
+  const billable = summary ? summary.cost !== "free" : false;
+  const availability = summary ? providerAvailability(summary) : null;
+  // the panel offers Location reference IMAGES; video inputs arrive with local capture (M2D.3)
+  const mode: InputMode | null = chosen.length
+    ? inputModeOf(chosen.map(() => ({ kind: "image" as const })))
+    : null;
+  const estimate = summary && mode ? (summary.estimates[modelId]?.[mode] ?? null) : null;
+  const options = Object.fromEntries(
+    (summary?.options ?? []).map((o) => [o.key, optionValues[o.key] ?? o.default]),
+  );
   const images = props.referenceImages;
   const nameOf = (id: string) => images.find((i) => i.id === id)?.name ?? id;
   const existingSplat = props.objects.find((o) => o.kind === "splat") ?? null;
 
   const gate: string[] = [];
   if (state && !state.enabled) gate.push("Reconstruction jobs are switched off on this server.");
-  if (!summary) gate.push("No reconstruction provider is available.");
+  if (!summary) gate.push("Choose a reconstruction provider.");
   else {
     if (summary.reason) gate.push(summary.reason);
-    if (summary.billable && !state?.paid.enabled)
+    if (billable && !state?.paid.enabled)
       gate.push("Paid generation is switched off on this server (PRISM_STUDIO_ALLOW_PAID_GENERATION).");
-    if (summary.billable && !ack) gate.push("Confirm that provider charges may apply.");
-    if (chosen.length > summary.maxImages)
-      gate.push(`This provider accepts at most ${summary.maxImages} images.`);
+    if (billable && !ack) gate.push("Confirm that provider charges may apply.");
+    if (chosen.length > summary.maxInputs)
+      gate.push(`This provider accepts at most ${summary.maxInputs} images.`);
+    if (mode && !summary.inputModes.includes(mode))
+      gate.push(
+        mode === "single_image"
+          ? "This provider needs more than one image."
+          : "This provider does not accept several images.",
+      );
   }
   if (chosen.length === 0) gate.push("Choose at least one reference image.");
   const canGenerate = props.ready && !busy && gate.length === 0;
@@ -138,16 +198,7 @@ export function ReconstructionJobsPanel(props: {
       fd.set("provider", summary.provider);
       fd.set("model", modelId);
       fd.set("sourceAssetIds", JSON.stringify(chosen));
-      fd.set(
-        "providerOptions",
-        JSON.stringify(
-          summary.provider === "mock_reconstruction"
-            ? { scenario }
-            : summary.provider === "worldlabs_marble"
-              ? { reconstructImages }
-              : {},
-        ),
-      );
+      fd.set("providerOptions", JSON.stringify(options));
       if (ack) fd.set("acknowledgeCost", "1");
       const r = await generateReconstruction(fd);
       if (!r.ok) return props.onStatus("error", r.error);
@@ -252,39 +303,34 @@ export function ReconstructionJobsPanel(props: {
           onChange={(e) => {
             setProvider(e.target.value);
             setModel("");
+            setOptionValues({});
             setAck(false);
           }}
           data-testid="recon-provider"
         >
-          {(state?.providers ?? []).map((p) => (
-            <option key={p.provider} value={p.provider}>
-              {p.label}
-            </option>
-          ))}
+          <option value="" disabled>
+            Choose a provider…
+          </option>
+          {(state?.providers ?? []).map((p) => {
+            const a = providerAvailability(p);
+            return (
+              <option key={p.provider} value={p.provider}>
+                {p.label} — {providerKindLabel(p)}
+                {a === "ready" ? "" : ` (${AVAILABILITY_LABEL[a]})`}
+              </option>
+            );
+          })}
         </select>
       </label>
-      {summary ? (
+      {summary && availability ? (
         <div
           className="mt-1"
           data-testid="recon-provider-status"
-          data-state={
-            !summary.configured
-              ? "not_configured"
-              : !summary.enabled
-                ? "disabled"
-                : summary.capability !== "available"
-                  ? "capability_unavailable"
-                  : "ready"
-          }
+          data-state={availability}
+          data-execution={summary.execution}
+          data-cost={summary.cost}
         >
-          {!summary.configured
-            ? "not configured"
-            : !summary.enabled
-              ? "configured · switched off"
-              : summary.capability !== "available"
-                ? "capability unavailable"
-                : "ready"}
-          {summary.testOnly ? " · test provider (no cost)" : ""}
+          {summary.label} · {providerKindLabel(summary)} · {AVAILABILITY_LABEL[availability]}
         </div>
       ) : null}
 
@@ -381,46 +427,51 @@ export function ReconstructionJobsPanel(props: {
         ) : null}
       </div>
 
-      {summary?.provider === "worldlabs_marble" ? (
-        <label className="mt-1.5 flex items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={reconstructImages}
-            onChange={(e) => setReconstructImages(e.target.checked)}
-            data-testid="recon-reconstruct-images"
-          />
-          Reconstruction mode (up to 8 images)
-        </label>
-      ) : null}
-      {summary?.provider === "mock_reconstruction" ? (
-        <label className="mt-1.5 block text-muted">
-          Test outcome
-          <select
-            className="mt-1 w-full"
-            value={scenario}
-            onChange={(e) => setScenario(e.target.value)}
-            data-testid="recon-mock-scenario"
-          >
-            {["success", "fail", "invalid", "oversize", "slow"].map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
+      {(summary?.options ?? []).map((o) =>
+        o.kind === "boolean" ? (
+          <label key={o.key} className="mt-1.5 flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={options[o.key] === true}
+              onChange={(e) => setOptionValues((v) => ({ ...v, [o.key]: e.target.checked }))}
+              data-testid={`recon-option-${o.key}`}
+            />
+            {o.label}
+          </label>
+        ) : (
+          <label key={o.key} className="mt-1.5 block text-muted">
+            {o.label}
+            <select
+              className="mt-1 w-full"
+              value={String(options[o.key])}
+              onChange={(e) => setOptionValues((v) => ({ ...v, [o.key]: e.target.value }))}
+              data-testid={`recon-option-${o.key}`}
+            >
+              {o.choices.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ),
+      )}
 
       {summary ? (
-        <div className="mt-2 rounded border border-line p-1.5" data-testid="recon-cost">
-          {summary.label} · {chosen.length} image{chosen.length === 1 ? "" : "s"} ·{" "}
-          {modelInfo?.label ?? modelId ?? "default model"}
+        <div
+          className="mt-2 rounded border border-line p-1.5"
+          data-testid="recon-cost"
+          data-cost={summary.cost}
+        >
+          {summary.label} · {chosen.length} image{chosen.length === 1 ? "" : "s"}
+          {modelInfo ? ` · ${modelInfo.label}` : ""}
           <br />
-          {summary.billable
-            ? modelInfo?.usd
-              ? `Documented price: about ${usd(modelInfo.usd)} per reconstruction. Provider charges apply.`
-              : "Provider charges may apply."
-            : "No provider cost (test provider)."}
-          {summary.billable ? (
+          {mode
+            ? estimateText(estimate, summary.testOnly)
+            : summary.cost === "free"
+              ? estimateText(summary.estimates[modelId]?.[summary.inputModes[0]!] ?? null, summary.testOnly)
+              : "Choose images to see the documented price."}
+          {billable ? (
             <label className="mt-1 flex items-center gap-1.5">
               <input
                 type="checkbox"
@@ -514,6 +565,23 @@ export function ReconstructionJobsPanel(props: {
             Status: {STATUS_LABEL[detail.status]}
             {detail.description ? ` · ${detail.description}` : ""}
           </div>
+          <div className="text-muted" data-testid="recon-job-cost">
+            {detail.costEstimate
+              ? `Estimate at submission: ${estimateText(detail.costEstimate, detail.costEstimate.costClass === "free")}`
+              : "No cost estimate was recorded for this job."}
+            {detail.actualCost
+              ? ` Provider-reported charge: ${
+                  detail.actualCost.usd !== null
+                    ? `$${detail.actualCost.usd.toFixed(2)}`
+                    : `${detail.actualCost.providerUnits?.amount} ${detail.actualCost.providerUnits?.unit}`
+                }.`
+              : ""}
+          </div>
+          {!detail.providerKnown ? (
+            <p className="text-muted" data-testid="recon-provider-unknown">
+              This server no longer has the provider “{detail.provider}”. The job is kept as history.
+            </p>
+          ) : null}
           {detail.errorMessage ? (
             <p className={detail.status === "failed" ? "text-fail" : "text-muted"} data-testid="recon-error">
               {detail.errorMessage}

@@ -97,7 +97,7 @@ async function generate(page: Page, scenario: string, names: string[]) {
   while (await page.getByTestId("recon-source-remove").count())
     await page.getByTestId("recon-source-remove").first().click();
   for (const n of names) await page.getByTestId("recon-add-source").filter({ hasText: n }).click();
-  await page.getByTestId("recon-mock-scenario").selectOption(scenario);
+  await page.getByTestId("recon-option-scenario").selectOption(scenario);
   await expect(page.getByTestId("recon-generate")).toBeEnabled({ timeout: 30_000 });
   const before = await page
     .getByTestId("recon-job")
@@ -128,11 +128,43 @@ test.describe("reconstruction jobs (mock provider, no provider cost)", () => {
     }
   });
 
-  test("provider status: World Labs is honestly 'not configured' and cannot be submitted", async ({
+  test("free first: nothing paid is pre-selected; Local Capture is free/local and honestly not installed", async ({
+    page,
+  }) => {
+    ({ setUrl, shotId } = await openSet(page));
+    await expect(page.getByTestId("reconstruction-jobs")).toHaveAttribute("data-loaded", "true", {
+      timeout: 60_000,
+    });
+    // no provider is chosen for the user (local capture is not installed, a paid one is never a default)
+    await expect(page.getByTestId("recon-provider")).toHaveValue("");
+    await expect(page.getByTestId("recon-generate")).toBeDisabled();
+    const offered = await page
+      .getByTestId("recon-provider")
+      .locator("option")
+      .evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value).filter(Boolean));
+    expect(offered).toEqual(["local_capture", "worldlabs_marble", "mock_reconstruction"]);
+    expect(offered).not.toContain("meshy");
+
+    await page.getByTestId("recon-provider").selectOption("local_capture");
+    const status = page.getByTestId("recon-provider-status");
+    await expect(status).toHaveAttribute("data-state", "not_installed");
+    await expect(status).toHaveAttribute("data-execution", "local");
+    await expect(status).toHaveAttribute("data-cost", "free");
+    await expect(status).toContainText("Free · runs on this machine");
+    await expect(page.getByTestId("recon-gate")).toContainText("not installed");
+    for (const n of NAMES.slice(0, 2))
+      await page.getByTestId("recon-add-source").filter({ hasText: n }).click();
+    await expect(page.getByTestId("recon-cost")).toContainText("Free · no per-generation cost");
+    await expect(page.getByTestId("recon-ack-cost")).toHaveCount(0); // nothing to acknowledge: it is free
+    await expect(page.getByTestId("recon-generate")).toBeDisabled(); // tools are not faked as present
+  });
+
+  test("provider status: World Labs is an optional paid provider, honestly 'not configured', and cannot be submitted", async ({
     page,
   }) => {
     ({ setUrl, shotId } = await openSet(page));
     await page.getByTestId("recon-provider").selectOption("worldlabs_marble");
+    await expect(page.getByTestId("recon-provider-status")).toContainText("Paid provider · optional");
     await expect(page.getByTestId("recon-provider-status")).toHaveAttribute("data-state", "not_configured");
     await expect(page.getByTestId("recon-gate")).toContainText("World Labs is not configured");
     await expect(page.getByTestId("recon-generate")).toBeDisabled();
@@ -173,7 +205,7 @@ test.describe("reconstruction jobs (mock provider, no provider cost)", () => {
     await expect(page.getByTestId("recon-source").first()).toHaveAttribute("data-primary", "true");
     await expect(page.getByTestId("recon-cost")).toContainText("No provider cost");
 
-    await page.getByTestId("recon-mock-scenario").selectOption("success");
+    await page.getByTestId("recon-option-scenario").selectOption("success");
     const existing = await page
       .getByTestId("recon-job")
       .evaluateAll((els) => els.map((e) => e.getAttribute("data-job-id")));

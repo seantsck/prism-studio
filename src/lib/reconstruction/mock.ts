@@ -1,7 +1,9 @@
+import { FREE_COST_ESTIMATE, type JobCostEstimate } from "@/domain/reconstruction/job";
 import { encodeSpzFile, syntheticPlane } from "@/lib/splat/synthetic";
 import {
   ProviderError,
   type ExtractedResult,
+  type InputMode,
   type OperationSnapshot,
   type PreparedInput,
   type ProviderCapabilities,
@@ -60,26 +62,39 @@ export class MockReconstructionProvider implements ReconstructionProvider {
   capabilities(): ProviderCapabilities {
     return {
       capability: "mock_world",
+      execution: "mock",
+      runner: "provider_api",
+      cost: "free",
       inputModes: ["single_image", "multi_image"],
       resultKinds: ["gaussian_splat"],
-      maxImages: 8,
-      models: [{ id: "mock-1", label: "Mock (test)", credits: null, usd: { min: 0, max: 0 } }],
+      maxInputs: 8,
+      models: [{ id: "mock-1", label: "Mock (test)" }],
       defaultModel: "mock-1",
+      options: [
+        {
+          key: "scenario",
+          kind: "choice",
+          label: "Test outcome",
+          choices: MOCK_SCENARIOS.map((s) => ({ value: s, label: s })),
+          default: "success",
+        },
+      ],
       supportsCancel: true,
       supportsProgress: true,
-      supportsWebhooks: false,
+      supportsResume: true,
       supportsIdempotencyKey: true,
-      requiresPublicInputUrls: false,
-      supportsProviderAssetUpload: true,
-      billable: false,
       testOnly: true,
     };
+  }
+
+  estimateCost(model: string | null, mode: InputMode): JobCostEstimate {
+    return FREE_COST_ESTIMATE(`${model ?? "mock-1"} · ${mode} · test provider`);
   }
 
   status(): ProviderStatus {
     return {
       provider: this.id,
-      label: "Mock Reconstruction (test only)",
+      label: "Mock Reconstruction",
       configured: true,
       enabled: this.config.available,
       capability: this.config.available ? "available" : "unavailable",

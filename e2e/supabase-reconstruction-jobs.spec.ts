@@ -137,7 +137,7 @@ test.describe("reconstruction jobs (signed in, Postgres + private Storage, no pr
     await page.getByTestId("recon-provider").selectOption("mock_reconstruction");
     for (const n of [...names].reverse())
       await page.getByTestId("recon-add-source").filter({ hasText: n }).click();
-    await page.getByTestId("recon-mock-scenario").selectOption("success");
+    await page.getByTestId("recon-option-scenario").selectOption("success");
     await page.getByTestId("recon-generate").click();
     const jobButton = page.getByTestId("recon-job").first();
     await expect(jobButton).toHaveAttribute("data-status", "succeeded", { timeout: 180_000 });

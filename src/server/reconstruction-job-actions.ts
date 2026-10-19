@@ -4,14 +4,19 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { PrevisError } from "@/data/previs-repository";
 import {
+  isProviderId,
   isTerminal,
+  type JobActualCost,
+  type JobCostEstimate,
   type ReconstructionJobRecord,
   type ReconstructionProviderId,
 } from "@/domain/reconstruction/job";
 import { parseCalibration, type SplatCalibration, type SplatFormat } from "@/domain/previs/splat";
 import type { Asset } from "@/domain/schemas";
+import { isBillable } from "@/lib/reconstruction/provider";
 import {
   buildProviders,
+  defaultProviderId,
   providerSummaries,
   readReconstructionConfig,
   type ProviderSummary,
@@ -123,7 +128,11 @@ export interface JobView {
   progress: number | null;
   provider: ReconstructionProviderId;
   providerLabel: string;
+  /** false: this server's registry no longer has the provider (history only; never polled or substituted) */
+  providerKnown: boolean;
   model: string | null;
+  costEstimate: JobCostEstimate | null;
+  actualCost: JobActualCost | null;
   sources: Array<{ ordinal: number; assetId: string; name: string }>;
   description: string | null;
   errorCode: string | null;
@@ -136,6 +145,8 @@ export interface JobView {
 export interface ReconstructionPanelState {
   enabled: boolean;
   providers: ProviderSummary[];
+  /** pre-selected provider: a free, local, ready one, or null (a paid provider is never pre-selected) */
+  defaultProvider: ReconstructionProviderId | null;
   paid: { enabled: boolean; maxUsd: number | null };
   pollIntervalMs: number;
   jobs: JobView[];
@@ -180,7 +191,10 @@ async function views(
       progress: j.progress,
       provider: j.provider,
       providerLabel: label.get(j.provider) ?? j.provider,
+      providerKnown: label.has(j.provider),
       model: j.model,
+      costEstimate: j.costEstimate,
+      actualCost: j.actualCost,
       sources: j.sources.map((s) => ({ ordinal: s.ordinal, assetId: s.assetId, name: name(s.assetId) })),
       description:
         typeof j.providerOperation?.description === "string"
@@ -225,11 +239,13 @@ export async function reconstructionJobs(
       deps.projectAssets = fresh.assets;
       revalidatePath(`/projects/${slug}`, "layout");
     }
+    const summaries = providerSummaries(deps.providers);
     return {
       ok: true,
       state: {
         enabled: deps.config.jobsEnabled,
-        providers: providerSummaries(deps.providers),
+        providers: summaries,
+        defaultProvider: defaultProviderId(summaries),
         paid: deps.config.paid,
         pollIntervalMs: deps.config.pollIntervalMs,
         jobs: await views(jobs, deps.projectAssets, previs),
@@ -245,7 +261,8 @@ export async function generateReconstruction(
   return guarded(async () => {
     const slug = str(form, "projectSlug");
     const locationId = str(form, "locationId");
-    const provider = str(form, "provider") as ReconstructionProviderId;
+    const provider = str(form, "provider");
+    if (!isProviderId(provider)) throw new UserFacingError("Choose a reconstruction provider.");
     let sourceAssetIds: string[];
     let providerOptions: Record<string, unknown>;
     try {
@@ -261,8 +278,8 @@ export async function generateReconstruction(
       throw new UserFacingError("That location is not in this project.");
     const p = deps.providers.get(provider);
     if (!p) throw new UserFacingError("That reconstruction provider is not available.");
-    // a billable provider is only ever called after the user explicitly acknowledged that charges may apply
-    if (p.capabilities().billable && str(form, "acknowledgeCost") !== "1")
+    // a paid (or unknown-cost) provider is only ever called after the user explicitly acknowledged the charges
+    if (isBillable(p.capabilities()) && str(form, "acknowledgeCost") !== "1")
       throw new UserFacingError("Confirm that provider charges may apply before generating.");
     const job = await createJob(deps, {
       locationId,
@@ -295,7 +312,8 @@ export async function retryReconstructionJob(
     const { deps, previs } = await context(str(form, "projectSlug"));
     const prior = await previs.getReconstructionJob(str(form, "jobId"));
     if (!prior || prior.projectId !== deps.projectId) throw new UserFacingError("That job no longer exists.");
-    if (deps.providers.get(prior.provider)?.capabilities().billable && str(form, "acknowledgeCost") !== "1")
+    const priorProvider = deps.providers.get(prior.provider);
+    if ((!priorProvider || isBillable(priorProvider.capabilities())) && str(form, "acknowledgeCost") !== "1")
       throw new UserFacingError("Confirm that provider charges may apply before retrying.");
     const job = await retryJob(deps, prior.id);
     revalidatePath(`/projects/${str(form, "projectSlug")}`, "layout");

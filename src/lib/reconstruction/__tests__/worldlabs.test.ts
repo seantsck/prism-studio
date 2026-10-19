@@ -6,7 +6,13 @@ import { encodeSpzFile, syntheticPlane } from "@/lib/splat/synthetic";
 import { createJob, refreshJob, submitJob, type JobServiceDeps } from "@/server/reconstruction-jobs";
 import type { PassStoreDeps } from "@/server/spatial-pass-store";
 import { ProviderError } from "../provider";
-import { readWorldLabsConfig, WorldLabsProvider, type WorldLabsConfig } from "../worldlabs";
+import {
+  readWorldLabsConfig,
+  worldLabsCredits,
+  WORLDLABS_PRICING,
+  WorldLabsProvider,
+  type WorldLabsConfig,
+} from "../worldlabs";
 
 /**
  * World Labs Marble adapter against a DETERMINISTIC FAKE HTTP layer (no network). Shapes follow the documented
@@ -355,10 +361,45 @@ describe("World Labs adapter (fake HTTP, documented Marble v1 contract)", () => 
     expect(p.capabilities()).toMatchObject({
       supportsCancel: false,
       supportsIdempotencyKey: false,
-      requiresPublicInputUrls: false,
-      billable: true,
+      execution: "hosted",
+      runner: "provider_api",
+      cost: "paid",
     });
     expect((p as { cancel?: unknown }).cancel).toBeUndefined();
+  });
+
+  it("advertises only what Prism actually sends and ingests: images in, a Gaussian splat out", () => {
+    const c = provider().p.capabilities();
+    expect(c.inputModes).toEqual(["single_image", "multi_image"]);
+    expect(c.resultKinds).toEqual(["gaussian_splat"]);
+    expect(c.maxInputs).toBe(8);
+    expect(c.options.map((o) => o.key)).toEqual(["reconstructImages"]);
+  });
+
+  it("estimates cost from the official pricing table: credits per input type, $1 per 1,250 credits", () => {
+    const { p } = provider();
+    // docs.worldlabs.ai/api/pricing (checked 2026-10-19): pano event 0 / 80 / 100 + world 150 / 1,500 (+0-1,500 plus)
+    expect(worldLabsCredits("marble-1.0-draft", "single_image")).toEqual({ min: 150, max: 230 });
+    expect(worldLabsCredits("marble-1.0-draft", "multi_image")).toEqual({ min: 250, max: 250 });
+    expect(worldLabsCredits("marble-1.0", "single_image")).toEqual({ min: 1500, max: 1580 });
+    expect(worldLabsCredits("marble-1.1", "multi_image")).toEqual({ min: 1600, max: 1600 });
+    expect(worldLabsCredits("marble-1.1-plus", "single_image")).toEqual({ min: 1500, max: 3080 });
+    expect(worldLabsCredits("marble-1.1-plus", "multi_image")).toEqual({ min: 1600, max: 3100 });
+    expect(worldLabsCredits("marble-9", "single_image")).toBeNull();
+
+    const single = p.estimateCost("marble-1.1", "single_image");
+    expect(single).toMatchObject({
+      costClass: "paid",
+      // one image is sent with is_pano "auto": it may bill as a panorama (1,500) or not (1,580)
+      usd: { min: 1.2, max: 1.264 },
+      providerUnits: { unit: "credits", min: 1500, max: 1580 },
+      pricingCheckedAt: WORLDLABS_PRICING.checkedAt,
+    });
+    expect(single.pricingSource).toMatch(/docs\.worldlabs\.ai\/api\/pricing/);
+    expect(p.estimateCost("marble-1.1-plus", "multi_image").usd).toEqual({ min: 1.28, max: 2.48 });
+    expect(p.estimateCost(null, "multi_image").basis).toBe("marble-1.1 · multi_image");
+    // an undocumented model is UNKNOWN, never assumed cheap
+    expect(p.estimateCost("marble-9", "single_image")).toMatchObject({ costClass: "unknown", usd: null });
   });
 
   it("an unconfigured provider makes no HTTP call at all", async () => {

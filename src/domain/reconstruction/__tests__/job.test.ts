@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   applyJobPatch,
   canTransition,
+  FREE_COST_ESTIMATE,
+  inputModeOf,
+  isProviderId,
+  jobCostEstimateSchema,
+  jobSourceSchema,
   idempotencyKey,
   JOB_STATUSES,
   JobTransitionError,
@@ -80,6 +85,7 @@ describe("job fingerprint", () => {
       status: "queued",
       userId: null,
       now: "2026-10-18T00:00:00Z",
+      costEstimate: null,
     };
     const r = newJobRecord(input);
     const later = {
@@ -105,7 +111,11 @@ describe("sources", () => {
     expect(validateSources([]).ok).toBe(false);
     expect(validateSources(orderedSources([src("a"), src("a")])).ok).toBe(false);
     expect(validateSources(orderedSources([{ ...src("a"), mime: "video/mp4" }])).ok).toBe(false);
-    expect(validateSources(orderedSources(Array.from({ length: 9 }, (_, i) => src(`s${i}`)))).ok).toBe(false);
+    // Prism's own ceiling is 300 (a local capture needs many photos); each provider declares a lower maximum
+    expect(validateSources(orderedSources(Array.from({ length: 9 }, (_, i) => src(`s${i}`)))).ok).toBe(true);
+    expect(validateSources(orderedSources(Array.from({ length: 301 }, (_, i) => src(`s${i}`)))).ok).toBe(
+      false,
+    );
   });
 });
 
@@ -132,6 +142,7 @@ describe("status transitions", () => {
       status,
       userId: null,
       now: "t0",
+      costEstimate: null,
     });
 
   it("applyJobPatch enforces the matrix, the frozen operation id, failure codes and CAS revision", () => {
@@ -181,5 +192,90 @@ describe("sanitising provider payloads and errors", () => {
   it("redacts URLs and key material from error messages", () => {
     const m = sanitizeErrorMessage("failed at https://x.y/z?token=1 with WLT-Api-Key: abc123 api_key=zzz");
     expect(m).not.toMatch(/https?:|abc123|zzz/);
+  });
+});
+
+describe("free-first readiness (provider ids, input kinds, cost provenance)", () => {
+  it("provider ids are identifiers checked by shape, not a closed list (the registry decides what is known)", () => {
+    for (const id of ["local_capture", "worldlabs_marble", "mock_reconstruction", "future_provider_2"])
+      expect(isProviderId(id)).toBe(true);
+    for (const id of ["", "Local", "1abc", "has-dash", "x".repeat(65), "drop table;", null, 3])
+      expect(isProviderId(id)).toBe(false);
+  });
+
+  it("image-only jobs keep the fingerprint they had before input kinds existed", () => {
+    // computed with the committed pre-0037 job.ts (HEAD 867a0c5) for exactly this identity
+    expect(jobFingerprint(identity())).toBe(
+      "c29e9b735804dbe48cd8799e5a9b23615536f52ec18b1b0d88ebb83c6c7f44e2",
+    );
+    // a stored pre-0037 source (no `kind`) reads back as an image
+    expect(jobSourceSchema.parse({ ordinal: 0, ...src("a") }).kind).toBe("image");
+  });
+
+  it("represents a future video input: its own kind, its own fingerprint, exactly one per job", () => {
+    const video = orderedSources([{ ...src("v"), kind: "video", mime: "video/mp4" }]);
+    expect(video[0]!.kind).toBe("video");
+    expect(validateSources(video)).toEqual({ ok: true });
+    expect(inputModeOf(video)).toBe("video");
+    const asImage = orderedSources([{ ...src("v"), mime: "video/mp4" }]);
+    expect(validateSources(asImage).ok).toBe(false); // a video Asset is never silently treated as an image
+    expect(
+      validateSources(orderedSources([{ ...src("v"), kind: "video", mime: "video/mp4" }, src("a")])).ok,
+    ).toBe(false);
+    expect(jobFingerprint(identity({ sources: video }))).not.toBe(
+      jobFingerprint(identity({ sources: orderedSources([src("v")]) })),
+    );
+  });
+
+  it("derives the input mode from the ordered sources", () => {
+    expect(inputModeOf(orderedSources([src("a")]))).toBe("single_image");
+    expect(inputModeOf(orderedSources([src("a"), src("b")]))).toBe("multi_image");
+  });
+
+  it("cost estimates are bounded, validated and honest about unknowns", () => {
+    expect(jobCostEstimateSchema.parse(FREE_COST_ESTIMATE("local"))).toMatchObject({
+      costClass: "free",
+      usd: { min: 0, max: 0 },
+    });
+    const unknown = {
+      costClass: "unknown",
+      usd: null,
+      providerUnits: null,
+      basis: "x",
+      pricingSource: null,
+      pricingCheckedAt: null,
+    };
+    expect(jobCostEstimateSchema.parse(unknown).usd).toBeNull();
+    expect(() =>
+      jobCostEstimateSchema.parse({ ...unknown, costClass: "paid", usd: { min: 2, max: 1 } }),
+    ).toThrow();
+  });
+
+  it("an estimate is frozen with the request; an actual cost is only what a provider reports", () => {
+    const rec = newJobRecord({
+      ...identity(),
+      id: "j1",
+      attempt: 1,
+      previousJobId: null,
+      status: "queued",
+      userId: null,
+      now: "t0",
+      costEstimate: FREE_COST_ESTIMATE("mock"),
+    });
+    expect(rec.costEstimate?.costClass).toBe("free");
+    expect(rec.actualCost).toBeNull();
+    const s = applyJobPatch(rec, { status: "submitting" }, "t1");
+    expect(s.costEstimate).toEqual(rec.costEstimate);
+    expect(s.actualCost).toBeNull();
+    const r = applyJobPatch(
+      s,
+      {
+        status: "running",
+        providerOperationId: "op",
+        actualCost: { usd: 1.264, providerUnits: { unit: "credits", amount: 1580 }, reportedAt: "t2" },
+      },
+      "t2",
+    );
+    expect(r.actualCost?.providerUnits?.amount).toBe(1580);
   });
 });

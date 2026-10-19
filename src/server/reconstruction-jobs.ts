@@ -3,11 +3,15 @@ import { PrevisError, type PrevisRepository } from "@/data/previs-repository";
 import { spendBlockers } from "@/domain/generation/gate";
 import {
   idempotencyKey,
+  INGESTIBLE_RESULT_KINDS,
+  inputModeOf,
+  isProviderId,
   isTerminal,
   jobOptionsSchema,
   orderedSources,
   sanitizeErrorMessage,
   validateSources,
+  type InputMode,
   type JobErrorCode,
   type JobEvent,
   type JobOptions,
@@ -19,8 +23,10 @@ import { MAX_SPLAT_BYTES, providerEstimatedCalibration, SPLAT_FORMAT_INFO } from
 import { assetSchema, type Asset } from "@/domain/schemas";
 import { inspectSplat } from "@/lib/splat/inspect";
 import { buildObjectPath } from "@/lib/storage-paths";
-import type { ReconstructionConfig } from "@/lib/reconstruction/registry";
+import type { ProviderRegistry, ReconstructionConfig } from "@/lib/reconstruction/registry";
 import {
+  isBillable,
+  normalizeProviderOptions,
   ProviderError,
   type OperationSnapshot,
   type PreparedInput,
@@ -35,7 +41,10 @@ import { persistPassBundle, type PassStoreDeps } from "./spatial-pass-store";
  * Rules that matter:
  *   - Every status change is derived HERE and written with compare-and-set; the browser never sends a status.
  *   - A billable provider is never called while the live-spend gate is closed (checked before ANY provider call).
+ *   - The provider is the one the user chose. There is NO fallback: an unavailable or failing provider fails the
+ *     request; Prism never switches to another provider (and so never to a paid one) on its own.
  *   - A local timeout never fails a running provider operation and never triggers a new submission.
+ *   - A `local_worker` provider is executed by a separate worker process, never by a web request (see provider.ts).
  *   - A provider "success" is only a Prism success after download, size cap, checksum and splat validation, and the
  *     Asset + immutable reconstruction + job success are persisted all-or-nothing. Exactly one poller ingests.
  */
@@ -60,7 +69,7 @@ export interface JobServiceDeps {
     | "completeReconstructionJob"
     | "appendReconstructionJobEvent"
   >;
-  providers: Map<ReconstructionProviderId, ReconstructionProvider>;
+  providers: ProviderRegistry;
   config: ReconstructionConfig;
   /** the Project's assets (for source validation and snapshots) */
   projectAssets: Asset[];
@@ -114,6 +123,7 @@ export function submissionBlocker(
   deps: Pick<JobServiceDeps, "config">,
   provider: ReconstructionProvider,
   model: string | null,
+  mode: InputMode,
 ): { code: JobErrorCode; message: string } | null {
   if (!deps.config.jobsEnabled)
     return { code: "not_configured", message: "Reconstruction jobs are switched off on this server." };
@@ -126,18 +136,25 @@ export function submissionBlocker(
       message: status.reason ?? "This provider does not expose the reconstruction capability.",
     };
   const caps = provider.capabilities();
-  if (caps.billable) {
-    const m = caps.models.find((x) => x.id === (model ?? caps.defaultModel));
+  if (isBillable(caps)) {
+    const estimate = provider.estimateCost(model, mode);
     const blockers = spendBlockers({
       paidEnabled: deps.config.paid.enabled,
       maxUsd: deps.config.paid.maxUsd,
-      // the documented MAXIMUM price is checked against the ceiling (variable pricing is never assumed cheap)
-      estimate: m?.usd ? { amount: m.usd.max, currency: "USD" } : { amount: null, currency: "USD" },
+      // the documented MAXIMUM price is checked against the ceiling (variable pricing is never assumed cheap);
+      // an unknown price cannot be checked, so it blocks
+      estimate: {
+        amount: estimate.costClass === "unknown" ? null : (estimate.usd?.max ?? null),
+        currency: "USD",
+      },
     });
     if (blockers.length > 0) return { code: "spend_blocked", message: blockers[0]!.message };
   }
   return null;
 }
+
+/** The registered provider for an id, or null for an id this server does not (or no longer) know. */
+const registered = (deps: JobServiceDeps, id: ReconstructionProviderId) => deps.providers.get(id) ?? null;
 
 // ───────────────────────── create ─────────────────────────
 
@@ -153,21 +170,26 @@ export async function createJob(
     retryOf?: ReconstructionJobRecord | null;
   },
 ): Promise<ReconstructionJobRecord> {
+  if (!isProviderId(input.provider))
+    throw new JobServiceError("invalid", "That is not a reconstruction provider id.");
   const provider = providerFor(deps, input.provider);
   const caps = provider.capabilities();
   const model = input.model ?? caps.defaultModel;
   if (model !== null && !caps.models.some((m) => m.id === model))
     throw new JobServiceError("invalid", "That model is not offered by this provider.");
-  const blocked = submissionBlocker(deps, provider, model);
-  if (blocked) throw new JobServiceError(blocked.code, blocked.message);
+  // what Prism will request: only a kind it can ingest, and only from a provider that advertises it
+  const resultKind = INGESTIBLE_RESULT_KINDS[0]!;
+  if (!caps.resultKinds.includes(resultKind))
+    throw new JobServiceError("capability_unavailable", "This provider does not produce a Gaussian splat.");
 
-  // sources: this Project's own images, frozen BY VALUE in the user's order
+  // sources: this Project's own images (or one video), frozen BY VALUE in the user's order
   const sources = orderedSources(
     input.sourceAssetIds.map((id) => {
       const a = deps.projectAssets.find((x) => x.id === id);
       if (!a || !a.objectPath)
         throw new JobServiceError("invalid_sources", "A chosen reference image is not in this project.");
       return {
+        kind: a.mime?.startsWith("video/") ? ("video" as const) : ("image" as const),
         assetId: a.id,
         checksum: a.checksum ?? null,
         mime: a.mime ?? null,
@@ -179,8 +201,22 @@ export async function createJob(
   );
   const ok = validateSources(sources);
   if (!ok.ok) throw new JobServiceError("invalid_sources", ok.error);
-  if (sources.length > caps.maxImages)
-    throw new JobServiceError("invalid_sources", `This provider accepts at most ${caps.maxImages} images.`);
+  if (sources.length > caps.maxInputs)
+    throw new JobServiceError("invalid_sources", `This provider accepts at most ${caps.maxInputs} inputs.`);
+  const mode = inputModeOf(sources);
+  if (!caps.inputModes.includes(mode))
+    throw new JobServiceError(
+      "invalid_sources",
+      mode === "single_image"
+        ? "This provider needs more than one image."
+        : mode === "video"
+          ? "This provider does not accept video."
+          : "This provider does not accept several images.",
+    );
+
+  // configuration / availability / spend: the CHOSEN provider only, never a substitute
+  const blocked = submissionBlocker(deps, provider, model, mode);
+  if (blocked) throw new JobServiceError(blocked.code, blocked.message);
 
   let options: JobOptions;
   try {
@@ -188,6 +224,10 @@ export async function createJob(
   } catch {
     throw new JobServiceError("invalid", "The reconstruction options are not valid.");
   }
+  const normalized = normalizeProviderOptions(caps.options, options.provider);
+  if (!normalized.ok) throw new JobServiceError("invalid", normalized.error);
+  options = { ...options, provider: normalized.options };
+
   const job = await deps.repo.createReconstructionJob({
     id: deps.newId(),
     projectId: deps.projectId,
@@ -197,9 +237,11 @@ export async function createJob(
     provider: input.provider,
     capability: caps.capability,
     model,
-    resultKind: "gaussian_splat",
+    resultKind,
     sources,
     options,
+    // the cost the user was shown and the gate checked, frozen with the request
+    costEstimate: provider.estimateCost(model, mode),
     status: "queued",
     userId: deps.userId,
     now: deps.now(),
@@ -208,6 +250,7 @@ export async function createJob(
     attempt: job.attempt,
     sources: sources.length,
     provider: job.provider,
+    costClass: job.costEstimate?.costClass ?? null,
   });
   await event(deps, job, "queued");
   if (input.retryOf)
@@ -247,10 +290,14 @@ export async function submitJob(deps: JobServiceDeps, jobId: string): Promise<Re
   if (!job || job.projectId !== deps.projectId)
     throw new JobServiceError("not_found", "No such reconstruction job.");
   if (job.status !== "queued") return job;
-  const provider = providerFor(deps, job.provider);
+  const provider = registered(deps, job.provider);
+  // an id this server no longer knows: the job stays as it is (readable, cancellable), nothing else is tried
+  if (!provider) return job;
+  // a local worker claims queued local jobs itself; a web request never runs a reconstruction
+  if (provider.capabilities().runner === "local_worker") return job;
 
   // spend / configuration gate BEFORE any provider call (nothing is uploaded, nothing is submitted)
-  const blocked = submissionBlocker(deps, provider, job.model);
+  const blocked = submissionBlocker(deps, provider, job.model, inputModeOf(job.sources));
   if (blocked) {
     job = await transition(deps, job, fail(blocked.code, blocked.message));
     await event(deps, job, "failed", { code: blocked.code });
@@ -344,7 +391,14 @@ export async function refreshJob(deps: JobServiceDeps, jobId: string): Promise<R
     throw new JobServiceError("not_found", "No such reconstruction job.");
   if (job.status === "queued") return submitJob(deps, jobId);
   if (job.status !== "running" && job.status !== "ingesting") return job;
-  const provider = providerFor(deps, job.provider);
+  const provider = registered(deps, job.provider);
+  if (!provider) {
+    // history from a provider this server no longer has: shown as stored, never polled, never substituted
+    log(deps, { jobId, provider: job.provider, poll: "skipped", reason: "provider not registered" });
+    return job;
+  }
+  // the worker owns a local job's progress; web requests only read what it wrote
+  if (provider.capabilities().runner === "local_worker") return job;
   const last = job.lastPolledAt ? Date.parse(job.lastPolledAt) : 0;
   if (Date.parse(deps.now()) - last < deps.config.pollIntervalMs) return job;
 
@@ -381,6 +435,8 @@ async function applySnapshot(
   op: OperationSnapshot,
 ): Promise<ReconstructionJobRecord> {
   const operation = { status: op.status, description: op.description, ...op.summary };
+  // only a cost the provider itself reported is recorded as actual; nothing is derived from the estimate
+  const reported = op.reportedCost ? { actualCost: op.reportedCost } : {};
   switch (op.status) {
     case "pending":
     case "running": {
@@ -404,6 +460,7 @@ async function applySnapshot(
             (op.status === "expired" ? "The provider operation expired." : "The provider failed."),
         ),
         providerOperation: operation,
+        ...reported,
       });
       await event(deps, next, "failed", { code: next.errorCode });
       return next;
@@ -421,6 +478,7 @@ async function applySnapshot(
           status: "ingesting",
           progress: 1,
           providerOperation: operation,
+          ...reported,
         });
       } catch (e) {
         if (e instanceof PrevisError && (e.code === "conflict" || e.code === "invalid"))
@@ -642,9 +700,11 @@ export async function cancelJob(deps: JobServiceDeps, jobId: string): Promise<Re
     await event(deps, job, "cancelled", { remote: false, reason: "never submitted" });
     return job;
   }
-  const provider = providerFor(deps, job.provider);
+  // an unregistered provider can still be cancelled locally: Prism just stops tracking it
+  const provider = registered(deps, job.provider);
+  const caps = provider?.capabilities() ?? null;
   let remote = false;
-  if (provider.capabilities().supportsCancel && provider.cancel) {
+  if (provider && caps?.supportsCancel && provider.cancel) {
     try {
       remote = await provider.cancel(job.providerOperationId!);
     } catch {
@@ -655,7 +715,9 @@ export async function cancelJob(deps: JobServiceDeps, jobId: string): Promise<Re
     status: "cancelled",
     errorMessage: remote
       ? null
-      : "Prism stopped tracking this job. The provider has no cancel operation, so it may still finish (and charge).",
+      : caps && !isBillable(caps)
+        ? "Prism stopped tracking this job. The provider has no cancel operation, so it may still finish."
+        : "Prism stopped tracking this job. The provider has no cancel operation, so it may still finish (and charge).",
     providerOperation: { ...(job.providerOperation ?? {}), cancelConfirmedByProvider: remote },
   });
   await event(deps, job, "cancelled", { remote });

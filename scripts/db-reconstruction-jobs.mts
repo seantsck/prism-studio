@@ -1,17 +1,24 @@
 // Integration tests for Phase 2F M2D.2 reconstruction jobs against the REAL dedicated Prism Studio database
-// (migration 0036: reconstruction_jobs, reconstruction_job_events, generated location_spatial_reconstructions).
+// (migration 0036: reconstruction_jobs, reconstruction_job_events, generated location_spatial_reconstructions;
+// migration 0037: registry-validated provider ids, cost provenance, up to 300 ordered inputs).
 //   npm run db:reconstruction-jobs
 //
 // Exercises (real rows, removed afterwards): owner create/read, the frozen request, the transition matrix enforced BY
 // THE DATABASE, compare-and-set, terminal immutability, the never-replaced operation id, retry as a new attempt,
 // the atomic job+reconstruction completion with exactly one reconstruction per job (lost race), generated provenance,
-// append-only events, owner-only RLS (stranger / anon), NO worker access, cross-project rejection, and cleanup.
+// append-only events, owner-only RLS (stranger / anon), NO worker access, cross-project rejection, new provider ids
+// without a migration, the frozen cost estimate and the provider-reported actual cost, and cleanup.
 // Requires `npm run db:seed` first. No provider call of any kind.
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { PostgresPrevisData } from "../src/data/previs-postgres";
 import { AdminRepository, rlsPreamble } from "../src/data/postgres-repository";
-import { orderedSources, type NewReconstructionJob } from "../src/domain/reconstruction/job";
+import {
+  FREE_COST_ESTIMATE,
+  orderedSources,
+  type JobCostEstimate,
+  type NewReconstructionJob,
+} from "../src/domain/reconstruction/job";
 import { UNKNOWN_CALIBRATION } from "../src/domain/previs/splat";
 import { assertDevUserExists, readDevUserEnv } from "./lib/dev-user.mjs";
 import { startScript } from "./lib/safety.mjs";
@@ -125,6 +132,7 @@ try {
     resultKind: "gaussian_splat",
     sources,
     options: { displayName: null, provider: { scenario: "success" } },
+    costEstimate: FREE_COST_ESTIMATE("mock-1 · multi_image · test provider"),
     status: "queued",
     userId: dev.id,
     now: now(),
@@ -347,6 +355,141 @@ try {
     retry.attempt === 2 &&
       retry.previousJobId === j2.id &&
       (await owner.getReconstructionJob(j2.id))!.revision === f2.revision,
+  );
+
+  // ── 0037: provider identity from the registry, cost provenance, input bounds ──
+  const local = await owner.createReconstructionJob(
+    newJob({
+      provider: "local_capture",
+      capability: "local_capture",
+      model: null,
+      options: { displayName: null, provider: {} },
+    }),
+  );
+  const future = await owner.createReconstructionJob(
+    newJob({
+      provider: "future_provider_x",
+      capability: "x",
+      model: null,
+      options: { displayName: null, provider: {} },
+    }),
+  );
+  check(
+    "a provider id the 0036 list never named is stored with NO migration (the registry decides what is known)",
+    local.provider === "local_capture" &&
+      (await owner.getReconstructionJob(future.id))!.provider === "future_provider_x",
+  );
+  const rawJob = (provider: string, sourcesJson: string) =>
+    sqlErr(
+      `insert into reconstruction_jobs (project_id, location_id, schema_version, job_fingerprint, attempt, provider,
+         provider_capability, requested_result_kind, source_assets_json, options_json, status)
+       values ($1,$2,'prism.reconstruction-job.v1',$3,1,$4,'x','gaussian_splat',$5::jsonb,'{}'::jsonb,'queued')`,
+      [projectId, tmpLocation, randomUUID().replace(/-/g, "").padEnd(64, "0"), provider, sourcesJson],
+    );
+  const oneSource = JSON.stringify([
+    {
+      ordinal: 0,
+      assetId: imgs[0],
+      checksum: null,
+      mime: "image/png",
+      width: null,
+      height: null,
+      byteSize: null,
+    },
+  ]);
+  check(
+    "an unsafe provider identifier is refused by the DATABASE",
+    (await rawJob("Bad Id; drop", oneSource)) !== null && (await rawJob("x".repeat(65), oneSource)) !== null,
+  );
+  check(
+    "a stored source without an input kind (pre-0037) reads back as an image",
+    await (async () => {
+      const fp = randomUUID().replace(/-/g, "").padEnd(64, "1");
+      const r = await pool.query(
+        `insert into reconstruction_jobs (project_id, location_id, schema_version, job_fingerprint, attempt, provider,
+           provider_capability, requested_result_kind, source_assets_json, options_json, status)
+         values ($1,$2,'prism.reconstruction-job.v1',$3,1,'meshy','x','gaussian_splat',$4::jsonb,'{}'::jsonb,'queued')
+         returning id`,
+        [projectId, tmpLocation, fp, oneSource],
+      );
+      const back = await owner.getReconstructionJob(r.rows[0].id);
+      // ('meshy' was in the 0036 list and has no adapter: such history stays readable)
+      return back?.sources[0]?.kind === "image" && back.provider === "meshy" && back.costEstimate === null;
+    })(),
+  );
+  const many = (n: number) =>
+    JSON.stringify(
+      Array.from({ length: n }, (_, i) => ({
+        ordinal: i,
+        assetId: randomUUID(),
+        checksum: null,
+        mime: "image/png",
+        width: null,
+        height: null,
+        byteSize: null,
+      })),
+    );
+  check(
+    "up to 300 ordered inputs are accepted (local capture); 301 are refused by the DATABASE",
+    (await rawJob("local_capture", many(300))) === null &&
+      (await rawJob("local_capture", many(301))) !== null,
+  );
+  const paidEstimate: JobCostEstimate = {
+    costClass: "paid",
+    usd: { min: 1.2, max: 1.264 },
+    providerUnits: { unit: "credits", min: 1500, max: 1580 },
+    basis: "marble-1.1 · single_image",
+    pricingSource: "World Labs API pricing (docs.worldlabs.ai/api/pricing)",
+    pricingCheckedAt: "2026-10-19",
+  };
+  const costed = await owner.createReconstructionJob(
+    newJob({
+      provider: "worldlabs_marble",
+      capability: "worlds:generate",
+      model: "marble-1.1",
+      costEstimate: paidEstimate,
+      options: { displayName: null, provider: { reconstructImages: false } },
+    }),
+  );
+  check(
+    "the cost estimate is persisted with its pricing source and check date",
+    JSON.stringify((await owner.getReconstructionJob(costed.id))!.costEstimate) ===
+      JSON.stringify(paidEstimate),
+  );
+  check(
+    "the cost estimate is frozen with the request (database)",
+    /frozen/i.test(
+      (await sqlErr(
+        "update reconstruction_jobs set cost_estimate_json = '{}'::jsonb, revision = revision + 1 where id = $1",
+        [costed.id],
+      )) ?? "",
+    ),
+  );
+  const c1 = await owner.updateReconstructionJob(costed.id, 1, { status: "submitting" }, now());
+  const c2 = await owner.updateReconstructionJob(
+    costed.id,
+    c1.revision,
+    {
+      status: "running",
+      providerOperationId: "op_cost_1",
+      actualCost: { usd: null, providerUnits: { unit: "credits", amount: 1580 }, reportedAt: now() },
+    },
+    now(),
+  );
+  check(
+    "a provider-REPORTED actual cost is recorded separately (no actual cost exists until reported)",
+    costed.actualCost === null &&
+      (await owner.getReconstructionJob(c2.id))!.actualCost?.providerUnits?.amount === 1580,
+  );
+  check(
+    "a generated reconstruction's provider is constrained to the same safe identifier shape (database)",
+    String(
+      (
+        await pool.query(
+          "select pg_get_constraintdef(oid) d from pg_constraint where conname = 'location_spatial_reconstructions_provider_check'",
+        )
+      ).rows[0]?.d ?? "",
+    ).includes("a-z0-9_"),
   );
 
   // ── events ──
