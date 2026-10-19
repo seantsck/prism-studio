@@ -75,8 +75,22 @@ THE SOFTWARE.
 | `@sparkjsdev/spark` | 0.1.10  | MIT     | Gaussian-splat renderer for three.js (Copyright © 2025 World Labs Technologies, Inc., https://github.com/sparkjsdev/spark). Used unmodified as an npm dependency and lazily imported; its source is not vendored. It renders through Prism's existing `THREE.WebGLRenderer`. |
 | `fflate`            | 0.8.3   | MIT     | gzip decompression to validate `.spz` files (Copyright © 2023 Arjun Barrett); also a dependency of Spark. Used on the server and in the browser for structural validation and to generate synthetic test splats.                                                             |
 
+Since Phase 2F M2D.3A Spark is also used server-side (Node) by the local reconstruction engine: its `SpzWriter`
+encodes the PLY → SPZ conversion and its `SpzReader` decodes in tests. Same package, same pinned version, unmodified.
+
 Spark's published bundle inlines a few three.js routines (MIT, Copyright 2010-2025 three.js authors) and carries no
 network URL on an executable path (the only URLs in the bundle are reference links in source comments). Spark 0.1.10
 is the version the pinned ArtCraft commit used (`^0.1.10`); Spark 2.x requires a newer three.js than Prism pins.
 No splat asset, demo scene or sample file from ArtCraft, Spark or any third party is included in this repository;
 tests generate their Gaussian data programmatically.
+
+## External tools for local reconstruction (Phase 2F M2D.3A): not distributed
+
+Prism Studio does **not** include, bundle, download or install COLMAP or Brush. The operator installs them and Prism
+invokes them as separate processes; their licences are the operator's to observe:
+
+- **COLMAP** 4.2.1 (https://github.com/colmap/colmap, new BSD for COLMAP itself; dependencies under their own
+  licences, including LGPL-2.1+/GPL-2+ SuiteSparse components). Prism supports only an operator-built, provenance-
+  verified CPU profile; official prebuilt archives are not supported (they compile in SiftGPU, licensed for
+  educational, research and non-profit use only, and AGPL-3.0 LSD). See `docs/local-reconstruction.md`.
+- **Brush** v0.3.0 (https://github.com/ArthurBrussee/brush, Apache-2.0).

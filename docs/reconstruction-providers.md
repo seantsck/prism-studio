@@ -201,23 +201,18 @@ database transaction. Any failure removes what the attempt stored; a transient f
 and is retried on later polls (at most 3 times) without ever regenerating; a second ingestion of the same job is
 refused by a unique index on `job_id`.
 
-## PLY → SPZ (M2D.3 requirement)
+## PLY → SPZ (implemented in M2D.3A)
 
-Brush (and most 3DGS trainers) write a binary little-endian Gaussian PLY. M2D.1 already validates that format
-(`inspectSplat`) and renders it, but a room-scale PLY with spherical harmonics is about 250 bytes per Gaussian
-(1 M Gaussians ≈ 250 MB), far over the 50 MB splat cap. M2D.3 therefore needs a production PLY → SPZ converter:
+Brush writes a binary little-endian Gaussian PLY; a room-scale PLY with spherical harmonics is ~236 bytes per
+Gaussian, far over the 50 MB splat cap. The local engine converts it with a production converter built on Spark
+0.1.10's MIT `SpzWriter` (the encoder matching the runtime's own `SpzReader`):
 
 ```
-Brush PLY → validate (inspectSplat) → convert / compress to SPZ → validate again → private Asset → reconstruction
+Brush PLY → production PLY reader → SPZ v3 (SH kept, scene-derived precision, no wrapping) → inspectSplat → result
 ```
 
-`encodeSpzFile` in `src/lib/splat/synthetic.ts` was audited for reuse and is **not** promoted: it is a test fixture
-that writes no spherical harmonics, wraps positions outside ±2,048 units silently (24-bit fixed point, 12 fractional
-bits, no range or NaN check), takes 8-bit opacity rather than PLY's logit, has no PLY reader, and builds everything
-in memory. The M2D.3 converter must read PLY attributes (positions, `f_dc_*`, `f_rest_*`, opacity logit, log
-scales, rotations), choose fractional bits from the scene's extent and refuse (not wrap) out-of-range values, keep
-or explicitly drop SH by degree, normalise quaternions, stream large files, and be round-trip tested against
-`inspectSplat` and the Spark loader. Until then, a local result that fits the cap can be ingested as PLY unchanged.
+The test-only `encodeSpzFile` in `src/lib/splat/synthetic.ts` was not promoted. Details, fidelity table and memory
+bounds: [`docs/local-reconstruction.md`](./local-reconstruction.md).
 
 ## Use as Spatial Environment
 
@@ -244,8 +239,9 @@ their own are Location history, not Shot truth. A visible generated splat still 
 
 - No live World Labs call has been made from Prism (by design in M2D.2); the adapter is built to the public docs and
   proved against a fake HTTP layer only. The first live use needs an operator decision.
-- Local capture is registered but not implemented: no worker, no toolchain detection beyond a stub that reports
-  "not installed", no video upload path in the panel (the job schema already represents video). That is M2D.3.
+- Local capture is registered but not executable from the web app. M2D.3A built the local engine and the real
+  toolchain probe ([`docs/local-reconstruction.md`](./local-reconstruction.md)); the durable worker, job
+  integration and UI are M2D.3B, so `local_capture` still reports "not installed". No video upload path yet.
 - Mesh results (`collider_mesh_url`) are not imported; only Gaussian splats are.
 - The World Labs price table is static (checked 2026-10-19); a price change needs a code update.
 - No webhooks; no provider-side cleanup of uploaded media assets.
