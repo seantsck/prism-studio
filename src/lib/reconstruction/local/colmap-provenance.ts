@@ -25,8 +25,9 @@ import { runProcess, type ToolCommand } from "./process";
  * CUDA; the executable itself refuses GPU SIFT and lacks the MVS commands; and the hashed files are those binaries.
  * What it does NOT prove: that the compiler or the vcpkg-built DLLs are free of defects or of anything not named
  * here, or anything about files other than the hashed ones. Copyleft components that the profile cannot remove
- * (SuiteSparse CHOLMOD, LGPL-2.1+; with COLMAP's stock manifest also GPL-2+ CHOLMOD modules and SPQR) are RECORDED;
- * they permit local commercial use, and Prism never redistributes COLMAP.
+ * (SuiteSparse CHOLMOD, LGPL-2.1+; with COLMAP's stock manifest also GPL-2+ CHOLMOD modules and SPQR) are RECORDED,
+ * not hidden: this is a restricted-dependency build, not a GPL-free one. They belong to the operator's external build;
+ * Prism never redistributes COLMAP or its DLLs (doing so would require a new licensing review).
  */
 
 export const COLMAP_PROVENANCE_SCHEMA = "prism.local-tool.colmap.v1" as const;

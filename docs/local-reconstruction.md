@@ -13,6 +13,10 @@ ordered photographs
   → result: splat.spz + splat.ply + manifest.json
 ```
 
+**Validation status.** Code validated: yes (against fake external tools). Real COLMAP build validated: **no**. Real
+Brush training validated: **no**. Real hardware performance validated: **no**. M2D.3A is not production-validated;
+the production acceptance gate for Local Capture requires at least one real reconstruction on supported hardware.
+
 **Local means local.** The engine uploads nothing, calls no provider, ArtCraft, telemetry or model host, and
 downloads, installs or builds nothing. The operator installs the tools; Prism detects, verifies and invokes them.
 No binary, DLL, model or installer is in this repository.
@@ -25,7 +29,13 @@ unavailable in the web app, even on a machine whose toolchain is ready: a browse
 
 ## Supported tools
 
-### COLMAP: 4.2.1, operator-built from source, provenance-verified
+### COLMAP: 4.2.1, a Prism-verified external build
+
+The only supported COLMAP is a **Prism-verified external COLMAP build**: built from source by the operator, at the
+approved commit, with the restricted-dependency profile below, and accepted by Prism's provenance verifier. It is a
+_restricted-dependency_ build, not a GPL-free one: it still links copyleft SuiteSparse components (see the table).
+Prism invokes it as a separate process; Prism does not link COLMAP, embed its code, redistribute it or any of its
+DLLs (including SuiteSparse and other GPL/LGPL libraries), or bundle a COLMAP installer.
 
 |               |                                                                                                                      |
 | ------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -94,12 +104,17 @@ Not compiled or linked in this profile: SiftGPU, LSD, CGAL/GMP/MPFR, Qt, ONNX Ru
 library, PoissonRecon (built but linked only by MVS).
 
 **Copyleft policy.** The profile cannot remove CHOLMOD (LGPL-2.1+); COLMAP's stock manifest also brings GPL-2+
-SuiteSparse modules. GPL/LGPL restrict redistribution, not use: running an operator-built COLMAP locally, as a
-separate process, is compatible with commercial use. Prism never ships COLMAP or its DLLs, and its own code never
-links them. The verifier records these components in the provenance manifest (`copyleftComponents`) rather than
-hiding them. A GPL-free variant exists in principle (patch COLMAP's `vcpkg.json` to build Ceres with `eigensparse`
-and `suitesparse-cholmod` without default features), but it changes the source tree, has not been tried, and is
-not a supported profile today.
+SuiteSparse modules, so the verified build **contains copyleft components installed by the operator**. Prism's
+engineering position is that these licences attach their obligations to redistribution, and Prism does not
+redistribute them: the operator builds and installs COLMAP, Prism runs it as a separate process, and Prism's own
+code never links it. The verifier records these components in the provenance manifest (`copyleftComponents`)
+rather than hiding them. A variant without the GPL-2+ modules exists in principle (patch COLMAP's `vcpkg.json` to
+build Ceres with `eigensparse` and `suitesparse-cholmod` without default features; LGPL CHOLMOD would remain), but
+it changes the source tree, has not been tried, and is not a supported profile today.
+
+**If Prism ever begins redistributing COLMAP or any of its DLLs** (bundling, an installer, a download, a container
+image), this licensing position no longer applies and must be reviewed again before that ships. None of this is
+legal advice.
 
 #### Provenance: verify the build, do not trust a text file
 
@@ -209,8 +224,14 @@ identifier; a fresh directory is required; every path is checked to stay inside 
 **Camera reconstruction is validated, not assumed.** `feature_extractor` must produce its database (it exits 0 even
 when it extracted nothing); the mapper's models are read from COLMAP's binary format; the chosen model is the one
 with the most registered images, then the most 3D points (never "directory 0" by default), and all models found are
-recorded. Fewer than 3 registered images, under 40 % of the photographs, or under 50 sparse points is
-`insufficient_camera_registration`. The undistorted model must be PINHOLE and contain every registered image.
+recorded. Every registered image must be one of the run's own inputs, each at most once. Fewer than 3 registered
+images, under 40 % of the photographs, or under 50 sparse points is `insufficient_camera_registration`. The
+undistorted model must be PINHOLE and contain every registered image, all written to disk.
+
+The database itself is only checked to exist and be non-empty (its SQLite contents are not read; Prism has no
+SQLite dependency). That is a diagnostic weakness, not a correctness hole: an empty or bogus database cannot reach
+success, because success requires a readable sparse model that passes every check above and an undistorted
+dataset that matches it. It only means such a failure is reported at the mapper stage rather than at extraction.
 
 **Errors** are normalized: `toolchain_missing, unsupported_version, invalid_inputs, workspace_failed, colmap_failed,
 insufficient_camera_registration, brush_failed, gpu_unavailable, out_of_memory, cancelled, timeout, ply_missing,
@@ -296,8 +317,13 @@ test time.
 
 ## Known gaps
 
-- No real COLMAP build or Brush training has been run by this project; the approved COLMAP profile and the Brush
-  contract come from source audits (COLMAP 4.2.1, Brush v0.3.0) and are exercised against faithful fakes.
+- **No real COLMAP or Brush reconstruction has been run.** Code validated: yes; real COLMAP build, real Brush
+  training and real hardware performance validated: no. A real-tool reconstruction on supported hardware is the
+  production acceptance gate for Local Capture.
+- The approved COLMAP profile and the Brush contract come from source audits (COLMAP 4.2.1, Brush v0.3.0) and are
+  exercised against faithful fakes.
+- The COLMAP database is checked for existence only (see "Camera reconstruction is validated"): diagnostic, not
+  correctness.
 - Only the `standard` profile exists; `draft`/`high` need validation on real scenes.
 - No video input (FFmpeg licensing/packaging is a separate decision).
 - Rendering the produced SPZ in a browser frame is not part of the automated tests; the SPZ is decoded by Spark's own

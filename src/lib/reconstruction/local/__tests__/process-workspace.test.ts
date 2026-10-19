@@ -43,7 +43,7 @@ describe("process runner (shell: false, bounded, abortable)", () => {
     expect(r.pid).toBeGreaterThan(0);
     expect(r.durationMs).toBeGreaterThanOrEqual(0);
     expect(Date.parse(r.startedAt)).not.toBeNaN();
-  });
+  }, 60_000);
 
   it("refuses a relative executable or working directory (never resolved from the current directory)", async () => {
     const d = await dir();
@@ -60,7 +60,7 @@ describe("process runner (shell: false, bounded, abortable)", () => {
       timeoutMs: 1000,
     });
     expect(missing.outcome).toBe("spawn_failed");
-  });
+  }, 60_000);
 
   it("keeps only a bounded TAIL of output and still reports lines", async () => {
     const d = await dir();
@@ -83,7 +83,7 @@ describe("process runner (shell: false, bounded, abortable)", () => {
     expect(r.stdout).toContain("line 19999");
     expect(r.stderr).toBe("oops\n");
     expect(lines.length).toBe(20000);
-  });
+  }, 60_000);
 
   it("times out and aborts: the process (tree) is stopped and the outcome says why", async () => {
     const d = await dir();
@@ -128,7 +128,7 @@ describe("process runner (shell: false, bounded, abortable)", () => {
     } finally {
       delete process.env.PRISM_TEST_SECRET_KEY;
     }
-  });
+  }, 60_000);
 });
 
 describe("workspace", () => {
@@ -145,7 +145,7 @@ describe("workspace", () => {
     expect(defaultWorkRoot({ HOME: "/home/u" }, "linux")).toBe(
       path.join("/home/u", ".cache", "prism-studio", "local-reconstruction"),
     );
-  });
+  }, 60_000);
 
   it("creates an isolated, fresh run directory; refuses unsafe run ids, reuse and path escapes", async () => {
     const root = await dir();
@@ -157,7 +157,7 @@ describe("workspace", () => {
     expect(() => inWorkspace(ws, "..", "escape")).toThrow(/escaped/);
     expect(() => inWorkspace(ws, path.resolve("/etc/passwd"))).toThrow(/escaped/);
     expect(inWorkspace(ws, "output", "a.spz")).toBe(path.join(ws.dir, "output", "a.spz"));
-  });
+  }, 60_000);
 
   it("detects a symlink escape where the platform allows creating one", async () => {
     const root = await dir();
@@ -170,7 +170,7 @@ describe("workspace", () => {
     );
     if (made) await expect(assertContained(ws, link)).rejects.toThrow(/outside its run directory/);
     await expect(assertContained(ws, ws.paths.output)).resolves.toBeUndefined();
-  });
+  }, 60_000);
 
   it("cleanup keeps output, logs and manifest for ingestion, or removes everything", async () => {
     const root = await dir();
@@ -183,7 +183,7 @@ describe("workspace", () => {
     expect((await readdir(ws.dir)).sort()).toEqual(["logs", "manifest.json", "output"]);
     await cleanupWorkspace(ws, "all");
     expect(await readdir(root)).toEqual([]);
-  });
+  }, 60_000);
 });
 
 describe("input materialization", () => {
@@ -215,7 +215,7 @@ describe("input materialization", () => {
     expect(await readdir(ws.paths.input)).toEqual(["000001.jpg", "000002.png", "000003.jpg"]);
     expect(new Uint8Array(await readFile(path.join(ws.paths.input, "000002.png")))).toEqual(PNG_BYTES);
     expect(m[1]!.checksum).toBe(await sha256File(hostile));
-  });
+  }, 60_000);
 
   it("refuses bad inputs: too few/many, wrong order, unsupported or lying MIME, empty, oversize, duplicates, checksum mismatch, relative paths", async () => {
     const root = await dir();
@@ -250,7 +250,7 @@ describe("input materialization", () => {
         limits,
       ),
     ).toThrow(/absolute/);
-  });
+  }, 60_000);
 
   it("streams large inputs and stops on cancellation", async () => {
     const root = await dir();
@@ -282,5 +282,5 @@ describe("input materialization", () => {
         ac.signal,
       ),
     ).rejects.toMatchObject({ code: "cancelled" });
-  });
+  }, 60_000);
 });

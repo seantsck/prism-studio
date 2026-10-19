@@ -87,10 +87,11 @@ tests generate their Gaussian data programmatically.
 ## External tools for local reconstruction (Phase 2F M2D.3A): not distributed
 
 Prism Studio does **not** include, bundle, download or install COLMAP or Brush. The operator installs them and Prism
-invokes them as separate processes; their licences are the operator's to observe:
+invokes them as separate processes. They are supported external tooling, not Prism-distributed dependencies; their
+licences are the operator's to observe:
 
 - **COLMAP** 4.2.1 (https://github.com/colmap/colmap, new BSD for COLMAP itself; dependencies under their own
-  licences, including LGPL-2.1+/GPL-2+ SuiteSparse components). Prism supports only an operator-built, provenance-
-  verified CPU profile; official prebuilt archives are not supported (they compile in SiftGPU, licensed for
+  licences, including LGPL-2.1+/GPL-2+ SuiteSparse components in the operator's build). Prism supports only a
+  Prism-verified external build (operator-built, restricted-dependency CPU profile, provenance-verified); official prebuilt archives are not supported (they compile in SiftGPU, licensed for
   educational, research and non-profit use only, and AGPL-3.0 LSD). See `docs/local-reconstruction.md`.
 - **Brush** v0.3.0 (https://github.com/ArthurBrussee/brush, Apache-2.0).

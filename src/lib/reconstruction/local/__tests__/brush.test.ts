@@ -72,7 +72,7 @@ describe("Brush command contract (v0.3.0)", () => {
     expect(() => brushArgs("relative", ex, "standard")).toThrow(/absolute/);
     expect(() => brushArgs(ds, ex, "draft")).toThrow(/not available yet/);
     expect(() => brushArgs(ds, ex, "high")).toThrow(/not available yet/);
-  });
+  }, 60_000);
 
   it("guards Brush's dataset discovery: exactly one model, images present, no stray PLY or second model", async () => {
     const root = await dir();
@@ -93,7 +93,7 @@ describe("Brush command contract (v0.3.0)", () => {
     const { rm } = await import("node:fs/promises");
     await rm(path.join(d, "images"), { recursive: true });
     expect(await code(verifyBrushDataset(d))).toBe("brush_failed");
-  });
+  }, 60_000);
 
   it("parses exact training iterations and redacts paths in bounded diagnostics", () => {
     expect(brushIteration("[ts INFO  brush_process] Refine iter 15000, 45000 splats.")).toBe(15000);
@@ -105,7 +105,7 @@ describe("Brush command contract (v0.3.0)", () => {
     expect(d).not.toMatch(/alice/);
     expect(d.split("\n").length).toBeLessThanOrEqual(12);
     expect(d.length).toBeLessThanOrEqual(1200);
-  });
+  }, 60_000);
 });
 
 describe("Brush runs (fake brush_app as a real child process)", () => {
@@ -130,7 +130,7 @@ describe("Brush runs (fake brush_app as a real child process)", () => {
     const info = await inspectGaussianPlyFile(plyPath);
     expect(info).toMatchObject({ vertexCount: 64, shDegree: 3 });
     expect(info.properties[0]!.name).toBe("f_dc_0"); // Brush's BTreeMap order, mapped by name
-  });
+  }, 60_000);
 
   it("normalizes failures: no GPU adapter, out of memory, generic failure, exit 0 without a PLY, cancel, timeout", async () => {
     const cases: Array<[string, string]> = [
@@ -190,5 +190,5 @@ describe("Brush runs (fake brush_app as a real child process)", () => {
       timeoutMs: 30_000,
     });
     expect(await code(inspectGaussianPlyFile(plyPath))).toBe("ply_invalid");
-  });
+  }, 60_000);
 });

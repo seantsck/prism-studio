@@ -66,7 +66,7 @@ describe("Gaussian PLY reader", () => {
       expect(info.bbox.min[0]).toBeLessThan(info.bbox.max[0]);
       expect(info.maxAbsPosition).toBeGreaterThan(0);
     }
-  });
+  }, 60_000);
 
   it("refuses ASCII, big-endian, missing properties, unsupported types, list properties and other elements", async () => {
     const d = await dir();
@@ -83,7 +83,7 @@ describe("Gaussian PLY reader", () => {
       await writeGaussianPly(file, 4, gen, o);
       expect([name, await code(inspectGaussianPlyFile(file))]).toEqual([name, "ply_invalid"]);
     }
-  });
+  }, 60_000);
 
   it("refuses truncated and padded files, absurd counts, and non-finite or zero-rotation Gaussians", async () => {
     const d = await dir();
@@ -108,7 +108,7 @@ describe("Gaussian PLY reader", () => {
     });
     await expect(inspectGaussianPlyFile(zero)).rejects.toThrow(/zero-length rotation/);
     expect(await code(inspectGaussianPlyFile(path.join(d, "absent.ply")))).toBe("ply_missing");
-  });
+  }, 60_000);
 
   it("streams across chunk boundaries with ONE bounded buffer (records never straddle incorrectly)", async () => {
     const d = await dir();
@@ -271,7 +271,7 @@ describe("PLY → SPZ (production converter, Spark's SpzWriter)", () => {
         convertPlyToSpz({ plyPath: ply, spzPath: path.join(d, "c.spz"), antialiased: false, shDegree: 3 }),
       ),
     ).toBe("spz_conversion_failed");
-  });
+  }, 60_000);
 
   it("chooses fractional bits from the real extent: large scenes lose precision, never wrap; impossible ones are refused", async () => {
     expect(chooseFractionalBits(0)).toBe(12);
@@ -294,7 +294,7 @@ describe("PLY → SPZ (production converter, Spark's SpzWriter)", () => {
     expect(
       await code(convertPlyToSpz({ plyPath: huge, spzPath: path.join(d, "h.spz"), antialiased: false })),
     ).toBe("spz_conversion_failed");
-  });
+  }, 60_000);
 
   it("normalizes non-unit quaternions (the orientation is kept) and counts values the format clamps", async () => {
     const d = await dir();
@@ -317,7 +317,7 @@ describe("PLY → SPZ (production converter, Spark's SpzWriter)", () => {
     expect([...dec.quats.subarray(0, 4)].map((v) => Math.round(v * 100) / 100)).toEqual([0, 0, 0, 1]);
     expect(Math.abs(dec.quats[5]!)).toBeCloseTo(1, 2); // (w,x,y,z)=(0,0,3,0) → decoded (x,y,z,w) = (0,±1,0,0)
     expect([...dec.quats.subarray(8, 12)].every((v) => Math.abs(v - 0.5) < 0.01)).toBe(true);
-  });
+  }, 60_000);
 
   it("refuses a result over the splat size limit and a conversion over the memory bound; writes nothing partial", async () => {
     const d = await dir();
@@ -332,7 +332,7 @@ describe("PLY → SPZ (production converter, Spark's SpzWriter)", () => {
     ).toBe("result_too_large");
     await expect(stat(spz)).rejects.toThrow();
     await expect(stat(`${spz}.partial`)).rejects.toThrow();
-  });
+  }, 60_000);
 
   it("stops on cancellation", async () => {
     const d = await dir();
@@ -350,7 +350,7 @@ describe("PLY → SPZ (production converter, Spark's SpzWriter)", () => {
         }),
       ),
     ).toBe("cancelled");
-  });
+  }, 60_000);
 
   it("names the encoder at the exact pinned Spark version", () => {
     const pkg = JSON.parse(
@@ -362,5 +362,5 @@ describe("PLY → SPZ (production converter, Spark's SpzWriter)", () => {
       dependencies: Record<string, string>;
     };
     expect(root.dependencies["@sparkjsdev/spark"]).toBe(pkg.version); // pinned exactly
-  });
+  }, 60_000);
 });

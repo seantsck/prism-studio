@@ -6,6 +6,8 @@
 //   few                one model registering only 2 images
 //   no_model           mapper writes nothing and fails ("Failed to create any sparse model")
 //   corrupt            mapper writes a truncated images.bin
+//   foreign            mapper's model names an image that is not among the inputs
+//   duplicate          mapper's model registers the same image twice
 //   extract_fails      feature_extractor exits 1
 //   silent_extract     feature_extractor exits 0 but writes no database (COLMAP's partial-failure behaviour)
 //   slow_mapper        mapper never finishes (for cancel / timeout)
@@ -188,6 +190,10 @@ switch (cmd) {
     } else if (mode === "tie") {
       writeModel(path.join(out, "0"), names, 100, 2);
       writeModel(path.join(out, "1"), names, 400, 2);
+    } else if (mode === "foreign") {
+      writeModel(path.join(out, "0"), [...names.slice(1), "not-an-input.jpg"], 500, 2);
+    } else if (mode === "duplicate") {
+      writeModel(path.join(out, "0"), [...names, names[0]], 500, 2);
     } else if (mode === "few") {
       writeModel(path.join(out, "0"), names.slice(0, 2), 80, 2);
     } else {

@@ -170,6 +170,12 @@ export async function runColmap(o: ColmapRunOptions): Promise<{
   await mkdir(cmds.sparse, { recursive: true }); // mapper requires its output directory to exist
   await run(cmds.mapper, "mapper");
   const { chosen, discovered } = await selectSparseModel(cmds.sparse);
+  // every registered image must be one of OUR inputs, each at most once: a model naming other files (or the same
+  // file twice) must not count toward the registration thresholds
+  const inputNames = new Set((await readdir(o.imageDir)).map((n) => n.toLowerCase()));
+  const modelNames = chosen.images.map((i) => i.name.toLowerCase());
+  if (new Set(modelNames).size !== modelNames.length || modelNames.some((n) => !inputNames.has(n)))
+    throw fail("COLMAP's sparse model refers to images that are not this run's inputs.");
   const registered = chosen.images.length;
   const ratio = o.inputImages > 0 ? registered / o.inputImages : 0;
   const metrics: CameraReconstructionMetrics = {

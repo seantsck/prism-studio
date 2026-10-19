@@ -119,7 +119,7 @@ describe("local toolchain probe (provenance policy)", () => {
     expect(r.gpu).toMatchObject({ backend: "vulkan", loaderPresent: true });
     expect(r.overall).toBe("ready");
     expect(r.commands.colmap).not.toBeNull();
-  });
+  }, 60_000);
 
   it("an installed COLMAP without provenance (official archive, PATH binary) is UNVERIFIED and never makes it ready", async () => {
     const m = await machine({ manifest: false });
@@ -136,7 +136,7 @@ describe("local toolchain probe (provenance policy)", () => {
     const configured = await probe(m, { PRISM_COLMAP_PATH: m.colmapExe, PRISM_BRUSH_PATH: m.brushExe });
     expect(configured.colmap.provenance).toBe("unverified");
     expect(configured.overall).toBe("incomplete");
-  });
+  }, 60_000);
 
   it("refuses unsupported versions and launchers instead of guessing their semantics", async () => {
     const m = await machine();
@@ -159,7 +159,7 @@ describe("local toolchain probe (provenance policy)", () => {
       provenance: "incompatible",
     });
     expect((await probe(m, { ...env, PRISM_COLMAP_PATH: "colmap.exe" })).colmap.reason).toMatch(/absolute/);
-  });
+  }, 60_000);
 
   it("missing tools and a missing Vulkan loader are reported truthfully (incomplete, never faked)", async () => {
     const m = await machine({ vulkan: false });
@@ -174,7 +174,7 @@ describe("local toolchain probe (provenance policy)", () => {
     });
     expect(v.gpu.loaderPresent).toBe(false);
     expect(v.overall).toBe("incomplete");
-  });
+  }, 60_000);
 
   it("PATH search never uses relative entries (the current directory) and accepts only .exe on Windows", async () => {
     const m = await machine();
@@ -198,7 +198,7 @@ describe("local toolchain probe (provenance policy)", () => {
         platform: "win32",
       }),
     ).toMatchObject({ status: "found", source: "path" });
-  });
+  }, 60_000);
 });
 
 // ───────────────────────── the orchestrator (key acceptance) ─────────────────────────

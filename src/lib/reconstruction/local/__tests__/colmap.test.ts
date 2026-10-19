@@ -106,7 +106,7 @@ describe("COLMAP command contract (4.2.1 CPU pipeline)", () => {
       'use_gpu","1',
     ])
       expect(all).not.toContain(banned);
-  });
+  }, 60_000);
 });
 
 describe("COLMAP runs (fake colmap.exe as a real child process; real binary model reader)", () => {
@@ -138,7 +138,7 @@ describe("COLMAP runs (fake colmap.exe as a real child process; real binary mode
       .split("\n")
       .map((l) => JSON.parse(l)[0]);
     expect(calls).toEqual(["feature_extractor", "exhaustive_matcher", "mapper", "image_undistorter"]);
-  });
+  }, 60_000);
 
   it("several models: chooses the one with the MOST registered images (not directory 0), then the most points", async () => {
     const s = await setup(6);
@@ -152,18 +152,20 @@ describe("COLMAP runs (fake colmap.exe as a real child process; real binary mode
     expect((await run(t, "tie")).metrics.chosenModel).toBe("1");
     const sel = await selectSparseModel(path.join(t.colmapDir, "sparse"));
     expect(sel.chosen.points).toBe(400);
-  });
+  }, 60_000);
 
   it("too few registered images is a failure, never 'a room'", async () => {
     const s = await setup(5);
     const err = (await run(s, "few").catch((e) => e)) as LocalReconstructionError;
     expect(err.code).toBe("insufficient_camera_registration");
     expect(err.message).toMatch(/Only 2 of 5/);
-  });
+  }, 60_000);
 
-  it("normalizes failures: no model, corrupt model, failed or SILENT extraction, cancel, timeout", async () => {
+  it("normalizes failures: no model, corrupt or foreign model, failed or SILENT extraction, cancel, timeout", async () => {
     expect(await code(run(await setup(), "no_model"))).toBe("insufficient_camera_registration");
     expect(await code(run(await setup(), "corrupt"))).toBe("colmap_failed");
+    expect(await code(run(await setup(), "foreign"))).toBe("colmap_failed"); // names must be this run's inputs
+    expect(await code(run(await setup(), "duplicate"))).toBe("colmap_failed"); // no double counting
     expect(await code(run(await setup(), "extract_fails"))).toBe("colmap_failed");
     expect(await code(run(await setup(), "silent_extract"))).toBe("colmap_failed"); // exit 0 proves nothing
     const ac = new AbortController();

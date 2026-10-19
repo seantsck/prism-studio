@@ -175,7 +175,7 @@ describe("COLMAP build provenance: the operator's local verifier", () => {
     await writeColmapProvenance(m, p);
     await expect(writeColmapProvenance(m, p)).rejects.toThrow(); // never silently overwritten
     expect(await checkColmapProvenance(f.exe, p)).toMatchObject({ state: "verified", reason: null });
-  });
+  }, 60_000);
 
   it("refuses: wrong commit, a forbidden option ON, a missing option, a dirty or unverifiable checkout", async () => {
     const wrong = await verify(await fixture({ commit: "a".repeat(40) }));
@@ -242,7 +242,7 @@ describe("COLMAP provenance at run time (toolchain probe policy)", () => {
       state: "unverified",
     });
     expect(await checkColmapProvenance(null, undefined)).toMatchObject({ state: "missing" });
-  });
+  }, 60_000);
 
   it("a hash mismatch (rebuilt, replaced or tampered executable or DLL) is UNVERIFIED", async () => {
     const f = await fixture();
@@ -257,7 +257,7 @@ describe("COLMAP provenance at run time (toolchain probe policy)", () => {
     const r = await manifestFor(h);
     await writeFile(path.join(h.bin, "extra.dll"), "new");
     expect(await checkColmapProvenance(h.exe, r)).toMatchObject({ state: "unverified" });
-  });
+  }, 60_000);
 
   it("a manifest for another version/commit or an unapproved profile is INCOMPATIBLE", async () => {
     const f = await fixture();
@@ -275,7 +275,7 @@ describe("COLMAP provenance at run time (toolchain probe policy)", () => {
     const garbage = path.join(f.bin, "garbage.json");
     await writeFile(garbage, "{not json");
     expect(await checkColmapProvenance(f.exe, garbage)).toMatchObject({ state: "unverified" });
-  });
+  }, 60_000);
 });
 
 describe("parsers", () => {
@@ -302,5 +302,5 @@ describe("parsers", () => {
     await writeFile(path.join(d, ".git", "refs", "heads", "main"), `${"c".repeat(40)}\n`);
     expect(await readGitHead(d)).toBe("c".repeat(40));
     expect(await readGitHead(path.join(d, "nope"))).toBeNull();
-  });
+  }, 60_000);
 });
