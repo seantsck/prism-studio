@@ -186,8 +186,11 @@ test.describe("reconstruction jobs (mock provider, no provider cost)", () => {
     ).find((id) => !existing.includes(id))!;
     await expect(job(page, firstJob)).toHaveAttribute("data-status", /queued|submitting|running/);
     await expect(job(page, firstJob)).toHaveAttribute("data-status", "running", { timeout: 30_000 });
-    await expect(page.getByTestId("recon-progress").first()).toBeVisible({ timeout: 30_000 });
-    const p1 = Number(await page.getByTestId("recon-progress").first().getAttribute("data-progress"));
+    // progress is reported while it runs (read from THIS job's bar, after at least one provider poll)
+    const progressOf = async () =>
+      Number((await job(page, firstJob).getByTestId("recon-progress").getAttribute("data-progress")) ?? "0");
+    await expect.poll(progressOf, { timeout: 30_000 }).toBeGreaterThan(0);
+    const p1 = await progressOf();
 
     // navigate away and back: the SAME job resumes from its stored operation id
     await page.getByRole("link", { name: "← Locations" }).click();
