@@ -1,4 +1,4 @@
-# Local reconstruction engine (Phase 2F M2D.3A)
+# Local reconstruction: engine (M2D.3A) and same-host worker (M2D.3B)
 
 Free, local reconstruction of a Location from photographs:
 
@@ -21,11 +21,17 @@ the production acceptance gate for Local Capture requires at least one real reco
 downloads, installs or builds nothing. The operator installs the tools; Prism detects, verifies and invokes them.
 No binary, DLL, model or installer is in this repository.
 
-M2D.3A is the engine and its library/CLI boundary only (`src/lib/reconstruction/local/`). It has no database,
-storage or server-action code. Wiring it to `reconstruction_jobs` (a durable worker, claiming, progress,
-cancellation, the existing atomic ingestion and the Location UI) is M2D.3B. Until then `local_capture` stays
-unavailable in the web app, even on a machine whose toolchain is ready: a browser request must never start a
-30-minute reconstruction.
+M2D.3A is the engine (`src/lib/reconstruction/local/`): no database, storage or server-action code. M2D.3B adds the
+durable **local reconstruction worker** (`src/lib/reconstruction/local-worker/`, `npm run local:reconstruction-worker`)
+that runs queued `local_capture` jobs through the engine and the shared M2D.2 ingestion. A browser request never
+starts a reconstruction; see [the worker section](#the-local-reconstruction-worker-m2d3b).
+
+> **SAME-HOST ONLY.** The M2D.3B worker runs on the machine that runs the Prism server, with the same persistence
+> configuration, work root and installed tools, using that server's own database authority. That covers local
+> development, an operator-hosted workstation or server, and a future desktop deployment. It does **not** let a hosted
+> Prism (e.g. studio.prismsuite.io) run a reconstruction on a user's unrelated home PC: that needs **M2D.3C**, a
+> paired Local Agent with a scoped remote protocol. The worker must never be distributed to another machine with
+> Prism's database or Storage credentials.
 
 ## Supported tools
 
@@ -290,14 +296,110 @@ arguments; every tool argument comes from a fixed allow-list (the quality profil
 is taken from a user); Brush is only ever given a local directory (it also accepts URLs); COLMAP is only ever given
 commands that cannot download.
 
-## M2D.3B integration contract
+## The local reconstruction worker (M2D.3B)
 
-The worker will: claim a queued `local_capture` job with the existing compare-and-set (`queued → submitting`);
-probe the toolchain (`ready`, COLMAP `verified`); read the job's ordered sources from private storage (by value,
-checksums verified); call `runLocalReconstruction` with the job attempt as the run id and an `AbortSignal` tied to
-the job's cancellation; map stage progress into the job's progress; on success hand `splat.spz` (with its checksum
-and the run metadata as generation provenance) to the existing atomic ingestion; map engine error codes to job
-error codes; and clean the workspace after ingestion. Closing the browser is not part of this contract.
+A separate, long-lived Node process (`scripts/run-local-reconstruction-worker.mts`), never a browser tab, a server
+action or an ephemeral serverless function. Closing the browser does not stop a reconstruction.
+
+```
+Location → ordered photographs → Generate Reconstruction → job QUEUED (the web server runs nothing)
+  → worker claims it (queued → submitting, compare-and-set) → sources verified from private storage
+  → running → M2D.3A engine (COLMAP → Brush → PLY → SPZ) with throttled progress and a cancellation watch
+  → re-read, running → ingesting (compare-and-set) → shared M2D.2 ingestion (private Asset + immutable
+    reconstruction + job success, atomic) → succeeded → the user explicitly chooses Use as Spatial Environment
+```
+
+| Command                                               | What                                                    |
+| ----------------------------------------------------- | ------------------------------------------------------- |
+| `npm run local:reconstruction-worker`                 | run until Ctrl+C / SIGTERM                              |
+| `npm run local:reconstruction-worker -- --until-idle` | process the queued local jobs, then exit                |
+| `npm run local:reconstruction-worker -- --check`      | probe the toolchain and print readiness; claims nothing |
+
+**It refuses to start** unless `PRISM_LOCAL_RECONSTRUCTION_WORKER_ENABLED=1` (so a hosted deployment never starts
+local compute by accident), unless `PRISM_STUDIO_PERSISTENCE=supabase` (a separate process cannot share the server's
+in-memory repository; nothing fakes that), and unless `SUPABASE_DB_URL` targets the Prism Studio project.
+
+### Authority (same-host v1)
+
+The worker is an operator process beside the Prism server. It uses the server's own guarded database connection for
+exactly ONE narrow discovery query (id, project, owner and status of `local_capture` jobs in the states it acts on).
+Every read and write for a job runs as role `authenticated` **with the job owner's claims**, the same preamble a
+signed-in request uses, so RLS still decides every job, event, Asset and reconstruction row. Storage uses the
+existing worker credential (`PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY`, the generation worker's sink), and only an
+Asset row read under the owner's RLS, of the job's project, under that project's path prefix, is ever read. No
+credential reaches the browser. No database migration was needed: the worker uses `status`, `revision`,
+`provider_operation_id`, `provider_operation_json`, `progress`, events and the existing ingestion.
+`PRISM_LOCAL_RECONSTRUCTION_PROJECT_ID` optionally limits a worker to one project.
+
+### One worker, one job, one GPU
+
+- **Lock**: `<work root>/.worker.lock`, created exclusively. A second worker on the same root refuses to start while
+  the first is alive (checked with signal 0, never killed). A lock whose process is gone (crash, power loss) is
+  recovered; an unreadable one is refused.
+- **Identity**: `local-<sha256(hostname)[0:8]>-<random>`, never the raw hostname. A claim gets an opaque run id
+  (`lr-<job>-a<attempt>-<random>`, also the workspace name); the job's operation id is `local:<run id>`.
+- **One reconstruction at a time.** Queued jobs wait (the UI shows the worker as busy). Concurrency is an
+  architectural possibility, not a setting.
+- **Only `local_capture`** is ever discovered or claimed; a job of any other provider is refused even if discovery
+  returned it. The `queued → submitting` compare-and-set elects exactly one claimer, even across work roots.
+
+### Heartbeat and availability
+
+`<work root>/.worker-heartbeat.json` (`prism.local-reconstruction-worker.v1`), rewritten atomically every 5 s:
+schema, worker id, pid, start time, last heartbeat, worker version, an opaque work-root id (a hash, never the path),
+the toolchain readiness summary and whether a run is active. No database URL, credential, API key, source path or
+hostname. The Prism server only READS it (it never probes tools or starts the worker on a page load).
+
+`local_capture` is **available** only when BOTH the worker's M2D.3A probe says the toolchain is ready (a VERIFIED
+Prism external COLMAP build, a supported Brush, a Vulkan loader) AND its heartbeat is fresh (at most 15 s old) and
+from this work root. Otherwise the UI says why (worker offline / not enabled; COLMAP missing / unverified /
+incompatible; Brush missing / incompatible; GPU unavailable) and Generate is disabled. A queued job is never failed
+because the worker is away: it waits. When available, Local Capture is the pre-selected free default; World Labs
+stays optional and paid and is never chosen automatically.
+
+### Inputs, progress, cancellation
+
+- **Inputs**: 3-300 JPEG/PNG photographs (refused at creation otherwise). Before any tool runs, every source is read
+  from private storage server-side and checked against the job's frozen snapshot (Asset exists, same project, image,
+  same MIME, same checksum, and the bytes hash to it), then staged and handed to the engine, which verifies them
+  again. Nothing is made public; no signed URL is created or stored. The staged copies are removed as soon as the
+  engine has its own.
+- **Progress**: written at most every ~1.5 s within a stage, immediately on a stage change; only stage changes are
+  events (never every Brush iteration). `provider_operation_json` holds runner, worker id, run id, work-root id,
+  quality, tool versions (COLMAP version, source commit and binary sha256; Brush version), stage and a safe message.
+- **Cancel**: the web marks the job cancelled (compare-and-set); the worker re-reads the job every ~1.5 s, aborts
+  the engine (COLMAP/Brush process trees are killed), removes the workspace and writes nothing.
+- **Cancel vs. finish**: before importing, the worker re-reads the job and moves it `running → ingesting` by
+  compare-and-set. A cancel that won is final (the result is discarded); an import that won makes a later cancel
+  impossible (a finished job is immutable history).
+
+### Import, calibration, provenance, cleanup
+
+The validated SPZ goes through `ingestReconstructionResult` (`src/server/reconstruction-jobs.ts`), the SAME function
+hosted results use: size cap, `inspectSplat`, sha256 (must equal the engine's), private Asset, immutable generated
+reconstruction and job success, all-or-nothing, one reconstruction per job. Calibration is **unknown**
+(`units: unknown`, `metresPerSourceUnit: null`, `scaleMethod: unknown`): COLMAP/Brush scale is arbitrary and never
+read as metres; manual calibration stays authoritative. Generation provenance: engine, runner, quality, COLMAP
+version / source commit / binary sha256, Brush version, SPZ encoder and version, inputs, registered images,
+registration ratio, sparse points, SH degree, `lossless: false`, clamped counts, worker id, run id. Never a path, a
+username, raw tool output or a credential.
+
+After a successful import the whole run directory is removed (copies, COLMAP database and models, undistorted
+images, raw PLY, conversion data): the private Asset is the durable copy. A failed run keeps only its bounded log and
+failure manifest. The sweeper removes worker run directories (`lr-*`) older than 3 days, never the active one.
+
+### Shutdown, crash and restart
+
+- **SIGINT / SIGTERM / SIGBREAK / SIGHUP**: stop claiming, abort the active run, wait up to 20 s for it to record
+  `failed: provider_failed` ("Local reconstruction worker stopped before the run completed. Retry creates a new
+  attempt.") and clean up, then remove the heartbeat and release the lock. A second signal forces exit.
+- **Restart** (after a crash or power loss): holding the lock, the worker looks at the `submitting`, `running` and
+  `ingesting` local jobs **claimed from this work root** (other roots' jobs belong to their own worker).
+  - A retained run is imported (and only imported) when everything matches: the run manifest (schema, succeeded,
+    this run id), the job's ordered source checksums, the tool provenance recorded on the job and the still-verified
+    COLMAP build, and the output (at most 50 MB, sha256 against the manifest, `inspectSplat`, Gaussian count).
+  - Anything else is failed with the message above. COLMAP/Brush are **never** re-run automatically; Retry (the
+    user's choice) creates a new attempt. An arbitrary SPZ in the work root is never imported.
 
 ## Tests (no GPU, no real tool, no network)
 
@@ -306,14 +408,18 @@ the fake COLMAP writes COLMAP's real binary model format. Only the external tool
 converter and `inspectSplat` are the production code. Test fixtures (Gaussian PLYs up to ~24 MB) are generated at
 test time.
 
-| What                                                                                                                                                                                                       | Where                                       |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| process runner, workspace, input materialization                                                                                                                                                           | `local/__tests__/process-workspace.test.ts` |
-| PLY reader, PLY → SPZ round trip through Spark's `SpzReader`, range, quaternions, SH, size and memory bounds                                                                                               | `local/__tests__/ply-spz.test.ts`           |
-| COLMAP build provenance verifier and run-time policy                                                                                                                                                       | `local/__tests__/colmap-provenance.test.ts` |
-| COLMAP commands, model selection, registration thresholds, failures, cancellation                                                                                                                          | `local/__tests__/colmap.test.ts`            |
-| Brush commands, dataset guards, failure normalization                                                                                                                                                      | `local/__tests__/brush.test.ts`             |
-| toolchain probe and the end-to-end engine (synthetic photos → fake COLMAP → fake Brush → real PLY parser → real SPZ converter → `inspectSplat` → Spark `SpzReader`), cancellation at each stage, retention | `local/__tests__/engine.test.ts`            |
+| What                                                                                                                                                                                                                                                                                                    | Where                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| process runner, workspace, input materialization                                                                                                                                                                                                                                                        | `local/__tests__/process-workspace.test.ts` |
+| PLY reader, PLY → SPZ round trip through Spark's `SpzReader`, range, quaternions, SH, size and memory bounds                                                                                                                                                                                            | `local/__tests__/ply-spz.test.ts`           |
+| COLMAP build provenance verifier and run-time policy                                                                                                                                                                                                                                                    | `local/__tests__/colmap-provenance.test.ts` |
+| COLMAP commands, model selection, registration thresholds, failures, cancellation                                                                                                                                                                                                                       | `local/__tests__/colmap.test.ts`            |
+| Brush commands, dataset guards, failure normalization                                                                                                                                                                                                                                                   | `local/__tests__/brush.test.ts`             |
+| toolchain probe and the end-to-end engine (synthetic photos → fake COLMAP → fake Brush → real PLY parser → real SPZ converter → `inspectSplat` → Spark `SpzReader`), cancellation at each stage, retention                                                                                              | `local/__tests__/engine.test.ts`            |
+| M2D.3B: worker identity, heartbeat (fresh / stale / malformed / other root, atomic, safe content), single-worker lock, availability = toolchain ready AND worker online                                                                                                                                 | `local-worker/__tests__/runtime.test.ts`    |
+| M2D.3B: worker lifecycle with the job service as the web side (browser close, offline queueing, claim race, provider restriction, source checksums, cancel, cancel-vs-import race, shutdown, crash before / after a validated result, retry, GPU failure, one job at a time, sweeper, no paid fallback) | `local-worker/__tests__/worker.test.ts`     |
+| M2D.3B: the REAL worker entry point as a separate process on the real database and private Storage (offline refusal, no-client success, progress, private SPZ, generated reconstruction, anonymous refused, cancel, hard crash → truthful failure → Retry)                                              | `npm run db:local-worker`                   |
+| M2D.3B: the panel's worker / toolchain states (a heartbeat file stands in for the worker)                                                                                                                                                                                                               | `e2e/supabase-local-worker.spec.ts`         |
 
 ## Known gaps
 
@@ -328,4 +434,10 @@ test time.
 - No video input (FFmpeg licensing/packaging is a separate decision).
 - Rendering the produced SPZ in a browser frame is not part of the automated tests; the SPZ is decoded by Spark's own
   `SpzReader` and accepted by `inspectSplat`, the gate the runtime loader uses.
-- The worker, job integration and UI are M2D.3B.
+- **Same-host only** (M2D.3B): hosted Prism → a user's own workstation needs the M2D.3C paired Local Agent.
+- A job claimed from a work root whose worker never comes back stays `running` until the user cancels it (another
+  root's worker never takes it over).
+- A crash in the middle of storing the result can leave an orphan private object (the same compensation limits as
+  M2D.2 ingestion); the job itself is resolved on restart.
+- Storing a validated result is retried 3 times in-process; after that the job fails `ingest_failed` (the result is
+  not kept for a later import).

@@ -12,7 +12,7 @@ approval. No real provider is called by any test.
 ```
 Prism Reconstruction Jobs (this document: jobs, ingestion, provenance)
     ├─ Local adapters                     free, run on the user's own machine
-    │    └─ local_capture  [M2D.3]        photos / video → COLMAP poses → Brush training → PLY → SPZ
+    │    └─ local_capture  [M2D.3]        photos → COLMAP poses → Brush training → PLY → SPZ (same-host worker)
     ├─ Import  [M2D.1]                    any .spz / .ply / .splat the user already has
     └─ Optional hosted adapters           paid, never required, never selected or used automatically
          └─ worldlabs_marble              World Labs Marble API (the user's own key)
@@ -105,7 +105,8 @@ substituted, and can still be cancelled locally.
 | `worldlabs_marble`    | hosted / `provider_api` | paid | single image, multi-image | optional: key + `WORLDLABS_RECONSTRUCTION_ENABLED` + the spend gate |
 | `mock_reconstruction` | mock / `provider_api`   | free | single image, multi-image | development and test servers only                                   |
 
-The UI pre-selects a provider only when a free, local provider is ready (`local_capture` once M2D.3 lands). A paid
+The UI pre-selects a provider only when a free, local provider is ready (`local_capture` when its worker is online
+and its toolchain verified). A paid
 provider, or the mock, is never pre-selected, even when it is the only one available. `meshy` (0036's reserved id)
 has no adapter and is not offered; `world_bundle` is not a result kind; ArtCraft and TripoSplat are not providers.
 
@@ -113,12 +114,13 @@ has no adapter and is not offered; `world_bundle` is not a result kind; ArtCraft
 
 - `provider_api`: an external service runs the operation. Any Prism server request may advance it (polls are
   rate-limited per job), so a job resumes from its stored operation id after a navigation, a closed tab or a restart.
-- `local_worker`: a separate Prism worker process on the same machine runs it. Web requests never execute or poll a
-  local job: `submitJob` and `refreshJob` leave it exactly as the worker wrote it (unit-tested). The M2D.3 worker
-  will claim `queued` jobs with the same compare-and-set (`queued → submitting`), run the toolchain, write
-  `running` progress, and hand the result to the same atomic ingestion. Because it does not depend on a browser, a
-  10–30 minute reconstruction keeps running with no page open. It must re-read the job before every write (a user
-  may cancel a queued or running local job; the compare-and-set and the terminal-state guard make a late write fail).
+- `local_worker`: a separate Prism worker process on the same machine runs it (M2D.3B,
+  `npm run local:reconstruction-worker`). Web requests never execute or poll a local job: `submitJob` and
+  `refreshJob` leave it exactly as the worker wrote it. The worker claims `queued` jobs with the same compare-and-set
+  (`queued → submitting`), runs the M2D.3A engine, writes throttled `running` progress, re-reads the job every ~1.5 s
+  (a cancel stops COLMAP/Brush) and hands the result to the same atomic ingestion. Because it does not depend on a
+  browser, a 10–30 minute reconstruction keeps running with no page open. Same-host only; authority, recovery and
+  limits: [`docs/local-reconstruction.md`](./local-reconstruction.md#the-local-reconstruction-worker-m2d3b).
 
 ## World Labs / Marble (`src/lib/reconstruction/worldlabs.ts`)
 
@@ -199,7 +201,9 @@ public addresses only, bounded redirects, byte cap, timeout) → checksum → `i
 (`3d` / `spatial_reconstruction` / `provider_output`) → immutable generated reconstruction **and** job success in ONE
 database transaction. Any failure removes what the attempt stored; a transient failure keeps the job `ingesting`
 and is retried on later polls (at most 3 times) without ever regenerating; a second ingestion of the same job is
-refused by a unique index on `job_id`.
+refused by a unique index on `job_id`. The persistence core (`ingestReconstructionResult`: size cap, validation,
+checksum, private Asset, immutable reconstruction, job success, cleanup) is shared with the local worker (M2D.3B),
+which hands it the engine's validated SPZ instead of a download.
 
 ## PLY → SPZ (implemented in M2D.3A)
 
@@ -239,9 +243,8 @@ their own are Location history, not Shot truth. A visible generated splat still 
 
 - No live World Labs call has been made from Prism (by design in M2D.2); the adapter is built to the public docs and
   proved against a fake HTTP layer only. The first live use needs an operator decision.
-- Local capture is registered but not executable from the web app. M2D.3A built the local engine and the real
-  toolchain probe ([`docs/local-reconstruction.md`](./local-reconstruction.md)); the durable worker, job
-  integration and UI are M2D.3B, so `local_capture` still reports "not installed". No video upload path yet.
+- Local capture runs only through the SAME-HOST worker (M2D.3B): hosted Prism → a user's own PC needs the M2D.3C
+  paired Local Agent. No real COLMAP/Brush reconstruction has been run yet (fake tools only). No video input yet.
 - Mesh results (`collider_mesh_url`) are not imported; only Gaussian splats are.
 - The World Labs price table is static (checked 2026-10-19); a price change needs a code update.
 - No webhooks; no provider-side cleanup of uploaded media assets.
