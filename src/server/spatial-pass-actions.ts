@@ -1,5 +1,6 @@
 "use server";
 
+import { hasVisibleSplat, SPLAT_PASSES_BLOCKED_MESSAGE } from "@/domain/previs/splat";
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { ZodError } from "zod";
@@ -153,6 +154,10 @@ export async function captureSpatialPassBundle(
       throw new UserFacingError(
         "The character blocking is stale for the current set. Re-anchor it before capturing control passes.",
       );
+
+    // A visible Gaussian splat is spatial geometry these passes cannot represent exactly. Refuse rather than ship
+    // depth, ids or masks that silently omit the environment.
+    if (hasVisibleSplat(scene.document.objects)) throw new UserFacingError(SPLAT_PASSES_BLOCKED_MESSAGE);
 
     // the camera source, re-derived from SAVED state (never the navigation camera, never a client camera)
     let camera: ControlCameraSource;

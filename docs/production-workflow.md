@@ -181,3 +181,20 @@ Production Frame from the same camera.
 - **Frozen in the package.** `spatialReference.controlPasses` carries the current bundle by value (asset ids, manifest,
   camera, per-Character mask identity). Nothing is injected into provider prompts and no provider is called: later
   adapters decide how to use depth and masks.
+
+## A reconstructed environment in the 3D Set (Phase 2F M2D.1)
+
+A Location can carry a **Gaussian-splat environment** reconstructed elsewhere (Prism does not create one yet).
+
+1. In the Location's 3D Set choose **Import Gaussian splat** (`.splat`, `.spz` or a Gaussian `.ply`, up to 50 MB).
+   Optionally tick the Location reference images it was reconstructed from: that is provenance, not a Shot reference.
+2. The file is validated, stored as a **private** Asset with an immutable reconstruction record, and placed in the Set.
+3. Move, rotate and scale it like any object; **Set as ground level** and **Flip 180° (X)** help with raw reconstructions.
+   Prism never assumes the splat is in metres: enter **metres per source unit** to make its scale metric (or leave it
+   "unknown"). **Lock environment** makes it safe to block Characters and move the camera around it.
+4. Link the Production Camera, add Character proxies and render master frames and previs exactly as before: the
+   environment is part of them, and a Character proxy stands in front of or behind it correctly.
+5. **Capture Control Passes is unavailable while the splat is visible** (exact depth and masks cannot include a splat yet).
+   Hide the splat to capture mesh-and-Character passes.
+6. The GenerationPackage records the environment (`spatialReference.spatialEnvironment`) by value; moving the splat later
+   produces a different package and leaves the earlier one untouched. No prompt text is added.

@@ -1220,6 +1220,12 @@ async function deleteAsset_impl(form: FormData) {
   if (await (await getPrevisRepo()).spatialPassUsesAsset(asset.id)) {
     throw new UserFacingError("This asset can't be deleted: it belongs to a spatial control-pass bundle.");
   }
+  // A Location's spatial reconstruction (a Gaussian splat and the reference images it was built from) is origin truth.
+  if (await (await getPrevisRepo()).reconstructionUsesAsset(asset.id)) {
+    throw new UserFacingError(
+      "This asset can't be deleted: it belongs to a spatial reconstruction of a location.",
+    );
+  }
   // Derived-media lineage and QA history also pin an asset: nothing is orphaned silently.
   const pins = await (await getMediaQaRepo()).assetPins(asset.id);
   if (pins.length > 0) {

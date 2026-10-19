@@ -15,6 +15,7 @@ import {
   type DerivedCharacterMask,
   type ObjectManifest,
 } from "@/domain/previs/spatial-passes";
+import { SPLAT_PASSES_BLOCKED_MESSAGE } from "@/domain/previs/splat";
 import type { SpatialSceneAdapter } from "./scene-adapter";
 
 /**
@@ -50,6 +51,8 @@ export class SpatialCaptureError extends Error {}
 
 export function renderSpatialCapture(req: CaptureRequest): CapturedPasses {
   const entities = req.adapter.productionEntities();
+  // exact depth / ids / masks cannot include a Gaussian splat yet: refuse instead of silently omitting the environment
+  if (entities.splats.length > 0) throw new SpatialCaptureError(SPLAT_PASSES_BLOCKED_MESSAGE);
   const characters = entities.characterIds.map((characterId) => {
     const saved = req.savedFigures.find((f) => f.characterId === characterId);
     if (!saved) throw new SpatialCaptureError("Save the character blocking before capturing control passes.");

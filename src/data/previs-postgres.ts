@@ -1,4 +1,11 @@
 import type { Pool, PoolClient } from "pg";
+import {
+  calibrationSchema,
+  canonicalSources,
+  reconstructionFingerprintOf,
+  type NewSpatialReconstruction,
+  type SpatialReconstructionRecord,
+} from "@/domain/previs/splat";
 import { pickCurrentClip, type StoredAudioMix } from "@/domain/previs/audio-mix";
 import {
   blockingFingerprint,
@@ -225,6 +232,32 @@ const mapBundle = (r: Row): SpatialPassBundleRecord => ({
   createdAt: iso(r.created_at),
 });
 
+const mapReconstruction = (r: Row): SpatialReconstructionRecord => ({
+  id: String(r.id),
+  projectId: String(r.project_id),
+  locationId: String(r.location_id),
+  schemaVersion: "prism.spatial-reconstruction.v1",
+  method: r.method as SpatialReconstructionRecord["method"],
+  resultKind: r.result_kind as SpatialReconstructionRecord["resultKind"],
+  resultAssetId: String(r.result_asset_id),
+  resultChecksum: str(r.result_checksum),
+  resultFormat: r.result_format as SpatialReconstructionRecord["resultFormat"],
+  gaussianCount:
+    r.gaussian_count === null || r.gaussian_count === undefined ? null : Number(r.gaussian_count),
+  sources: canonicalSources(
+    (Array.isArray(r.source_assets_json) ? r.source_assets_json : []).map(
+      (s: { assetId: string; checksum: string | null }) => ({
+        assetId: String(s.assetId),
+        checksum: s.checksum ?? null,
+      }),
+    ),
+  ),
+  calibration: calibrationSchema.parse(r.calibration_json),
+  fingerprint: String(r.reconstruction_fingerprint),
+  createdBy: str(r.created_by),
+  createdAt: iso(r.created_at),
+});
+
 /** RLS-bound: every statement runs under the caller's JWT claims via the preamble (owner-only policies). */
 export class PostgresPrevisData implements PrevisRepository {
   constructor(
@@ -404,6 +437,11 @@ export class PostgresPrevisData implements PrevisRepository {
         [projectId],
       );
       const adopted = new Map(f.rows.map((r) => [String(r.shot_id), String(r.asset_id)]));
+      const reconRows = await c.query(
+        "select * from location_spatial_reconstructions where project_id = $1 order by created_at desc",
+        [projectId],
+      );
+      const reconstructions = reconRows.rows.map(mapReconstruction);
       const bundleRows = await c.query(
         "select * from shot_spatial_pass_bundles where project_id = $1 order by created_at desc",
         [projectId],
@@ -524,6 +562,7 @@ export class PostgresPrevisData implements PrevisRepository {
             });
             return cur ? buildControlPassesReference(cur) : null;
           })(),
+          reconstructions: reconstructions.filter((rec) => rec.locationId === scene.locationId),
         });
       }
       return out;
@@ -894,6 +933,85 @@ export class PostgresPrevisData implements PrevisRepository {
         [assetId],
       );
       return (r.rowCount ?? 0) > 0;
+    });
+  }
+
+  async listReconstructions(locationId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        "select * from location_spatial_reconstructions where location_id = $1 order by created_at desc, id desc",
+        [locationId],
+      );
+      return r.rows.map(mapReconstruction);
+    });
+  }
+
+  async getReconstruction(id: string) {
+    return this.tx(async (c) => {
+      const r = await c.query("select * from location_spatial_reconstructions where id = $1", [id]);
+      return r.rows[0] ? mapReconstruction(r.rows[0]) : null;
+    });
+  }
+
+  async reconstructionUsesAsset(assetId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        `select 1 from location_spatial_reconstructions
+          where result_asset_id = $1 or source_assets_json @> jsonb_build_array(jsonb_build_object('assetId', $1::text))
+          limit 1`,
+        [assetId],
+      );
+      return r.rows.length > 0;
+    });
+  }
+
+  async recordReconstruction(input: NewSpatialReconstruction) {
+    return this.tx(async (c) => {
+      const calibration = calibrationSchema.parse(input.calibration);
+      const sources = canonicalSources(input.sources);
+      const fp = reconstructionFingerprintOf({
+        locationId: input.locationId,
+        method: input.method,
+        resultKind: input.resultKind,
+        resultAssetId: input.resultAssetId,
+        resultChecksum: input.resultChecksum,
+        sources,
+        calibration,
+      });
+      try {
+        const r = await c.query(
+          `insert into location_spatial_reconstructions
+             (id, project_id, location_id, schema_version, method, result_kind, result_asset_id, result_checksum,
+              result_format, gaussian_count, source_assets_json, calibration_json, reconstruction_fingerprint,
+              created_by, created_at)
+           values ($1,$2,$3,'prism.spatial-reconstruction.v1',$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14)
+           returning *`,
+          [
+            input.id,
+            input.projectId,
+            input.locationId,
+            input.method,
+            input.resultKind,
+            input.resultAssetId,
+            input.resultChecksum,
+            input.resultFormat,
+            input.gaussianCount,
+            JSON.stringify(sources),
+            JSON.stringify(calibration),
+            fp,
+            input.userId,
+            input.now,
+          ],
+        );
+        return mapReconstruction(r.rows[0]);
+      } catch (e) {
+        if ((e as { code?: string }).code === "23505")
+          throw new PrevisError(
+            "conflict",
+            "That exact reconstruction is already recorded for this location.",
+          );
+        throw e;
+      }
     });
   }
 

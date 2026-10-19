@@ -645,3 +645,181 @@ assets; an update guard makes bundles immutable). `assets` gains type `data` and
 - A GLB that fails to load makes the saved Set and the live scene disagree; capture then stops with a conflict.
 - Depth needs WebGL2 float render targets (`EXT_color_buffer_float`); without it capture refuses.
 - Provider conditioning (depth/mask upload, control nets, inpainting, compositing) is intentionally not built.
+
+## Gaussian-splat Location environments (Phase 2F M2D.1)
+
+A Location's 3D Set can hold a **reconstructed spatial environment**: a Gaussian splat. M2D.1 builds the provider-neutral
+runtime for it: **store, display, transform, render and persist**. It does not create reconstructions (no image-to-3D
+provider, no photogrammetry, no NeRF training: that is M2D.2).
+
+```
+Location → Spatial environment → Import Gaussian splat → private Asset (+ immutable reconstruction record)
+         → one Set object → move / rotate / scale / calibrate → Production Camera → blocking → master frame → local previs
+```
+
+The splat belongs to the **Location**, not to a Shot. Shot-specific Character blocking remains an overlay exactly as in M2B.
+A splat is **spatial environment data**: not a flat reference image, not a generated video, not Character identity, and
+not a substitute for explicit Set geometry everywhere. Prism always knows whether a scene contains mesh geometry,
+splats or both, and never claims capabilities the splat renderer cannot provide (see _M2C interop_).
+
+### Runtime: Spark, one renderer, one context
+
+|                      |                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Package              | `@sparkjsdev/spark` **0.1.10**, exact; MIT, © 2025 World Labs Technologies, Inc. (`LICENSE` in the package; recorded in `THIRD_PARTY_NOTICES.md`)                                                                                                                                                                                                                                |
+| Why 0.1.10           | the version the pinned ArtCraft commit used (`^0.1.10`); Spark 2.x peers `three ^0.180` and Prism pins `three ^0.171`                                                                                                                                                                                                                                                            |
+| Renderer             | the editor's **existing** `THREE.WebGLRenderer`. `SparkRenderer({ renderer })` adds one object to the scene and draws splats in the same pass as meshes. **No second renderer, canvas, iframe or WebGL context** (asserted in the E2E: the context count is unchanged by importing a splat and a remount costs what a page load costs)                                           |
+| Network              | none. The bundle has no executable URL (its only URLs are reference links in source comments); its sort worker and WebAssembly are inlined. Splat bytes come from Prism's authenticated Asset route                                                                                                                                                                              |
+| Loading              | `fileBytes` (an in-memory buffer): **no URL, no Blob URL**, so there is nothing to persist or revoke                                                                                                                                                                                                                                                                             |
+| Lazy                 | imported on the first splat load; a Set without a splat never downloads it                                                                                                                                                                                                                                                                                                       |
+| ArtCraft code reused | none. The audit of the pinned commit found Spark used as `SplatMesh` + URL loading + a `__bbox_internal` selection helper + an entrance "dyno" effect + a `SparkRenderer` on the camera. M2D.1 keeps only the idea (Spark's `SplatMesh` as a scene object); everything else is Prism-written (`src/lib/previs/splat-runtime.ts`). No ArtCraft demo splat, scene or asset is used |
+
+The only vendor edit is a small, documented hook: `PageSceneAdapter.loadSplat`, called from `Scene.loadObject` before the
+model loader, plus a duck-typed `isPrismSplat` disposal branch in `disposeObject3D` (diff:
+[`patches/prism-m2d1.patch`](../src/vendor/artcraft-scene-engine/patches/prism-m2d1.patch)). The upstream `.spz` URL
+sniffing is gone; a splat is never recognised from a URL.
+
+### Formats (only what is parsed AND tested)
+
+| Format                 | Extension | MIME (stored on the Asset)     | Validation (client and server; the server is the authority)                                                                                                                                                             |
+| ---------------------- | --------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Antimatter-style splat | `.splat`  | `application/x-gaussian-splat` | size is a whole number of 32-byte records; every position and scale is finite                                                                                                                                           |
+| SPZ v2 / v3            | `.spz`    | `application/x-spz`            | gzip; stream-inflated in slices and stopped as soon as the output disagrees with the 16-byte header; exact decompressed size; Gaussian count bounded (no decompression bomb)                                            |
+| Gaussian PLY           | `.ply`    | `application/x-ply`            | **binary little-endian**, exactly one `vertex` element, with the 3DGS attributes (`x y z scale_0‥2 rot_0‥3 opacity f_dc_0‥2`); exact size from the header. A point-cloud or ASCII PLY is refused with a precise message |
+
+`.ksplat` and the PlayCanvas SOG variants are readable by Spark but are **not enabled**: nothing tests them. The filename
+must agree with the bytes (a renamed `.ply` is refused as a `.splat`), the file is capped at **50 MB** and at 8 000 000
+Gaussians. The global 55 MB request ceiling was **not** raised; larger splats need a resumable/direct upload (a later
+storage milestone).
+
+Test data is generated at test time from the formats' documented primitives (`src/lib/splat/synthetic.ts`): a coloured
+plane of Gaussians. Nothing third-party is committed.
+
+### Assets and privacy
+
+A splat is a **3D Asset**: `type = '3d'`, `purpose = 'spatial_reconstruction'` (migration 0035), the truthful machine MIME
+above, in the private bucket (no public bucket, no persisted signed URL; the browser reads it through the authenticated
+`/api/assets/<id>` route). It cannot be uploaded through the generic library (the sniffer refuses it); it enters only
+through the reconstruction import. Anonymous and cross-project users cannot read it.
+
+### Two records, deliberately separate
+
+|               | Record                                         | Mutable?                          | Holds                                                                                                                                                                                                                                                     |
+| ------------- | ---------------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Origin**    | `location_spatial_reconstructions` (immutable) | no (a trigger refuses any update) | the result Asset (+ its content checksum), `method = 'imported'`, `result_kind = 'gaussian_splat'`, the source reference images (ids + checksums, may be empty), the calibration the source **claimed** on arrival (units unknown), a content fingerprint |
+| **Placement** | the Set document's splat object                | yes                               | position / rotation / uniform scale, visibility, lock, **calibration** (scale provenance)                                                                                                                                                                 |
+
+Moving, rotating or re-scaling the splat never rewrites the origin. The reconstruction fingerprint covers: schema, Location,
+method, result kind, the result Asset id **and content checksum**, the canonicalised source Asset ids + checksums, and the
+imported calibration. It excludes panel state, selection, the navigation camera, names and any URL.
+
+Source images are validated server-side: each must be an **image Asset of the same Project** (they are JSON members, so
+the database cannot enforce this). They are provenance, not Shot references: they are **not** added to any prompt or
+reference list. Result and sources are pinned against deletion.
+
+### Scene object, fingerprint and versioning
+
+`prism.previs.v1` is extended backward-compatibly: `PREVIS_OBJECT_KINDS` gains `splat`, and `PrevisObject` gains nullable
+`reconstructionId` and `calibration` (defaults null, so old documents still parse). A splat object is an asset-bound
+`m_<assetId>` token whose `user_data` names its reconstruction; the engine's own save JSON round-trips it.
+
+The Set fingerprint changes when the splat **Asset checksum**, **transform**, **visibility**, **calibration** or presence
+changes. Lock, loading progress, runtime buffers, selection and the navigation camera never change it. The fingerprint keys
+for a splat (`reconstructionId`, `calibration`) are added **only** to splat objects, so a Set without one keeps its
+historical fingerprint (unit-tested: the key set of a non-splat object is exactly the old one).
+
+A Set holds **one** splat environment (enforced on save). The server re-checks on every save that the object's Asset is a
+splat Asset of this Project, bound to a reconstruction of **this Location** whose result is that Asset and content.
+
+### Calibration: scale is never assumed
+
+A splat from another tool has an arbitrary origin, rotation and scale. Prism never assumes `1 unit = 1 metre`.
+
+| Field                 | Meaning                                                |
+| --------------------- | ------------------------------------------------------ |
+| `units`               | `unknown` (default) or `metres`                        |
+| `metresPerSourceUnit` | `null`, or a positive number a human entered           |
+| `scaleMethod`         | `unknown` or `manual` (the only two M2D.1 can produce) |
+| `groundOffsetMetres`  | informational: the Set-Y the user chose for the floor  |
+
+The pairing is enforced (`manual` ⇔ a number ⇔ `metres`). **Apply scale** sets both the calibration and the object's
+uniform scale so that one source unit equals that many Set metres; **Scale unknown** clears the claim. **Set as ground
+level** rests the bottom of the (transformed) bounding box on `y = 0`; **Flip 180° (X)** fixes the common y-down
+convention. There is no automatic ground, horizon or scale detection.
+
+### Interaction
+
+One production object: selecting, moving, rotating and uniformly scaling happens on the root with the existing gizmos.
+Picking uses the splat's bounding box, never an individual Gaussian; there is no Gaussian editing. **Lock environment**
+uses the engine's lock (gizmo detached) and also refuses numeric edits and calibration; navigation and Shot blocking keep
+working. The inspector says **Gaussian Splat** and shows Asset, format, size, Gaussian count, provenance, scale status,
+visibility, lock and the load time / GPU estimate.
+
+### Rendering and depth composition
+
+Master frames and previs render the splat through the same isolated Production Camera as meshes. Spark sorts
+asynchronously for the **viewport** camera, so a production render first sorts a dedicated viewpoint from the production
+pose, shows it for exactly that render and then gives the viewport its own viewpoint back (`SplatRuntime.renderFromCamera`;
+it also returns the accumulator reference Spark's `prepare()` takes, or every capture would leak one).
+
+Depth composition with ordinary THREE geometry is **proven in the real renderer** (SwiftShader), not assumed:
+
+- a mesh in front of the splat hides it; behind it, the splat wins and the mesh is hidden;
+- a Character proxy in front of the splat hides it; behind it, the splat wins;
+- moving the mesh back restores the result (nothing depends on sort history).
+
+Splats are alpha-blended without depth writes, so they composite correctly against opaque meshes; a **transparent** mesh
+and a splat are not sorted against each other. Character proxies are opaque.
+
+### M2C interop: blocked, not faked
+
+The M2C depth / object-id / mask passes cannot represent splat geometry exactly. Rather than silently omit the
+environment, **Capture Control Passes is blocked while a splat is visible**, in the UI and again on the server (which
+checks the saved Set):
+
+> Spatial control passes for Gaussian splat environments are not supported yet. Hide the splat or use mesh geometry to
+> capture exact depth and object masks.
+
+Hide the splat, save, and the capture is available again. A hidden splat is not in the manifest. Earlier bundles remain.
+
+### GenerationPackage
+
+`spatialReference.spatialEnvironment` is additive and optional (absent when the Set has no splat; earlier packages are
+byte-identical). It freezes by value: kind, scene object id, reconstruction id + fingerprint, Asset id + checksum, format,
+Gaussian count, visibility, the transform (position, Euler rotation, **quaternion orientation**, scale), the calibration,
+and the reconstruction's source image ids + checksums. No bytes, no URL, no change to any provider prompt. The splat Asset
+is also described in the package asset map. A package compiled before the splat moved is unchanged (a value, not a view).
+
+### Failure states
+
+Unsupported format, corrupt file, parse failure, oversize file, missing Asset, fetch failure and a GPU that cannot run the
+runtime all produce a specific message; nothing is added to the Set. If the **saved** Set names a splat that cannot be
+loaded, the editor shows the reason, **disables Save** (saving would silently drop it) and offers an explicit "Remove it
+from this set". The saved Set is never corrupted by a failed load.
+
+### Resources
+
+Removing a splat (or leaving the page) disposes its Spark object and GPU buffers through the engine's own disposal path
+(`isPrismSplat`); the SparkRenderer is removed and freed on unmount. Repeated navigation does not duplicate the splat and
+does not add WebGL contexts (E2E: three remounts, one splat root and one SparkRenderer each time).
+
+### Tests (M2D.1)
+
+| What                                                                                                                                 | Where                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| Formats, calibration, fingerprints, document, package value                                                                          | `src/domain/previs/__tests__/splat.test.ts`, `splat-reconstruction-repo.test.ts`, `src/lib/splat/__tests__/inspect.test.ts` |
+| Reconstruction table, RLS, immutability, pinning, atomic import                                                                      | `npm run db:reconstructions` (`scripts/db-reconstructions.mts`)                                                             |
+| Real browser: import, render, depth ordering, gizmos, lock, save/reload, previs, master frame, M2C block, package, failures, cleanup | `e2e/zzzzzzzzzzz-gaussian-splats.spec.ts`                                                                                   |
+| Supabase: private storage, anonymous / cross-project refusal                                                                         | `e2e/supabase-gaussian-splats.spec.ts`                                                                                      |
+
+### Known gaps (M2D.1)
+
+- No reconstruction provider, image-to-3D, photogrammetry or NeRF training; "imported" is the only method.
+- One splat per Set; no per-Gaussian editing, picking, segmentation or animation; no automatic ground/scale/horizon.
+- No exact depth, object-id or mask pass for splats (capture is blocked); no splat↔transparent-mesh ordering.
+- 50 MB / 8 M Gaussians; `.ksplat` and SOG are not enabled; spherical-harmonic view-dependence is whatever Spark renders.
+- Rendering proof is SwiftShader (no hardware-GPU run); the FPS and load time of the small fixture say little about real scenes.
+- A missing Asset is detected after load by comparing the saved Set with what materialised (the engine drops a failed
+  object silently); the editor blocks Save rather than guessing.
+- The sort worker is created from an inlined Blob; a Content-Security-Policy that forbids `worker-src blob:` would need an
+  exception (Prism sets none today).

@@ -305,6 +305,10 @@ class Editor {
           ? (tokens) => this.adapter.getMediaUrlsByTokens!(tokens)
           : undefined,
         onGlbLoaded: () => this.selection.refreshOutliner(),
+        // PRISM PATCH (M2D.1): optional host splat loader
+        loadSplat: this.adapter.loadSplat
+          ? (token, name, signal) => this.adapter.loadSplat!(token, name, signal)
+          : undefined,
       },
     );
     this.activeScene.initialize();

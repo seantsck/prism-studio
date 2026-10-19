@@ -1,3 +1,4 @@
+import type { NewSpatialReconstruction, SpatialReconstructionRecord } from "@/domain/previs/splat";
 import type { StoredAudioMix } from "@/domain/previs/audio-mix";
 import type { RenderedBlockingFigure, ShotBlockingEntry } from "@/domain/previs/blocking";
 import type { CameraPath } from "@/domain/previs/camera-path";
@@ -276,6 +277,14 @@ export type NewSpatialPassBundle = Omit<SpatialPassBundleRecord, "createdBy" | "
 };
 
 export interface PrevisRepository {
+  /** Newest first. Immutable origin records of the Location's spatial reconstructions (M2D.1). */
+  listReconstructions(locationId: string): Promise<SpatialReconstructionRecord[]>;
+  getReconstruction(id: string): Promise<SpatialReconstructionRecord | null>;
+  /** True when a reconstruction depends on this asset (as its result or as a source image). */
+  reconstructionUsesAsset(assetId: string): Promise<boolean>;
+  /** Records an immutable reconstruction; the fingerprint is computed here from the identity fields. */
+  recordReconstruction(input: NewSpatialReconstruction): Promise<SpatialReconstructionRecord>;
+
   getSceneForLocation(locationId: string): Promise<SceneDocumentRecord | null>;
   getScene(sceneDocumentId: string): Promise<SceneDocumentRecord | null>;
   /** Insert or compare-and-set update; throws PrevisError("conflict") on a stale expectedRevision. */

@@ -1,3 +1,11 @@
+import {
+  calibrationSchema,
+  canonicalSources,
+  reconstructionFingerprintOf,
+  RECONSTRUCTION_SCHEMA,
+  type NewSpatialReconstruction,
+  type SpatialReconstructionRecord,
+} from "@/domain/previs/splat";
 import { pickCurrentClip } from "@/domain/previs/audio-mix";
 import {
   blockingFingerprint,
@@ -53,6 +61,7 @@ export class MemoryPrevisService implements PrevisRepository {
   private clips = new Map<string, PrevisClipRecord>();
   private blocking = new Map<string, ShotBlockingRecord>(); // by `${shotId}:${characterId}`
   private bundles = new Map<string, SpatialPassBundleRecord>();
+  private reconstructions = new Map<string, SpatialReconstructionRecord>();
 
   constructor(private readonly access: MemoryProjectsAccess) {}
 
@@ -268,6 +277,7 @@ export class MemoryPrevisService implements PrevisRepository {
           { locationId: scene.locationId },
         ),
         controlPasses: this.currentControlPasses(shotId, scene.sceneFingerprint, p, b),
+        reconstructions: [...this.reconstructions.values()].filter((r) => r.locationId === scene.locationId),
       });
     }
     return structuredClone(out);
@@ -474,6 +484,63 @@ export class MemoryPrevisService implements PrevisRepository {
       .filter((c) => c.shotId === shotId)
       .sort((a, b) => (a.renderedAt < b.renderedAt ? 1 : -1))
       .map(clone);
+  }
+
+  async listReconstructions(locationId: string) {
+    return [...this.reconstructions.values()]
+      .filter((r) => r.locationId === locationId)
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : a.id < b.id ? 1 : -1))
+      .map(clone);
+  }
+
+  async getReconstruction(id: string) {
+    const r = this.reconstructions.get(id);
+    return r ? clone(r) : null;
+  }
+
+  async reconstructionUsesAsset(assetId: string) {
+    return [...this.reconstructions.values()].some(
+      (r) => r.resultAssetId === assetId || r.sources.some((s) => s.assetId === assetId),
+    );
+  }
+
+  async recordReconstruction(input: NewSpatialReconstruction) {
+    this.requireLocation(input.projectId, input.locationId);
+    const calibration = calibrationSchema.parse(input.calibration);
+    const sources = canonicalSources(input.sources);
+    const rec: SpatialReconstructionRecord = {
+      id: input.id,
+      projectId: input.projectId,
+      locationId: input.locationId,
+      schemaVersion: RECONSTRUCTION_SCHEMA,
+      method: input.method,
+      resultKind: input.resultKind,
+      resultAssetId: input.resultAssetId,
+      resultChecksum: input.resultChecksum,
+      resultFormat: input.resultFormat,
+      gaussianCount: input.gaussianCount,
+      sources,
+      calibration,
+      fingerprint: reconstructionFingerprintOf({
+        locationId: input.locationId,
+        method: input.method,
+        resultKind: input.resultKind,
+        resultAssetId: input.resultAssetId,
+        resultChecksum: input.resultChecksum,
+        sources,
+        calibration,
+      }),
+      createdBy: input.userId,
+      createdAt: input.now,
+    };
+    if (
+      [...this.reconstructions.values()].some(
+        (r) => r.locationId === rec.locationId && r.fingerprint === rec.fingerprint,
+      )
+    )
+      throw new PrevisError("conflict", "That exact reconstruction is already recorded for this location.");
+    this.reconstructions.set(rec.id, rec);
+    return clone(rec);
   }
 
   async listSpatialPassBundles(shotId: string) {

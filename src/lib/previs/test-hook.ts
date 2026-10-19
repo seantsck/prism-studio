@@ -58,8 +58,56 @@ export interface SpatialTestHook {
   selectObject(id: string | null): void;
 }
 
+/** Gaussian-splat acceptance helpers (M2D.1). */
+export interface SplatTestHook {
+  /** live splat roots, SparkRenderers and WebGL facts of the mounted editor */
+  info(): {
+    liveSplats: number;
+    sparkRenderers: number;
+    splatObjects: Array<{
+      id: string;
+      visible: boolean;
+      locked: boolean;
+      position: number[];
+      rotation: number[];
+      scale: number[];
+      hasUrlInUserData: boolean;
+    }>;
+    stats: Array<{ gaussianCount: number; loadMs: number; estimatedGpuBytes: number; format: string }>;
+    failures: Array<{ message: string; kind: string }>;
+  };
+  /**
+   * Renders the Production Frame through an EXPLICIT pose (as a master frame does) and returns the RGB at the given
+   * pixels (row 0 = top). Never reads the navigation camera.
+   */
+  beautyPixels(
+    pose: { position: number[]; rotation: number[]; focalLengthMm: number },
+    pixels: Array<[number, number]>,
+  ): Promise<Array<[number, number, number]>>;
+  /** Same, but through the local previs frame renderer at `size` (row 0 = top). */
+  previsPixels(
+    pose: { position: number[]; rotation: number[]; focalLengthMm: number },
+    size: { width: number; height: number },
+    pixels: Array<[number, number]>,
+  ): Promise<Array<[number, number, number]>>;
+  /** The pixel (row 0 = top) a world point projects to for an explicit pose. */
+  pixelOf(
+    pose: { position: number[]; rotation: number[]; focalLengthMm: number },
+    world: number[],
+  ): { x: number; y: number };
+  /** Mean frames per second of the editor viewport over `ms` milliseconds. */
+  fps(ms: number): Promise<number>;
+  /** True once the editor has finished loading the saved scene (every object resolved or failed). */
+  sceneLoaded(): boolean;
+  /** World-space bounding box of a splat object. */
+  worldBounds(id: string): { min: number[]; max: number[] } | null;
+  /** Client-space (CSS px) position of a point on a splat's bounding box, for real pointer interaction. */
+  bboxClientPoint(id: string, fraction?: number[]): { x: number; y: number } | null;
+}
+
 export interface PrevisTestHook {
   spatial: SpatialTestHook;
+  splat: SplatTestHook;
   /** Client-space (CSS px) position of a point `offsetWorld` away from the object's origin. */
   project(id: string, offsetWorld?: { x: number; y: number; z: number }): { x: number; y: number } | null;
   navigationCamera(): { position: number[]; rotation: number[]; fov: number } | null;
@@ -263,6 +311,131 @@ export function installPrevisTestHook(adapter: SpatialSceneAdapter, canvas: HTML
           programs: r?.info.programs?.length ?? -1,
           canvases: document.querySelectorAll("canvas").length,
         };
+      },
+    },
+    splat: {
+      info() {
+        const editor = adapter.getEditor();
+        const scene = editor?.activeScene.scene;
+        let spark = 0;
+        scene?.traverse((o) => {
+          if (o.name === "::PRISM_SPARK::") spark++;
+        });
+        const stats = adapter.splatStats().map((s) => ({
+          gaussianCount: s.gaussianCount,
+          loadMs: s.loadMs,
+          estimatedGpuBytes: s.estimatedGpuBytes,
+          format: s.format,
+        }));
+        const objs = adapter
+          .listObjects()
+          .filter((o) => o.kind === "splat")
+          .map((o) => {
+            const node = scene?.getObjectByProperty("uuid", o.id);
+            return {
+              id: o.id,
+              visible: o.visible,
+              locked: o.locked,
+              position: [o.position.x, o.position.y, o.position.z],
+              rotation: [o.rotation.x, o.rotation.y, o.rotation.z],
+              scale: [o.scale.x, o.scale.y, o.scale.z],
+              hasUrlInUserData: /(https?:|blob:|X-Amz|token=)/i.test(JSON.stringify(node?.userData ?? {})),
+            };
+          });
+        return {
+          liveSplats: adapter.splatCount(),
+          sparkRenderers: spark,
+          splatObjects: objs,
+          stats,
+          failures: adapter.splatFailures().map((f) => ({ message: f.message, kind: f.kind })),
+        };
+      },
+      async beautyPixels(pose, pixels) {
+        const bookmark = bookmarkFromCamera({
+          id: "test",
+          label: "test",
+          position: { x: pose.position[0], y: pose.position[1], z: pose.position[2] },
+          rotation: { x: pose.rotation[0], y: pose.rotation[1], z: pose.rotation[2] },
+          focalLengthMm: pose.focalLengthMm,
+        });
+        const frame = await adapter.captureMasterFrame(bookmark);
+        const bitmap = await createImageBitmap(frame.blob);
+        const c = document.createElement("canvas");
+        c.width = bitmap.width;
+        c.height = bitmap.height;
+        const g = c.getContext("2d", { willReadFrequently: true })!;
+        g.drawImage(bitmap, 0, 0);
+        bitmap.close();
+        return pixels.map(([x, y]) => {
+          const d = g.getImageData(x, y, 1, 1).data;
+          return [d[0], d[1], d[2]] as [number, number, number];
+        });
+      },
+      async previsPixels(pose, size, pixels) {
+        const canvas2 = await adapter.renderPrevisFrame(
+          {
+            position: { x: pose.position[0], y: pose.position[1], z: pose.position[2] },
+            rotation: { x: pose.rotation[0], y: pose.rotation[1], z: pose.rotation[2] },
+            focalLengthMm: pose.focalLengthMm,
+          },
+          size,
+        );
+        const g = (canvas2 as HTMLCanvasElement).getContext("2d", { willReadFrequently: true })!;
+        return pixels.map(([x, y]) => {
+          const d = g.getImageData(x, y, 1, 1).data;
+          return [d[0], d[1], d[2]] as [number, number, number];
+        });
+      },
+      pixelOf(pose, world) {
+        const camera = controlCameraFromPose(
+          { x: pose.position[0], y: pose.position[1], z: pose.position[2] },
+          { x: pose.rotation[0], y: pose.rotation[1], z: pose.rotation[2] },
+          pose.focalLengthMm,
+        );
+        const cam = buildPassCamera(camera);
+        const v = new THREE.Vector3(world[0], world[1], world[2]).project(cam);
+        return { x: ((v.x + 1) / 2) * 1912, y: ((1 - v.y) / 2) * 800 };
+      },
+      fps(ms) {
+        return new Promise((resolve) => {
+          let frames = 0;
+          const start = performance.now();
+          const tick = () => {
+            frames++;
+            const elapsed = performance.now() - start;
+            if (elapsed >= ms) resolve((frames * 1000) / elapsed);
+            else requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        });
+      },
+      sceneLoaded() {
+        return adapter.getEditor()?.isEngineDataLoaded() === true;
+      },
+      worldBounds(id) {
+        const node = adapter.getEditor()?.activeScene.scene.getObjectByProperty("uuid", id) as
+          (THREE.Object3D & { getBoundingBox?: () => THREE.Box3 }) | undefined;
+        if (!node?.getBoundingBox) return null;
+        node.updateMatrixWorld(true);
+        const box = node.getBoundingBox().clone().applyMatrix4(node.matrixWorld);
+        return { min: box.min.toArray(), max: box.max.toArray() };
+      },
+      bboxClientPoint(id, fraction = [0.5, 0.5, 0.5]) {
+        const c = cam();
+        const node = adapter.getEditor()?.activeScene.scene.getObjectByProperty("uuid", id) as
+          (THREE.Object3D & { getBoundingBox?: () => THREE.Box3 }) | undefined;
+        if (!c || !node?.getBoundingBox) return null;
+        node.updateMatrixWorld(true);
+        c.updateMatrixWorld(true);
+        const box = node.getBoundingBox();
+        const centre = new THREE.Vector3(
+          box.min.x + (box.max.x - box.min.x) * fraction[0]!,
+          box.min.y + (box.max.y - box.min.y) * fraction[1]!,
+          box.min.z + (box.max.z - box.min.z) * fraction[2]!,
+        ).applyMatrix4(node.matrixWorld);
+        centre.project(c);
+        const r = canvas.getBoundingClientRect();
+        return { x: r.left + ((centre.x + 1) / 2) * r.width, y: r.top + ((1 - centre.y) / 2) * r.height };
       },
     },
     project(id, offset = { x: 0, y: 0, z: 0 }) {

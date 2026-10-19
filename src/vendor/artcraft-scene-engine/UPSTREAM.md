@@ -71,6 +71,13 @@ commit, line endings normalised to LF). Summary:
     `selectBone/getSelectedBone/setSkeletonVisible/setGizmoVisible`, drops its debug logging and now disposes its sphere
     materials and skeleton helper. `keybinds_controls.ts` exposes `kinMode`/`fkHelper` (were `private`).
     Diff: [`patches/prism-m2b.patch`](./patches/prism-m2b.patch).
+14. **Host-owned Gaussian splats (M2D.1)**: `PageSceneAdapter.loadSplat?` (new optional member) is threaded through
+    `Editor` into `SceneDeps`; `Scene.loadObject` asks it first and falls through to the model loader when it returns
+    `null`, and the upstream `.spz` URL-sniffing branch (which threw) now states that splats are loaded by the host only.
+    `disposeObject3D` calls `dispose()` on any object that sets `isPrismSplat === true`. The engine still bundles **no**
+    splat runtime: `@sparkjsdev/spark` 0.1.10 (MIT) is a Prism npm dependency used only from `src/lib/previs/splat-runtime.ts`
+    on the editor's existing renderer. No upstream splat loader, selection helper or entrance effect was re-imported.
+    Diff: [`patches/prism-m2d1.patch`](./patches/prism-m2d1.patch) (4 files, +38/-2).
 
 ## Removed after the first import (M1 hardening)
 
@@ -80,7 +87,7 @@ commit, line endings normalised to LF). Summary:
 | MMD loader, animation helper, Ammo bootstrap (`scene.ts`) | anime-character path; needed a wasm blob that was never vendored |
 | `engine/CustomOutlinePass.js`, `engine/FindSurfaces.js` and the "raw" composer in `PostProcessingPipeline.ts` | only fed the removed raw render path; the live outline is `SelectionOutlinePass` (upstream-written). Also removes a file with no establishable provenance |
 | `engine/chromakey.js`, `engine/shaders.js`, the video-plane branch of `Scene.instantiate` | forum-sourced chroma-key shader whose conversion routine cites a `libretro/glsl-shaders` file (licence not established); video planes are not a Prism feature |
-| Spark splats: `SplatMesh` loader (`scene.ts`), `instanceof SplatMesh` (`SelectionOutlinePass.ts`), `SparkRenderer`/`SplatMesh` disposal (`disposeObject3D.ts`), the `SparkRenderer` field (`editor.ts`) | splats are not exposed in M1. **`@sparkjsdev/spark` is no longer a dependency** |
+| Spark splats: `SplatMesh` loader (`scene.ts`), `instanceof SplatMesh` (`SelectionOutlinePass.ts`), `SparkRenderer`/`SplatMesh` disposal (`disposeObject3D.ts`), the `SparkRenderer` field (`editor.ts`) | splats were not exposed in M1, so the dependency was dropped. **M2D.1 reintroduced Spark as a Prism-owned dependency behind the `loadSplat` hook (patch 14); none of this removed upstream code came back** |
 | second `THREE.WebGLRenderer` (`rawRenderer`) | only fed the removed raw composer; one WebGL context per mount instead of two |
 
 What remains compiled but unused on Prism's paths: the `Image::` plane branch (png/jpg textures; the URL is always
@@ -112,7 +119,7 @@ by the e2e "same-origin requests, none missing" test.
 
 ## Prism-written code (outside this directory)
 
-`src/lib/previs/` (scene adapter, shapes, procedural humanoid rig, blocking overlay), `src/domain/previs/` (schema, fingerprint, camera maths, spatial
+`src/lib/previs/` (scene adapter, shapes, procedural humanoid rig, blocking overlay, `splat-runtime.ts`), `src/lib/splat/` (format inspection, synthetic test splats), `src/domain/previs/` (schema, fingerprint, camera maths, spatial
 reference, rig/pose/blocking), `src/data/previs-*.ts`, `src/server/previs*.ts`, `src/components/previs/`, migration `0030`.
 Nothing outside `src/lib/previs/scene-adapter.ts`, `src/lib/previs/blocking-overlay.ts` and the vendored hooks imports from this directory.
 

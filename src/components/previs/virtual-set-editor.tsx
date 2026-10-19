@@ -16,6 +16,12 @@ import {
 import { installPrevisTestHook } from "@/lib/previs/test-hook";
 import type { SpatialPassBundleRecord } from "@/data/previs-repository";
 import { CharacterBlockingPanel, type BlockingState } from "./character-blocking-panel";
+import {
+  SplatAddPanel,
+  SplatInspector,
+  type ReferenceImageOption,
+  type SplatEnvironmentInfo,
+} from "./splat-environment-panel";
 import { SpatialPassesPanel } from "./spatial-passes-panel";
 import {
   CameraMotionPanel,
@@ -71,6 +77,10 @@ export interface VirtualSetProps {
   previsClips: PrevisClipInfo[];
   /** stored spatial control-pass bundles of the active shot (newest first) */
   spatialBundles: SpatialPassBundleRecord[];
+  /** the imported Gaussian-splat environments of this location (immutable reconstruction records + result Assets) */
+  splatEnvironments: SplatEnvironmentInfo[];
+  /** images that can be named as reconstruction sources */
+  referenceImages: ReferenceImageOption[];
 }
 
 const RAD = Math.PI / 180;
@@ -85,6 +95,12 @@ export function VirtualSetEditor(props: VirtualSetProps) {
   const editorCanvasRef = useRef<HTMLCanvasElement>(null);
   const camViewCanvasRef = useRef<HTMLCanvasElement>(null);
   const adapterRef = useRef<SpatialSceneAdapter | null>(null);
+  // Gaussian-splat Assets the scene loader may resolve (props, plus anything imported in this session)
+  const splatInfoRef = useRef(
+    new Map<string, SplatEnvironmentInfo>(props.splatEnvironments.map((e) => [e.assetId, e])),
+  );
+  const [splatFailures, setSplatFailures] = useState<Array<{ assetId: string; message: string }>>([]);
+  const [splatEnvs, setSplatEnvs] = useState<SplatEnvironmentInfo[]>(props.splatEnvironments);
 
   const [editor, setEditor] = useState<Editor | null>(null);
   const [canvasEl, setCanvasEl] = useState<HTMLCanvasElement | null>(null);
@@ -124,7 +140,11 @@ export function VirtualSetEditor(props: VirtualSetProps) {
     const editorCanvas = editorCanvasRef.current;
     const camViewCanvas = camViewCanvasRef.current;
     if (!container || !editorCanvas || !camViewCanvas) return;
-    const adapter = new ArtCraftSceneAdapter({ resolveAssetUrl: (id) => `/api/assets/${id}` });
+    const adapter = new ArtCraftSceneAdapter({
+      resolveAssetUrl: (id) => `/api/assets/${id}`,
+      splatAssets: () =>
+        new Map([...splatInfoRef.current].map(([id, e]) => [id, { format: e.format, name: e.name }])),
+    });
     adapterRef.current = adapter;
     let cancelled = false;
     let removeTestHook = () => {};
@@ -137,6 +157,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
       setLooking(adapter.isLookingThroughProductionCamera());
       setCanUndo(adapter.canUndo());
       setCanRedo(adapter.canRedo());
+      setSplatFailures(adapter.splatFailures().map((f) => ({ assetId: f.assetId, message: f.message })));
     };
     const unsubscribe = adapter.subscribe(sync);
 
@@ -418,7 +439,8 @@ export function VirtualSetEditor(props: VirtualSetProps) {
           <button
             className="btn btn-primary"
             onClick={() => void save()}
-            disabled={!ready || status.tone === "busy"}
+            // saving while a splat failed to load would silently drop it from the set
+            disabled={!ready || status.tone === "busy" || splatFailures.length > 0}
             data-testid="save-set"
           >
             Save 3D set
@@ -434,6 +456,26 @@ export function VirtualSetEditor(props: VirtualSetProps) {
       >
         {status.text || " "}
       </div>
+
+      {splatFailures.length > 0 ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-2 border-b border-fail px-4 py-1.5 text-xs text-fail"
+          data-testid="splat-failure"
+        >
+          <span>
+            {splatFailures.map((f) => f.message).join(" ")} Saving is disabled so it is not dropped from this
+            set.
+          </span>
+          <button
+            className="btn"
+            data-testid="splat-discard-failed"
+            onClick={() => adapter().discardSplatFailures()}
+          >
+            Remove it from this set
+          </button>
+        </div>
+      ) : null}
 
       <div className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)_300px]">
         {/* ── left: add + outliner ── */}
@@ -508,6 +550,20 @@ export function VirtualSetEditor(props: VirtualSetProps) {
               </button>
             </div>
           ) : null}
+          <SplatAddPanel
+            projectSlug={props.projectSlug}
+            locationId={props.locationId}
+            ready={ready}
+            adapter={adapter}
+            objects={objects}
+            environments={splatEnvs}
+            referenceImages={props.referenceImages}
+            onImported={(info) => {
+              splatInfoRef.current.set(info.assetId, info);
+              setSplatEnvs((list) => [info, ...list.filter((x) => x.assetId !== info.assetId)]);
+            }}
+            onStatus={(tone, text) => setStatus({ tone, text })}
+          />
           <button
             className="btn mb-4 w-full"
             disabled={!ready}
@@ -530,7 +586,9 @@ export function VirtualSetEditor(props: VirtualSetProps) {
                   onClick={() => adapter().select(o.id)}
                 >
                   {o.name || o.shape || "object"}
-                  <span className="ml-1 text-xs text-muted">{o.kind}</span>
+                  <span className="ml-1 text-xs text-muted">
+                    {o.kind === "splat" ? "gaussian splat" : o.kind}
+                  </span>
                 </button>
               </li>
             ))}
@@ -602,6 +660,13 @@ export function VirtualSetEditor(props: VirtualSetProps) {
           </div>
 
           <h2 className="mb-1 text-xs uppercase tracking-wide text-muted">Selected object</h2>
+          {selected?.kind === "splat" ? (
+            <SplatInspector
+              adapter={adapter}
+              object={selected}
+              environment={splatEnvs.find((e) => e.assetId === selected.assetId) ?? null}
+            />
+          ) : null}
           {selected ? (
             <TransformFields
               key={`${selected.id}:${[selected.position, selected.rotation, selected.scale].map((v) => `${fmt(v.x)},${fmt(v.y)},${fmt(v.z)}`).join("|")}`}
@@ -795,6 +860,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
               }
               motion={motionState}
               blocking={blockingState}
+              hasVisibleSplat={objects.some((o) => o.kind === "splat" && o.visible)}
             />
           ) : null}
 

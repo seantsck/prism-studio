@@ -297,7 +297,8 @@ export function expectedManifest(
 ): ObjectManifest {
   return buildObjectManifest({
     setObjects: document.objects
-      .filter((o) => o.kind !== "light" && o.visible)
+      // a splat environment is spatial data, not mesh geometry: a visible one blocks capture before this is reached
+      .filter((o) => o.kind !== "light" && o.kind !== "splat" && o.visible)
       .map((o) => ({ id: o.id, name: o.name })),
     characters: blocking
       .filter((b) => b.entry.visibility)
