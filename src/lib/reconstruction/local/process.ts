@@ -14,6 +14,18 @@ import path from "node:path";
  *     have spawned the real worker process.
  */
 
+/**
+ * A resolved external tool. In production `prefixArgs` is always empty (the executable IS the tool, resolved to an
+ * absolute path by the toolchain probe). Tests point `executable` at the Node binary and put a fake tool script in
+ * `prefixArgs`, so fakes still run as real child processes through this same runner.
+ */
+export interface ToolCommand {
+  executable: string;
+  prefixArgs: readonly string[];
+  /** extra environment for this tool (e.g. its own bin directory on PATH for its DLLs) */
+  env?: Record<string, string>;
+}
+
 export interface RunProcessOptions {
   /** absolute path of the executable */
   executable: string;
