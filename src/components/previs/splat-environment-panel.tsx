@@ -253,7 +253,9 @@ export function SplatInspector(props: {
         <dd data-testid="splat-scale-status" data-scale-method={cal.scaleMethod}>
           {cal.scaleMethod === "manual"
             ? `manual — 1 source unit = ${cal.metresPerSourceUnit} m`
-            : "unknown units (not metric)"}
+            : cal.scaleMethod === "provider_estimated"
+              ? `provider-estimated — 1 source unit ≈ ${cal.metresPerSourceUnit} m (an estimate, not exact)`
+              : "unknown units (not metric)"}
         </dd>
         <dt className="text-muted">Visible</dt>
         <dd data-testid="splat-visible">{object.visible ? "yes" : "hidden"}</dd>

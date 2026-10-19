@@ -28,6 +28,14 @@ export default defineConfig({
       PRISM_STUDIO_PERSISTENCE: "supabase",
       NEXT_PUBLIC_SITE_URL: "http://localhost:3101",
       PRISM_STUDIO_ENABLE_MOCK_PROVIDER: "1",
+      // Reconstruction jobs (M2D.2): the free mock provider only; World Labs unconfigured; paid generation off.
+      PRISM_RECONSTRUCTION_JOBS_ENABLED: "1",
+      PRISM_STUDIO_ENABLE_MOCK_RECONSTRUCTION: "1",
+      PRISM_STUDIO_MOCK_RECONSTRUCTION_MS: "15000",
+      PRISM_RECONSTRUCTION_POLL_MS: "1000",
+      WLT_API_KEY: "",
+      WORLDLABS_RECONSTRUCTION_ENABLED: "",
+      PRISM_STUDIO_ALLOW_PAID_GENERATION: "false",
     },
   },
 });

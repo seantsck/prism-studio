@@ -22,6 +22,7 @@ import {
   type ReferenceImageOption,
   type SplatEnvironmentInfo,
 } from "./splat-environment-panel";
+import { ReconstructionJobsPanel } from "./reconstruction-jobs-panel";
 import { SpatialPassesPanel } from "./spatial-passes-panel";
 import {
   CameraMotionPanel,
@@ -559,6 +560,20 @@ export function VirtualSetEditor(props: VirtualSetProps) {
             environments={splatEnvs}
             referenceImages={props.referenceImages}
             onImported={(info) => {
+              splatInfoRef.current.set(info.assetId, info);
+              setSplatEnvs((list) => [info, ...list.filter((x) => x.assetId !== info.assetId)]);
+            }}
+            onStatus={(tone, text) => setStatus({ tone, text })}
+          />
+          <ReconstructionJobsPanel
+            projectSlug={props.projectSlug}
+            locationId={props.locationId}
+            ready={ready}
+            adapter={adapter}
+            objects={objects}
+            referenceImages={props.referenceImages}
+            onResult={(info) => {
+              // registered BEFORE the splat is added, so the scene loader can resolve its Asset
               splatInfoRef.current.set(info.assetId, info);
               setSplatEnvs((list) => [info, ...list.filter((x) => x.assetId !== info.assetId)]);
             }}

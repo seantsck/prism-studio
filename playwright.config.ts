@@ -34,6 +34,15 @@ export default defineConfig({
       PRISM_STUDIO_ANALYSIS_TRANSPORT: "fake",
       PRISM_STUDIO_ALLOW_PAID_ANALYSIS: "true",
       PRISM_STUDIO_MAX_ANALYSIS_USD_PER_RUN: "0.10",
+      // Reconstruction jobs (M2D.2): the FREE deterministic mock provider only. World Labs is explicitly unconfigured
+      // and paid generation stays off, so no E2E can reach a reconstruction provider.
+      PRISM_RECONSTRUCTION_JOBS_ENABLED: "1",
+      PRISM_STUDIO_ENABLE_MOCK_RECONSTRUCTION: "1",
+      PRISM_STUDIO_MOCK_RECONSTRUCTION_MS: "15000",
+      PRISM_RECONSTRUCTION_POLL_MS: "1000",
+      WLT_API_KEY: "",
+      WORLDLABS_RECONSTRUCTION_ENABLED: "",
+      PRISM_STUDIO_ALLOW_PAID_GENERATION: "false",
     },
   },
 });
