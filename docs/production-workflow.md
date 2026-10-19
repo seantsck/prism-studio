@@ -203,8 +203,11 @@ A Location can carry a **Gaussian-splat environment** reconstructed elsewhere (P
 
 1. Put reference photos of the Location in the asset library (purpose **Location reference**).
 2. In the Location's 3D Set, **Create reconstruction**: pick the images, order them (the first is the primary image;
-   ↑ ↓ ★ ×), pick the provider and model. The panel states the provider status (ready / not configured / switched
-   off) and, for a paid provider, the documented price; you must tick "provider charges may apply".
+   ↑ ↓ ★ ×), pick the provider and model. Each provider says first what it costs and where it runs (**Local Capture**:
+   free, runs on this machine, not installed until a later update; **World Labs Marble**: paid provider, optional;
+   **Mock Reconstruction**: development only), then its status (ready / not installed / not configured / switched
+   off). Nothing paid is ever pre-selected. For a paid provider the panel shows the documented price and you must
+   tick "provider charges may apply". If a provider is unavailable or fails, Prism never switches to another one.
 3. **Generate Reconstruction** creates a job and submits it once. Progress appears in the job list. You can leave the
    page: the job is stored and resumes when you come back.
 4. When the result is ready, Prism has already downloaded it, checked it and stored it privately. Your Set is not
