@@ -130,6 +130,7 @@ const assets = (
         and ((a.source = '3d_render' and 'master_frame' = any(a.tags))
           or (a.source = '3d_render' and 'spatial_pass' = any(a.tags))
           or (a.source = 'import' and 'gaussian_splat' = any(a.tags))
+          or (a.source = 'provider_output' and 'gaussian_splat' = any(a.tags))
           or (a.source = 'local_previs' and 'previs' = any(a.tags)))`,
     [dev.id],
   )
@@ -149,12 +150,13 @@ const counts = (
             (select count(*)::int from shot_previs_clips c join projects p on p.id = c.project_id where p.user_id = $1) as clips,
             (select count(*)::int from shot_character_blocking c join projects p on p.id = c.project_id where p.user_id = $1) as blocking,
             (select count(*)::int from shot_spatial_pass_bundles c join projects p on p.id = c.project_id where p.user_id = $1) as bundles,
-            (select count(*)::int from location_spatial_reconstructions c join projects p on p.id = c.project_id where p.user_id = $1) as reconstructions`,
+            (select count(*)::int from location_spatial_reconstructions c join projects p on p.id = c.project_id where p.user_id = $1) as reconstructions,
+            (select count(*)::int from reconstruction_jobs c join projects p on p.id = c.project_id where p.user_id = $1) as jobs`,
     [dev.id],
   )
 ).rows[0];
 console.log(
-  `scenes: ${counts.scenes}, bookmarks: ${counts.bookmarks}, camera paths: ${counts.paths}, previs clips: ${counts.clips}, character blocking: ${counts.blocking}, spatial pass bundles: ${counts.bundles}, reconstructions: ${counts.reconstructions}, previs/master-frame/spatial-pass/splat assets: ${assets.length}, storyboard frames: ${frames.length}`,
+  `scenes: ${counts.scenes}, bookmarks: ${counts.bookmarks}, camera paths: ${counts.paths}, previs clips: ${counts.clips}, character blocking: ${counts.blocking}, spatial pass bundles: ${counts.bundles}, reconstructions: ${counts.reconstructions}, reconstruction jobs: ${counts.jobs}, previs/master-frame/spatial-pass/splat assets: ${assets.length}, storyboard frames: ${frames.length}`,
 );
 if (!process.argv.includes("--yes")) {
   console.log("dry run; pass --yes to delete");
@@ -168,8 +170,10 @@ await pool.query(
   `delete from shot_spatial_pass_bundles where project_id in (select id from projects where user_id = $1)`,
   [dev.id],
 );
+// jobs and generated reconstructions reference each other: delete both in ONE statement (FKs checked at its end)
 await pool.query(
-  `delete from location_spatial_reconstructions where project_id in (select id from projects where user_id = $1)`,
+  `with jobs as (delete from reconstruction_jobs where project_id in (select id from projects where user_id = $1))
+   delete from location_spatial_reconstructions where project_id in (select id from projects where user_id = $1)`,
   [dev.id],
 );
 await pool.query(

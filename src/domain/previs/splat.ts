@@ -63,9 +63,10 @@ export const splatFormatFromFilename = (name: string): SplatFormat | null => {
 
 /**
  * Scale provenance. A reconstruction from another tool has arbitrary units: "1 splat unit = 1 metre" is NEVER
- * assumed. `metres` / `manual` are only reachable by an explicit human numeric entry.
+ * assumed. `metres` is reachable only by an explicit human numeric entry (`manual`) or by a provider that documents
+ * a metric scale ESTIMATE for its output (`provider_estimated`, M2D.2). An estimate is never called exact.
  */
-export const SCALE_METHODS = ["unknown", "manual"] as const;
+export const SCALE_METHODS = ["unknown", "manual", "provider_estimated"] as const;
 export const calibrationSchema = z
   .object({
     units: z.enum(["unknown", "metres"]),
@@ -75,10 +76,10 @@ export const calibrationSchema = z
     groundOffsetMetres: z.number().finite().default(0),
   })
   .refine((c) => (c.scaleMethod === "unknown") === (c.metresPerSourceUnit === null), {
-    message: "metresPerSourceUnit is set exactly when the scale method is manual",
+    message: "metresPerSourceUnit is set exactly when the scale is known (manual or provider-estimated)",
   })
-  .refine((c) => (c.units === "metres") === (c.scaleMethod === "manual"), {
-    message: "units are metres exactly when the scale was set manually",
+  .refine((c) => (c.units === "metres") === (c.scaleMethod !== "unknown"), {
+    message: "units are metres exactly when the scale was set manually or estimated by the provider",
   });
 export type SplatCalibration = z.infer<typeof calibrationSchema>;
 
@@ -98,6 +99,26 @@ export function manualCalibration(metresPerSourceUnit: number, groundOffsetMetre
   });
 }
 
+/**
+ * A provider's documented metric-scale ESTIMATE (e.g. World Labs `semantics_metadata.metric_scale_factor`). A factor
+ * of exactly 1 is documented as "not inferred", so it is NOT an estimate; null / invalid is unknown.
+ */
+export function providerEstimatedCalibration(
+  metricScaleFactor: number | null | undefined,
+  groundOffsetMetres: number | null | undefined = 0,
+): SplatCalibration {
+  if (typeof metricScaleFactor !== "number" || !Number.isFinite(metricScaleFactor) || metricScaleFactor <= 0)
+    return { ...UNKNOWN_CALIBRATION };
+  if (metricScaleFactor === 1) return { ...UNKNOWN_CALIBRATION };
+  return calibrationSchema.parse({
+    units: "metres",
+    metresPerSourceUnit: metricScaleFactor,
+    scaleMethod: "provider_estimated",
+    groundOffsetMetres:
+      typeof groundOffsetMetres === "number" && Number.isFinite(groundOffsetMetres) ? groundOffsetMetres : 0,
+  });
+}
+
 /** Parse a stored calibration; anything malformed is treated as unknown scale (never as metric). */
 export function parseCalibration(value: unknown): SplatCalibration {
   const parsed = calibrationSchema.safeParse(value);
@@ -110,8 +131,8 @@ export const scaleFromMetresPerUnit = (metresPerSourceUnit: number) => metresPer
 // ───────────────────────── reconstruction provenance (IMMUTABLE) ─────────────────────────
 
 export const RECONSTRUCTION_SCHEMA = "prism.spatial-reconstruction.v1" as const;
-/** M2D.1 only records imports; later milestones add provider/model methods. */
-export const RECONSTRUCTION_METHODS = ["imported"] as const;
+/** `imported` (M2D.1): a file the user brought. `generated` (M2D.2): produced by a reconstruction job + provider. */
+export const RECONSTRUCTION_METHODS = ["imported", "generated"] as const;
 export const RECONSTRUCTION_RESULT_KINDS = ["gaussian_splat"] as const;
 
 export const sourceAssetSchema = z.object({
@@ -119,6 +140,19 @@ export const sourceAssetSchema = z.object({
   checksum: z.string().nullable(),
 });
 export type ReconstructionSource = z.infer<typeof sourceAssetSchema>;
+
+/** Provider provenance of a GENERATED reconstruction (never a URL, a key or a temporary grant). */
+export const generationProvenanceSchema = z.object({
+  jobId: z.string().min(1),
+  attempt: z.number().int().positive(),
+  provider: z.string().min(1),
+  capability: z.string().min(1),
+  model: z.string().nullable(),
+  operationId: z.string().nullable(),
+  /** sanitised, bounded provider metadata (e.g. world id, chosen resolution, scale estimate) */
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+export type GenerationProvenance = z.infer<typeof generationProvenanceSchema>;
 
 export interface ReconstructionIdentity {
   locationId: string;
@@ -128,12 +162,14 @@ export interface ReconstructionIdentity {
   sources: ReconstructionSource[];
   /** the calibration the SOURCE claimed on arrival (units unknown for an import), immutable provenance */
   calibration: SplatCalibration;
+  /** generated only: which job / provider / model / operation produced it */
+  generation?: GenerationProvenance | null;
 }
 
 const byAsset = (a: ReconstructionSource, b: ReconstructionSource) =>
   a.assetId < b.assetId ? -1 : a.assetId > b.assetId ? 1 : 0;
 
-/** Sources are a SET: duplicates collapse, order never matters. */
+/** Imported sources are a SET: duplicates collapse, order never matters. */
 export function canonicalSources(sources: ReconstructionSource[]): ReconstructionSource[] {
   const seen = new Map<string, ReconstructionSource>();
   for (const s of sources) if (!seen.has(s.assetId)) seen.set(s.assetId, { ...s });
@@ -151,7 +187,20 @@ export function reconstructionFingerprint(id: ReconstructionIdentity): string {
     method: id.method,
     resultKind: id.resultKind,
     result: { assetId: id.result.assetId, checksum: id.result.checksum },
-    sources: canonicalSources(id.sources).map((s) => ({ assetId: s.assetId, checksum: s.checksum })),
+    sources: sourcesFor(id.method, id.sources).map((s) => ({ assetId: s.assetId, checksum: s.checksum })),
+    // generated only (absent for imports, so M2D.1 fingerprints are unchanged)
+    ...(id.method === "generated" && id.generation
+      ? {
+          generation: {
+            jobId: id.generation.jobId,
+            attempt: id.generation.attempt,
+            provider: id.generation.provider,
+            capability: id.generation.capability,
+            model: id.generation.model,
+            operationId: id.generation.operationId,
+          },
+        }
+      : {}),
     calibration: {
       units: id.calibration.units,
       metresPerSourceUnit: id.calibration.metresPerSourceUnit,
@@ -159,6 +208,18 @@ export function reconstructionFingerprint(id: ReconstructionIdentity): string {
       groundOffsetMetres: id.calibration.groundOffsetMetres,
     },
   });
+}
+
+/**
+ * Imported sources are an unordered set; GENERATED sources keep the job's order (the first image is the primary one
+ * and provider semantics may depend on it), de-duplicated but never sorted.
+ */
+export function sourcesFor(method: ReconstructionIdentity["method"], sources: ReconstructionSource[]) {
+  if (method !== "generated") return canonicalSources(sources);
+  const seen = new Set<string>();
+  return sources
+    .filter((s) => (seen.has(s.assetId) ? false : (seen.add(s.assetId), true)))
+    .map((s) => ({ ...s }));
 }
 
 export interface SpatialReconstructionRecord {
@@ -175,6 +236,8 @@ export interface SpatialReconstructionRecord {
   gaussianCount: number | null;
   sources: ReconstructionSource[];
   calibration: SplatCalibration;
+  /** generated only; null for imports */
+  generation: GenerationProvenance | null;
   fingerprint: string;
   createdBy: string | null;
   createdAt: string;
@@ -192,6 +255,7 @@ export interface NewSpatialReconstruction {
   gaussianCount: number | null;
   sources: ReconstructionSource[];
   calibration: SplatCalibration;
+  generation?: GenerationProvenance | null;
   userId: string | null;
   now: string;
 }
@@ -204,6 +268,7 @@ export function reconstructionFingerprintOf(r: {
   resultChecksum: string | null;
   sources: ReconstructionSource[];
   calibration: SplatCalibration;
+  generation?: GenerationProvenance | null;
 }): string {
   return reconstructionFingerprint({
     locationId: r.locationId,
@@ -212,6 +277,7 @@ export function reconstructionFingerprintOf(r: {
     result: { assetId: r.resultAssetId, checksum: r.resultChecksum },
     sources: r.sources,
     calibration: r.calibration,
+    generation: r.generation ?? null,
   });
 }
 
@@ -258,6 +324,19 @@ export interface SpatialEnvironmentReference {
   /** reconstruction provenance: the images the splat was reconstructed from (NOT shot references) */
   sourceReferenceAssetIds: string[];
   sourceReferences: ReconstructionSource[];
+  /**
+   * Present only for a GENERATED reconstruction (M2D.2): job / provider / model / operation identity. Additive:
+   * imported environments have no `generation` key, so their packages are unchanged.
+   */
+  generation?: {
+    method: "generated";
+    jobId: string;
+    attempt: number;
+    provider: string;
+    capability: string;
+    model: string | null;
+    operationId: string | null;
+  };
 }
 
 const r5 = (v: number) => Math.round(v * 1e5) / 1e5 + 0;
@@ -286,8 +365,21 @@ export function buildSpatialEnvironment(
       scale: rv(object.scale),
     },
     calibration: parseCalibration(object.calibration ?? null),
-    sourceReferenceAssetIds: canonicalSources(reconstruction.sources).map((s) => s.assetId),
-    sourceReferences: canonicalSources(reconstruction.sources),
+    sourceReferenceAssetIds: sourcesFor(reconstruction.method, reconstruction.sources).map((s) => s.assetId),
+    sourceReferences: sourcesFor(reconstruction.method, reconstruction.sources),
+    ...(reconstruction.method === "generated" && reconstruction.generation
+      ? {
+          generation: {
+            method: "generated" as const,
+            jobId: reconstruction.generation.jobId,
+            attempt: reconstruction.generation.attempt,
+            provider: reconstruction.generation.provider,
+            capability: reconstruction.generation.capability,
+            model: reconstruction.generation.model,
+            operationId: reconstruction.generation.operationId,
+          },
+        }
+      : {}),
   };
 }
 

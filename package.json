@@ -38,6 +38,7 @@
     "db:blocking": "tsx --env-file=.env.local scripts/db-blocking.mts",
     "db:spatial-passes": "tsx --env-file=.env.local scripts/db-spatial-passes.mts",
     "db:reconstructions": "tsx --env-file=.env.local scripts/db-reconstructions.mts",
+    "db:reconstruction-jobs": "tsx --env-file=.env.local scripts/db-reconstruction-jobs.mts",
     "db:continuity-analysis": "tsx --env-file=.env.local scripts/db-continuity-analysis.mts",
     "continuity:worker": "tsx --env-file=.env.local scripts/continuity-worker.mts",
     "continuity:pre-paid:check": "tsx --env-file=.env.local scripts/continuity-pre-paid-check.mts",

@@ -1,7 +1,21 @@
 import type { Pool, PoolClient } from "pg";
 import {
+  applyJobPatch,
+  jobOptionsSchema,
+  jobSourceSchema,
+  JobTransitionError,
+  newJobRecord,
+  sanitizeProviderPayload,
+  type JobEvent,
+  type JobEventRecord,
+  type JobPatch,
+  type NewReconstructionJob,
+  type ReconstructionJobRecord,
+} from "@/domain/reconstruction/job";
+import {
   calibrationSchema,
-  canonicalSources,
+  generationProvenanceSchema,
+  sourcesFor,
   reconstructionFingerprintOf,
   type NewSpatialReconstruction,
   type SpatialReconstructionRecord,
@@ -244,7 +258,8 @@ const mapReconstruction = (r: Row): SpatialReconstructionRecord => ({
   resultFormat: r.result_format as SpatialReconstructionRecord["resultFormat"],
   gaussianCount:
     r.gaussian_count === null || r.gaussian_count === undefined ? null : Number(r.gaussian_count),
-  sources: canonicalSources(
+  sources: sourcesFor(
+    r.method as SpatialReconstructionRecord["method"],
     (Array.isArray(r.source_assets_json) ? r.source_assets_json : []).map(
       (s: { assetId: string; checksum: string | null }) => ({
         assetId: String(s.assetId),
@@ -253,10 +268,104 @@ const mapReconstruction = (r: Row): SpatialReconstructionRecord => ({
     ),
   ),
   calibration: calibrationSchema.parse(r.calibration_json),
+  generation: r.generation_json ? generationProvenanceSchema.parse(r.generation_json) : null,
   fingerprint: String(r.reconstruction_fingerprint),
   createdBy: str(r.created_by),
   createdAt: iso(r.created_at),
 });
+
+const mapJob = (r: Row): ReconstructionJobRecord => ({
+  id: String(r.id),
+  projectId: String(r.project_id),
+  locationId: String(r.location_id),
+  schemaVersion: "prism.reconstruction-job.v1",
+  jobFingerprint: String(r.job_fingerprint),
+  attempt: Number(r.attempt),
+  previousJobId: str(r.previous_job_id),
+  provider: r.provider as ReconstructionJobRecord["provider"],
+  capability: String(r.provider_capability),
+  model: str(r.provider_model),
+  resultKind: r.requested_result_kind as ReconstructionJobRecord["resultKind"],
+  sources: (r.source_assets_json as unknown[]).map((x) => jobSourceSchema.parse(x)),
+  options: jobOptionsSchema.parse(r.options_json),
+  status: r.status as ReconstructionJobRecord["status"],
+  progress: r.progress === null || r.progress === undefined ? null : Number(r.progress),
+  revision: Number(r.revision),
+  providerOperationId: str(r.provider_operation_id),
+  providerOperation: (r.provider_operation_json as Record<string, unknown> | null) ?? null,
+  providerInputs: (r.provider_inputs_json as ReconstructionJobRecord["providerInputs"]) ?? null,
+  providerResult: (r.provider_result_json as Record<string, unknown> | null) ?? null,
+  resultReconstructionId: str(r.result_reconstruction_id),
+  errorCode: (r.error_code as ReconstructionJobRecord["errorCode"]) ?? null,
+  errorMessage: str(r.error_message),
+  lastPolledAt: r.last_polled_at ? iso(r.last_polled_at) : null,
+  createdBy: str(r.created_by),
+  createdAt: iso(r.created_at),
+  updatedAt: iso(r.updated_at),
+  completedAt: r.completed_at ? iso(r.completed_at) : null,
+});
+
+async function insertReconstruction(c: PoolClient, input: NewSpatialReconstruction) {
+  const calibration = calibrationSchema.parse(input.calibration);
+  const sources = sourcesFor(input.method, input.sources);
+  const generation = input.method === "generated" ? generationProvenanceSchema.parse(input.generation) : null;
+  if (input.method !== "generated" && input.generation)
+    throw new PrevisError("invalid", "Only a generated reconstruction carries provider provenance.");
+  const fp = reconstructionFingerprintOf({
+    locationId: input.locationId,
+    method: input.method,
+    resultKind: input.resultKind,
+    resultAssetId: input.resultAssetId,
+    resultChecksum: input.resultChecksum,
+    sources,
+    calibration,
+    generation,
+  });
+  try {
+    const r = await c.query(
+      `insert into location_spatial_reconstructions
+         (id, project_id, location_id, schema_version, method, result_kind, result_asset_id, result_checksum,
+          result_format, gaussian_count, source_assets_json, calibration_json, reconstruction_fingerprint,
+          created_by, created_at, job_id, provider, provider_capability, provider_model, provider_operation_id,
+          generation_json)
+       values ($1,$2,$3,'prism.spatial-reconstruction.v1',$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14,
+               $15,$16,$17,$18,$19,$20::jsonb)
+       returning *`,
+      [
+        input.id,
+        input.projectId,
+        input.locationId,
+        input.method,
+        input.resultKind,
+        input.resultAssetId,
+        input.resultChecksum,
+        input.resultFormat,
+        input.gaussianCount,
+        JSON.stringify(sources),
+        JSON.stringify(calibration),
+        fp,
+        input.userId,
+        input.now,
+        generation?.jobId ?? null,
+        generation?.provider ?? null,
+        generation?.capability ?? null,
+        generation?.model ?? null,
+        generation?.operationId ?? null,
+        generation ? JSON.stringify(generation) : null,
+      ],
+    );
+    return mapReconstruction(r.rows[0]);
+  } catch (e) {
+    if ((e as { code?: string }).code === "23505")
+      throw new PrevisError(
+        "conflict",
+        generation
+          ? "That reconstruction job already produced its reconstruction."
+          : "That exact reconstruction is already recorded for this location.",
+      );
+    throw e;
+  }
+}
 
 /** RLS-bound: every statement runs under the caller's JWT claims via the preamble (owner-only policies). */
 export class PostgresPrevisData implements PrevisRepository {
@@ -966,52 +1075,176 @@ export class PostgresPrevisData implements PrevisRepository {
   }
 
   async recordReconstruction(input: NewSpatialReconstruction) {
+    return this.tx((c) => insertReconstruction(c, input));
+  }
+
+  async createReconstructionJob(input: NewReconstructionJob) {
+    const rec = newJobRecord(input);
     return this.tx(async (c) => {
-      const calibration = calibrationSchema.parse(input.calibration);
-      const sources = canonicalSources(input.sources);
-      const fp = reconstructionFingerprintOf({
-        locationId: input.locationId,
-        method: input.method,
-        resultKind: input.resultKind,
-        resultAssetId: input.resultAssetId,
-        resultChecksum: input.resultChecksum,
-        sources,
-        calibration,
-      });
       try {
         const r = await c.query(
-          `insert into location_spatial_reconstructions
-             (id, project_id, location_id, schema_version, method, result_kind, result_asset_id, result_checksum,
-              result_format, gaussian_count, source_assets_json, calibration_json, reconstruction_fingerprint,
-              created_by, created_at)
-           values ($1,$2,$3,'prism.spatial-reconstruction.v1',$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14)
+          `insert into reconstruction_jobs
+             (id, project_id, location_id, schema_version, job_fingerprint, attempt, previous_job_id, provider,
+              provider_capability, provider_model, requested_result_kind, source_assets_json, options_json, status,
+              created_by, created_at, updated_at)
+           values ($1,$2,$3,'prism.reconstruction-job.v1',$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13,$14,$15,$15)
            returning *`,
           [
-            input.id,
-            input.projectId,
-            input.locationId,
-            input.method,
-            input.resultKind,
-            input.resultAssetId,
-            input.resultChecksum,
-            input.resultFormat,
-            input.gaussianCount,
-            JSON.stringify(sources),
-            JSON.stringify(calibration),
-            fp,
+            rec.id,
+            rec.projectId,
+            rec.locationId,
+            rec.jobFingerprint,
+            rec.attempt,
+            rec.previousJobId,
+            rec.provider,
+            rec.capability,
+            rec.model,
+            rec.resultKind,
+            JSON.stringify(rec.sources),
+            JSON.stringify(rec.options),
+            rec.status,
             input.userId,
             input.now,
           ],
         );
-        return mapReconstruction(r.rows[0]);
+        return mapJob(r.rows[0]);
       } catch (e) {
         if ((e as { code?: string }).code === "23505")
-          throw new PrevisError(
-            "conflict",
-            "That exact reconstruction is already recorded for this location.",
-          );
+          throw new PrevisError("conflict", "That reconstruction attempt already exists.");
         throw e;
       }
+    });
+  }
+
+  async getReconstructionJob(id: string) {
+    return this.tx(async (c) => {
+      const r = await c.query("select * from reconstruction_jobs where id = $1", [id]);
+      return r.rows[0] ? mapJob(r.rows[0]) : null;
+    });
+  }
+
+  async listReconstructionJobs(locationId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        "select * from reconstruction_jobs where location_id = $1 order by created_at desc, id desc",
+        [locationId],
+      );
+      return r.rows.map(mapJob);
+    });
+  }
+
+  async updateReconstructionJob(id: string, expectedRevision: number, patch: JobPatch, now: string) {
+    return this.tx(async (c) => {
+      const cur = await c.query("select * from reconstruction_jobs where id = $1 for update", [id]);
+      if (!cur.rows[0]) throw new PrevisError("not_found", "That reconstruction job no longer exists.");
+      const job = mapJob(cur.rows[0]);
+      if (job.revision !== expectedRevision)
+        throw new PrevisError("conflict", "The reconstruction job changed in the meantime.");
+      let next: ReconstructionJobRecord;
+      try {
+        next = applyJobPatch(job, patch, now);
+      } catch (e) {
+        if (e instanceof JobTransitionError) throw new PrevisError("invalid", e.message);
+        throw e;
+      }
+      const r = await c.query(
+        `update reconstruction_jobs set
+            status = $3, progress = $4, revision = $5, provider_operation_id = $6, provider_operation_json = $7::jsonb,
+            provider_inputs_json = $8::jsonb, provider_result_json = $9::jsonb, error_code = $10, error_message = $11,
+            last_polled_at = $12, completed_at = $13
+          where id = $1 and revision = $2
+          returning *`,
+        [
+          id,
+          expectedRevision,
+          next.status,
+          next.progress,
+          next.revision,
+          next.providerOperationId,
+          next.providerOperation ? JSON.stringify(next.providerOperation) : null,
+          next.providerInputs ? JSON.stringify(next.providerInputs) : null,
+          next.providerResult ? JSON.stringify(next.providerResult) : null,
+          next.errorCode,
+          next.errorMessage,
+          next.lastPolledAt,
+          next.completedAt,
+        ],
+      );
+      if (!r.rows[0]) throw new PrevisError("conflict", "The reconstruction job changed in the meantime.");
+      return mapJob(r.rows[0]);
+    });
+  }
+
+  async completeReconstructionJob(input: {
+    jobId: string;
+    expectedRevision: number;
+    reconstruction: NewSpatialReconstruction;
+    providerResult: Record<string, unknown> | null;
+    now: string;
+  }) {
+    return this.tx(async (c) => {
+      const cur = await c.query("select * from reconstruction_jobs where id = $1 for update", [input.jobId]);
+      if (!cur.rows[0]) throw new PrevisError("not_found", "That reconstruction job no longer exists.");
+      const job = mapJob(cur.rows[0]);
+      if (job.revision !== input.expectedRevision || job.status !== "ingesting")
+        throw new PrevisError("conflict", "The reconstruction job changed in the meantime.");
+      if (input.reconstruction.generation?.jobId !== job.id)
+        throw new PrevisError("invalid", "The reconstruction does not belong to this job.");
+      // one transaction: the reconstruction row and the job's success are committed together or not at all
+      const reconstruction = await insertReconstruction(c, input.reconstruction);
+      const r = await c.query(
+        `update reconstruction_jobs set status = 'succeeded', progress = 1, revision = revision + 1,
+            provider_result_json = $3::jsonb, result_reconstruction_id = $4, completed_at = $5
+          where id = $1 and revision = $2 and status = 'ingesting'
+          returning *`,
+        [
+          job.id,
+          input.expectedRevision,
+          input.providerResult ? JSON.stringify(sanitizeProviderPayload(input.providerResult)) : null,
+          reconstruction.id,
+          input.now,
+        ],
+      );
+      if (!r.rows[0]) throw new PrevisError("conflict", "The reconstruction job changed in the meantime.");
+      return { job: mapJob(r.rows[0]), reconstruction };
+    });
+  }
+
+  async appendReconstructionJobEvent(input: {
+    projectId: string;
+    jobId: string;
+    event: JobEvent;
+    detail: Record<string, unknown>;
+    now: string;
+  }) {
+    await this.tx(async (c) => {
+      await c.query(
+        `insert into reconstruction_job_events (project_id, job_id, event, detail_json, created_at)
+         values ($1,$2,$3,$4::jsonb,$5)`,
+        [
+          input.projectId,
+          input.jobId,
+          input.event,
+          JSON.stringify(sanitizeProviderPayload(input.detail) ?? {}),
+          input.now,
+        ],
+      );
+    });
+  }
+
+  async listReconstructionJobEvents(jobId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        "select * from reconstruction_job_events where job_id = $1 order by created_at, id",
+        [jobId],
+      );
+      return r.rows.map((x): JobEventRecord => ({
+        id: String(x.id),
+        jobId: String(x.job_id),
+        event: x.event as JobEvent,
+        detail: (x.detail_json as Record<string, unknown>) ?? {},
+        createdAt: iso(x.created_at),
+      }));
     });
   }
 
