@@ -1,3 +1,10 @@
+import type {
+  JobEvent,
+  JobEventRecord,
+  JobPatch,
+  NewReconstructionJob,
+  ReconstructionJobRecord,
+} from "@/domain/reconstruction/job";
 import type { NewSpatialReconstruction, SpatialReconstructionRecord } from "@/domain/previs/splat";
 import type { StoredAudioMix } from "@/domain/previs/audio-mix";
 import type { RenderedBlockingFigure, ShotBlockingEntry } from "@/domain/previs/blocking";
@@ -284,6 +291,41 @@ export interface PrevisRepository {
   reconstructionUsesAsset(assetId: string): Promise<boolean>;
   /** Records an immutable reconstruction; the fingerprint is computed here from the identity fields. */
   recordReconstruction(input: NewSpatialReconstruction): Promise<SpatialReconstructionRecord>;
+
+  // ── reconstruction jobs (M2D.2) ──
+  createReconstructionJob(input: NewReconstructionJob): Promise<ReconstructionJobRecord>;
+  getReconstructionJob(id: string): Promise<ReconstructionJobRecord | null>;
+  /** Newest first, every attempt (history is retained). */
+  listReconstructionJobs(locationId: string): Promise<ReconstructionJobRecord[]>;
+  /**
+   * Compare-and-set on `revision`: applies one server-derived change only if nobody else changed the job since it was
+   * read. Throws PrevisError("conflict") when another request won, PrevisError("invalid") on a forbidden transition.
+   */
+  updateReconstructionJob(
+    id: string,
+    expectedRevision: number,
+    patch: JobPatch,
+    now: string,
+  ): Promise<ReconstructionJobRecord>;
+  /**
+   * The ONLY way a job succeeds: atomically records the generated reconstruction AND moves the job ingesting ->
+   * succeeded with its result link (CAS on revision). Exactly one caller can win; the loser gets a conflict and no row.
+   */
+  completeReconstructionJob(input: {
+    jobId: string;
+    expectedRevision: number;
+    reconstruction: NewSpatialReconstruction;
+    providerResult: Record<string, unknown> | null;
+    now: string;
+  }): Promise<{ job: ReconstructionJobRecord; reconstruction: SpatialReconstructionRecord }>;
+  appendReconstructionJobEvent(input: {
+    projectId: string;
+    jobId: string;
+    event: JobEvent;
+    detail: Record<string, unknown>;
+    now: string;
+  }): Promise<void>;
+  listReconstructionJobEvents(jobId: string): Promise<JobEventRecord[]>;
 
   getSceneForLocation(locationId: string): Promise<SceneDocumentRecord | null>;
   getScene(sceneDocumentId: string): Promise<SceneDocumentRecord | null>;

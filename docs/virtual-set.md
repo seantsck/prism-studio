@@ -823,3 +823,20 @@ does not add WebGL contexts (E2E: three remounts, one splat root and one SparkRe
   object silently); the editor blocks Save rather than guessing.
 - The sort worker is created from an inlined Blob; a Content-Security-Policy that forbids `worker-src blob:` would need an
   exception (Prism sets none today).
+
+## Generated spatial environments (Phase 2F M2D.2)
+
+A Location's spatial environment can now also be **generated** from its reference images by a reconstruction job
+(see [reconstruction-providers](reconstruction-providers.md)). The result converges on exactly the M2D.1 path:
+
+- the provider result is downloaded server-side, size-capped (50 MB), checksummed and validated with `inspectSplat`
+  before it becomes a private `3d` / `spatial_reconstruction` Asset (`source = provider_output`);
+- it is recorded as an immutable `location_spatial_reconstructions` row with `method = 'generated'`, the job's
+  ORDERED sources and the job / provider / model / operation provenance;
+- nothing changes in the Set until **Use as Spatial Environment** (with an explicit confirmation to replace an existing
+  environment); it is then an ordinary splat object: transform, lock, calibrate, save;
+- calibration gains `scaleMethod: provider_estimated` for a provider's documented metric ESTIMATE (World Labs
+  `metric_scale_factor` ≠ 1); the inspector says "provider-estimated … (an estimate, not exact)";
+- `spatialReference.spatialEnvironment` gains an optional `generation` block (job, attempt, provider, capability,
+  model, operation id) for generated environments only; imported environments are unchanged;
+- a visible generated splat blocks M2C control passes exactly like an imported one.

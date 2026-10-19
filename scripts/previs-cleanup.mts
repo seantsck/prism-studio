@@ -25,6 +25,30 @@ if (!report && !reportClips && !reportBlocking && !reportPasses)
 const pool = new pg.Pool({ connectionString: dev.url, ssl: { rejectUnauthorized: false }, max: 2 });
 await assertDevUserExists(pool, dev);
 
+if (process.argv.includes("--report-jobs")) {
+  const rows = await pool.query(
+    `select j.id, j.location_id, j.status, j.attempt, j.provider, j.provider_capability, j.provider_model,
+            j.provider_operation_id, j.provider_operation_json, j.provider_inputs_json, j.provider_result_json,
+            j.source_assets_json, j.result_reconstruction_id, j.error_code, j.revision,
+            (select count(*)::int from reconstruction_job_events e where e.job_id = j.id) as events,
+            (select jsonb_build_object('method', r.method, 'job_id', r.job_id, 'provider', r.provider,
+                     'provider_operation_id', r.provider_operation_id, 'result_asset_id', r.result_asset_id,
+                     'source_assets_json', r.source_assets_json, 'calibration_json', r.calibration_json,
+                     'asset', (select jsonb_build_object('type', a.type, 'purpose', a.purpose, 'source', a.source,
+                                'mime', a.mime, 'bucket', a.bucket, 'object_path', a.object_path, 'checksum', a.checksum,
+                                'bucket_public', (select public from storage.buckets bk where bk.id = a.bucket))
+                               from assets a where a.id = r.result_asset_id))
+               from location_spatial_reconstructions r where r.id = j.result_reconstruction_id) as reconstruction
+       from reconstruction_jobs j
+       join projects p on p.id = j.project_id
+      where p.user_id = $1 order by j.created_at`,
+    [dev.id],
+  );
+  console.log(JSON.stringify(rows.rows));
+  await pool.end();
+  process.exit(0);
+}
+
 if (process.argv.includes("--report-reconstructions")) {
   const rows = await pool.query(
     `select r.id, r.location_id, r.method, r.result_kind, r.result_asset_id, r.result_checksum, r.result_format,
@@ -123,15 +147,20 @@ if (report) {
   process.exit(0);
 }
 
+// E2E reference images uploaded by a reconstruction-job test (names start with the given e2e- prefix)
+const prefixArg = process.argv.find((a) => a.startsWith("--e2e-assets-prefix="))?.split("=")[1] ?? "";
+const e2ePrefix = /^e2e-[a-z0-9-]+$/i.test(prefixArg) ? prefixArg : "(no e2e prefix)";
 const assets = (
   await pool.query(
     `select a.id, a.object_path from assets a join projects p on p.id = a.project_id
       where p.user_id = $1
-        and ((a.source = '3d_render' and 'master_frame' = any(a.tags))
+        and ((a.source = 'upload' and a.name like $2 || '%')
+          or (a.source = '3d_render' and 'master_frame' = any(a.tags))
           or (a.source = '3d_render' and 'spatial_pass' = any(a.tags))
           or (a.source = 'import' and 'gaussian_splat' = any(a.tags))
+          or (a.source = 'provider_output' and 'gaussian_splat' = any(a.tags))
           or (a.source = 'local_previs' and 'previs' = any(a.tags)))`,
-    [dev.id],
+    [dev.id, e2ePrefix],
   )
 ).rows;
 const frames = (
@@ -149,12 +178,13 @@ const counts = (
             (select count(*)::int from shot_previs_clips c join projects p on p.id = c.project_id where p.user_id = $1) as clips,
             (select count(*)::int from shot_character_blocking c join projects p on p.id = c.project_id where p.user_id = $1) as blocking,
             (select count(*)::int from shot_spatial_pass_bundles c join projects p on p.id = c.project_id where p.user_id = $1) as bundles,
-            (select count(*)::int from location_spatial_reconstructions c join projects p on p.id = c.project_id where p.user_id = $1) as reconstructions`,
+            (select count(*)::int from location_spatial_reconstructions c join projects p on p.id = c.project_id where p.user_id = $1) as reconstructions,
+            (select count(*)::int from reconstruction_jobs c join projects p on p.id = c.project_id where p.user_id = $1) as jobs`,
     [dev.id],
   )
 ).rows[0];
 console.log(
-  `scenes: ${counts.scenes}, bookmarks: ${counts.bookmarks}, camera paths: ${counts.paths}, previs clips: ${counts.clips}, character blocking: ${counts.blocking}, spatial pass bundles: ${counts.bundles}, reconstructions: ${counts.reconstructions}, previs/master-frame/spatial-pass/splat assets: ${assets.length}, storyboard frames: ${frames.length}`,
+  `scenes: ${counts.scenes}, bookmarks: ${counts.bookmarks}, camera paths: ${counts.paths}, previs clips: ${counts.clips}, character blocking: ${counts.blocking}, spatial pass bundles: ${counts.bundles}, reconstructions: ${counts.reconstructions}, reconstruction jobs: ${counts.jobs}, previs/master-frame/spatial-pass/splat assets: ${assets.length}, storyboard frames: ${frames.length}`,
 );
 if (!process.argv.includes("--yes")) {
   console.log("dry run; pass --yes to delete");
@@ -168,8 +198,10 @@ await pool.query(
   `delete from shot_spatial_pass_bundles where project_id in (select id from projects where user_id = $1)`,
   [dev.id],
 );
+// jobs and generated reconstructions reference each other: delete both in ONE statement (FKs checked at its end)
 await pool.query(
-  `delete from location_spatial_reconstructions where project_id in (select id from projects where user_id = $1)`,
+  `with jobs as (delete from reconstruction_jobs where project_id in (select id from projects where user_id = $1))
+   delete from location_spatial_reconstructions where project_id in (select id from projects where user_id = $1)`,
   [dev.id],
 );
 await pool.query(

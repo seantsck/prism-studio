@@ -217,6 +217,7 @@ describe("spatial environment frozen into a package", () => {
       { assetId: "ref-1", checksum: "sha-r1" },
     ],
     calibration: { ...UNKNOWN_CALIBRATION },
+    generation: null,
     fingerprint: "f".repeat(64),
     createdBy: null,
     createdAt: "2026-10-18T00:00:00.000Z",

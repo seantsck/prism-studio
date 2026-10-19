@@ -198,3 +198,22 @@ A Location can carry a **Gaussian-splat environment** reconstructed elsewhere (P
    Hide the splat to capture mesh-and-Character passes.
 6. The GenerationPackage records the environment (`spatialReference.spatialEnvironment`) by value; moving the splat later
    produces a different package and leaves the earlier one untouched. No prompt text is added.
+
+## Generating a spatial environment from reference images (Phase 2F M2D.2)
+
+1. Put reference photos of the Location in the asset library (purpose **Location reference**).
+2. In the Location's 3D Set, **Create reconstruction**: pick the images, order them (the first is the primary image;
+   ↑ ↓ ★ ×), pick the provider and model. Each provider says first what it costs and where it runs (**Local Capture**:
+   free, runs on this machine, not installed until a later update; **World Labs Marble**: paid provider, optional;
+   **Mock Reconstruction**: development only), then its status (ready / not installed / not configured / switched
+   off). Nothing paid is ever pre-selected. For a paid provider the panel shows the documented price and you must
+   tick "provider charges may apply". If a provider is unavailable or fails, Prism never switches to another one.
+3. **Generate Reconstruction** creates a job and submits it once. Progress appears in the job list. You can leave the
+   page: the job is stored and resumes when you come back.
+4. When the result is ready, Prism has already downloaded it, checked it and stored it privately. Your Set is not
+   changed. Press **Use as Spatial Environment** (or **Replace current spatial environment** if the Set already has
+   one), align it, and save the Set.
+5. A failed job can be **retried** (a new attempt; the failed one stays in history). **Cancel** tells you truthfully
+   whether the provider stopped the work or Prism only stopped tracking it.
+6. Scale is never assumed: a provider's metric estimate is labelled "provider-estimated"; otherwise it is "unknown"
+   until you calibrate it. Control passes stay blocked while a splat is visible, as with imported splats.

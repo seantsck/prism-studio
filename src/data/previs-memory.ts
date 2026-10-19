@@ -1,6 +1,18 @@
 import {
+  applyJobPatch,
+  JobTransitionError,
+  newJobRecord,
+  sanitizeProviderPayload,
+  type JobEvent,
+  type JobEventRecord,
+  type JobPatch,
+  type NewReconstructionJob,
+  type ReconstructionJobRecord,
+} from "@/domain/reconstruction/job";
+import {
   calibrationSchema,
-  canonicalSources,
+  generationProvenanceSchema,
+  sourcesFor,
   reconstructionFingerprintOf,
   RECONSTRUCTION_SCHEMA,
   type NewSpatialReconstruction,
@@ -62,6 +74,8 @@ export class MemoryPrevisService implements PrevisRepository {
   private blocking = new Map<string, ShotBlockingRecord>(); // by `${shotId}:${characterId}`
   private bundles = new Map<string, SpatialPassBundleRecord>();
   private reconstructions = new Map<string, SpatialReconstructionRecord>();
+  private jobs = new Map<string, ReconstructionJobRecord>();
+  private jobEvents: JobEventRecord[] = [];
 
   constructor(private readonly access: MemoryProjectsAccess) {}
 
@@ -507,7 +521,16 @@ export class MemoryPrevisService implements PrevisRepository {
   async recordReconstruction(input: NewSpatialReconstruction) {
     this.requireLocation(input.projectId, input.locationId);
     const calibration = calibrationSchema.parse(input.calibration);
-    const sources = canonicalSources(input.sources);
+    const sources = sourcesFor(input.method, input.sources);
+    const generation =
+      input.method === "generated" ? generationProvenanceSchema.parse(input.generation) : null;
+    if (input.method !== "generated" && input.generation)
+      throw new PrevisError("invalid", "Only a generated reconstruction carries provider provenance.");
+    if (
+      generation &&
+      [...this.reconstructions.values()].some((r) => r.generation?.jobId === generation.jobId)
+    )
+      throw new PrevisError("conflict", "That reconstruction job already produced its reconstruction.");
     const rec: SpatialReconstructionRecord = {
       id: input.id,
       projectId: input.projectId,
@@ -521,6 +544,7 @@ export class MemoryPrevisService implements PrevisRepository {
       gaussianCount: input.gaussianCount,
       sources,
       calibration,
+      generation,
       fingerprint: reconstructionFingerprintOf({
         locationId: input.locationId,
         method: input.method,
@@ -529,6 +553,7 @@ export class MemoryPrevisService implements PrevisRepository {
         resultChecksum: input.resultChecksum,
         sources,
         calibration,
+        generation,
       }),
       createdBy: input.userId,
       createdAt: input.now,
@@ -541,6 +566,104 @@ export class MemoryPrevisService implements PrevisRepository {
       throw new PrevisError("conflict", "That exact reconstruction is already recorded for this location.");
     this.reconstructions.set(rec.id, rec);
     return clone(rec);
+  }
+
+  async createReconstructionJob(input: NewReconstructionJob) {
+    this.requireLocation(input.projectId, input.locationId);
+    const rec = newJobRecord(input);
+    const dup = [...this.jobs.values()].some(
+      (j) =>
+        j.projectId === rec.projectId && j.jobFingerprint === rec.jobFingerprint && j.attempt === rec.attempt,
+    );
+    if (dup) throw new PrevisError("conflict", "That reconstruction attempt already exists.");
+    if (input.previousJobId) {
+      const prev = this.jobs.get(input.previousJobId);
+      if (!prev || prev.projectId !== input.projectId)
+        throw new PrevisError("invalid", "The job being retried is not in this project.");
+    }
+    this.jobs.set(rec.id, rec);
+    return clone(rec);
+  }
+
+  async getReconstructionJob(id: string) {
+    const j = this.jobs.get(id);
+    return j ? clone(j) : null;
+  }
+
+  async listReconstructionJobs(locationId: string) {
+    return [...this.jobs.values()]
+      .filter((j) => j.locationId === locationId)
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : a.id < b.id ? 1 : -1))
+      .map(clone);
+  }
+
+  async updateReconstructionJob(id: string, expectedRevision: number, patch: JobPatch, now: string) {
+    const job = this.jobs.get(id);
+    if (!job) throw new PrevisError("not_found", "That reconstruction job no longer exists.");
+    if (job.revision !== expectedRevision)
+      throw new PrevisError("conflict", "The reconstruction job changed in the meantime.");
+    let next: ReconstructionJobRecord;
+    try {
+      next = applyJobPatch(job, patch, now);
+    } catch (e) {
+      if (e instanceof JobTransitionError) throw new PrevisError("invalid", e.message);
+      throw e;
+    }
+    this.jobs.set(id, next);
+    return clone(next);
+  }
+
+  async completeReconstructionJob(input: {
+    jobId: string;
+    expectedRevision: number;
+    reconstruction: NewSpatialReconstruction;
+    providerResult: Record<string, unknown> | null;
+    now: string;
+  }) {
+    const job = this.jobs.get(input.jobId);
+    if (!job) throw new PrevisError("not_found", "That reconstruction job no longer exists.");
+    if (job.revision !== input.expectedRevision || job.status !== "ingesting")
+      throw new PrevisError("conflict", "The reconstruction job changed in the meantime.");
+    if (input.reconstruction.generation?.jobId !== job.id)
+      throw new PrevisError("invalid", "The reconstruction does not belong to this job.");
+    // both writes or neither: the reconstruction is validated first, then the job moves
+    const reconstruction = await this.recordReconstruction(input.reconstruction);
+    const next: ReconstructionJobRecord = {
+      ...job,
+      status: "succeeded",
+      progress: 1,
+      providerResult:
+        (sanitizeProviderPayload(input.providerResult) as Record<string, unknown> | null) ?? null,
+      resultReconstructionId: reconstruction.id,
+      revision: job.revision + 1,
+      updatedAt: input.now,
+      completedAt: input.now,
+    };
+    this.jobs.set(job.id, next);
+    return { job: clone(next), reconstruction };
+  }
+
+  async appendReconstructionJobEvent(input: {
+    projectId: string;
+    jobId: string;
+    event: JobEvent;
+    detail: Record<string, unknown>;
+    now: string;
+  }) {
+    const job = this.jobs.get(input.jobId);
+    if (!job || job.projectId !== input.projectId)
+      throw new PrevisError("not_found", "No such reconstruction job.");
+    this.jobEvents.push({
+      id: `${input.jobId}:${this.jobEvents.length + 1}`,
+      jobId: input.jobId,
+      event: input.event,
+      detail: (sanitizeProviderPayload(input.detail) as Record<string, unknown>) ?? {},
+      createdAt: input.now,
+    });
+  }
+
+  async listReconstructionJobEvents(jobId: string) {
+    return this.jobEvents.filter((e) => e.jobId === jobId).map(clone);
   }
 
   async listSpatialPassBundles(shotId: string) {

@@ -63,6 +63,8 @@ const expectedTables = [
   "shot_character_blocking",
   "shot_spatial_pass_bundles",
   "location_spatial_reconstructions",
+  "reconstruction_jobs",
+  "reconstruction_job_events",
 ];
 const tables = (await rows("select tablename, rowsecurity from pg_tables where schemaname='public'")).filter(
   (t) => t.tablename !== "prism_migrations",
