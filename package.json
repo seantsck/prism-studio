@@ -39,6 +39,7 @@
     "db:spatial-passes": "tsx --env-file=.env.local scripts/db-spatial-passes.mts",
     "db:reconstructions": "tsx --env-file=.env.local scripts/db-reconstructions.mts",
     "db:reconstruction-jobs": "tsx --env-file=.env.local scripts/db-reconstruction-jobs.mts",
+    "db:local-worker": "tsx --env-file=.env.local scripts/db-local-worker.mts",
     "local:verify-colmap": "tsx scripts/local-verify-colmap.mts",
     "local:reconstruction-worker": "tsx --env-file=.env.local scripts/run-local-reconstruction-worker.mts",
     "db:continuity-analysis": "tsx --env-file=.env.local scripts/db-continuity-analysis.mts",
