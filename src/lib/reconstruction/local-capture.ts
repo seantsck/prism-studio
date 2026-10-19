@@ -43,7 +43,12 @@ export interface LocalToolchain {
   probe(): LocalToolchainStatus;
 }
 
-/** M2D.2: there is no toolchain integration yet, so it is never reported as installed. */
+/**
+ * Never reported as installed. M2D.3A added the real engine (`./local/engine.ts`) and toolchain probe
+ * (`./local/toolchain.ts`), but Local Capture stays unavailable to the web job service until the durable M2D.3B
+ * worker exists: a browser request must never start a 30-minute reconstruction, even on a machine whose verified
+ * toolchain is ready.
+ */
 export const UNAVAILABLE_TOOLCHAIN: LocalToolchain = {
   probe: () => ({
     installed: false,
