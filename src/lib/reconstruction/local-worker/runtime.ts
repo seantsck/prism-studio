@@ -195,6 +195,11 @@ const lockSchema = z.object({
   workerId: z.string().max(64),
   pid: z.number().int().positive(),
   startedAt: z.string().max(40),
+  /** the work-root identity (workRootId) this lock guards; optional so an older lock file still reads */
+  workRoot: z
+    .string()
+    .regex(/^[0-9a-f]{16}$/)
+    .optional(),
 });
 export type WorkerLock = z.infer<typeof lockSchema>;
 
@@ -228,7 +233,7 @@ export async function acquireWorkerLock(
 ): Promise<{ release: () => Promise<void>; recoveredStale: WorkerLock | null }> {
   await mkdir(workRoot, { recursive: true });
   const file = path.join(workRoot, LOCK_FILE);
-  const body = `${JSON.stringify({ schema: LOCK_SCHEMA, ...me })}\n`;
+  const body = `${JSON.stringify({ schema: LOCK_SCHEMA, ...me, workRoot: workRootId(workRoot) })}\n`;
   let recoveredStale: WorkerLock | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {

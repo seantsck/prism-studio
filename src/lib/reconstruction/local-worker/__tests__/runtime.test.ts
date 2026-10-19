@@ -140,7 +140,7 @@ describe("single-worker lock", () => {
     const dir = await root();
     await acquireWorkerLock(dir, me(3333), () => true); // never released: a crash
     const next = await acquireWorkerLock(dir, me(4444), () => false);
-    expect(next.recoveredStale).toMatchObject({ pid: 3333 });
+    expect(next.recoveredStale).toMatchObject({ pid: 3333, workRoot: workRootId(dir) });
     expect((await readdir(dir)).filter((n) => n.startsWith(LOCK_FILE))).toEqual([LOCK_FILE]);
     await next.release();
 

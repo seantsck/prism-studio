@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, readdir, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -636,7 +636,14 @@ describe("failures and cleanup", () => {
       await mkdir(path.join(w.workRoot, d), { recursive: true });
       if (d !== "lr-fresh") await utimes(path.join(w.workRoot, d), old, old);
     }
+    // a junction / symlink named like a run directory, pointing OUTSIDE the work root: never followed
+    const outside = path.join(w.tmp.dir, "outside");
+    await mkdir(outside, { recursive: true });
+    await writeFile(path.join(outside, "precious.txt"), "keep");
+    await symlink(outside, path.join(w.workRoot, "lr-cccccccccccc-a1-00000000"), "junction");
+    await utimes(outside, old, old);
     expect(await ww.sweep(true)).toBe(2);
+    expect(await readFile(path.join(outside, "precious.txt"), "utf8")).toBe("keep");
     const left = await readdir(w.workRoot);
     expect(left).toContain("keep-me");
     expect(left).toContain("lr-fresh");

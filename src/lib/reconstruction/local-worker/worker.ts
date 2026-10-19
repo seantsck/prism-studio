@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PrevisError } from "@/data/previs-repository";
 import { MAX_SPLAT_BYTES, UNKNOWN_CALIBRATION } from "@/domain/previs/splat";
@@ -891,8 +891,9 @@ export class LocalReconstructionWorker {
     for (const dir of candidates) {
       const name = path.basename(dir);
       if (!name.startsWith("lr-") || name === this.active?.runId) continue;
-      const s = await stat(dir).catch(() => null);
-      if (!s?.isDirectory() || s.mtimeMs > cutoff) continue;
+      // lstat: a symlink or junction is never followed (nothing outside the work root is ever removed)
+      const s = await lstat(dir).catch(() => null);
+      if (!s?.isDirectory() || s.isSymbolicLink() || s.mtimeMs > cutoff) continue;
       await rm(dir, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
       removed++;
     }

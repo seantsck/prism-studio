@@ -319,23 +319,57 @@ Location → ordered photographs → Generate Reconstruction → job QUEUED (the
 local compute by accident), unless `PRISM_STUDIO_PERSISTENCE=supabase` (a separate process cannot share the server's
 in-memory repository; nothing fakes that), and unless `SUPABASE_DB_URL` targets the Prism Studio project.
 
-### Authority (same-host v1)
+### Trust boundary (approved for M2D.3B only)
 
-The worker is an operator process beside the Prism server. It uses the server's own guarded database connection for
-exactly ONE narrow discovery query (id, project, owner and status of `local_capture` jobs in the states it acts on).
-Every read and write for a job runs as role `authenticated` **with the job owner's claims**, the same preamble a
-signed-in request uses, so RLS still decides every job, event, Asset and reconstruction row. Storage uses the
-existing worker credential (`PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY`, the generation worker's sink), and only an
-Asset row read under the owner's RLS, of the job's project, under that project's path prefix, is ever read. No
-credential reaches the browser. No database migration was needed: the worker uses `status`, `revision`,
-`provider_operation_id`, `provider_operation_json`, `progress`, events and the existing ingestion.
-`PRISM_LOCAL_RECONSTRUCTION_PROJECT_ID` optionally limits a worker to one project.
+> **The M2D.3B worker is a TRUSTED SAME-HOST process.** It may hold `SUPABASE_DB_URL` (for the narrow discovery
+> query) and the server-side worker Storage credential `PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY` **only because** it
+> runs beside the trusted Prism server, under operator control. This approval does **not** extend to a downloadable
+> or remote worker. **M2D.3C must not give an end-user workstation `SUPABASE_DB_URL`, any service or worker database
+> credential, or any general Supabase worker secret**: it must use a paired, scoped Local Agent protocol in which
+> the server, not the workstation, holds these authorities.
+
+Neither credential is read by any module the Next.js app imports (the worker modules are imported only by the
+worker entry point and tests; the app reads only the heartbeat file), so neither can reach a client bundle. Neither
+is printed (the startup banner shows only the database host; scripts install the redacting error handlers), and
+neither appears in the heartbeat, the lock file, `provider_operation_json`, job events, error messages or
+reconstruction provenance (all of which are built from fixed fields, and `provider_operation_json` /
+`provider_result_json` additionally pass through the URL/secret-dropping sanitiser).
+
+### Authority (same-host v1): how the job-owner context is established
+
+1. **Discovery** (privileged connection, the ONLY statement run with that privilege): one fixed, parameterised
+   query reading `id`, `project_id`, `created_by` and `status` from `reconstruction_jobs`, filtered on
+   `provider = 'local_capture'`, the status set it acts on and (optionally) the project scope, oldest first, limited.
+   No user-controlled SQL; no other table; no job content. `PRISM_LOCAL_RECONSTRUCTION_PROJECT_ID` optionally limits
+   it to one project.
+2. **Owner**: the job's `created_by`, a column written by the server at creation from the creator's VERIFIED
+   session (never from browser input). It must be a UUID; a job without one (or with a malformed one) is never
+   claimed. RLS (`is_project_owner`) then decides whether that identity may touch the project at all: a disputed
+   owner (not the project's owner) cannot read or write anything, so the claim fails without effect.
+3. **Owner scope**: every read and write for the job (job, events, source Assets, result Asset, reconstruction) goes
+   through the normal repositories (`PostgresPrevisData`, `UserRepository`) constructed with
+   `rlsPreamble({ sub: created_by })`, which opens each transaction with `begin`, `set local role authenticated` and
+   `set_config('request.jwt.claims', …, true)`. This is exactly what a signed-in request uses. It is **transaction-scoped** (`set local`, `is_local = true`), explicit, and ends
+   with that transaction's commit or rollback; the pooled connection returns to its own role. The claims are
+   serialised as a JSON literal with quoting escaped, and the subject is validated as a UUID first.
+4. **Cross-project**: the worker additionally requires the job's project to equal the discovered project, every
+   source Asset's project to equal the job's, and a Storage key to lie under `<project id>/`; RLS enforces ownership
+   independently.
+
+Storage: the worker credential is used only to read the job's own private source objects (Asset rows read under the
+owner's RLS, ids from the frozen job, re-validated) and to write / clean up the result object through the shared
+ingestion. No signed or public URL is created; no path from user content is traversed. No database migration was
+needed: the worker uses `status`, `revision`, `provider_operation_id`, `provider_operation_json`, `progress`, events
+and the existing ingestion.
 
 ### One worker, one job, one GPU
 
-- **Lock**: `<work root>/.worker.lock`, created exclusively. A second worker on the same root refuses to start while
-  the first is alive (checked with signal 0, never killed). A lock whose process is gone (crash, power loss) is
-  recovered; an unreadable one is refused.
+- **Lock**: `<work root>/.worker.lock` (worker id, pid, start time, work-root hash), created exclusively
+  (`O_EXCL`). A second worker on the same root refuses to start while the first is alive (checked with signal 0,
+  never killed). A lock whose process is gone (crash, power loss) is recovered once, atomically; an unreadable one is
+  refused. A lock is never removed because of its age while its pid appears alive. **Manual recovery** (e.g. Windows
+  reused the dead worker's pid): the operator deletes `.worker.lock` only after confirming no worker process is
+  running.
 - **Identity**: `local-<sha256(hostname)[0:8]>-<random>`, never the raw hostname. A claim gets an opaque run id
   (`lr-<job>-a<attempt>-<random>`, also the workspace name); the job's operation id is `local:<run id>`.
 - **One reconstruction at a time.** Queued jobs wait (the UI shows the worker as busy). Concurrency is an
@@ -360,9 +394,11 @@ stays optional and paid and is never chosen automatically.
 ### Inputs, progress, cancellation
 
 - **Inputs**: 3-300 JPEG/PNG photographs (refused at creation otherwise). Before any tool runs, every source is read
-  from private storage server-side and checked against the job's frozen snapshot (Asset exists, same project, image,
-  same MIME, same checksum, and the bytes hash to it), then staged and handed to the engine, which verifies them
-  again. Nothing is made public; no signed URL is created or stored. The staged copies are removed as soon as the
+  from private storage server-side and checked against the job's frozen snapshot (Asset exists, same project, type
+  `image`, same MIME (JPEG/PNG), same checksum, and the bytes hash to it), in the frozen order, then staged and handed
+  to the engine, which verifies them again (count, order, signature, checksum). The purpose is not narrowed beyond
+  what job creation accepts (the panel offers the Location's reference images). Cached files are never trusted
+  because they exist: every run starts from the private Assets. Nothing is made public; no signed URL is created or stored. The staged copies are removed as soon as the
   engine has its own.
 - **Progress**: written at most every ~1.5 s within a stage, immediately on a stage change; only stage changes are
   events (never every Brush iteration). `provider_operation_json` holds runner, worker id, run id, work-root id,
@@ -393,6 +429,10 @@ failure manifest. The sweeper removes worker run directories (`lr-*`) older than
 - **SIGINT / SIGTERM / SIGBREAK / SIGHUP**: stop claiming, abort the active run, wait up to 20 s for it to record
   `failed: provider_failed` ("Local reconstruction worker stopped before the run completed. Retry creates a new
   attempt.") and clean up, then remove the heartbeat and release the lock. A second signal forces exit.
+- **Windows**: Ctrl+C (SIGINT) and Ctrl+Break (SIGBREAK) in the worker's console, and closing the console window
+  (SIGHUP, which Windows allows only a few seconds to finish), take the clean path above. `taskkill /F`, Task Manager's
+  End task, `child.kill()` or a power loss terminate the process without running any handler: that is a crash, handled
+  by the restart rules below.
 - **Restart** (after a crash or power loss): holding the lock, the worker looks at the `submitting`, `running` and
   `ingesting` local jobs **claimed from this work root** (other roots' jobs belong to their own worker).
   - A retained run is imported (and only imported) when everything matches: the run manifest (schema, succeeded,
@@ -437,7 +477,10 @@ test time.
 - **Same-host only** (M2D.3B): hosted Prism → a user's own workstation needs the M2D.3C paired Local Agent.
 - A job claimed from a work root whose worker never comes back stays `running` until the user cancels it (another
   root's worker never takes it over).
-- A crash in the middle of storing the result can leave an orphan private object (the same compensation limits as
-  M2D.2 ingestion); the job itself is resolved on restart.
-- Storing a validated result is retried 3 times in-process; after that the job fails `ingest_failed` (the result is
-  not kept for a later import).
+- **Cleanup / reconciliation debt (not harmless):** a process crash in the middle of storing the result can leave
+  an orphan private object (and possibly its Asset row) that nothing references; the job itself is resolved on
+  restart. The same compensation limit exists in M2D.2 ingestion. A future cleanup must decide by reachability (Asset
+  rows and reconstructions that reference them) or by operation manifests, never by blind bucket deletion.
+- Storing a validated result is attempted at most 3 times in-process; after that the job fails `ingest_failed` and
+  the result is not kept for a later import. Nothing is re-trained automatically: Retry (the user's choice) creates a
+  NEW attempt that reconstructs again.
