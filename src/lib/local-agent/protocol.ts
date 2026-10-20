@@ -1,9 +1,13 @@
 import { z } from "zod";
+import { MAX_SPLAT_BYTES } from "@/domain/previs/splat";
+import { LOCAL_ERROR_CODES, LOCAL_STAGES } from "@/lib/reconstruction/local/types";
 
 /**
  * Prism Local Agent protocol v1 (Phase 2F M2D.3C1): the wire contract between a user's workstation (the remote Local
  * Agent) and the Prism server. Shared by both sides; pure (no filesystem, no database, no environment).
- * The full specification is docs/local-agent-protocol.md; this module is its executable form.
+ * The full specification is docs/local-agent-protocol.md; this module is its executable form. M2D.3C2 adds remote
+ * reconstruction jobs (lease → exact sources → progress/keepalive → fail or one SPZ result) on new signed routes; the
+ * M2D.3C1 pairing, heartbeat and status messages are unchanged, so a C1 agent keeps working (it just never leases).
  *
  * The workstation is an EXTERNAL CLIENT: it holds only its own Ed25519 key pair, its device id and the pinned Prism
  * origin. It never receives a database URL, a Supabase key, a Storage credential, a provider key or a user session.
@@ -15,14 +19,34 @@ export const DEVICE_SCHEMA = "prism.local-agent.v1" as const;
 export const CAPABILITIES_SCHEMA = "prism.local-agent-capabilities.v1" as const;
 
 /** The agent implementation's version string (reported, never trusted for authority). */
-export const AGENT_VERSION = "prism-local-agent-0.1.0" as const;
+export const AGENT_VERSION = "prism-local-agent-0.2.0" as const;
 
 export const API_PREFIX = "/api/local-agent/v1" as const;
 export const PATHS = {
   pair: `${API_PREFIX}/pair`,
   heartbeat: `${API_PREFIX}/heartbeat`,
   status: `${API_PREFIX}/status`,
+  /** M2D.3C2: lease the project's oldest queued remote job (or get the agent's own live lease back) */
+  lease: `${API_PREFIX}/jobs/lease`,
 } as const;
+
+/** An opaque lease id: 128 random bits, lowercase hex. Not a credential (every request is still device-signed). */
+export const LEASE_ID_RE = /^[0-9a-f]{32}$/;
+/** The ids a job route can carry (job ids are UUIDs; the route grammar refuses anything else before any lookup). */
+export const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** A source ordinal on the wire: 0-based, no leading zeros, at most 299. */
+export const ORDINAL_RE = /^(0|[1-9][0-9]{0,2})$/;
+
+/** The routes of ONE lease. Every one is signed like any other request (the path, with these ids, is signed). */
+export const jobPaths = (jobId: string, leaseId: string) => {
+  const base = `${API_PREFIX}/jobs/${jobId}/leases/${leaseId}`;
+  return {
+    source: (ordinal: number) => `${base}/sources/${ordinal}`,
+    progress: `${base}/progress`,
+    fail: `${base}/fail`,
+    result: `${base}/result`,
+  };
+};
 
 /** Request headers of a signed (authenticated) request. Header names are case-insensitive on the wire. */
 export const HEADERS = {
@@ -51,8 +75,55 @@ export function agentOnline(status: string, lastSeenAt: string | null, nowMs: nu
   return Number.isFinite(age) && age >= -CLOCK_SKEW_MS && age <= ONLINE_MS;
 }
 
-/** Strict body limits: every v1 message is tiny (no media ever travels on this protocol in M2D.3C1). */
-export const BODY_LIMITS = { pair: 4096, heartbeat: 8192, status: 0 } as const;
+/**
+ * Strict request body limits. Every control message is small JSON; the ONLY media a request carries is the one SPZ
+ * result of a lease (at most Prism's splat cap). Source photographs travel in RESPONSES (bounded by their frozen size).
+ */
+export const BODY_LIMITS = {
+  pair: 4096,
+  heartbeat: 8192,
+  status: 0,
+  lease: 1024,
+  source: 0,
+  progress: 16_384,
+  fail: 4096,
+  result: MAX_SPLAT_BYTES,
+} as const;
+
+// ───────────────────────── remote jobs (M2D.3C2) ─────────────────────────
+
+/**
+ * A lease is the agent's authority over ONE job attempt. It lives in the job row (provider operation), is renewed by
+ * every accepted keepalive, and is never handed to another workstation: an expired lease fails the attempt.
+ */
+export const LEASE_TTL_MS = 120_000;
+/** The agent sends a signed keepalive/progress at least this often while it holds a lease. */
+export const KEEPALIVE_INTERVAL_MS = 10_000;
+/** The server writes a same-stage progress update at most this often (a stage change is always written). */
+export const MIN_PROGRESS_WRITE_MS = 2_000;
+/** While the server imports a result, the lease is extended by this much (an import never outlives it unnoticed). */
+export const INGEST_GRACE_MS = 10 * 60_000;
+/** The one quality profile remote jobs run (the M2D.3A validated profile; nothing the browser sends changes it). */
+export const REMOTE_QUALITY = "standard" as const;
+/** Largest single source photograph (the M2D.3A engine's per-image limit). */
+export const MAX_SOURCE_BYTES = 64 * 1024 * 1024;
+
+/** The stages a remote job reports: download, the M2D.3A engine stages, and the result upload. */
+export const REMOTE_STAGES = [
+  "downloading",
+  ...LOCAL_STAGES.filter((s) => s !== "complete"),
+  "uploading",
+] as const;
+export type RemoteStage = (typeof REMOTE_STAGES)[number];
+
+/**
+ * What an agent may report when a job fails: the M2D.3A engine's normalized codes, plus two agent-side facts. The
+ * SERVER maps these to a job error code; the workstation never chooses a job status or a database error code.
+ *   source_invalid   a downloaded photograph did not match its frozen size/type/checksum (nothing was run)
+ *   interrupted      the agent restarted mid-run with no validated result (the run is never silently repeated)
+ */
+export const AGENT_FAILURE_CODES = [...LOCAL_ERROR_CODES, "source_invalid", "interrupted"] as const;
+export type AgentFailureCode = (typeof AGENT_FAILURE_CODES)[number];
 
 export const ERROR_CODES = [
   "invalid_pairing",
@@ -69,6 +140,14 @@ export const ERROR_CODES = [
   "origin_mismatch",
   "payload_too_large",
   "not_enabled",
+  // M2D.3C2 remote jobs
+  "lease_expired",
+  "lease_mismatch",
+  "job_cancelled",
+  "job_not_available",
+  "source_unavailable",
+  "result_rejected",
+  "result_pending",
 ] as const;
 export type AgentErrorCode = (typeof ERROR_CODES)[number];
 
@@ -88,6 +167,13 @@ export const ERROR_STATUS: Record<AgentErrorCode, number> = {
   origin_mismatch: 400,
   payload_too_large: 413,
   not_enabled: 404,
+  lease_expired: 410,
+  lease_mismatch: 404,
+  job_cancelled: 409,
+  job_not_available: 409,
+  source_unavailable: 409,
+  result_rejected: 422,
+  result_pending: 409,
 };
 
 /** Fixed, safe, user-readable messages: never SQL, stack traces, key material or another project's existence. */
@@ -108,6 +194,14 @@ export const ERROR_MESSAGES: Record<AgentErrorCode, string> = {
   origin_mismatch: "The agent was pointed at a different address than this Prism server's canonical origin.",
   payload_too_large: "The request body is too large.",
   not_enabled: "Local agents are not enabled on this Prism server.",
+  lease_expired:
+    "This job's lease expired: the workstation stopped reporting in time. The attempt was failed; Retry creates a new one.",
+  lease_mismatch: "This device holds no such lease.",
+  job_cancelled: "The job was cancelled in Prism. Stop and discard the run.",
+  job_not_available: "The job is no longer running.",
+  source_unavailable: "That photograph is not available for this lease.",
+  result_rejected: "Prism refused this result.",
+  result_pending: "Prism is still importing this job's result. Ask again shortly.",
 };
 
 // ───────────────────────── identifiers ─────────────────────────
@@ -177,8 +271,13 @@ export const capabilitiesSchema = z
         qualityProfiles: z.array(z.enum(["draft", "standard", "high"])).max(4),
       })
       .strict(),
-    /** M2D.3C1 executes nothing: always false */
-    busy: z.literal(false),
+    /** true while the agent holds a remote job (M2D.3C1 agents always report false) */
+    busy: z.boolean(),
+    /** M2D.3C2: present when this agent leases and runs remote jobs (absent on M2D.3C1 agents) */
+    execution: z
+      .object({ remoteJobs: z.literal(true) })
+      .strict()
+      .optional(),
   })
   .strict();
 export type AgentCapabilities = z.infer<typeof capabilitiesSchema>;
@@ -267,6 +366,136 @@ export const statusResponseSchema = z.object({
   }),
   project: z.object({ id: z.string().regex(UUID_RE), title: z.string() }),
   acceptedCounter: z.number().int().positive(),
-  remoteExecution: z.literal("not_available"),
+  /**
+   * "available" only when this device reported it runs remote jobs AND this server can serve them. An M2D.3C1 agent
+   * never reports that, so it keeps receiving the value it was built to understand.
+   */
+  remoteExecution: z.enum(["available", "not_available"]),
 });
 export type StatusResponse = z.infer<typeof statusResponseSchema>;
+
+// ───────────────────────── remote job messages (M2D.3C2) ─────────────────────────
+
+const assetIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+
+export const leaseRequestSchema = z.object({ protocol: z.literal(PROTOCOL) }).strict();
+
+export const leaseSourceSchema = z
+  .object({
+    ordinal: z.number().int().min(0).max(299),
+    assetId: assetIdSchema,
+    mime: z.enum(["image/jpeg", "image/png"]),
+    byteSize: z.number().int().min(1).max(MAX_SOURCE_BYTES),
+    sha256: z.string().regex(HEX64_RE),
+    /** the signed Prism route that serves exactly this photograph to exactly this lease */
+    path: z.string().max(200),
+  })
+  .strict();
+export type LeaseSource = z.infer<typeof leaseSourceSchema>;
+
+export const leaseSchema = z
+  .object({
+    jobId: z.string().regex(JOB_ID_RE),
+    attempt: z.number().int().min(1),
+    leaseId: z.string().regex(LEASE_ID_RE),
+    leaseExpiresAt: z.string().max(40),
+    leaseTtlMs: z.number().int().positive(),
+    /** true when this is the agent's own live lease returned again (e.g. after a lost response) */
+    resumed: z.boolean(),
+    quality: z.literal(REMOTE_QUALITY),
+    sources: z.array(leaseSourceSchema).min(3).max(300),
+  })
+  .strict();
+export type Lease = z.infer<typeof leaseSchema>;
+
+export const leaseResponseSchema = z.object({
+  ...envelope,
+  ok: z.literal(true),
+  lease: leaseSchema.nullable(),
+  /** why no lease was given (null when one was) */
+  idle: z.enum(["no_job", "toolchain_not_ready", "remote_jobs_unavailable"]).nullable(),
+});
+export type LeaseResponse = z.infer<typeof leaseResponseSchema>;
+
+/** Safe, path-free facts about a VALIDATED SPZ result, frozen by the server before the bytes are uploaded. */
+export const finalResultSchema = z
+  .object({
+    format: z.literal("spz"),
+    sha256: z.string().regex(HEX64_RE),
+    byteSize: z.number().int().min(1).max(MAX_SPLAT_BYTES),
+    gaussianCount: z.number().int().min(1),
+    shDegree: z.number().int().min(0).max(3),
+    inputImages: z.number().int().min(1).max(300),
+    registeredImages: z.number().int().min(0).max(300),
+    registrationRatio: z.number().min(0).max(1),
+    sparsePoints: z.number().int().min(0),
+    quality: z.literal(REMOTE_QUALITY),
+    colmap: z
+      .object({
+        version: z.string().regex(/^[0-9A-Za-z.+_-]{1,32}$/),
+        sourceCommit: z.string().regex(/^[0-9a-f]{7,40}$/),
+        binarySha256: z.string().regex(HEX64_RE),
+      })
+      .strict(),
+    brush: z.object({ version: z.string().regex(/^[0-9A-Za-z.+_-]{1,32}$/) }).strict(),
+    spzEncoder: z.string().regex(/^[0-9A-Za-z.+_ /:@-]{1,80}$/),
+    spzVersion: z.number().int().min(1).max(100),
+    lossless: z.literal(false),
+    clamped: z
+      .object({
+        positions: z.number().int().min(0),
+        colors: z.number().int().min(0),
+        scales: z.number().int().min(0),
+        sh: z.number().int().min(0),
+      })
+      .strict(),
+  })
+  .strict();
+export type FinalResult = z.infer<typeof finalResultSchema>;
+
+/** A short, single-line, user-language message (bounded; control characters refused). */
+const safeMessage = z
+  .string()
+  .max(300)
+  .refine((s) => !/\p{Cc}/u.test(s), "message must not contain control characters");
+
+export const progressRequestSchema = z
+  .object({
+    protocol: z.literal(PROTOCOL),
+    stage: z.enum(REMOTE_STAGES),
+    progress: z.number().min(0).max(1),
+    message: safeMessage,
+    /** sent once, with stage "uploading", before the SPZ bytes: the server freezes it */
+    result: finalResultSchema.optional(),
+  })
+  .strict();
+export type ProgressRequest = z.infer<typeof progressRequestSchema>;
+
+export const progressResponseSchema = z.object({
+  ...envelope,
+  ok: z.literal(true),
+  leaseExpiresAt: z.string().max(40),
+  leaseTtlMs: z.number().int().positive(),
+});
+export type ProgressResponse = z.infer<typeof progressResponseSchema>;
+
+export const failRequestSchema = z
+  .object({
+    protocol: z.literal(PROTOCOL),
+    code: z.enum(AGENT_FAILURE_CODES),
+    stage: z.enum(REMOTE_STAGES).nullable(),
+    message: safeMessage,
+  })
+  .strict();
+export type FailRequest = z.infer<typeof failRequestSchema>;
+
+export const jobOutcomeResponseSchema = z.object({
+  ...envelope,
+  ok: z.literal(true),
+  job: z.object({
+    id: z.string().regex(JOB_ID_RE),
+    status: z.enum(["succeeded", "failed", "cancelled"]),
+    reconstructionId: z.string().nullable(),
+  }),
+});
+export type JobOutcomeResponse = z.infer<typeof jobOutcomeResponseSchema>;
