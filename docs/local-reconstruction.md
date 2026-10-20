@@ -16,6 +16,9 @@ ordered photographs
 **Validation status.** Code validated: yes (against fake external tools). Real COLMAP build validated: **no**. Real
 Brush training validated: **no**. Real hardware performance validated: **no**. M2D.3A is not production-validated;
 the production acceptance gate for Local Capture requires at least one real reconstruction on supported hardware.
+**M2D.3D** is that acceptance: the readiness check, hardware policy, REAL_SMOKE / REAL_ROOM harness, acceptance
+report and human checklist are in [reconstruction-acceptance.md](reconstruction-acceptance.md) (M2D.3D1); the first
+real run is M2D.3D2.
 
 **Local means local.** The engine uploads nothing, calls no provider, ArtCraft, telemetry or model host, and
 downloads, installs or builds nothing. The operator installs the tools; Prism detects, verifies and invokes them.
@@ -491,17 +494,19 @@ test time.
 
 - **No real COLMAP or Brush reconstruction has been run.** Code validated: yes; real COLMAP build, real Brush
   training and real hardware performance validated: no. A real-tool reconstruction on supported hardware is the
-  production acceptance gate for Local Capture.
+  production acceptance gate for Local Capture; the harness for it (`npm run local:acceptance:*`) and the three
+  gates are described in [reconstruction-acceptance.md](reconstruction-acceptance.md).
 - The approved COLMAP profile and the Brush contract come from source audits (COLMAP 4.2.1, Brush v0.3.0) and are
   exercised against faithful fakes.
 - The COLMAP database is checked for existence only (see "Camera reconstruction is validated"): diagnostic, not
   correctness.
 - Only the `standard` profile exists; `draft`/`high` need validation on real scenes.
 - No video input (FFmpeg licensing/packaging is a separate decision).
-- Rendering the produced SPZ in a browser frame is not part of the automated tests; the SPZ is decoded by Spark's own
-  `SpzReader` and accepted by `inspectSplat`, the gate the runtime loader uses.
-- **Same-host only** (M2D.3B): hosted Prism → a user's own workstation needs the M2D.3C paired Local Agent. M2D.3C1
-  pairs and authenticates such agents but does not yet run jobs on them (M2D.3C2).
+- The engine's automated tests decode the produced SPZ with Spark's own `SpzReader` and `inspectSplat`; since
+  M2D.3D1 the acceptance harness also RENDERS an SPZ through Prism's production `SplatRuntime` (Spark 0.1.10) in
+  headless Chromium (tested on a synthetic SPZ; a real one in M2D.3D2).
+- **Same-host only** (M2D.3B): hosted Prism → a user's own workstation runs through the M2D.3C paired Local Agent
+  (`local_agent_capture`, M2D.3C2).
 - A job claimed from a work root whose worker never comes back stays `running` until the user cancels it (another
   root's worker never takes it over).
 - **Cleanup / reconciliation debt (not harmless):** a process crash in the middle of storing the result can leave
