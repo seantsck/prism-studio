@@ -495,6 +495,13 @@ signature, and that a wrong key, a truncated or non-canonical signature, or a no
   the deterministic guards (§17–§20: body limits, one live lease per device, one result per job, bounded progress
   writes, strict ordinals, the pre-body upload gate), production ingress rate limiting is still required.
 - No per-device routing: any ready workstation of the project may take the oldest queued job.
+- **A single source download longer than the lease can lose it.** The client serialises its signed requests (the
+  server accepts only strictly increasing counters), so no keepalive is sent while one photograph is downloading. A
+  photograph whose transfer takes longer than the remaining lease (120 s minus the safety margin) makes the agent
+  stop and the attempt fail; Retry creates a new one. Per-image size is capped at 64 MB. Concurrent keepalives were
+  deliberately not added for V1.
+- **Result upload memory**: bounded but memory-heavy (§20): up to about twice the declared result size per accepted
+  upload, at most ~100 MB.
 
 ## 16. Privacy
 
@@ -527,9 +534,12 @@ project only:
 2. if THIS device already holds a live lease, returns that same lease (`resumed: true`) and renews it: a lost response
    never makes a device run two jobs, and a device never holds two;
 3. otherwise, if the device can execute (above), takes the oldest queued `local_agent_capture` job of its project and
-   claims it with compare-and-set: `queued → submitting → running` (two writes; a crash between them leaves a
-   `submitting` job whose lease expires and is reaped). Exactly one device wins a race; a loser gets the next job or
-   none. A job whose frozen sources cannot run remotely (count, kind, type, missing checksum or size, over 64 MB) is
+   claims it with compare-and-set: `queued → submitting → running` (two writes, because the job state machine has no
+   `queued → running` edge). The FIRST write already freezes the whole remote authority (runner, device, opaque lease,
+   expiry, recorded toolchain), so a crash between the two leaves a `submitting` job that no other device can take
+   while its lease lives; the same device's next lease request resumes it, otherwise it is failed `provider_timeout`
+   once the lease expires (by the next lease request or the owner's panel refresh) and never re-run. Exactly one device
+   wins a race; a loser gets the next job or none. A job whose frozen sources cannot run remotely (count, kind, type, missing checksum or size, over 64 MB) is
    failed `invalid_sources` instead.
 
 The job is `running` at once: the lease is the execution authority, and the owner can cancel immediately. Events
@@ -584,6 +594,10 @@ run. There are no direct Storage signed URLs in V1: the workstation's whole capa
 `converting_spz`, `validating_spz`) or `uploading`. It is the keepalive: sent at least every 10 s while the agent holds
 a lease (and at once on a stage change). Answer: `{ leaseExpiresAt, leaseTtlMs }`.
 
+The `message` is for the agent's own log: the server never stores or shows it. The owner sees the SERVER's fixed
+label for the reported stage (e.g. "Splat training (Brush)"), so no workstation text (paths, user or host names,
+command lines) can reach Prism's database or UI.
+
 The server renews the lease and writes progress at a bounded cadence: a stage change is written (and is a `progress`
 event) at once; a same-stage update at most every 2 s (faster ones are acknowledged without a write), and always
 before the lease gets close to expiring. Brush iterations are not events.
@@ -609,7 +623,7 @@ cancellation (§21).
    length and sha256 against the declaration and validates the SPZ again (Prism's `inspectSplat`, same Gaussian count).
    A mismatch fails the job `result_invalid`.
 3. **Claim and ingest.** `running → ingesting` by compare-and-set (a cancel that won is final; an import that won makes
-   a later cancel impossible), the lease extended by a 10-minute import grace, then the SHARED M2D.2
+   a later cancel impossible), the stored deadline moved to a 10-minute SERVER-SIDE import grace, then the SHARED M2D.2
    `ingestReconstructionResult`: private Asset + immutable generated reconstruction (unknown scale: COLMAP/Brush units
    are never metres) + job success, all-or-nothing, with cleanup on failure. Provenance: the declared facts, `runner:
 remote_agent`, the opaque device id, a fingerprint prefix and the agent version (never a label as identity).
@@ -617,9 +631,17 @@ remote_agent`, the opaque device id, a fingerprint prefix and the agent version 
    another upload gets `result_pending`; concurrent uploads import once (the compare-and-set and the one-reconstruction-
    per-job invariant). The agent never creates an Asset and never touches Storage.
 
-Memory: the server holds one bounded buffer per accepted upload (at most the declared size ≤ 50 MB, Prism's splat cap,
-unchanged), because the shared ingestion validates and stores whole bytes. No temporary Storage staging object exists
-(no second orphan class).
+**The import grace is not a lease.** Once the server wins `running → ingesting`, the workstation's authority is over:
+its keepalives answer `job_not_available` and renew nothing, a lease request gets no job, and only the server's own
+import continues. The 10-minute deadline exists only so that an import whose server process died is eventually failed
+(`provider_timeout`) instead of staying `ingesting` forever; a healthy import finishes long before it.
+
+Memory (a bounded but memory-heavy V1 relay): a declared `Content-Length` over 50 MB is refused before anything is
+read; the pre-body gate requires it to equal the frozen declaration; the body is then read in chunks with a hard cap
+at that length (reading stops at the first byte over, also when the header is absent or wrong) and joined once, so an
+accepted upload transiently holds up to about twice its size (≤ ~100 MB) while the shared ingestion validates and
+stores whole bytes. No temporary Storage staging object exists (no second orphan class). Streaming ingestion is
+future work.
 
 ## 21. Failure reports
 
@@ -636,8 +658,10 @@ unchanged), because the shared ingestion validates and stores whole bytes. No te
 | `toolchain_missing`, `unsupported_version`, `gpu_unavailable`, `out_of_memory`, `colmap_failed`, `brush_failed`, `workspace_failed`, `insufficient_camera_registration` | `provider_failed`  |
 | `cancelled`, `interrupted` (the agent stopped on its own)                                                                                                               | `provider_failed`  |
 
-An agent-reported `cancelled` is never a cancellation: only the owner's cancel makes a job `cancelled`. The message is
-bounded, single-line, path-redacted and prefixed "Remote Local Agent:" (stopped runs get a fixed sentence).
+An agent-reported `cancelled` is never a cancellation: only the owner's cancel makes a job `cancelled`. The stored and
+displayed message is the SERVER's fixed sentence for the agent code (prefixed "Remote Local Agent:"; stopped runs get
+a fixed sentence); the agent's `message` is never stored or shown. The provider operation keeps only the agent code
+and stage (both from closed lists).
 
 ## 22. Restarts, network loss, revocation and server restarts
 
@@ -670,6 +694,9 @@ created_at` of `local_agent_capture` jobs of the AUTHENTICATED device's project,
   the device's project (one owner may own several projects; RLS alone would not separate them).
 - **Storage** in Supabase mode uses a dedicated server-only secret key, `PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY`,
   read only by `src/server/local-agent/relay-storage.ts` (a source test proves no other module reads it). Fail closed:
-  without it, Remote Local Agent is "not configured" and nothing falls back to the worker key or a session. It is used
+  without it, Remote Local Agent is "not configured" and nothing falls back to the worker key or a session; pairing,
+  heartbeat and status keep working (status reports `remoteExecution: "not_available"`), a lease request answers
+  `remote_jobs_unavailable`, the source/progress/fail routes `job_not_available` and a result upload is refused before
+  its body is read. It is used
   only for the frozen sources of a job leased to an authenticated device of that project and for that job's one
   result. In memory mode the local-disk store is used. See [security-model.md](security-model.md).
