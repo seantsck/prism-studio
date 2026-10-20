@@ -12,7 +12,8 @@ approval. No real provider is called by any test.
 ```
 Prism Reconstruction Jobs (this document: jobs, ingestion, provenance)
     ├─ Local adapters                     free, run on the user's own machine
-    │    └─ local_capture  [M2D.3]        photos → COLMAP poses → Brush training → PLY → SPZ (same-host worker)
+    │    ├─ local_capture  [M2D.3B]       photos → COLMAP poses → Brush training → PLY → SPZ (same-host worker)
+    │    └─ local_agent_capture [M2D.3C2] the same engine on the user's PAIRED WORKSTATION (signed lease)
     ├─ Import  [M2D.1]                    any .spz / .ply / .splat the user already has
     └─ Optional hosted adapters           paid, never required, never selected or used automatically
          └─ worldlabs_marble              World Labs Marble API (the user's own key)
@@ -99,14 +100,15 @@ The registry is the only list of providers. Provider ids in the database are bou
 a provider the registry no longer has stays readable history: it is shown as stored, never polled, never
 substituted, and can still be cancelled locally.
 
-| Provider              | Execution / runner      | Cost | Inputs                    | Availability                                                        |
-| --------------------- | ----------------------- | ---- | ------------------------- | ------------------------------------------------------------------- |
-| `local_capture`       | local / `local_worker`  | free | multi-image, video        | `not_installed` until the M2D.3 toolchain exists (never faked)      |
-| `worldlabs_marble`    | hosted / `provider_api` | paid | single image, multi-image | optional: key + `WORLDLABS_RECONSTRUCTION_ENABLED` + the spend gate |
-| `mock_reconstruction` | mock / `provider_api`   | free | single image, multi-image | development and test servers only                                   |
+| Provider              | Execution / runner      | Cost | Inputs                    | Availability                                                                                                     |
+| --------------------- | ----------------------- | ---- | ------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `local_capture`       | local / `local_worker`  | free | multi-image, video        | `not_installed` until the M2D.3 toolchain exists (never faked)                                                   |
+| `local_agent_capture` | local / `remote_agent`  | free | multi-image (JPEG/PNG)    | listed with `PRISM_LOCAL_AGENTS_ENABLED=1`; usable when a paired workstation of THIS project is online and ready |
+| `worldlabs_marble`    | hosted / `provider_api` | paid | single image, multi-image | optional: key + `WORLDLABS_RECONSTRUCTION_ENABLED` + the spend gate                                              |
+| `mock_reconstruction` | mock / `provider_api`   | free | single image, multi-image | development and test servers only                                                                                |
 
-The UI pre-selects a provider only when a free, local provider is ready (`local_capture` when its worker is online
-and its toolchain verified). A paid
+The UI pre-selects a provider only when a free, local provider is ready, in this order: `local_capture` (its worker
+online, its toolchain verified), else `local_agent_capture` (a ready paired workstation of the project). A paid
 provider, or the mock, is never pre-selected, even when it is the only one available. `meshy` (0036's reserved id)
 has no adapter and is not offered; `world_bundle` is not a result kind; ArtCraft and TripoSplat are not providers.
 
@@ -122,8 +124,12 @@ has no adapter and is not offered; `world_bundle` is not a result kind; ArtCraft
   browser, a 10–30 minute reconstruction keeps running with no page open. Same-host only; authority, recovery and
   limits: [`docs/local-reconstruction.md`](./local-reconstruction.md#the-local-reconstruction-worker-m2d3b).
   A **remote Local Agent** (a user's own workstation, M2D.3C) is a separate, untrusted-client model with its own
-  signed protocol ([`docs/local-agent-protocol.md`](./local-agent-protocol.md)). M2D.3C1 pairs and authenticates
-  agents only: Local Capture does not run on a remote agent until M2D.3C2.
+  signed protocol ([`docs/local-agent-protocol.md`](./local-agent-protocol.md)).
+- `remote_agent` (M2D.3C2, `local_agent_capture`): a paired workstation runs it. Web requests never execute it; the
+  web side only reads the job and fails one whose lease has expired (`provider_timeout`, never reassigned). The
+  workstation leases the job by compare-and-set, downloads the frozen sources over a signed Prism route, runs the
+  M2D.3A engine, renews the lease with signed progress, and uploads one SPZ that Prism re-validates and imports through
+  the same atomic ingestion. Retry stays on `local_agent_capture`; nothing falls back to a hosted provider.
 
 ## World Labs / Marble (`src/lib/reconstruction/worldlabs.ts`)
 
@@ -246,8 +252,9 @@ their own are Location history, not Shot truth. A visible generated splat still 
 
 - No live World Labs call has been made from Prism (by design in M2D.2); the adapter is built to the public docs and
   proved against a fake HTTP layer only. The first live use needs an operator decision.
-- Local capture runs only through the SAME-HOST worker (M2D.3B): hosted Prism → a user's own PC needs the M2D.3C
-  paired Local Agent. No real COLMAP/Brush reconstruction has been run yet (fake tools only). No video input yet.
+- Hosted Prism → a user's own PC runs through `local_agent_capture` (M2D.3C2); `local_capture` stays the same-host
+  worker. No real COLMAP/Brush reconstruction has been run yet (fake tools only). No video input yet. No per-device
+  job routing yet (any ready workstation of the project takes the oldest queued job).
 - Mesh results (`collider_mesh_url`) are not imported; only Gaussian splats are.
 - The World Labs price table is static (checked 2026-10-19); a price change needs a code update.
 - No webhooks; no provider-side cleanup of uploaded media assets.

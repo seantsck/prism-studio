@@ -74,6 +74,17 @@ Asset responses add `nosniff`, a safe `Content-Disposition` (inline only for ima
 | Replayed / forged webhooks                            | No endpoint exists until a provider needs one; contract requires signature verification before parsing and idempotency on the event id                                                         |
 | Worker storage credential                             | See below                                                                                                                                                                                      |
 
+**Agent relay Storage credential (M2D.3C2).** Remote Local Agent jobs are served by the Prism server (Next.js app)
+on signed agent requests that carry no browser session, so in Supabase mode the app needs a session-less Storage
+authority for exactly two things: reading the frozen source photographs of a job leased to an authenticated device of
+that project, and storing that job's one validated result through the shared ingestion. It is a DEDICATED secret key,
+`PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY`, distinct from the worker key so it can be scoped and rotated on its
+own. It is read only by `src/server/local-agent/relay-storage.ts` (server-only; a source test proves no other module
+reads it), only while `PRISM_LOCAL_AGENTS_ENABLED=1`, and it is never sent to a workstation (agents receive bytes
+over signed routes, never a key or a signed URL). Without it, remote jobs are unavailable (fail closed; nothing falls
+back to the worker key or a session). This is a deliberate change from the earlier rule that no Storage secret lives
+in the app: it was approved for M2D.3C2 and is listed as a residual risk below.
+
 **Worker storage credential.** A worker has no browser session, so writing to the private bucket needs a server
 credential. The production worker uses `PRISM_STUDIO_WORKER_SERVICE_KEY`, which exists **only** in the worker's
 environment (never the Next.js app, never the browser, never the database, never a snapshot). For local
@@ -107,6 +118,11 @@ These are known and unmitigated unless noted.
 12. **Storage policy tested at SQL level.** See Known gaps in the [roadmap](roadmap.md).
 13. **Migration history before checksums** (0001–0005) is baselined, not proven ([migration-policy](migration-policy.md)).
 14. **Worker holds a storage-write key** (production) with project-wide Storage access; scope it to the worker host and rotate it.
+    **The app holds the agent relay key** when remote Local Agents are enabled (M2D.3C2): a Supabase secret key has
+    project-wide Storage access, and the app is internet-facing. Mitigations: a dedicated key (rotate independently),
+    one server-only reader, use limited by code to leased jobs' frozen sources and their one result, fail-closed
+    absence, never logged (redaction lists) and never sent to a workstation. Production ingress rate limiting on
+    `/api/local-agent/v1/*` is still required.
 15. **Output downloads rely on provider hosts' TLS and the allow-list**; a compromised provider CDN host on the allow-list can serve hostile bytes (validated by type/size, never executed).
 16. **Provider-side idempotency** is only as good as the provider: a crash between "provider accepted" and "Prism recorded it" can, for providers without idempotency keys, produce a second paid generation.
 17. **Media processing runs untrusted bytes through ffmpeg** in the app server. Mitigated by magic-byte
