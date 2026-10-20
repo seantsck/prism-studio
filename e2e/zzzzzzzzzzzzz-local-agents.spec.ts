@@ -63,7 +63,7 @@ test("pair → code shown once → device online with toolchain → offline → 
   await expect(device.getByTestId("local-agent-toolchain")).toHaveText("Toolchain ready");
   await expect(device.getByTestId("local-agent-last-seen")).toHaveText(/s ago$/);
   await expect(page.getByTestId("remote-execution-note")).toContainText(
-    "Remote execution arrives in the next milestone",
+    "A ready workstation runs this project's Remote Local Agent reconstruction jobs",
   );
 
   // no secret is ever in the page: not the (used) code, not a private key

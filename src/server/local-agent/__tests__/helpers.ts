@@ -95,7 +95,7 @@ export class TestAgent {
 
   /** A signed request exactly as the agent client builds it. */
   request(
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "PUT",
     path: string,
     body: unknown | null,
     o: {

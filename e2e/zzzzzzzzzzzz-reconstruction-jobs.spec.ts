@@ -142,7 +142,13 @@ test.describe("reconstruction jobs (mock provider, no provider cost)", () => {
       .getByTestId("recon-provider")
       .locator("option")
       .evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value).filter(Boolean));
-    expect(offered).toEqual(["local_capture", "worldlabs_marble", "mock_reconstruction"]);
+    // free first: the same-host Local Capture, then a paired workstation (remote agents are on in this server)
+    expect(offered).toEqual([
+      "local_capture",
+      "local_agent_capture",
+      "worldlabs_marble",
+      "mock_reconstruction",
+    ]);
     expect(offered).not.toContain("meshy");
 
     await page.getByTestId("recon-provider").selectOption("local_capture");

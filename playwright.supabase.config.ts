@@ -44,6 +44,13 @@ export default defineConfig({
       PRISM_LOCAL_RECONSTRUCTION_ROOT: path.join(os.tmpdir(), "prism-e2e-local-worker"),
       // Remote Local Agents (M2D.3C1): supabase-local-agents.spec.ts pairs the real agent CLI (no credentials)
       PRISM_LOCAL_AGENTS_ENABLED: "1",
+      // M2D.3C2: the Prism SERVER's agent-relay Storage key (server-side only; the agent CLI never sees it). A machine
+      // without a dedicated relay key runs this local test server with the worker key's VALUE in that role; production
+      // configures a separate sb_secret_ key (docs/security-model.md).
+      PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY:
+        process.env.PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY ||
+        process.env.PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY ||
+        "",
     },
   },
 });
