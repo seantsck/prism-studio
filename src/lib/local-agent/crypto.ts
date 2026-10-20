@@ -120,23 +120,28 @@ export function encodeRfc3986(s: string): string {
 }
 
 const SEGMENT_RE = /^(?:[A-Za-z0-9\-._~]|%[0-9A-F]{2})+$/;
+/** A percent-encoded unreserved character (%41 for "A", %7E for "~"...): it has a shorter canonical spelling. */
+const ENCODED_UNRESERVED_RE = /%(?:4[1-9A-F]|5[0-9A]|6[1-9A-F]|7[0-9A]|3[0-9]|2D|2E|5F|7E)/;
 
 /**
  * The canonical request target signed by both sides: the path exactly as sent (it must already be canonical: absolute,
- * no empty, "." or ".." segments, no trailing slash, only unreserved characters or uppercase %XX), then, if there are
- * query parameters, "?" and the parameters decoded, re-encoded per RFC 3986 and sorted by key then value, joined by
- * "&". A path that is not canonical is refused rather than normalised (the signer must say exactly what it means).
+ * no empty, "." or ".." segments, no trailing slash, only unreserved characters or uppercase %XX of a reserved byte),
+ * then, if there are query parameters, "?" and the parameters decoded, re-encoded per RFC 3986 and sorted by key, joined
+ * by "&". A path that is not canonical, or a query naming a key twice (whose meaning would depend on which value a
+ * handler reads), is refused rather than normalised (the signer must say exactly what it means).
  */
 export function canonicalTarget(url: URL): string {
   const p = url.pathname;
   if (!p.startsWith("/") || p.length > 512) throw new ProtocolFormatError("path is not canonical");
   if (p !== "/") {
     for (const seg of p.slice(1).split("/"))
-      if (!SEGMENT_RE.test(seg) || seg === "." || seg === "..")
+      if (!SEGMENT_RE.test(seg) || ENCODED_UNRESERVED_RE.test(seg) || seg === "." || seg === "..")
         throw new ProtocolFormatError("path is not canonical");
   }
   const pairs = [...new URLSearchParams(url.search)].map(([k, v]) => [encodeRfc3986(k), encodeRfc3986(v)]);
-  pairs.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+  if (new Set(pairs.map(([k]) => k)).size !== pairs.length)
+    throw new ProtocolFormatError("query names a parameter more than once");
+  pairs.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   const q = pairs.map(([k, v]) => `${k}=${v}`).join("&");
   return q ? `${p}?${q}` : p;
 }

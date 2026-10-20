@@ -84,14 +84,17 @@ prism-local-agent-request/1
 
 1. **Path**: the request path exactly as sent. It must already be canonical: it begins with `/`; it has no empty
    segment (no `//`, no trailing `/` except the root), no `.` or `..` segment, and each segment consists only of RFC
-   3986 unreserved characters (`A-Z a-z 0-9 - . _ ~`) or `%XX` with **uppercase** hex. A non-canonical path is
-   **refused** (`malformed_request`), never normalised.
-2. **Query**: parse the query as `application/x-www-form-urlencoded` (so `+` is a space), percent-decode each key and
-   value, re-encode each as UTF-8 with every byte outside the unreserved set as `%XX` (uppercase), sort the pairs by
-   encoded key then encoded value (byte order), and join as `k=v` with `&`.
+   3986 unreserved characters (`A-Z a-z 0-9 - . _ ~`) or `%XX` with **uppercase** hex of a byte that is NOT unreserved
+   (`%2F` is a literal byte inside one segment, never a `/`; `%41` is refused because `A` is its only spelling). A
+   non-canonical path is **refused** (`malformed_request`), never normalised.
+2. **Query**: parse the query as `application/x-www-form-urlencoded` (so `+` and `%20` are both a space, exactly as the
+   handler will read them), percent-decode each key and value, re-encode each as UTF-8 with every byte outside the
+   unreserved set as `%XX` (uppercase), sort the pairs by encoded key (byte order), and join as `k=v` with `&`. A key
+   that appears **more than once** is refused (`malformed_request`): its meaning would depend on which value a
+   handler reads. Keys are case-sensitive.
 3. The target is the path, followed by `?` and the query **only** if there is at least one pair.
 
-Example: `/x?b=2&a=1&a=0&q=a+b` → `/x?a=0&a=1&b=2&q=a%20b`.
+Example: `/x?b=2&a=1&q=a+b` → `/x?a=1&b=2&q=a%20b`; `/x?a=1&a=0` → refused.
 
 ### 4.3 Pairing proof of possession
 
@@ -182,6 +185,11 @@ secret.
 | `X-Prism-Agent-Timestamp` | timestamp           |
 | `X-Prism-Agent-Signature` | signature over §4.1 |
 
+Every header has a fixed grammar with a bounded length (§3): id 36 chars, counter at most 16 digits with no leading
+zero and at most 2^53−1 (larger is refused, never rounded), timestamp at most 16 digits, signature exactly 86 chars. A
+header sent twice reaches the handler comma-joined (Fetch `Headers`) and therefore fails its grammar: duplicates are
+refused, never resolved to one of the values.
+
 POST bodies are `application/json`. There is no bearer token and no cookie authority. The session proxy lets
 `/api/local-agent/v1/*` through untouched, and each request authenticates itself.
 
@@ -206,6 +214,17 @@ commit
 
 A refused request changes nothing. **Equality is refused**: a counter is accepted at most once, ever. Two concurrent
 requests with the same counter are serialised by the row lock, so exactly one is accepted (tested on Postgres).
+
+The signature is checked before the revoked, ownership, clock and counter checks so that nothing about a device's
+state is revealed to a caller who cannot sign for it. Every check runs under the same row lock before the single
+`update`, so the order is transactionally equivalent to "lock → exists → revoked → project → clock → signature →
+counter → advance → commit". No authenticated side effect (heartbeat fields, last seen) is written except in that
+same `update` after every check passed.
+
+**Racing higher counters** are serialised by the row lock in the order the database grants it. Each accepted
+counter is strictly greater than every counter accepted before it; a request whose counter is not greater than the
+committed `last_counter` when it acquires the lock is refused `counter_replayed`. An older request can therefore never
+be accepted after a newer one commits. (The agent sends one request at a time, §6.4, so it never races itself.)
 
 ### 6.3 Timestamps
 
@@ -315,7 +334,8 @@ software. `busy` is always `false` in v1. The agent re-probes at most every 5 mi
 
 - The agent heartbeats every **10 s**. The server stores `last_seen_at`, `capabilities_json` (at most 4 KiB),
   `agent_version` and `protocol_version`. A device counts as **online** while its last accepted request is younger
-  than **30 s**. Offline does not revoke anything. No file or database heartbeat crosses from the workstation; it is
+  than **30 s**. Offline does not revoke anything. A `last_seen_at` that cannot be parsed, or that lies further in the
+  future than the 5-minute skew window, is shown offline (never "online forever"). No file or database heartbeat crosses from the workstation; it is
   HTTPS only.
 - **Revocation** (owner only, "Revoke Agent"): sets `status = 'revoked'` and `revoked_at`. It is terminal: the
   database refuses any later change to a revoked row, from the owner or the server, so it can never be reactivated.
@@ -425,8 +445,12 @@ signature, and that a wrong key, a truncated or non-canonical signature, or a no
   available only through the same-host worker, and a remote agent being online does not change that. The UI says
   "Remote execution arrives in the next milestone".
 - **0 Asset bytes, 0 signed Storage URLs, 0 upload grants** are given to an agent.
-- The pairing endpoint relies on 140-bit entropy rather than rate limiting. A per-IP rate limit is a reasonable
-  addition at deployment.
+- **No application-level rate limit.** The 140-bit pairing secret makes guessing impractical (2^140 candidates), so
+  rate limiting is not what keeps pairing secure. The pair endpoint is nevertheless unauthenticated and does an
+  Ed25519 verification and a database lookup per request, so a production deployment **must** put ingress or edge
+  rate limiting in front of `/api/local-agent/v1/*` (per client IP) for abuse and DoS resistance before the feature
+  is broadly exposed. Prism does not currently provide that coverage itself; an in-process limiter was deliberately
+  not added (it would not hold across instances).
 - There is no per-project cap on the number of devices.
 - Windows private-key protection is limited to the per-user directory ACL (§11).
 - **M2D.3C2** will add: a scoped job lease to one chosen agent → ephemeral, per-job source transfer → the M2D.3A

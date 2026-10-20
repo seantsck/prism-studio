@@ -41,6 +41,16 @@ export const CLOCK_SKEW_MS = 5 * 60_000;
 export const HEARTBEAT_INTERVAL_MS = 10_000;
 export const ONLINE_MS = 30_000;
 
+/**
+ * Online = active and a signed heartbeat within ONLINE_MS. A last-seen time that is unparseable, or further in the future
+ * than the allowed clock skew, is treated as offline (never "online forever"); no heartbeat is offline, never revoked.
+ */
+export function agentOnline(status: string, lastSeenAt: string | null, nowMs: number): boolean {
+  if (status !== "active" || !lastSeenAt) return false;
+  const age = nowMs - Date.parse(lastSeenAt);
+  return Number.isFinite(age) && age >= -CLOCK_SKEW_MS && age <= ONLINE_MS;
+}
+
 /** Strict body limits: every v1 message is tiny (no media ever travels on this protocol in M2D.3C1). */
 export const BODY_LIMITS = { pair: 4096, heartbeat: 8192, status: 0 } as const;
 

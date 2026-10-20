@@ -50,9 +50,13 @@ export function resolveAgentHome(
 }
 
 export const PROFILE_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+/** Windows reserved device names (a directory with one of these names cannot be created or is an alias). */
+const RESERVED_PROFILE_RE = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/;
 
 export function profileDir(home: string, profile: string): string {
   if (!PROFILE_RE.test(profile))
     throw new AgentHomeError("A profile name is 1-32 lowercase letters, digits or hyphens.");
+  if (RESERVED_PROFILE_RE.test(profile))
+    throw new AgentHomeError(`"${profile}" is a reserved device name and cannot be a profile name.`);
   return path.join(home, "profiles", profile);
 }

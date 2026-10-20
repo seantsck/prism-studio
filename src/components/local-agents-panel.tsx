@@ -34,7 +34,9 @@ const TOOLCHAIN_LABEL: Record<string, string> = {
 
 const ago = (iso: string | null, now: number) => {
   if (!iso) return "never";
-  const s = Math.max(0, Math.round((now - Date.parse(iso)) / 1000));
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "unknown";
+  const s = Math.max(0, Math.round((now - t) / 1000));
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
   return new Date(iso).toLocaleString();

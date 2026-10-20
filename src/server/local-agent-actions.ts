@@ -2,7 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getSiteUrl } from "@/lib/auth/site-url";
-import { ONLINE_MS } from "@/lib/local-agent/protocol";
+import { agentOnline } from "@/lib/local-agent/protocol";
 import { UserFacingError } from "./action-result";
 import { getOwnerAgentStore, localAgentsEnabled } from "./local-agent";
 import {
@@ -82,7 +82,7 @@ function view(d: DeviceRecord, nowMs: number): AgentDeviceView {
     agentVersion: d.agentVersion,
     protocolVersion: d.protocolVersion,
     status: d.status,
-    online: d.status === "active" && !!d.lastSeenAt && nowMs - Date.parse(d.lastSeenAt) <= ONLINE_MS,
+    online: agentOnline(d.status, d.lastSeenAt, nowMs),
     pairedAt: d.createdAt,
     lastSeenAt: d.lastSeenAt,
     revokedAt: d.revokedAt,
