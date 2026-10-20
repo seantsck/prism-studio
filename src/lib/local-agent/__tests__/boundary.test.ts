@@ -188,6 +188,22 @@ describe("M2D.3C2 remote execution boundary", () => {
     expect(readers.sort()).toEqual(
       ["scripts/db-remote-agent-jobs.mts", "scripts/lib/safety.mjs", relay, "src/lib/auth/redact.ts"].sort(),
     );
+    // exactly one importer: the server-only wiring (src/server/local-agent/index.ts, itself "server-only"); no route,
+    // client component or other app module imports the relay directly
+    const importers = walk(path.join(ROOT, "src")).filter(
+      (f) =>
+        /\.(m?[jt]sx?)$/.test(f) &&
+        !f.includes("__tests__") &&
+        /from\s+["'](?:@\/server\/local-agent|\.)\/?(?:[\w./-]*\/)?relay-storage["']/.test(
+          readFileSync(path.join(ROOT, f), "utf8"),
+        ),
+    );
+    expect(importers).toEqual(["src/server/local-agent/index.ts"]);
+    expect(
+      readFileSync(path.join(ROOT, "src/server/local-agent/index.ts"), "utf8").startsWith(
+        'import "server-only"',
+      ),
+    ).toBe(true);
     // no client component reaches the relay or the job service
     for (const f of walk(path.join(ROOT, "src", "components")).filter((x) => x.endsWith(".tsx"))) {
       const text = readFileSync(path.join(ROOT, f), "utf8");
