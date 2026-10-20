@@ -61,6 +61,8 @@ export interface AgentServiceDeps {
   canonicalOrigin: string;
   /** server clock (Unix ms) for the timestamp window */
   now: () => number;
+  /** M2D.3C2: this server can serve remote jobs (reconstruction jobs on, Storage authority present) */
+  remoteJobs?: boolean;
 }
 
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -152,6 +154,8 @@ export interface Authenticated {
   device: DeviceRecord;
   projectTitle: string | null;
   counter: number;
+  /** the request's SIGNED timestamp (Unix ms; within the clock-skew window) */
+  timestamp: number;
 }
 
 /**
@@ -211,7 +215,7 @@ export async function authenticateRequest(
   });
   if (r.kind === "none") return fail("device_unknown");
   if (r.kind === "refused") return fail(r.error);
-  return { device: r.device, projectTitle: r.projectTitle, counter };
+  return { device: r.device, projectTitle: r.projectTitle, counter, timestamp };
 }
 
 /** Parses a heartbeat body BEFORE authentication (a malformed body never reaches the device lock). */
@@ -264,7 +268,9 @@ export async function status(deps: AgentServiceDeps, req: IncomingRequest): Prom
     },
     project: { id: a.device.projectId, title: a.projectTitle ?? "" },
     acceptedCounter: a.counter,
-    remoteExecution: "not_available",
+    // only an agent that said it runs remote jobs is told they are available (an M2D.3C1 agent never says so)
+    remoteExecution:
+      deps.remoteJobs && a.device.capabilities?.execution?.remoteJobs ? "available" : "not_available",
   };
 }
 

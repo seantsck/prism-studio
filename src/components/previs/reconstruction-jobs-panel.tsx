@@ -42,9 +42,16 @@ const units = (r: JobCostEstimate["providerUnits"]) =>
   !r ? null : `${r.min === r.max ? r.min : `${r.min}–${r.max}`} ${r.unit}`;
 
 /** Cost class first, in plain words: what choosing this provider means for money and where it runs. */
-export function providerKindLabel(s: Pick<ProviderSummary, "execution" | "cost" | "testOnly">): string {
+export function providerKindLabel(
+  s: Pick<ProviderSummary, "execution" | "cost" | "testOnly"> & Partial<Pick<ProviderSummary, "runner">>,
+): string {
   if (s.testOnly || s.execution === "mock") return "Development only · no cost";
-  const where = s.execution === "local" ? "runs on this machine" : "hosted service";
+  const where =
+    s.runner === "remote_agent"
+      ? "paired workstation"
+      : s.execution === "local"
+        ? "runs on this machine"
+        : "hosted service";
   const cost = s.cost === "free" ? "Free" : s.cost === "paid" ? "Paid provider · optional" : "Cost unknown";
   return `${cost} · ${where}`;
 }
@@ -360,6 +367,45 @@ export function ReconstructionJobsPanel(props: {
           ) : null}
         </div>
       ) : null}
+      {summary?.remote ? (
+        // a paired workstation of THIS project runs the job (counts only: no device key or address)
+        <div
+          className="mt-1 rounded border border-line p-1.5"
+          data-testid="recon-remote-runtime"
+          data-state={summary.remote.state}
+          data-ready={summary.remote.ready}
+          data-busy={summary.remote.busy}
+        >
+          <div data-testid="recon-remote-summary">
+            {summary.remote.state === "ready"
+              ? `Ready · ${summary.remote.ready} workstation${summary.remote.ready === 1 ? "" : "s"} online`
+              : summary.remote.state === "no_agents"
+                ? "No paired workstation"
+                : summary.remote.state === "offline"
+                  ? "Paired workstation offline"
+                  : summary.remote.state === "toolchain"
+                    ? "Toolchain unavailable"
+                    : summary.remote.state === "outdated"
+                      ? "No ready paired workstation (update the Local Agent)"
+                      : "Not available on this server"}
+          </div>
+          {summary.remote.busy > 0 ? (
+            <div className="text-muted">
+              A paired workstation is running a reconstruction; new jobs wait their turn.
+            </div>
+          ) : null}
+          <div className="text-muted">
+            The job runs on your paired workstation; you can close this page.{" "}
+            <a
+              className="underline"
+              href={`/projects/${props.projectSlug}/agents`}
+              data-testid="recon-remote-agents-link"
+            >
+              Local agents
+            </a>
+          </div>
+        </div>
+      ) : null}
 
       {summary && summary.models.length > 1 ? (
         <label className="mt-1.5 block text-muted">
@@ -593,6 +639,12 @@ export function ReconstructionJobsPanel(props: {
             Status: {STATUS_LABEL[detail.status]}
             {detail.description ? ` · ${detail.description}` : ""}
           </div>
+          {detail.runner === "remote_agent" ? (
+            <div className="text-muted" data-testid="recon-job-agent">
+              Remote Local Agent{detail.agentLabel ? ` · ${detail.agentLabel}` : ""}
+              {detail.stage ? ` · stage ${detail.stage.replace(/_/g, " ")}` : ""}
+            </div>
+          ) : null}
           <div className="text-muted" data-testid="recon-job-cost">
             {detail.costEstimate
               ? `Estimate at submission: ${estimateText(detail.costEstimate, detail.costEstimate.costClass === "free")}`

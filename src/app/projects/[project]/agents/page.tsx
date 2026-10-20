@@ -17,7 +17,7 @@ export default async function LocalAgentsPage({ params }: { params: Promise<{ pr
     <div data-testid="local-agents-page">
       <PageHeader
         title="Local agents"
-        subtitle="Workstations paired with this project for local compute. Pairing only: remote execution arrives in the next milestone."
+        subtitle="Workstations paired with this project. A ready workstation runs this project's Remote Local Agent reconstructions."
       />
       <div className="space-y-4 p-6">
         {!enabled ? (

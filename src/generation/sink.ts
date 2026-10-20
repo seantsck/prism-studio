@@ -118,14 +118,7 @@ export async function createOutputSink(
   }
   const secret =
     env.PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY?.trim() || env.PRISM_STUDIO_WORKER_SERVICE_KEY?.trim();
-  if (secret) {
-    if (!isServerSecretKey(secret) || (publishable && secret === publishable)) {
-      throw new SinkConfigError(
-        "The worker Storage credential is not a server secret key (a publishable/anon key was supplied).",
-      );
-    }
-    return new SupabaseSink(createClient(url, secret, { auth: { persistSession: false } }), bucket);
-  }
+  if (secret) return secretKeySink({ url, publishable, secret, bucket, what: "worker" });
   const email = env.PRISM_STUDIO_DEV_USER_EMAIL;
   const password = env.PRISM_STUDIO_DEV_USER_PASSWORD;
   if (
@@ -144,6 +137,30 @@ export async function createOutputSink(
     "The worker has no way to write Supabase Storage. Set PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY " +
       "(or the legacy PRISM_STUDIO_WORKER_SERVICE_KEY) on the worker host. For local development only: " +
       "PRISM_STUDIO_WORKER_DEV_STORAGE=1 with PRISM_STUDIO_DEV_USER_EMAIL/PASSWORD.",
+  );
+}
+
+/**
+ * A Storage sink authorised by a server SECRET key, validated the same way for every holder: the URL must target the
+ * Prism Studio project and the key must be a secret key (never the publishable/anon key). Callers pass the key they
+ * own (the worker's, or the Prism server's dedicated agent-relay key); this function reads no environment itself.
+ */
+export function secretKeySink(o: {
+  url: string | undefined;
+  publishable: string | undefined;
+  secret: string;
+  bucket?: string;
+  what: string;
+}): OutputSink {
+  if (!o.url || !o.url.includes("lyqdxiyjperhniwhzsvg"))
+    throw new SinkConfigError("NEXT_PUBLIC_SUPABASE_URL must target the Prism Studio project.");
+  if (!isServerSecretKey(o.secret) || (o.publishable && o.secret === o.publishable))
+    throw new SinkConfigError(
+      `The ${o.what} Storage credential is not a server secret key (a publishable/anon key was supplied).`,
+    );
+  return new SupabaseSink(
+    createClient(o.url, o.secret, { auth: { persistSession: false } }),
+    o.bucket ?? "prism-assets",
   );
 }
 

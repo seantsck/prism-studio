@@ -590,6 +590,28 @@ export class MemoryPrevisService implements PrevisRepository {
     return j ? clone(j) : null;
   }
 
+  /**
+   * Memory counterpart of a narrow privileged discovery query: id, project, owner, status and creation time of ONE
+   * provider's jobs in one project and the given states, oldest first. No job content.
+   */
+  discoverReconstructionJobs(filter: { provider: string; projectId: string; statuses: readonly string[] }) {
+    return [...this.jobs.values()]
+      .filter(
+        (j) =>
+          j.provider === filter.provider &&
+          j.projectId === filter.projectId &&
+          filter.statuses.includes(j.status),
+      )
+      .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1))
+      .map((j) => ({
+        id: j.id,
+        projectId: j.projectId,
+        ownerId: j.createdBy,
+        status: j.status,
+        createdAt: j.createdAt,
+      }));
+  }
+
   async listReconstructionJobs(locationId: string) {
     return [...this.jobs.values()]
       .filter((j) => j.locationId === locationId)

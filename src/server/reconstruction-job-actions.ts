@@ -21,10 +21,12 @@ import {
   defaultProviderId,
   providerSummaries,
   readReconstructionConfig,
+  withRemoteAgents,
   type ProviderSummary,
 } from "@/lib/reconstruction/registry";
 import { UserFacingError } from "./action-result";
 import { requireUser } from "./auth";
+import { getOwnerAgentStore, localAgentsEnabled, remoteAgentAvailability } from "./local-agent";
 import { getPrevisRepo } from "./previs";
 import {
   cancelJob,
@@ -84,9 +86,11 @@ async function context(slug: string) {
   const storage = await getUploadStorage();
   const repo = await getRepo();
   const previs = await getPrevisRepo();
+  // Remote Local Agent availability is THIS project's own paired workstations, read per request (never cached)
+  const remote = await remoteAgentAvailability(data.project.id);
   const deps: JobServiceDeps = {
     repo: previs,
-    providers: providers(),
+    providers: withRemoteAgents(providers(), { view: () => remote }),
     config: readReconstructionConfig(),
     projectAssets: data.assets,
     projectId: data.project.id,
@@ -144,6 +148,10 @@ export interface JobView {
   description: string | null;
   /** the current pipeline stage of a local job (e.g. "splat_training"); null otherwise */
   stage: string | null;
+  /** who executes it: the same-host worker, a paired workstation, or a provider API (null: not recorded) */
+  runner: "local_worker" | "remote_agent" | null;
+  /** a remote job's workstation, by its CURRENT label (a label is never identity; never a key or lease id) */
+  agentLabel: string | null;
   errorCode: string | null;
   errorMessage: string | null;
   createdAt: string;
@@ -161,10 +169,19 @@ export interface ReconstructionPanelState {
   jobs: JobView[];
 }
 
+/** Current labels of the project's workstations named by remote jobs (owner-scoped; empty when none). */
+async function agentLabels(projectId: string, jobs: ReconstructionJobRecord[]): Promise<Map<string, string>> {
+  if (!localAgentsEnabled() || !jobs.some((j) => j.providerOperation?.runner === "remote_agent"))
+    return new Map();
+  const devices = await (await getOwnerAgentStore()).listDevices(projectId);
+  return new Map(devices.map((d) => [d.id, d.label]));
+}
+
 async function views(
   jobs: ReconstructionJobRecord[],
   assets: Asset[],
   previs: Awaited<ReturnType<typeof getPrevisRepo>>,
+  agents: Map<string, string> = new Map(),
 ): Promise<JobView[]> {
   const label = new Map(providerSummaries(providers()).map((p) => [p.provider, p.label]));
   const name = (id: string) => assets.find((a) => a.id === id)?.name ?? "(removed image)";
@@ -210,8 +227,17 @@ async function views(
           ? (j.providerOperation.description as string)
           : null,
       stage:
-        j.providerOperation?.runner === "local_worker" && typeof j.providerOperation.stage === "string"
+        (j.providerOperation?.runner === "local_worker" || j.providerOperation?.runner === "remote_agent") &&
+        typeof j.providerOperation.stage === "string"
           ? (j.providerOperation.stage as string)
+          : null,
+      runner:
+        j.providerOperation?.runner === "local_worker" || j.providerOperation?.runner === "remote_agent"
+          ? j.providerOperation.runner
+          : null,
+      agentLabel:
+        j.providerOperation?.runner === "remote_agent" && typeof j.providerOperation.agentId === "string"
+          ? (agents.get(j.providerOperation.agentId) ?? null)
           : null,
       errorCode: j.errorCode,
       errorMessage: j.errorMessage,
@@ -261,7 +287,7 @@ export async function reconstructionJobs(
         defaultProvider: defaultProviderId(summaries),
         paid: deps.config.paid,
         pollIntervalMs: deps.config.pollIntervalMs,
-        jobs: await views(jobs, deps.projectAssets, previs),
+        jobs: await views(jobs, deps.projectAssets, previs, await agentLabels(deps.projectId, jobs)),
       },
     };
   });
