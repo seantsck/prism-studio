@@ -97,6 +97,23 @@ describe("agent home", () => {
       /outside the Prism repository/,
     );
     expect(() => profileDir(tmp, "../escape")).toThrow();
+    for (const bad of [
+      "..",
+      ".",
+      "a/b",
+      "a\\b",
+      "/abs",
+      "C:\\x",
+      "C:x",
+      "Default",
+      "a b",
+      "",
+      "x".repeat(33),
+    ])
+      expect(() => profileDir(tmp, bad)).toThrow();
+    for (const reserved of ["con", "nul", "prn", "aux", "com1", "lpt9"])
+      expect(() => profileDir(tmp, reserved)).toThrow(/reserved/);
+    expect(profileDir(tmp, "studio-2")).toBe(path.join(tmp, "profiles", "studio-2"));
   });
 });
 

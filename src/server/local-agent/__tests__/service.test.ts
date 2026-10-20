@@ -143,6 +143,69 @@ describe("pairing", () => {
     });
   });
 
+  it("a newer code never revokes paired devices nor rewrites consumed offers; other projects' codes survive", async () => {
+    const used1 = await createPairingOffer(store, PROJECT_A);
+    const a1 = new TestAgent(now);
+    a1.deviceId = (await redeemPairing(deps, a1.pairBody(used1.code))).device.id;
+    const used2 = await createPairingOffer(store, PROJECT_A);
+    const a2 = new TestAgent(now);
+    a2.deviceId = (await redeemPairing(deps, a2.pairBody(used2.code))).device.id;
+    const otherProject = await createPairingOffer(store, PROJECT_B);
+    const pending = await createPairingOffer(store, PROJECT_A);
+    await createPairingOffer(store, PROJECT_A);
+    // consumed history stays "paired" (never re-labelled cancelled), the unused one is cancelled
+    for (const used of [used1, used2])
+      expect(await pairingOfferState(store, PROJECT_A, used.pairingId, clock)).toMatchObject({
+        state: "paired",
+      });
+    expect(await pairingOfferState(store, PROJECT_A, pending.pairingId, clock)).toMatchObject({
+      state: "cancelled",
+    });
+    expect(await pairingOfferState(store, PROJECT_B, otherProject.pairingId, clock)).toMatchObject({
+      state: "pending",
+    });
+    // both devices stay active and keep authenticating
+    expect((await store.listDevices(PROJECT_A)).map((d) => d.status)).toEqual(["active", "active"]);
+    expect((await heartbeat(deps, a1.heartbeat())).acceptedCounter).toBe(1);
+    expect((await heartbeat(deps, a2.heartbeat())).acceptedCounter).toBe(1);
+  });
+
+  it("a valid proof cannot be replayed into another pairing (it is bound to the offer's secret digest)", async () => {
+    const first = await createPairingOffer(store, PROJECT_A);
+    const second = await createPairingOffer(store, PROJECT_B);
+    const a = new TestAgent(now);
+    // a proof made for the first offer, presented with the second offer's code
+    const replayed = { ...a.pairBody(first.code), pairingCode: second.code };
+    expect(await code(redeemPairing(deps, replayed))).toBe("invalid_signature");
+    // ...or with another public key substituted (the proof binds the key's fingerprint)
+    const b = new TestAgent(now);
+    expect(await code(redeemPairing(deps, { ...a.pairBody(second.code), publicKey: b.publicKey }))).toBe(
+      "invalid_signature",
+    );
+    expect(await pairingOfferState(store, PROJECT_B, second.pairingId, clock)).toMatchObject({
+      state: "pending",
+    });
+    expect(await store.listDevices(PROJECT_B)).toEqual([]);
+  });
+
+  it("the device's project comes from the offer, never from the request", async () => {
+    const offer = await createPairingOffer(store, PROJECT_A);
+    const a = new TestAgent(now);
+    expect(await code(redeemPairing(deps, a.pairBody(offer.code, { projectId: PROJECT_B })))).toBe(
+      "malformed_request",
+    );
+    const r = await redeemPairing(deps, a.pairBody(offer.code));
+    expect(r.device.projectId).toBe(PROJECT_A);
+    a.deviceId = r.device.id;
+    // a heartbeat cannot nominate a project either
+    const nominated = a.request("POST", "/api/local-agent/v1/heartbeat", {
+      protocol: PROTOCOL,
+      capabilities: capabilities(),
+      projectId: PROJECT_B,
+    });
+    expect(await code(heartbeat(deps, nominated))).toBe("malformed_request");
+  });
+
   it("ownership is re-checked at redemption (project changed hands or is gone)", async () => {
     const offer = await createPairingOffer(store, PROJECT_A);
     owners.set(PROJECT_A, STRANGER);
@@ -250,6 +313,38 @@ describe("signed heartbeat", () => {
     expect(results.filter((r) => r === "counter_replayed")).toHaveLength(9);
   });
 
+  it("racing higher counters: requests are serialised on the device; an older counter never lands after a newer one", async () => {
+    const agent = await paired();
+    // sequential arrival order 5, 3, 9, 1, 7: each accepted counter exceeds every earlier one
+    const order = [5, 3, 9, 1, 7].map((counter) => agent.heartbeat({ counter }));
+    const results: string[] = [];
+    for (const r of order) results.push(await code(heartbeat(deps, r)));
+    expect(results).toEqual([
+      "no error",
+      "counter_replayed",
+      "no error",
+      "counter_replayed",
+      "counter_replayed",
+    ]);
+    expect((await store.listDevices(PROJECT_A))[0].lastCounter).toBe(9);
+    // concurrent arrival: whichever order the lock grants, the accepted sequence is strictly increasing and the
+    // highest counter always wins
+    const agent2 = await paired(PROJECT_B);
+    const accepted: number[] = [];
+    await Promise.all(
+      [14, 11, 20, 12, 13, 19].map(async (counter) => {
+        try {
+          accepted.push((await heartbeat(deps, agent2.heartbeat({ counter }))).acceptedCounter);
+        } catch (e) {
+          expect((e as AgentProtocolError).code).toBe("counter_replayed");
+        }
+      }),
+    );
+    expect(accepted).toContain(20);
+    expect([...accepted].sort((x, y) => x - y)).toEqual(accepted);
+    expect((await store.listDevices(PROJECT_B))[0].lastCounter).toBe(20);
+  });
+
   it("refuses a skewed clock without consuming the counter", async () => {
     const agent = await paired();
     expect(
@@ -310,6 +405,32 @@ describe("signed heartbeat", () => {
     expect(await code(heartbeat(deps, hdr({ "x-prism-agent-counter": "0" })))).toBe("malformed_request");
     expect(await code(heartbeat(deps, hdr({ "x-prism-agent-signature": "!!" })))).toBe("malformed_request");
     expect(await code(heartbeat(deps, hdr({ "x-prism-agent-id": "nope" })))).toBe("malformed_request");
+    // a header sent twice reaches the handler comma-joined (Fetch Headers) and fails every header grammar
+    const twice = new Headers();
+    twice.append("x-prism-agent-counter", "1");
+    twice.append("x-prism-agent-counter", "2");
+    expect(twice.get("x-prism-agent-counter")).toBe("1, 2");
+    const sig = good.header("x-prism-agent-signature")!;
+    const id = good.header("x-prism-agent-id")!;
+    for (const [h, v] of [
+      ["x-prism-agent-counter", "1, 2"],
+      ["x-prism-agent-counter", "1,1"],
+      ["x-prism-agent-timestamp", `${clock}, ${clock}`],
+      ["x-prism-agent-signature", `${sig}, ${sig}`],
+      ["x-prism-agent-id", `${id}, ${id}`],
+      ["x-prism-agent-protocol", "1, 1"],
+    ])
+      expect([h, await code(heartbeat(deps, hdr({ [h]: v })))]).toEqual([
+        h,
+        h === "x-prism-agent-protocol" ? "protocol_unsupported" : "malformed_request",
+      ]);
+    // a counter beyond 2^53-1 is refused, never rounded
+    expect(await code(heartbeat(deps, hdr({ "x-prism-agent-counter": "9007199254740993" })))).toBe(
+      "malformed_request",
+    );
+    expect(await code(heartbeat(deps, hdr({ "x-prism-agent-counter": "1".repeat(17) })))).toBe(
+      "malformed_request",
+    );
     expect((await store.listDevices(PROJECT_A))[0].lastCounter).toBe(0);
   });
 

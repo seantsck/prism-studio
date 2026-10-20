@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -115,5 +115,70 @@ describe("remote agent trust boundary", () => {
     const index = readFileSync(path.join(ROOT, "src", "server", "local-agent", "index.ts"), "utf8");
     expect(index.startsWith('import "server-only"')).toBe(true);
     expect(panel.files).toContain("src/server/local-agent-actions.ts");
+  });
+});
+
+describe("M2D.3C1 is identity and control plane only (no remote job execution)", () => {
+  const strip = (t: string) => t.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+  const JOB_WORDS = /\b(?:next-?job|claim|lease|asset|upload|download|signed.?url|complete-?job|storage)/i;
+
+  it("exposes exactly three agent routes: pair, heartbeat, status", () => {
+    const routes: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true }))
+        if (e.isDirectory()) walk(path.join(dir, e.name));
+        else routes.push(path.relative(ROOT, path.join(dir, e.name)).replace(/\\/g, "/"));
+    };
+    walk(path.join(ROOT, "src", "app", "api", "local-agent"));
+    expect(routes.sort()).toEqual([
+      "src/app/api/local-agent/v1/heartbeat/route.ts",
+      "src/app/api/local-agent/v1/pair/route.ts",
+      "src/app/api/local-agent/v1/status/route.ts",
+    ]);
+    const protocol = readFileSync(path.join(ROOT, "src", "lib", "local-agent", "protocol.ts"), "utf8");
+    const paths = protocol.slice(
+      protocol.indexOf("export const PATHS"),
+      protocol.indexOf("} as const", protocol.indexOf("export const PATHS")),
+    );
+    expect(paths.match(/^\s+\w+:/gm)?.map((k) => k.trim())).toEqual(["pair:", "heartbeat:", "status:"]);
+    // the heartbeat response can carry no job: its schema admits only an empty array
+    expect(protocol).toContain("jobs: z.array(z.never()).max(0)");
+  });
+
+  it("the agent CLI has no job, Asset, upload or signed-URL code path", () => {
+    const { files } = graph(path.join(ROOT, "scripts", "local-agent.mts"));
+    for (const f of files) {
+      expect(f).not.toMatch(
+        /^src\/server\/|storage|ingest|reconstruction-job|local-worker\/(worker|store|postgres-store|adapter)\./,
+      );
+      if (!f.startsWith("src/lib/local-agent/") && f !== "scripts/local-agent.mts") continue;
+      // imports name the local toolchain probe and engine constants (capability facts only)
+      const code = strip(readFileSync(path.join(ROOT, f), "utf8")).replace(/^import[^;]*;$/gm, "");
+      expect(`${f}: ${code.match(JOB_WORDS)?.[0] ?? "none"}`).toBe(`${f}: none`);
+    }
+  });
+
+  it("the server's agent-authenticated path reaches only the agent tables", () => {
+    for (const mod of ["service.ts", "http.ts", "store.ts", "postgres-store.ts"]) {
+      const { files } = graph(path.join(ROOT, "src", "server", "local-agent", mod));
+      for (const f of files) {
+        expect(f).not.toMatch(/reconstruction|storage|asset|generation|src\/data\//i);
+      }
+    }
+    const sql = strip(
+      readFileSync(path.join(ROOT, "src", "server", "local-agent", "postgres-store.ts"), "utf8"),
+    );
+    const authStore = sql.slice(
+      sql.indexOf("class PostgresAgentAuthStore"),
+      sql.indexOf("class PostgresOwnerAgentStore"),
+    );
+    const tables = new Set(
+      [...authStore.matchAll(/\b(?:from|into|update|join)\s+([a-z_]+)/g)]
+        .map((m) => m[1])
+        .filter((t) => t !== "of"), // "for update of p"
+    );
+    expect([...tables].sort()).toEqual(["local_agent_pairings", "local_agents", "projects"]);
+    // projects is only read (ownership re-check, title), never written
+    expect(authStore).not.toMatch(/(?:update|insert into|delete from)\s+projects/);
   });
 });

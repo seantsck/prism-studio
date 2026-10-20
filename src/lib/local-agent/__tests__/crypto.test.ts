@@ -19,7 +19,7 @@ import {
   verifyMessage,
   type SignedRequestFields,
 } from "../crypto";
-import { capabilitiesSchema, CAPABILITIES_SCHEMA } from "../protocol";
+import { agentOnline, capabilitiesSchema, CAPABILITIES_SCHEMA } from "../protocol";
 
 // ── golden vector: RFC 8032 §7.1 TEST 1 key (a published test key, never a real device key) ──
 const RFC_SEED = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
@@ -76,6 +76,24 @@ describe("device public key encoding", () => {
     expect(() => parsePublicKey(ec.export({ format: "der", type: "spki" }).toString("base64"))).toThrow();
     const x25519 = generateKeyPairSync("x25519").publicKey.export({ format: "der", type: "spki" });
     expect(() => parsePublicKey(x25519.toString("base64"))).toThrow();
+    const rsa = generateKeyPairSync("rsa", { modulusLength: 1024 }).publicKey;
+    expect(() => parsePublicKey(rsa.export({ format: "der", type: "spki" }).toString("base64"))).toThrow();
+    // malformed DER: the right prefix with a wrong length byte
+    const der = Buffer.from(PUBLIC_KEY_B64, "base64");
+    const badLen = Buffer.from(der);
+    badLen[1] = 0x2b;
+    expect(() => parsePublicKey(badLen.toString("base64"))).toThrow();
+    // extra trailing bytes after a valid SPKI
+    expect(() => parsePublicKey(Buffer.concat([der, Buffer.from([0])]).toString("base64"))).toThrow();
+    // private-key material (PKCS8 DER) is never accepted as a public key
+    const pkcs8 = priv.export({ format: "der", type: "pkcs8" }).toString("base64");
+    expect(() => parsePublicKey(pkcs8)).toThrow();
+    // standard base64 only: the base64url spelling is refused
+    const urlSafe = generateKeyPairSync("ed25519").publicKey.export({ format: "der", type: "spki" });
+    const b64url = urlSafe.toString("base64url");
+    if (b64url !== urlSafe.toString("base64").replace(/=+$/, ""))
+      expect(() => parsePublicKey(`${b64url}=`)).toThrow();
+    expect(() => parsePublicKey(PUBLIC_KEY_B64.slice(0, -1))).toThrow(); // padding is required
   });
 });
 
@@ -143,17 +161,34 @@ describe("canonical target", () => {
   const t = (u: string) => canonicalTarget(new URL(u, "https://studio.example.test"));
   it("keeps a canonical path and sorts/re-encodes the query", () => {
     expect(t("/api/local-agent/v1/status")).toBe("/api/local-agent/v1/status");
-    expect(t("/x?b=2&a=1&a=0")).toBe("/x?a=0&a=1&b=2");
+    expect(t("/x?b=2&a=1&c=0")).toBe("/x?a=1&b=2&c=0");
     expect(t("/x?q=a b&r=%7e")).toBe("/x?q=a%20b&r=~");
     expect(t("/x?q=a+b")).toBe("/x?q=a%20b");
     expect(t("/x?k=%E2%9C%93&k2='")).toBe("/x?k=%E2%9C%93&k2=%27");
     expect(t("/x?")).toBe("/x");
+    // "+" and "%20" are the same value to the handler (form decoding), so they sign the same bytes
+    expect(t("/x?q=a+b")).toBe(t("/x?q=a%20b"));
+    // keys are case-sensitive: different keys, different targets
+    expect(t("/x?A=1")).not.toBe(t("/x?a=1"));
+  });
+  it("refuses a query naming a key twice (its meaning would depend on which value a handler reads)", () => {
+    expect(() => t("/x?a=1&a=0")).toThrow();
+    expect(() => t("/x?a=1&b=2&a=1")).toThrow();
+    expect(() => t("/x?a+b=1&a%20b=2")).toThrow(); // the same decoded key
   });
   it("refuses a non-canonical path rather than guessing", () => {
     expect(() => t("/x/")).toThrow();
     expect(() => t("/x//y")).toThrow();
     expect(() => t("/x/%7e")).toThrow(); // lowercase percent-encoding
     expect(() => t("/x/a%20b")).not.toThrow();
+    // an encoded unreserved character has exactly one spelling: the character itself
+    expect(() => t("/x/%41")).toThrow();
+    expect(() => t("/x/%7E")).toThrow();
+    expect(() => t("/x/%2D")).toThrow();
+    // %2F stays a byte inside ONE segment: never the same target as a "/" path
+    expect(t("/a%2Fb")).toBe("/a%2Fb");
+    expect(t("/a%2Fb")).not.toBe(t("/a/b"));
+    expect(() => t("/a%2fb")).toThrow();
   });
 });
 
@@ -221,6 +256,10 @@ describe("server origin pinning", () => {
     );
     expect(normalizeServerOrigin("http://localhost:3100")).toBe("http://localhost:3100");
     expect(normalizeServerOrigin("http://127.0.0.1:3100")).toBe("http://127.0.0.1:3100");
+    // default ports and scheme case are the same origin
+    expect(normalizeServerOrigin("https://studio.example.test:443")).toBe("https://studio.example.test");
+    expect(normalizeServerOrigin("HTTPS://Studio.Example.Test")).toBe("https://studio.example.test");
+    expect(normalizeServerOrigin("http://[::1]:3100/")).toBe("http://[::1]:3100");
   });
   it.each([
     "http://studio.example.test",
@@ -272,5 +311,24 @@ describe("capability schema", () => {
       }).success,
     ).toBe(false);
     expect(capabilitiesSchema.safeParse({ ...ok, busy: true }).success).toBe(false);
+  });
+});
+
+describe("online / offline", () => {
+  const now = Date.parse("2026-10-20T12:00:00.000Z");
+  const at = (ms: number) => new Date(now + ms).toISOString();
+  it("is online only for an active device with a heartbeat in the last 30 s", () => {
+    expect(agentOnline("active", at(-10_000), now)).toBe(true);
+    expect(agentOnline("active", at(-30_000), now)).toBe(true);
+    expect(agentOnline("active", at(-30_001), now)).toBe(false);
+    expect(agentOnline("active", null, now)).toBe(false);
+    expect(agentOnline("revoked", at(-1_000), now)).toBe(false);
+  });
+  it("a far-future or malformed last-seen time is offline, never online forever, and never throws", () => {
+    expect(agentOnline("active", at(60_000), now)).toBe(true); // within the clock-skew window
+    expect(agentOnline("active", at(5 * 60_000 + 1), now)).toBe(false);
+    expect(agentOnline("active", "2999-01-01T00:00:00.000Z", now)).toBe(false);
+    expect(agentOnline("active", "not a date", now)).toBe(false);
+    expect(agentOnline("active", "", now)).toBe(false);
   });
 });
