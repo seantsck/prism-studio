@@ -65,6 +65,9 @@ const expectedTables = [
   "location_spatial_reconstructions",
   "reconstruction_jobs",
   "reconstruction_job_events",
+  // Phase 2F M2D.3C1: remote Local Agent identity
+  "local_agent_pairings",
+  "local_agents",
 ];
 const tables = (await rows("select tablename, rowsecurity from pg_tables where schemaname='public'")).filter(
   (t) => t.tablename !== "prism_migrations",
@@ -105,6 +108,9 @@ const must = {
     "continuity_analysis_jobs_claim_idx",
     "continuity_analysis_costs_one_estimate",
     "continuity_analysis_costs_one_final",
+    "local_agent_pairings_secret_hash_key",
+    "local_agents_public_key_fingerprint_key",
+    "local_agents_pairing_id_key",
   ],
   triggers: [
     "dialogue_locked_guard",
@@ -123,6 +129,10 @@ const must = {
     "continuity_analysis_jobs_guard",
     "continuity_analysis_costs_guard",
     "continuity_analysis_events_guard",
+    "local_agent_pairings_insert",
+    "local_agent_pairings_guard",
+    "local_agents_insert",
+    "local_agents_guard",
   ],
 };
 const missingIdx = must.indexes.filter((i) => !idx.some((x) => x.indexname === i));
