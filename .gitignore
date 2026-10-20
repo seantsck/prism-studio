@@ -10,3 +10,14 @@ next-env.d.ts
 playwright-report
 test-results
 .DS_Store
+
+# Real-reconstruction acceptance (M2D.3D1). The commands refuse inputs and outputs inside the repository; these
+# rules are a safety net so capture photos and acceptance evidence are never committed by accident.
+/acceptance/
+/acceptance-*/
+*.spz
+*.ply
+*.heic
+*.HEIC
+acceptance-report.json
+human-review.json
