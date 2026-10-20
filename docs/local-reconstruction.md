@@ -33,6 +33,25 @@ starts a reconstruction; see [the worker section](#the-local-reconstruction-work
 > paired Local Agent with a scoped remote protocol. The worker must never be distributed to another machine with
 > Prism's database or Storage credentials.
 
+### Two different trust models: same-host worker (M2D.3B) vs remote Local Agent (M2D.3C)
+
+|                    | M2D.3B same-host worker                             | M2D.3C remote Local Agent                             |
+| ------------------ | --------------------------------------------------- | ----------------------------------------------------- |
+| Runs on            | the machine that runs the Prism server              | a user's own workstation, anywhere (behind NAT)       |
+| Trusted as         | part of the Prism server (operator-controlled)      | an **external client**                                |
+| Command            | `npm run local:reconstruction-worker`               | `npm run local:agent -- pair / run / status / forget` |
+| Database           | `SUPABASE_DB_URL` (one discovery query + owner RLS) | **none**: it never connects to the database           |
+| Storage            | the server-side worker key                          | **none** (M2D.3C2 adds scoped, per-job transfer only) |
+| Identity           | the server's own                                    | its own Ed25519 key pair, paired to ONE project       |
+| Network            | local                                               | outbound HTTPS to the pinned Prism origin only        |
+| Reads `.env.local` | yes                                                 | no                                                    |
+
+The remote agent can **never** use the same-host worker's credentials: it holds no database URL, no Supabase or
+Storage key, no worker secret, no provider key and no user session. The protocol is in
+[local-agent-protocol.md](local-agent-protocol.md). **M2D.3C1 (current) is identity only**: pairing, signed
+heartbeat, capability reporting and revocation. A paired agent runs **no** jobs yet; Local Capture still runs only on
+the same-host worker until M2D.3C2 adds remote leasing, transfer and execution.
+
 ## Supported tools
 
 ### COLMAP: 4.2.1, a Prism-verified external build
@@ -474,7 +493,8 @@ test time.
 - No video input (FFmpeg licensing/packaging is a separate decision).
 - Rendering the produced SPZ in a browser frame is not part of the automated tests; the SPZ is decoded by Spark's own
   `SpzReader` and accepted by `inspectSplat`, the gate the runtime loader uses.
-- **Same-host only** (M2D.3B): hosted Prism → a user's own workstation needs the M2D.3C paired Local Agent.
+- **Same-host only** (M2D.3B): hosted Prism → a user's own workstation needs the M2D.3C paired Local Agent. M2D.3C1
+  pairs and authenticates such agents but does not yet run jobs on them (M2D.3C2).
 - A job claimed from a work root whose worker never comes back stays `running` until the user cancels it (another
   root's worker never takes it over).
 - **Cleanup / reconciliation debt (not harmless):** a process crash in the middle of storing the result can leave

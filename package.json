@@ -42,6 +42,8 @@
     "db:local-worker": "tsx --env-file=.env.local scripts/db-local-worker.mts",
     "local:verify-colmap": "tsx scripts/local-verify-colmap.mts",
     "local:reconstruction-worker": "tsx --env-file=.env.local scripts/run-local-reconstruction-worker.mts",
+    "local:agent": "tsx scripts/local-agent.mts",
+    "db:local-agents": "tsx --env-file=.env.local scripts/db-local-agents.mts",
     "db:continuity-analysis": "tsx --env-file=.env.local scripts/db-continuity-analysis.mts",
     "continuity:worker": "tsx --env-file=.env.local scripts/continuity-worker.mts",
     "continuity:pre-paid:check": "tsx --env-file=.env.local scripts/continuity-pre-paid-check.mts",

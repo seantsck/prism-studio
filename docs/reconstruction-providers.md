@@ -121,6 +121,9 @@ has no adapter and is not offered; `world_bundle` is not a result kind; ArtCraft
   (a cancel stops COLMAP/Brush) and hands the result to the same atomic ingestion. Because it does not depend on a
   browser, a 10–30 minute reconstruction keeps running with no page open. Same-host only; authority, recovery and
   limits: [`docs/local-reconstruction.md`](./local-reconstruction.md#the-local-reconstruction-worker-m2d3b).
+  A **remote Local Agent** (a user's own workstation, M2D.3C) is a separate, untrusted-client model with its own
+  signed protocol ([`docs/local-agent-protocol.md`](./local-agent-protocol.md)). M2D.3C1 pairs and authenticates
+  agents only: Local Capture does not run on a remote agent until M2D.3C2.
 
 ## World Labs / Marble (`src/lib/reconstruction/worldlabs.ts`)
 

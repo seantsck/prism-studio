@@ -22,6 +22,7 @@ const NAV = [
   ["/candidates", "Experiments"],
   ["/models", "Models"],
   ["/assets", "Assets"],
+  ["/agents", "Local agents"],
 ] as const;
 
 export default async function ProjectLayout({
