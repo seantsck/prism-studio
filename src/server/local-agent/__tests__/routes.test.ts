@@ -153,6 +153,32 @@ describe("remote agents enabled, but no dedicated agent-relay key (fail closed, 
     expect((await agentServiceDeps()).remoteJobs).toBe(true);
   });
 
+  it("rotation (fictional keys): configured → available; removed → unavailable, control plane intact; a new value → available with a new Storage client", async () => {
+    const { agentRelaySink } = await import("@/server/local-agent/relay-storage");
+    configure({ PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY: "sb_secret_fictional_relay_key_one" });
+    expect((await remoteJobDeps()).available).toBe(true);
+    const first = agentRelaySink(process.env, "supabase");
+    expect(first).not.toBeNull();
+    expect(agentRelaySink(process.env, "supabase")).toBe(first); // one client per value
+
+    delete process.env.PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY; // the operator revokes it
+    expect(agentRelaySink(process.env, "supabase")).toBeNull();
+    expect((await remoteJobDeps()).available).toBe(false);
+    // pairing / heartbeat / status keep working: status reports remote execution as not available
+    expect((await agentServiceDeps()).remoteJobs).toBe(false);
+    const big = bigUpload();
+    expect(await (await result(big, leaseParams)).json()).toMatchObject({
+      error: { code: "job_not_available" },
+    });
+    expect(big.bodyUsed).toBe(false);
+
+    process.env.PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY = "sb_secret_fictional_relay_key_two"; // a new key
+    expect((await remoteJobDeps()).available).toBe(true);
+    const second = agentRelaySink(process.env, "supabase");
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first); // the old key's client is never reused
+  });
+
   it("a publishable key in the relay variable is refused (fail closed)", async () => {
     configure({ PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY: "sb_publishable_fictional" });
     const err = vi.spyOn(console, "error").mockImplementation(() => undefined);

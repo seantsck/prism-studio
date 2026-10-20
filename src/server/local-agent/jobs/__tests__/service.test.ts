@@ -986,6 +986,37 @@ describe("project-scoped availability", () => {
   });
 });
 
+describe("relay key rotation (no re-pairing)", () => {
+  it("the SAME paired device keeps heartbeating while execution is withdrawn, and leases again once it returns", async () => {
+    const w = await remoteWorld();
+    const job = await w.remoteJob(w.A, await w.addImages(w.A, 3));
+    const a = await w.agent(w.A);
+    const { heartbeat } = await import("../../service");
+    const caps = capabilities();
+    const execCaps = {
+      ...caps,
+      engine: { ...caps.engine, qualityProfiles: ["draft" as const, "standard" as const] },
+      execution: { remoteJobs: true as const },
+    };
+    const off = { ...w.deps, available: false, agent: { ...w.deps.agent, remoteJobs: false } };
+    // key removed: control plane fine, execution unavailable, the job waits (queued, untouched)
+    await heartbeat(off.agent, a.heartbeat({}, execCaps));
+    expect(await status(off.agent, a.request("GET", PATHS.status, null))).toMatchObject({
+      remoteExecution: "not_available",
+    });
+    expect(await leaseJob(off, leaseReq(a))).toMatchObject({ lease: null, idle: "remote_jobs_unavailable" });
+    expect(await w.job(job.id)).toMatchObject({ status: "queued" });
+    // a new key configured: the same device (same key pair, no new pairing) leases the waiting job
+    const on = { ...w.deps, available: true, agent: { ...w.deps.agent, remoteJobs: true } };
+    await heartbeat(on.agent, a.heartbeat({}, execCaps));
+    expect(await status(on.agent, a.request("GET", PATHS.status, null))).toMatchObject({
+      remoteExecution: "available",
+    });
+    expect((await leaseJob(on, leaseReq(a))).lease?.jobId).toBe(job.id);
+    expect((await w.agentStore.listDevices(w.A)).filter((d) => d.status === "active")).toHaveLength(1);
+  });
+});
+
 describe("lease id secrecy", () => {
   it("the lease id never appears in server logs, job events or the reconstruction's provenance", async () => {
     const w = await remoteWorld();

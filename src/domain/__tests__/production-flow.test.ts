@@ -141,13 +141,13 @@ describe("environment safety", () => {
 
   it("no source file reads a service-role / secret key", () => {
     // The ONLY modules that may name a server secret key, by exact path: the worker's Storage sink (validates + uses
-    // it), the log redactor (masks it), and (M2D.3C2, approved) the Prism server's agent-relay module, the single
-    // server-only reader of the dedicated relay key used for remote Local Agent jobs. No other app module, route,
-    // client component or same-named file elsewhere is exempt.
+    // it), the log redactor (masks it), and (M2D.3C2, approved) relay-key.ts, the single module that names the Prism
+    // server's dedicated agent-relay key (its value goes only to the server-only relay; the operator readiness check
+    // gets a status). No other app module, route, client component or same-named file elsewhere is exempt.
     const SECRET_HANDLING = new Set([
       "src/generation/sink.ts",
       "src/lib/auth/redact.ts",
-      "src/server/local-agent/relay-storage.ts",
+      "src/server/local-agent/relay-key.ts",
     ]);
     const root = path.join(process.cwd(), "src");
     const offenders: string[] = [];

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MAX_SPLAT_BYTES } from "@/domain/previs/splat";
 import { HEADERS, jobPaths, PATHS, PROTOCOL } from "@/lib/local-agent/protocol";
 import type { TestAgent } from "../../__tests__/helpers";
@@ -220,5 +220,47 @@ describe("remote job HTTP framing", () => {
     expect(text).not.toMatch(/https?:\/\/|objectPath|bucket|prism-assets|token=|signature=/i);
     void ORIGIN;
     void ({} as TestAgent);
+  });
+});
+
+describe("lease ids stay out of application logs", () => {
+  it("an unexpected server error is logged by reference only: no URL, no lease id, no message", async () => {
+    const { w, a, lease } = await leasedWorld();
+    const broken = {
+      ...w.deps,
+      jobs: {
+        ...w.deps.jobs,
+        scope: async () => {
+          throw new Error(`fictional storage failure at /jobs/${lease.jobId}/leases/${lease.leaseId}`);
+        },
+      },
+    };
+    const logged: string[] = [];
+    const spy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args) => void logged.push(args.map(String).join(" ")));
+    const info = vi
+      .spyOn(console, "info")
+      .mockImplementation((...args) => void logged.push(args.map(String).join(" ")));
+    try {
+      const r = await handleSource(
+        toRequest(a.request("GET", jobPaths(lease.jobId, lease.leaseId).source(0), null)),
+        broken,
+        { jobId: lease.jobId, leaseId: lease.leaseId, ordinal: "0" },
+      );
+      expect(r.status).toBe(500);
+      const body = await r.text();
+      expect(body).not.toContain(lease.leaseId);
+      expect(body).toMatch(/ref [0-9a-f]{8}/);
+    } finally {
+      spy.mockRestore();
+      info.mockRestore();
+    }
+    expect(logged.length).toBeGreaterThan(0);
+    for (const line of logged) {
+      expect(line).not.toContain(lease.leaseId);
+      expect(line).not.toContain("/leases/");
+      expect(line).not.toContain("fictional storage failure");
+    }
   });
 });

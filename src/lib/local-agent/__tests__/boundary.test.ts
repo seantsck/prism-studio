@@ -127,6 +127,13 @@ describe("remote agent trust boundary", () => {
 });
 
 describe("M2D.3C2 remote execution boundary", () => {
+  // every file is read once for the whole suite (several tests scan the source tree)
+  const files = new Map<string, string>();
+  const read = (f: string) => {
+    let t = files.get(f);
+    if (t === undefined) files.set(f, (t = readFileSync(path.join(ROOT, f), "utf8")));
+    return t;
+  };
   const strip = (t: string) => t.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
   const walk = (dir: string, out: string[] = []) => {
     for (const e of readdirSync(dir, { withFileTypes: true }))
@@ -148,7 +155,7 @@ describe("M2D.3C2 remote execution boundary", () => {
     ]);
     // every one is behind the feature flag, first
     for (const f of walk(path.join(ROOT, "src", "app", "api", "local-agent"))) {
-      const text = readFileSync(path.join(ROOT, f), "utf8");
+      const text = read(f);
       expect(text).toMatch(/if \(!localAgentsEnabled\(\)\) return agentError\("not_enabled"\);/);
     }
     // the heartbeat stays M2D.3C1-compatible: it never carries a job (leasing is its own route)
@@ -163,7 +170,7 @@ describe("M2D.3C2 remote execution boundary", () => {
     for (const f of files) {
       expect(f).not.toMatch(/^src\/server\/|^src\/data\/|^src\/generation\/|^src\/lib\/supabase\//);
       expect(f).not.toMatch(/local-worker\/(worker|store|postgres-store|adapter|status)\.ts$/);
-      const code = strip(readFileSync(path.join(ROOT, f), "utf8"));
+      const code = strip(read(f));
       expect(
         `${f}: ${code.match(/signedUrl|createSignedUrl|storage\.from\(|supabase|service_role/i)?.[0] ?? "none"}`,
       ).toBe(`${f}: none`);
@@ -171,32 +178,47 @@ describe("M2D.3C2 remote execution boundary", () => {
     for (const pkg of packages) expect(pkg).not.toMatch(/^(pg|@supabase\/.*|server-only|next(\/.*)?)$/);
   });
 
-  it("only the server's relay module reads the agent-relay Storage key, and it is server-only", () => {
+  it("one module names the agent-relay Storage key; only the server-only relay uses its value", () => {
     const relay = "src/server/local-agent/relay-storage.ts";
+    const relayKey = "src/server/local-agent/relay-key.ts";
     expect(readFileSync(path.join(ROOT, relay), "utf8").startsWith('import "server-only"')).toBe(true);
     const readers = [...walk(path.join(ROOT, "src")), ...walk(path.join(ROOT, "scripts"))].filter(
       (f) =>
         /\.(m?[jt]sx?)$/.test(f) &&
         !f.includes("__tests__") &&
         // code, not documentation: comments may explain the key without reading it
-        strip(readFileSync(path.join(ROOT, f), "utf8")).includes(
-          "PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY",
-        ),
+        strip(read(f)).includes("PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY"),
     );
-    // the relay module reads it; the redaction lists only NAME it so its value is never logged; the hosted test
-    // harness (db:remote-agent-jobs) plays the SERVER's role. No agent-side module is ever among them.
+    // relay-key.ts names it (and hands its value only to the relay); the redaction lists only NAME it so its value is
+    // never logged; the hosted test harness (db:remote-agent-jobs) plays the SERVER's role. No agent-side module is
+    // ever among them.
     expect(readers.sort()).toEqual(
-      ["scripts/db-remote-agent-jobs.mts", "scripts/lib/safety.mjs", relay, "src/lib/auth/redact.ts"].sort(),
+      [
+        "scripts/db-remote-agent-jobs.mts",
+        "scripts/lib/safety.mjs",
+        relayKey,
+        "src/lib/auth/redact.ts",
+      ].sort(),
     );
+    // who imports relay-key, and what: the server-only relay (the value) and the operator readiness check (a STATUS
+    // only: configured / missing / invalid, never the value)
+    const keyImporters = walk(path.join(ROOT, "src"))
+      .filter((f) => /\.(m?[jt]sx?)$/.test(f) && !f.includes("__tests__"))
+      .map((f) => ({ f, text: read(f) }))
+      .filter(({ text }) => /from\s+["'](?:@\/server\/local-agent\/|\.\/)relay-key["']/.test(text));
+    expect(keyImporters.map((x) => x.f).sort()).toEqual(
+      ["src/lib/reconstruction/acceptance/readiness.ts", relay].sort(),
+    );
+    const readiness = keyImporters.find((x) => x.f.endsWith("readiness.ts"))!.text;
+    expect(readiness).toMatch(/import \{ relayKeyStatus \} from "@\/server\/local-agent\/relay-key";/);
+    expect(readiness).not.toContain("readRelayKey");
     // exactly one importer: the server-only wiring (src/server/local-agent/index.ts, itself "server-only"); no route,
     // client component or other app module imports the relay directly
     const importers = walk(path.join(ROOT, "src")).filter(
       (f) =>
         /\.(m?[jt]sx?)$/.test(f) &&
         !f.includes("__tests__") &&
-        /from\s+["'](?:@\/server\/local-agent|\.)\/?(?:[\w./-]*\/)?relay-storage["']/.test(
-          readFileSync(path.join(ROOT, f), "utf8"),
-        ),
+        /from\s+["'](?:@\/server\/local-agent|\.)\/?(?:[\w./-]*\/)?relay-storage["']/.test(read(f)),
     );
     expect(importers).toEqual(["src/server/local-agent/index.ts"]);
     expect(
@@ -206,9 +228,18 @@ describe("M2D.3C2 remote execution boundary", () => {
     ).toBe(true);
     // no client component reaches the relay or the job service
     for (const f of walk(path.join(ROOT, "src", "components")).filter((x) => x.endsWith(".tsx"))) {
-      const text = readFileSync(path.join(ROOT, f), "utf8");
-      expect(text).not.toMatch(/@\/server\/local-agent\/(relay-storage|jobs)/);
+      const text = read(f);
+      expect(text).not.toMatch(/@\/server\/local-agent\/(relay-storage|relay-key|jobs)/);
     }
+    // the operator acceptance tooling (which can see the relay key's STATUS) is never part of the app or the agent
+    const acceptanceImporters = [...walk(path.join(ROOT, "src")), ...walk(path.join(ROOT, "scripts"))].filter(
+      (f) =>
+        /\.(m?[jt]sx?)$/.test(f) &&
+        !f.includes("__tests__") &&
+        !f.startsWith("src/lib/reconstruction/acceptance/") &&
+        /reconstruction\/acceptance\//.test(read(f)),
+    );
+    expect(acceptanceImporters).toEqual(["scripts/reconstruction-acceptance.mts"]);
   });
 
   it("the agent-authenticated auth store reaches only the agent tables; the job store only reconstruction jobs", () => {
