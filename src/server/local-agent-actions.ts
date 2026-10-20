@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { getSiteUrl } from "@/lib/auth/site-url";
 import { agentOnline } from "@/lib/local-agent/protocol";
 import { UserFacingError } from "./action-result";
-import { getOwnerAgentStore, localAgentsEnabled } from "./local-agent";
+import { getOwnerAgentStore, localAgentsEnabled, remoteJobsForOwner } from "./local-agent";
+import { failJobsOfAgent } from "./local-agent/jobs/service";
 import {
   createPairingOffer,
   OwnerAgentError,
@@ -186,6 +187,10 @@ export async function revokeLocalAgent(
 ): Promise<AgentActionResult<{ device: AgentDeviceView }>> {
   return guarded(async () => {
     const { projectId, store } = await context(slug);
-    return { ok: true, device: view(await revokeAgent(store, projectId, deviceId), Date.now()) };
+    const device = await revokeAgent(store, projectId, deviceId);
+    // a revoked workstation's active remote jobs fail now (never left running, never reassigned)
+    const jobs = await remoteJobsForOwner();
+    if (jobs) await failJobsOfAgent(jobs, projectId, device.createdBy, device.id);
+    return { ok: true, device: view(device, Date.now()) };
   });
 }

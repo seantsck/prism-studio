@@ -176,8 +176,8 @@ export function LocalAgentsPanel({ slug, initial }: { slug: string; initial: Age
       <Panel title="Paired devices">
         {anyOnline ? (
           <p className="mb-2 text-[12px] text-muted" data-testid="remote-execution-note">
-            Remote agent online. Remote execution arrives in the next milestone; Local Capture still runs only
-            on this server&apos;s same-host worker.
+            Remote agent online. A ready workstation runs this project&apos;s Remote Local Agent
+            reconstruction jobs; Local Capture still runs only on this server&apos;s same-host worker.
           </p>
         ) : null}
         {devices.length === 0 ? (

@@ -35,22 +35,29 @@ starts a reconstruction; see [the worker section](#the-local-reconstruction-work
 
 ### Two different trust models: same-host worker (M2D.3B) vs remote Local Agent (M2D.3C)
 
-|                    | M2D.3B same-host worker                             | M2D.3C remote Local Agent                             |
-| ------------------ | --------------------------------------------------- | ----------------------------------------------------- |
-| Runs on            | the machine that runs the Prism server              | a user's own workstation, anywhere (behind NAT)       |
-| Trusted as         | part of the Prism server (operator-controlled)      | an **external client**                                |
-| Command            | `npm run local:reconstruction-worker`               | `npm run local:agent -- pair / run / status / forget` |
-| Database           | `SUPABASE_DB_URL` (one discovery query + owner RLS) | **none**: it never connects to the database           |
-| Storage            | the server-side worker key                          | **none** (M2D.3C2 adds scoped, per-job transfer only) |
-| Identity           | the server's own                                    | its own Ed25519 key pair, paired to ONE project       |
-| Network            | local                                               | outbound HTTPS to the pinned Prism origin only        |
-| Reads `.env.local` | yes                                                 | no                                                    |
+|                    | M2D.3B same-host worker                             | M2D.3C remote Local Agent                                                                                       |
+| ------------------ | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Runs on            | the machine that runs the Prism server              | a user's own workstation, anywhere (behind NAT)                                                                 |
+| Trusted as         | part of the Prism server (operator-controlled)      | an **external client**                                                                                          |
+| Command            | `npm run local:reconstruction-worker`               | `npm run local:agent -- pair / run / status / forget`                                                           |
+| Database           | `SUPABASE_DB_URL` (one discovery query + owner RLS) | **none**: it never connects to the database                                                                     |
+| Storage            | the server-side worker key                          | **none**: photographs and the result travel through signed Prism routes; Prism's server holds its own relay key |
+| Identity           | the server's own                                    | its own Ed25519 key pair, paired to ONE project                                                                 |
+| Network            | local                                               | outbound HTTPS to the pinned Prism origin only                                                                  |
+| Reads `.env.local` | yes                                                 | no                                                                                                              |
+| Provider id        | `local_capture` (Local Capture · this server)       | `local_agent_capture` (Remote Local Agent · paired workstation)                                                 |
+| Claims             | queued `local_capture` jobs only                    | queued `local_agent_capture` jobs of ITS project only, by signed lease                                          |
 
 The remote agent can **never** use the same-host worker's credentials: it holds no database URL, no Supabase or
 Storage key, no worker secret, no provider key and no user session. The protocol is in
-[local-agent-protocol.md](local-agent-protocol.md). **M2D.3C1 (current) is identity only**: pairing, signed
-heartbeat, capability reporting and revocation. A paired agent runs **no** jobs yet; Local Capture still runs only on
-the same-host worker until M2D.3C2 adds remote leasing, transfer and execution.
+[local-agent-protocol.md](local-agent-protocol.md). **M2D.3C1** is identity: pairing, signed heartbeat, capability
+reporting and revocation. **M2D.3C2** adds remote execution as its own provider, `local_agent_capture`: a paired,
+ready workstation of the job's project leases the job (compare-and-set), downloads exactly its frozen photographs over
+a signed Prism route, runs this same M2D.3A engine, keeps the lease alive with signed progress (cancel arrives within
+~10 s), declares and uploads ONE validated SPZ, and Prism re-validates it and imports it through the shared M2D.2
+ingestion. An expired lease fails the attempt (never re-leased); a restarted agent uploads a retained validated result
+or reports the run failed (never re-runs COLMAP/Brush). The same-host `local_capture` path is unchanged, and the two
+runners can never claim each other's jobs. Real-tool acceptance on supported hardware is still a separate gate.
 
 ## Supported tools
 

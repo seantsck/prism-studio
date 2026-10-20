@@ -2,6 +2,11 @@ import { readGenerationConfig } from "@/generation/config";
 import type { JobCostEstimate, ReconstructionProviderId } from "@/domain/reconstruction/job";
 import { LocalCaptureProvider, type LocalToolchain } from "./local-capture";
 import { MockReconstructionProvider, readMockConfig } from "./mock";
+import {
+  RemoteAgentCaptureProvider,
+  remoteAgentsEnabled,
+  type RemoteAgentAvailability,
+} from "./remote-agent-capture";
 import type { InputMode, ProviderCapabilities, ProviderStatus, ReconstructionProvider } from "./provider";
 import { readWorldLabsConfig, WorldLabsProvider } from "./worldlabs";
 
@@ -10,7 +15,8 @@ import { readWorldLabsConfig, WorldLabsProvider } from "./worldlabs";
  * database are plain identifiers (migration 0037); whether an id is known, local or hosted, free or paid, and
  * available is decided here, from each adapter's capabilities and status.
  *
- * Free first: `local_capture` (free, runs on this machine; M2D.3) is listed first. World Labs Marble is an OPTIONAL
+ * Free first: `local_capture` (free, the trusted same-host worker; M2D.3B) is listed first, then
+ * `local_agent_capture` (free, a paired workstation of the job's project; M2D.3C2). World Labs Marble is an OPTIONAL
  * hosted, PAID provider. Prism never requires it, never selects it on its own, and never falls back to it. ArtCraft is
  * deliberately not a provider: its "Image to Location" is a paid cloud relay to World Labs / fal.ai behind an
  * ArtCraft account and credits, which is exactly the dependency Prism avoids.
@@ -18,6 +24,7 @@ import { readWorldLabsConfig, WorldLabsProvider } from "./worldlabs";
  * A provider is usable only when ALL of these hold:
  *   - PRISM_RECONSTRUCTION_JOBS_ENABLED=1            the feature is on for this server
  *   - the provider is available                       local: its toolchain is installed (M2D.3)
+ *                                                     remote agent: a ready paired workstation of THIS project
  *                                                     World Labs: WORLDLABS_RECONSTRUCTION_ENABLED=1 + WLT_API_KEY
  *   - for a paid / unknown-cost provider: the live-spend gate (PRISM_STUDIO_ALLOW_PAID_GENERATION=true and a
  *     PRISM_STUDIO_MAX_GENERATION_USD ceiling covering the documented maximum price) AND an explicit cost
@@ -48,15 +55,32 @@ export type ProviderRegistry = Map<ReconstructionProviderId, ReconstructionProvi
 
 export function buildProviders(
   env: Record<string, string | undefined> = process.env,
-  opts: { localToolchain?: LocalToolchain } = {},
+  opts: { localToolchain?: LocalToolchain; remoteAgents?: RemoteAgentAvailability } = {},
 ): ProviderRegistry {
   const providers: ProviderRegistry = new Map();
   const add = (p: ReconstructionProvider) => providers.set(p.id, p);
   add(new LocalCaptureProvider(opts.localToolchain));
+  // listed only where remote Local Agents are switched on (PRISM_LOCAL_AGENTS_ENABLED=1)
+  if (remoteAgentsEnabled(env)) add(new RemoteAgentCaptureProvider(opts.remoteAgents));
   add(new WorldLabsProvider(readWorldLabsConfig(env)));
   const mock = readMockConfig(env);
   if (mock.available) add(new MockReconstructionProvider(mock));
   return providers;
+}
+
+/**
+ * The registry for ONE project's request: the shared providers, with the remote-agent provider bound to that
+ * project's own workstation availability (computed per request, never cached across projects). Insertion order, and
+ * so the free-first order, is unchanged.
+ */
+export function withRemoteAgents(
+  base: ProviderRegistry,
+  availability: RemoteAgentAvailability,
+): ProviderRegistry {
+  const out: ProviderRegistry = new Map(base);
+  if (out.has("local_agent_capture"))
+    out.set("local_agent_capture", new RemoteAgentCaptureProvider(availability));
+  return out;
 }
 
 /** What the UI may know about each provider: capabilities and status only, never a credential or URL. */
@@ -115,8 +139,9 @@ export function providerSummaries(providers: ProviderRegistry): ProviderSummary[
 }
 
 /**
- * The provider pre-selected in the UI: a FREE, LOCAL provider that is ready right now, else none. A paid provider
- * (or the test mock) is never pre-selected, even when it is the only one available: the user picks it explicitly.
+ * The provider pre-selected in the UI: a FREE, LOCAL provider that is ready right now, else none, in registry order:
+ * the same-host Local Capture first, then a ready paired workstation (Remote Local Agent). A paid provider (or the
+ * test mock) is never pre-selected, even when it is the only one available: the user picks it explicitly.
  */
 export function defaultProviderId(summaries: ProviderSummary[]): ReconstructionProviderId | null {
   return (

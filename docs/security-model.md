@@ -74,6 +74,43 @@ Asset responses add `nosniff`, a safe `Content-Disposition` (inline only for ima
 | Replayed / forged webhooks                            | No endpoint exists until a provider needs one; contract requires signature verification before parsing and idempotency on the event id                                                         |
 | Worker storage credential                             | See below                                                                                                                                                                                      |
 
+**Agent relay Storage credential (M2D.3C2).** Remote Local Agent jobs are served by the Prism server (Next.js app)
+on signed agent requests that carry no browser session, so in Supabase mode the app needs a session-less Storage
+authority for exactly two things: reading the frozen source photographs of a job leased to an authenticated device of
+that project, and storing that job's one validated result through the shared ingestion. It is a DEDICATED secret key,
+`PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY`, distinct from the worker key so it can be scoped and rotated on its
+own. It is read only by `src/server/local-agent/relay-storage.ts` (server-only; a source test proves no other module
+reads it), only while `PRISM_LOCAL_AGENTS_ENABLED=1`, and it is never sent to a workstation (agents receive bytes
+over signed routes, never a key or a signed URL). Without it, remote jobs are unavailable (fail closed; nothing falls
+back to the worker key or a session). This is a deliberate change from the earlier rule that no Storage secret lives
+in the app: it was approved for M2D.3C2 and is listed as a residual risk below.
+
+Without the key, only EXECUTION is unavailable: pairing, heartbeat, status and revocation keep working (a paired
+workstation stays paired; its status says remote execution is not available), a lease request answers
+`remote_jobs_unavailable`, the source, progress and failure routes answer `job_not_available` without reading or
+writing anything, and a result upload is refused before its body is read. Same-host Local Capture and World Labs are
+unaffected.
+
+**Remote Local Agent production gate (deployment checklist).** M2D.3C2 is implementation-validated, NOT production
+enabled. Before `PRISM_LOCAL_AGENTS_ENABLED=1` is set on a hosted deployment:
+
+1. Create a NEW, dedicated Supabase secret key (`sb_secret_…`) for the relay and set it ONLY in the Prism server's
+   environment as `PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY`. Do NOT reuse the generation worker's key
+   (`PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY` / `PRISM_STUDIO_WORKER_SERVICE_KEY`), the database password, a
+   service-role key issued for anything else, or any unrelated service secret. (Only a future, documented emergency
+   procedure could say otherwise.) Never put it in a workstation's environment, a client bundle (`NEXT_PUBLIC_*`),
+   logs or tickets. Rotate it on any suspicion of server compromise; revoking it disables remote execution at once
+   (fail closed) without unpairing devices.
+2. Put ingress / edge rate limiting in front of `/api/local-agent/v1/*` (per client IP): strict on the
+   unauthenticated `/pair`, and sensible request limits on the authenticated job routes (§15 of
+   [local-agent-protocol.md](local-agent-protocol.md)). Prism has no in-process limiter by design.
+3. Complete the first real COLMAP + Brush reconstruction on supported hardware (the automated suites use fakes only).
+
+Automated tests run without a dedicated relay key: the hosted test script (`db:remote-agent-jobs`) and the Supabase
+browser suite pass the existing TEST worker key's VALUE under the relay variable name to a LOCAL test server only
+(`playwright.supabase.config.ts`, `scripts/db-remote-agent-jobs.mts`). Production code never reads the worker key in
+its place.
+
 **Worker storage credential.** A worker has no browser session, so writing to the private bucket needs a server
 credential. The production worker uses `PRISM_STUDIO_WORKER_SERVICE_KEY`, which exists **only** in the worker's
 environment (never the Next.js app, never the browser, never the database, never a snapshot). For local
@@ -107,6 +144,16 @@ These are known and unmitigated unless noted.
 12. **Storage policy tested at SQL level.** See Known gaps in the [roadmap](roadmap.md).
 13. **Migration history before checksums** (0001–0005) is baselined, not proven ([migration-policy](migration-policy.md)).
 14. **Worker holds a storage-write key** (production) with project-wide Storage access; scope it to the worker host and rotate it.
+    **The internet-facing app holds a private Storage credential** when remote Local Agents are enabled (M2D.3C2):
+    the agent relay key is a Supabase secret key with project-wide Storage authority. **Threat:** a compromise of the
+    Prism server process (code execution, environment disclosure) could expose that authority over every project's
+    private objects. This is not zero risk. Mitigations: a server-only module boundary (one reader, imported only by
+    the server-only wiring; source tests enforce both); the feature flag (`PRISM_LOCAL_AGENTS_ENABLED=1`); a
+    DEDICATED credential (rotate or revoke independently of the worker; absence fails closed); narrow relay
+    authorization in code (authenticated device → its project → its own unexpired lease → the frozen job → a frozen
+    source ordinal → the Asset's project, type and checksum; result only through the shared ingestion); no exposure to
+    workstations, browsers, logs (redaction lists) or job/provenance JSON; no Storage URLs of any kind; production
+    ingress controls on `/api/local-agent/v1/*` (deployment gate above).
 15. **Output downloads rely on provider hosts' TLS and the allow-list**; a compromised provider CDN host on the allow-list can serve hostile bytes (validated by type/size, never executed).
 16. **Provider-side idempotency** is only as good as the provider: a crash between "provider accepted" and "Prism recorded it" can, for providers without idempotency keys, produce a second paid generation.
 17. **Media processing runs untrusted bytes through ffmpeg** in the app server. Mitigated by magic-byte

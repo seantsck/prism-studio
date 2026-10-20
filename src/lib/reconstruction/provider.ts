@@ -11,6 +11,7 @@ import type {
 } from "@/domain/reconstruction/job";
 import type { SplatFormat } from "@/domain/previs/splat";
 import type { LocalRuntimeView } from "./local-capture";
+import type { RemoteAgentView } from "./remote-agent-capture";
 
 export type { InputMode };
 
@@ -30,10 +31,14 @@ export type ProviderExecution = "local" | "hosted" | "mock";
  * Who advances an operation (the execution boundary):
  *   provider_api   an external service runs it; ANY Prism server request may poll its API (rate-limited per job),
  *                  so the job resumes from its stored operation id after a navigation or a closed tab.
- *   local_worker   a separate Prism worker process runs it on this machine (M2D.3). Web requests never execute or
- *                  poll it: they only read the job row the worker writes. The job keeps running with no browser.
+ *   local_worker   a separate Prism worker process runs it on this machine (M2D.3B, trusted same-host). Web requests
+ *                  never execute or poll it: they only read the job row the worker writes. No browser is needed.
+ *   remote_agent   a PAIRED WORKSTATION runs it (M2D.3C2): it leases the job over the signed Local Agent protocol and
+ *                  reports progress and one result; web requests never execute it and only read (and reconcile an
+ *                  expired lease of) the job row.
+ * Anything but provider_api: the web side only reads the job.
  */
-export type ProviderRunner = "provider_api" | "local_worker";
+export type ProviderRunner = "provider_api" | "local_worker" | "remote_agent";
 
 export type CapabilityState = "available" | "unavailable" | "not_installed" | "unknown";
 
@@ -98,6 +103,8 @@ export interface ProviderStatus {
   reason: string | null;
   /** local execution only: worker and toolchain state as the worker last reported it (never a path or pid) */
   local?: LocalRuntimeView;
+  /** remote-agent execution only: this PROJECT's paired workstations, as counts (never a device key or address) */
+  remote?: RemoteAgentView;
 }
 
 /** One Prism source input, read server-side from private storage. Never a URL. */

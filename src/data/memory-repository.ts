@@ -74,6 +74,11 @@ export class MemoryRepository implements Repository {
     return p ? { userId: p.project.userId, title: p.project.title } : null;
   }
 
+  /** A location's name, only within its own project (the memory Local Agent job path's provenance label). */
+  locationName(projectId: string, locationId: string): string | null {
+    return this.projects.get(projectId)?.locations.find((l) => l.id === locationId)?.name ?? null;
+  }
+
   async listProjects(): Promise<Project[]> {
     return [...this.projects.values()].map((p) => clone(p.project));
   }

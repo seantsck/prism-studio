@@ -37,6 +37,11 @@ import {
   type PreparedInput,
   type ReconstructionProvider,
 } from "@/lib/reconstruction/provider";
+import {
+  LEASE_EXPIRED_MESSAGE,
+  remoteLeaseOf,
+  staleRemoteJob,
+} from "@/lib/reconstruction/remote-agent-capture";
 import { persistPassBundle, type PassStoreDeps } from "./spatial-pass-store";
 
 /**
@@ -49,7 +54,8 @@ import { persistPassBundle, type PassStoreDeps } from "./spatial-pass-store";
  *   - The provider is the one the user chose. There is NO fallback: an unavailable or failing provider fails the
  *     request; Prism never switches to another provider (and so never to a paid one) on its own.
  *   - A local timeout never fails a running provider operation and never triggers a new submission.
- *   - A `local_worker` provider is executed by a separate worker process, never by a web request (see provider.ts).
+ *   - A `local_worker` or `remote_agent` provider is executed outside the web request (the same-host worker, or a
+ *     paired workstation): the web side only reads the job, and fails a remote job whose lease has expired.
  *   - A provider "success" is only a Prism success after download, size cap, checksum and splat validation, and the
  *     Asset + immutable reconstruction + job success are persisted all-or-nothing. Exactly one poller ingests.
  */
@@ -284,7 +290,9 @@ async function transition(
       jobId: job.id,
       provider: job.provider,
       transition: `${job.status}->${patch.status}`,
-      operation: next.providerOperationId ? `…${next.providerOperationId.slice(-8)}` : null,
+      // a provider operation suffix helps support; a remote agent's lease id is never logged, not even in part
+      operation:
+        next.providerOperationId && !remoteLeaseOf(next) ? `…${next.providerOperationId.slice(-8)}` : null,
       code: patch.errorCode ?? null,
     });
   return next;
@@ -305,8 +313,8 @@ export async function submitJob(deps: JobServiceDeps, jobId: string): Promise<Re
   const provider = registered(deps, job.provider);
   // an id this server no longer knows: the job stays as it is (readable, cancellable), nothing else is tried
   if (!provider) return job;
-  // a local worker claims queued local jobs itself; a web request never runs a reconstruction
-  if (provider.capabilities().runner === "local_worker") return job;
+  // a local worker or a paired agent claims queued jobs itself; a web request never runs a reconstruction
+  if (provider.capabilities().runner !== "provider_api") return job;
 
   // spend / configuration gate BEFORE any provider call (nothing is uploaded, nothing is submitted)
   const blocked = submissionBlocker(deps, provider, job.model, inputModeOf(job.sources));
@@ -402,15 +410,20 @@ export async function refreshJob(deps: JobServiceDeps, jobId: string): Promise<R
   if (!job || job.projectId !== deps.projectId)
     throw new JobServiceError("not_found", "No such reconstruction job.");
   if (job.status === "queued") return submitJob(deps, jobId);
-  if (job.status !== "running" && job.status !== "ingesting") return job;
+  if (job.status !== "running" && job.status !== "ingesting" && job.status !== "submitting") return job;
   const provider = registered(deps, job.provider);
   if (!provider) {
     // history from a provider this server no longer has: shown as stored, never polled, never substituted
     log(deps, { jobId, provider: job.provider, poll: "skipped", reason: "provider not registered" });
     return job;
   }
-  // the worker owns a local job's progress; web requests only read what it wrote
-  if (provider.capabilities().runner === "local_worker") return job;
+  // the worker / the paired agent owns the job's progress; web requests only read what it wrote. A remote lease is
+  // reconciled in every in-flight state, `submitting` included (a claim interrupted between its two writes).
+  const runner = provider.capabilities().runner;
+  if (runner === "remote_agent") return reconcileRemoteLease(deps, job);
+  // a hosted submission in flight belongs to its submitter (unchanged)
+  if (job.status === "submitting") return job;
+  if (runner !== "provider_api") return job;
   const last = job.lastPolledAt ? Date.parse(job.lastPolledAt) : 0;
   if (Date.parse(deps.now()) - last < deps.config.pollIntervalMs) return job;
 
@@ -438,6 +451,46 @@ export async function refreshJob(deps: JobServiceDeps, jobId: string): Promise<R
     return job;
   }
   return applySnapshot(deps, job, provider, op);
+}
+
+/**
+ * The ONLY thing a web request does to a remote-agent job: when its stored lease has truly expired (the workstation
+ * stopped reporting), the attempt is failed with a clear message (compare-and-set). It is never handed to another
+ * workstation (that could run two expensive reconstructions for one attempt); Retry creates a new attempt.
+ */
+export async function reconcileRemoteLease(
+  deps: Pick<JobServiceDeps, "repo" | "now" | "log">,
+  job: ReconstructionJobRecord,
+): Promise<ReconstructionJobRecord> {
+  if (!staleRemoteJob(job, Date.parse(deps.now()))) return job;
+  try {
+    const next = await deps.repo.updateReconstructionJob(
+      job.id,
+      job.revision,
+      {
+        ...fail("provider_timeout", LEASE_EXPIRED_MESSAGE),
+        providerOperation: { ...(job.providerOperation ?? {}), stage: "lease_expired" },
+      },
+      deps.now(),
+    );
+    await event(deps, next, "failed", {
+      code: "provider_timeout",
+      reason: "lease_expired",
+      agent: remoteLeaseOf(job)?.agentId ?? null,
+    });
+    log(deps, {
+      jobId: job.id,
+      provider: job.provider,
+      transition: `${job.status}->failed`,
+      reason: "lease_expired",
+    });
+    return next;
+  } catch (e) {
+    // the agent renewed, uploaded or the user cancelled first: theirs is the outcome
+    if (e instanceof PrevisError && (e.code === "conflict" || e.code === "invalid"))
+      return (await deps.repo.getReconstructionJob(job.id)) ?? job;
+    throw e;
+  }
 }
 
 async function applySnapshot(
@@ -738,7 +791,8 @@ export async function ingestReconstructionResult(
               provider: job.provider,
               capability: job.capability,
               model: job.model,
-              operationId: job.providerOperationId,
+              // a remote agent's operation id carries its lease id: never copied into the reconstruction
+              operationId: remoteLeaseOf(job) ? null : job.providerOperationId,
               metadata: providerResult,
             },
             userId: deps.userId,

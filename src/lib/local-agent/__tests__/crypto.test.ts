@@ -310,7 +310,14 @@ describe("capability schema", () => {
         toolchain: { ...ok.toolchain, brush: { version: "C:\\x\\brush", compatible: true } },
       }).success,
     ).toBe(false);
-    expect(capabilitiesSchema.safeParse({ ...ok, busy: true }).success).toBe(false);
+    // M2D.3C2: busy is truthful (a C1 agent's constant false stays valid); execution is an exact, optional claim
+    expect(capabilitiesSchema.safeParse({ ...ok, busy: true }).success).toBe(true);
+    expect(capabilitiesSchema.safeParse({ ...ok, busy: "yes" }).success).toBe(false);
+    expect(capabilitiesSchema.safeParse({ ...ok, execution: { remoteJobs: true } }).success).toBe(true);
+    expect(capabilitiesSchema.safeParse({ ...ok, execution: { remoteJobs: false } }).success).toBe(false);
+    expect(
+      capabilitiesSchema.safeParse({ ...ok, execution: { remoteJobs: true, shell: "bash" } }).success,
+    ).toBe(false);
   });
 });
 
