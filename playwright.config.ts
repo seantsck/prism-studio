@@ -43,6 +43,8 @@ export default defineConfig({
       WLT_API_KEY: "",
       WORLDLABS_RECONSTRUCTION_ENABLED: "",
       PRISM_STUDIO_ALLOW_PAID_GENERATION: "false",
+      // Remote Local Agents (M2D.3C1): pairing + heartbeat only (no remote execution exists yet).
+      PRISM_LOCAL_AGENTS_ENABLED: "1",
     },
   },
 });

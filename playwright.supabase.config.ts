@@ -42,6 +42,8 @@ export default defineConfig({
       // writes the worker heartbeat there (no tool runs, no worker process in this suite)
       PRISM_LOCAL_RECONSTRUCTION_WORKER_ENABLED: "1",
       PRISM_LOCAL_RECONSTRUCTION_ROOT: path.join(os.tmpdir(), "prism-e2e-local-worker"),
+      // Remote Local Agents (M2D.3C1): supabase-local-agents.spec.ts pairs the real agent CLI (no credentials)
+      PRISM_LOCAL_AGENTS_ENABLED: "1",
     },
   },
 });
