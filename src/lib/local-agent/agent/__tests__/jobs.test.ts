@@ -272,6 +272,109 @@ describe("remote execution end to end (agent ↔ production handlers)", { timeou
     expect(await w.job(job.id)).toMatchObject({ status: "failed", errorCode: "invalid_sources" });
     expect(await runDirs()).toEqual([]);
   });
+
+  it("an unexpected error inside a run stops its keepalive (no stray loop, no unhandled rejection); the persisted state then fails the attempt", async () => {
+    const job = await w.remoteJob(w.A, await w.addImages(w.A, 3));
+    const client = await pairedClient();
+    // a defect, not a protocol answer: the first source download throws a plain TypeError mid-run
+    const download = client.downloadSource.bind(client);
+    let thrown = 0;
+    client.downloadSource = async (...a: Parameters<typeof download>) => {
+      if (thrown++ === 0) {
+        await new Promise((r) => setTimeout(r, 700)); // let the keepalive run a few times first
+        throw new TypeError("fictional defect");
+      }
+      return download(...a);
+    };
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => unhandled.push(e);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      let engineRuns = 0;
+      const out = await run(client, {
+        engine: async (...a) => (engineRuns++, runLocalReconstruction(...a)),
+      });
+      // the run loop survived the defect: the kept job state was resolved on the next pass (reported, never re-run)
+      expect(out).toMatchObject({
+        kind: "jobs_done",
+        outcomes: [{ kind: "deferred" }, { kind: "failed", jobId: job.id, code: "interrupted" }],
+      });
+      expect(engineRuns).toBe(0);
+      expect(await w.job(job.id)).toMatchObject({ status: "failed", errorCode: "provider_failed" });
+      const progressCalls = () => srv.log.filter((l) => l.endsWith("/progress")).length;
+      expect(progressCalls()).toBeGreaterThan(0); // the keepalive did run before the defect
+      const settled = progressCalls();
+      await new Promise((r) => setTimeout(r, 1_500)); // six keepalive intervals
+      expect(progressCalls()).toBe(settled);
+      expect(unhandled).toEqual([]);
+      expect(await readJobState(profile())).toBeNull();
+      expect(srv.log.some((l) => l.startsWith("PUT "))).toBe(false);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("the executor itself: an unexpected error stops and settles the keepalive before it is rethrown", async () => {
+    await w.remoteJob(w.A, await w.addImages(w.A, 3));
+    const client = await pairedClient();
+    await beat(client);
+    const r = await client.lease();
+    expect(r.lease).not.toBeNull();
+    // a server that would renew forever: only the executor's own cleanup can stop the keepalive
+    let keepalives = 0;
+    const stub = {
+      device: client.device,
+      progress: async () => {
+        keepalives++;
+        const now = Date.now();
+        return {
+          protocol: "prism.local-agent.v1" as const,
+          ok: true as const,
+          serverTime: new Date(now).toISOString(),
+          leaseExpiresAt: new Date(now + 120_000).toISOString(),
+          leaseTtlMs: 120_000,
+        };
+      },
+      fail: async () => {
+        throw new Error("not expected");
+      },
+      uploadResult: async () => {
+        throw new Error("not expected");
+      },
+      downloadSource: async () => {
+        await new Promise((res) => setTimeout(res, 600));
+        throw new TypeError("fictional defect");
+      },
+    } as unknown as Parameters<typeof executeLease>[0]["client"];
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => unhandled.push(e);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await expect(
+        executeLease(
+          {
+            client: stub,
+            profileDir: profile(),
+            workRoot: workRoot(),
+            toolchain: jobToolchainFromProbe(await probe()),
+            keepaliveMs: 100,
+            marginMs: 600,
+          },
+          r.lease!,
+          r.serverTime,
+        ),
+      ).rejects.toThrow("fictional defect");
+      expect(keepalives).toBeGreaterThan(0); // it was running
+      const settled = keepalives;
+      await new Promise((res) => setTimeout(res, 1_000)); // ten keepalive intervals
+      expect(keepalives).toBe(settled);
+      expect(unhandled).toEqual([]);
+      // the state stays: the next pass of the run loop resolves it (reported failed, never re-run)
+      expect(await readJobState(profile())).toMatchObject({ jobId: r.lease!.jobId });
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
 });
 
 describe("agent restart", { timeout: 90_000 }, () => {

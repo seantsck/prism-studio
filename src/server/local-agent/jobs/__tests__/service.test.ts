@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { jobPaths, LEASE_TTL_MS, PATHS, PROTOCOL, type AgentFailureCode } from "@/lib/local-agent/protocol";
+import {
+  INGEST_GRACE_MS,
+  jobPaths,
+  LEASE_TTL_MS,
+  PATHS,
+  PROTOCOL,
+  type AgentFailureCode,
+} from "@/lib/local-agent/protocol";
 import { cancelJob, refreshJob, retryJob } from "@/server/reconstruction-jobs";
 import { readWorldLabsConfig, WorldLabsProvider } from "@/lib/reconstruction/worldlabs";
 import { capabilities, type TestAgent } from "../../__tests__/helpers";
@@ -235,6 +242,123 @@ describe("lease", () => {
     expect(stale.errorMessage).toMatch(/stopped reporting/);
   });
 
+  it("relay Storage withdrawn (no dedicated key): a held lease gets no source, no progress, no failure write, no upload", async () => {
+    const w = await remoteWorld();
+    const { a, lease } = await leased(w);
+    const off = { ...w.deps, available: false };
+    const before = (await w.job(lease.jobId))!.revision;
+    const reads = { ...w.sinkCalls };
+    expect(
+      await code(serveSource(off, srcReq(a, lease.jobId, lease.leaseId, 0), lease.jobId, lease.leaseId, 0)),
+    ).toBe("job_not_available");
+    expect(
+      await code(
+        progress(
+          off,
+          progReq(a, lease.jobId, lease.leaseId, { stage: "downloading", progress: 0, message: "x" }),
+          lease.jobId,
+          lease.leaseId,
+        ),
+      ),
+    ).toBe("job_not_available");
+    expect(
+      await code(
+        failJob(
+          off,
+          failReq(a, lease.jobId, lease.leaseId, { code: "brush_failed", stage: null, message: "x" }),
+          lease.jobId,
+          lease.leaseId,
+        ),
+      ),
+    ).toBe("job_not_available");
+    expect(await code(resultUploadGate(off, a.deviceId, lease.jobId, lease.leaseId, 10))).toBe(
+      "job_not_available",
+    );
+    expect((await w.job(lease.jobId))!.revision).toBe(before);
+    expect(w.sinkCalls).toEqual(reads); // no private Storage read or write
+  });
+
+  it("a claim interrupted between its two writes (queued → submitting, then the server dies) is held by its lease, then failed; never claimed twice", async () => {
+    const w = await remoteWorld();
+    const job = await w.remoteJob(w.A, await w.addImages(w.A, 3));
+    const a = await w.agent(w.A);
+    const previs = w.repo.previs;
+    const update = previs.updateReconstructionJob.bind(previs);
+    previs.updateReconstructionJob = async (...args: Parameters<typeof update>) => {
+      if (args[2].status === "running") throw new Error("fictional crash between the two claim writes");
+      return update(...args);
+    };
+    try {
+      await expect(leaseJob(w.deps, leaseReq(a))).rejects.toThrow("fictional crash");
+    } finally {
+      previs.updateReconstructionJob = update;
+    }
+    // the FIRST write already froze the whole remote authority: runner, device, opaque lease, its expiry
+    const half = (await w.job(job.id))!;
+    expect(half.status).toBe("submitting");
+    expect(half.providerOperationId).toMatch(/^agent:[0-9a-f]{32}$/);
+    expect(half.providerOperation).toMatchObject({
+      runner: "remote_agent",
+      agentId: a.deviceId,
+      leaseId: half.providerOperationId!.slice("agent:".length),
+      leaseExpiresAt: new Date(w.now() + LEASE_TTL_MS).toISOString(),
+    });
+    // while that lease lives, no other workstation can take the job
+    const b = await w.agent(w.A);
+    w.advance(LEASE_TTL_MS - 1_000);
+    expect(await leaseJob(w.deps, leaseReq(b))).toMatchObject({ lease: null, idle: "no_job" });
+    expect((await w.job(job.id))!.status).toBe("submitting");
+    // past it, the reaper fails that SAME attempt: no second claim, no new attempt, nothing re-run
+    w.advance(1_001);
+    expect(await leaseJob(w.deps, leaseReq(b))).toMatchObject({ lease: null, idle: "no_job" });
+    expect(await w.job(job.id)).toMatchObject({
+      status: "failed",
+      errorCode: "provider_timeout",
+      attempt: 1,
+      providerOperationId: half.providerOperationId,
+    });
+    expect(await w.repo.previs.listReconstructionJobs(w.locA)).toHaveLength(1);
+    // the original agent's late requests are refused
+    expect(await code(leaseJob(w.deps, leaseReq(a)))).toBe("no error");
+    expect(
+      await code(
+        progress(
+          w.deps,
+          progReq(a, job.id, half.providerOperationId!.slice(6), {
+            stage: "downloading",
+            progress: 0,
+            message: "x",
+          }),
+          job.id,
+          half.providerOperationId!.slice(6),
+        ),
+      ),
+    ).toBe("job_not_available");
+  });
+
+  it("a claim interrupted after its first write is also failed by the owner's refresh once the lease expired", async () => {
+    const w = await remoteWorld();
+    const job = await w.remoteJob(w.A, await w.addImages(w.A, 3));
+    const a = await w.agent(w.A);
+    const previs = w.repo.previs;
+    const update = previs.updateReconstructionJob.bind(previs);
+    previs.updateReconstructionJob = async (...args: Parameters<typeof update>) => {
+      if (args[2].status === "running") throw new Error("fictional crash");
+      return update(...args);
+    };
+    try {
+      await expect(leaseJob(w.deps, leaseReq(a))).rejects.toThrow("fictional crash");
+    } finally {
+      previs.updateReconstructionJob = update;
+    }
+    expect(await refreshJob(await w.jobDeps(w.A), job.id)).toMatchObject({ status: "submitting" });
+    w.advance(LEASE_TTL_MS + 1);
+    expect(await refreshJob(await w.jobDeps(w.A), job.id)).toMatchObject({
+      status: "failed",
+      errorCode: "provider_timeout",
+    });
+  });
+
   it("a job whose frozen sources cannot run remotely fails at claim time (invalid_sources)", async () => {
     const w = await remoteWorld();
     const imgs = await w.addImages(w.A, 3);
@@ -362,10 +486,15 @@ describe("progress and keepalive", () => {
     w.advance(2_000);
     await p({ stage: "downloading", progress: 0.02, message: "Downloading" });
     expect((await w.job(lease.jobId))!.revision).toBe(rev + 1);
-    await p({ stage: "splat_training", progress: 0.4, message: "Training" });
+    await p({ stage: "splat_training", progress: 0.4, message: "Training on WS-FICTIONAL as someone" });
     const job = (await w.job(lease.jobId))!;
+    expect(JSON.stringify(job)).not.toMatch(/WS-FICTIONAL|someone/);
     expect(job).toMatchObject({ status: "running", progress: 0.4 });
-    expect(job.providerOperation).toMatchObject({ stage: "splat_training", description: "Training" });
+    // the server's own words for the stage, never the workstation's text
+    expect(job.providerOperation).toMatchObject({
+      stage: "splat_training",
+      description: "Splat training (Brush)",
+    });
     const ev = (await w.events(lease.jobId)).filter((e) => e.event === "progress").map((e) => e.detail.stage);
     expect(ev).toEqual(["downloading", "splat_training"]);
   });
@@ -476,7 +605,8 @@ describe("failure report", () => {
         failReq(a, lease.jobId, lease.leaseId, {
           code: agentCode,
           stage: "splat_training",
-          message: "Brush stopped at C:\\Users\\someone\\x and /home/someone/y",
+          message:
+            "Brush stopped at C:\\Users\\someone\\x and /home/someone/y on WS-FICTIONAL (cmd: brush --x) lease abc",
         }),
         lease.jobId,
         lease.leaseId,
@@ -484,7 +614,9 @@ describe("failure report", () => {
       expect(r.job.status).toBe("failed");
       const job = (await w.job(lease.jobId))!;
       expect(job.errorCode).toBe(jobCode);
-      expect(job.errorMessage).not.toMatch(/someone/);
+      // the server's own message for the code; none of the workstation's text is stored
+      expect(job.errorMessage).toBe(agentFailureMessage(agentCode as keyof typeof REMOTE_FAILURE_MAP));
+      expect(JSON.stringify(job)).not.toMatch(/someone|WS-FICTIONAL|brush --x|lease abc/);
       expect(job.providerOperation).toMatchObject({ stage: "failed", agentError: { code: agentCode } });
     },
   );
@@ -492,7 +624,7 @@ describe("failure report", () => {
   it("the workstation cannot forge a cancellation, choose a status, or name a free-form code", async () => {
     const w = await remoteWorld();
     const { a, lease } = await leased(w);
-    expect(agentFailureMessage("cancelled", "anything")).toMatch(/stopped before the run completed/);
+    expect(agentFailureMessage("cancelled")).toMatch(/stopped before the run completed/);
     expect(
       await code(
         failJob(
@@ -756,6 +888,53 @@ describe("result upload", () => {
     expect(again.job.reconstructionId).toBe((await w.job(lease.jobId))!.resultReconstructionId);
   });
 
+  it("ingesting: the workstation's authority is over; only the server-side import grace applies", async () => {
+    const w = await remoteWorld();
+    const { a, lease } = await leased(w);
+    await declare(w, a, lease.jobId, lease.leaseId);
+    // the server won running → ingesting (as uploadResult does) and its import is still in progress
+    const j = (await w.job(lease.jobId))!;
+    await w.repo.previs.updateReconstructionJob(
+      j.id,
+      j.revision,
+      {
+        status: "ingesting",
+        progress: 1,
+        providerOperation: {
+          ...j.providerOperation,
+          stage: "ingesting",
+          leaseExpiresAt: new Date(w.now() + INGEST_GRACE_MS).toISOString(),
+        },
+      },
+      new Date(w.now()).toISOString(),
+    );
+    const ingesting = (await w.job(lease.jobId))!;
+    // no renewal: progress is refused and does not move the grace deadline
+    w.advance(60_000);
+    expect(
+      await code(
+        progress(
+          w.deps,
+          progReq(a, lease.jobId, lease.leaseId, { stage: "uploading", progress: 1, message: "x" }),
+          lease.jobId,
+          lease.leaseId,
+        ),
+      ),
+    ).toBe("job_not_available");
+    // a lease request neither renews it nor hands out another job while the result is imported
+    expect(await leaseJob(w.deps, leaseReq(a))).toMatchObject({ lease: null, idle: "no_job" });
+    expect((await w.job(lease.jobId))!.revision).toBe(ingesting.revision);
+    expect((await w.job(lease.jobId))!.providerOperation!.leaseExpiresAt).toBe(
+      ingesting.providerOperation!.leaseExpiresAt,
+    );
+    // a server import that never finished (process died): failed once the grace ends, never re-leased
+    w.advance(INGEST_GRACE_MS);
+    expect(await refreshJob(await w.jobDeps(w.A), lease.jobId)).toMatchObject({
+      status: "failed",
+      errorCode: "provider_timeout",
+    });
+  });
+
   it("cancel racing the upload: whichever compare-and-set wins is final (a cancel that won stores nothing)", async () => {
     const w = await remoteWorld();
     const { a, lease } = await leased(w);
@@ -787,6 +966,96 @@ describe("result upload", () => {
 });
 
 // ───────────────────────── revocation, web reconciliation, no fallback ─────────────────────────
+
+describe("project-scoped availability", () => {
+  it("one owner, two projects: project A's ready workstation never makes Remote Local Agent ready in project B", async () => {
+    const w = await remoteWorld();
+    const { remoteAgentView } = await import("@/lib/reconstruction/remote-agent-capture");
+    // the same signed-in owner owns both projects
+    expect((await w.repo.projectOwner(w.B))?.userId).toBe((await w.repo.projectOwner(w.A))?.userId);
+    await w.agent(w.A);
+    const server = { enabled: true, configured: true };
+    const viewOf = async (p: string) => remoteAgentView(await w.agentStore.listDevices(p), w.now(), server);
+    expect(await viewOf(w.A)).toMatchObject({ state: "ready", ready: 1 });
+    expect(await viewOf(w.B)).toMatchObject({ state: "no_agents", ready: 0 });
+    // and project A's workstation never sees project B's queued job
+    const jobB = await w.remoteJob(w.B, await w.addImages(w.B, 3));
+    const a2 = await w.agent(w.A);
+    expect(await leaseJob(w.deps, leaseReq(a2))).toMatchObject({ lease: null, idle: "no_job" });
+    expect(await w.job(jobB.id)).toMatchObject({ status: "queued" });
+  });
+});
+
+describe("lease id secrecy", () => {
+  it("the lease id never appears in server logs, job events or the reconstruction's provenance", async () => {
+    const w = await remoteWorld();
+    const logs: unknown[] = [];
+    w.deps.log = (e) => logs.push(e);
+    const { a, lease } = await leased(w);
+    const bytes = await declare(w, a, lease.jobId, lease.leaseId);
+    await uploadResult(w.deps, putReq(a, lease.jobId, lease.leaseId, bytes), lease.jobId, lease.leaseId);
+    const job = (await w.job(lease.jobId))!;
+    expect(job.status).toBe("succeeded");
+    const rec = (await w.repo.previs.getReconstruction(job.resultReconstructionId!))!;
+    const tail = lease.leaseId.slice(-12);
+    for (const text of [
+      JSON.stringify(logs),
+      JSON.stringify(await w.events(lease.jobId)),
+      JSON.stringify(rec),
+    ]) {
+      expect(text).not.toContain(lease.leaseId);
+      expect(text).not.toContain(tail);
+    }
+    expect(logs.length).toBeGreaterThan(0);
+  });
+});
+
+describe("request ownership on every lease route", () => {
+  it("knowing the job, lease and Asset ids grants nothing without THE device's key, project and lease", async () => {
+    const w = await remoteWorld();
+    const { a, lease } = await leased(w);
+    const bytes = await declare(w, a, lease.jobId, lease.leaseId);
+    const sameProject = await w.agent(w.A);
+    const otherProject = await w.agent(w.B);
+    const otherJob = await w.remoteJob(w.A, await w.addImages(w.A, 3));
+    const wrongLease = "f".repeat(32);
+    const before = { rev: (await w.job(lease.jobId))!.revision, sink: { ...w.sinkCalls } };
+    const routes = (who: TestAgent, jobId: string, leaseId: string, o: { agentId?: string } = {}) => [
+      serveSource(w.deps, who.request("GET", jobPaths(jobId, leaseId).source(0), null, o), jobId, leaseId, 0),
+      progress(
+        w.deps,
+        progReq(who, jobId, leaseId, { stage: "downloading", progress: 0, message: "x" }, o),
+        jobId,
+        leaseId,
+      ),
+      failJob(
+        w.deps,
+        who.request(
+          "POST",
+          jobPaths(jobId, leaseId).fail,
+          { protocol: PROTOCOL, code: "brush_failed", stage: null, message: "x" },
+          o,
+        ),
+        jobId,
+        leaseId,
+      ),
+      uploadResult(w.deps, putReq(who, jobId, leaseId, bytes, o), jobId, leaseId),
+    ];
+    const all = async (ps: Promise<unknown>[]) => Promise.all(ps.map((p) => code(p)));
+    const mismatch = ["lease_mismatch", "lease_mismatch", "lease_mismatch", "lease_mismatch"];
+    expect(await all(routes(sameProject, lease.jobId, lease.leaseId))).toEqual(mismatch);
+    expect(await all(routes(otherProject, lease.jobId, lease.leaseId))).toEqual(mismatch);
+    expect(await all(routes(a, lease.jobId, wrongLease))).toEqual(mismatch);
+    expect(await all(routes(a, otherJob.id, lease.leaseId))).toEqual(mismatch);
+    // another device signing while claiming the holder's id: the signature does not verify
+    const forged = await all(routes(sameProject, lease.jobId, lease.leaseId, { agentId: a.deviceId }));
+    expect(new Set(forged)).toEqual(new Set(["invalid_signature"]));
+    // nothing changed and no private byte was read or written
+    expect((await w.job(lease.jobId))!.revision).toBe(before.rev);
+    expect(w.sinkCalls).toEqual(before.sink);
+    expect(await w.job(otherJob.id)).toMatchObject({ status: "queued" });
+  });
+});
 
 describe("revocation and reconciliation", () => {
   it("revoking a device fails its active job at once (never reassigned); other devices' jobs are untouched", async () => {

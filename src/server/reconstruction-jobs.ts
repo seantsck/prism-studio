@@ -290,7 +290,9 @@ async function transition(
       jobId: job.id,
       provider: job.provider,
       transition: `${job.status}->${patch.status}`,
-      operation: next.providerOperationId ? `…${next.providerOperationId.slice(-8)}` : null,
+      // a provider operation suffix helps support; a remote agent's lease id is never logged, not even in part
+      operation:
+        next.providerOperationId && !remoteLeaseOf(next) ? `…${next.providerOperationId.slice(-8)}` : null,
       code: patch.errorCode ?? null,
     });
   return next;
@@ -408,16 +410,19 @@ export async function refreshJob(deps: JobServiceDeps, jobId: string): Promise<R
   if (!job || job.projectId !== deps.projectId)
     throw new JobServiceError("not_found", "No such reconstruction job.");
   if (job.status === "queued") return submitJob(deps, jobId);
-  if (job.status !== "running" && job.status !== "ingesting") return job;
+  if (job.status !== "running" && job.status !== "ingesting" && job.status !== "submitting") return job;
   const provider = registered(deps, job.provider);
   if (!provider) {
     // history from a provider this server no longer has: shown as stored, never polled, never substituted
     log(deps, { jobId, provider: job.provider, poll: "skipped", reason: "provider not registered" });
     return job;
   }
-  // the worker / the paired agent owns the job's progress; web requests only read what it wrote
+  // the worker / the paired agent owns the job's progress; web requests only read what it wrote. A remote lease is
+  // reconciled in every in-flight state, `submitting` included (a claim interrupted between its two writes).
   const runner = provider.capabilities().runner;
   if (runner === "remote_agent") return reconcileRemoteLease(deps, job);
+  // a hosted submission in flight belongs to its submitter (unchanged)
+  if (job.status === "submitting") return job;
   if (runner !== "provider_api") return job;
   const last = job.lastPolledAt ? Date.parse(job.lastPolledAt) : 0;
   if (Date.parse(deps.now()) - last < deps.config.pollIntervalMs) return job;
@@ -786,7 +791,8 @@ export async function ingestReconstructionResult(
               provider: job.provider,
               capability: job.capability,
               model: job.model,
-              operationId: job.providerOperationId,
+              // a remote agent's operation id carries its lease id: never copied into the reconstruction
+              operationId: remoteLeaseOf(job) ? null : job.providerOperationId,
               metadata: providerResult,
             },
             userId: deps.userId,

@@ -27,6 +27,7 @@ import {
   type Lease,
   type LeaseResponse,
   type ProgressResponse,
+  type RemoteStage,
 } from "@/lib/local-agent/protocol";
 import {
   agentCanExecute,
@@ -331,7 +332,7 @@ async function claim(
   }
   await event(scope, now, job, "submitted", { runner: "remote_agent", agent: d.id });
   await event(scope, now, job, "provider_running", { stage: "leased" });
-  log(deps, { jobId: job.id, agent: d.id, transition: "queued->running", lease: `…${leaseId.slice(-6)}` });
+  log(deps, { jobId: job.id, agent: d.id, transition: "queued->running" });
   return leaseView(job, remoteLeaseOf(job)!, false, ttl(deps));
 }
 
@@ -481,6 +482,21 @@ async function failHeld(
 
 // ───────────────────────── progress / keepalive ─────────────────────────
 
+/**
+ * What the owner sees for each reported stage: the SERVER's own words. The agent's progress text is never stored or
+ * shown (like failure text, it is free text from the workstation).
+ */
+export const REMOTE_STAGE_DESCRIPTIONS: Record<RemoteStage, string> = {
+  downloading: "Downloading the photographs",
+  preparing: "Preparing the photographs",
+  camera_reconstruction: "Camera reconstruction (COLMAP)",
+  splat_training: "Splat training (Brush)",
+  validating_ply: "Validating the trained splat",
+  converting_spz: "Converting to SPZ",
+  validating_spz: "Validating the SPZ",
+  uploading: "Uploading the result",
+};
+
 function sameResult(a: Record<string, unknown>, b: FinalResult) {
   return JSON.stringify(finalResultSchema.safeParse(a).data ?? null) === JSON.stringify(b);
 }
@@ -533,7 +549,8 @@ export async function progress(
       leaseTtlMs: ttl(deps),
     };
   for (let attempt = 0; ; attempt++) {
-    const renewed = await renew(deps, h.scope, h.job, h.lease, d, body.stage, body.message, {
+    const description = REMOTE_STAGE_DESCRIPTIONS[body.stage];
+    const renewed = await renew(deps, h.scope, h.job, h.lease, d, body.stage, description, {
       progress: body.progress,
       ...(body.result ? { result: { ...body.result } } : {}),
     });
@@ -592,13 +609,37 @@ export const REMOTE_FAILURE_MAP: Record<AgentFailureCode, JobErrorCode> = {
 export const REMOTE_STOPPED_MESSAGE =
   "The paired workstation stopped before the run completed. Retry creates a new attempt.";
 
-/** Absolute paths, drive letters and UNC prefixes are never stored from an agent message. */
-const PATHLIKE = /([A-Za-z]:[\\/][^\s"']*|\\\\[^\s"']+|(?:^|\s)\/(?:[^\s/"']+\/)+[^\s"']*)/g;
+/**
+ * The message Prism stores and shows for an agent-reported failure: chosen by the SERVER from the failure code alone.
+ * The workstation's own text is never persisted or displayed (it could name a path, user, host or command line that no
+ * filter can reliably recognise); the agent keeps its local details in its own terminal.
+ */
+export const REMOTE_FAILURE_MESSAGES: Record<AgentFailureCode, string> = {
+  toolchain_missing: "The paired workstation's reconstruction toolchain is not ready.",
+  unsupported_version: "The paired workstation's COLMAP or Brush version is not supported.",
+  invalid_inputs: "The workstation could not use these photographs for a reconstruction.",
+  source_invalid: "A photograph did not match the one recorded for this job. Create a new job.",
+  workspace_failed: "The paired workstation could not prepare its working folder.",
+  colmap_failed: "Camera reconstruction (COLMAP) failed on the paired workstation.",
+  insufficient_camera_registration:
+    "Too few photographs could be placed in 3D. Use more overlapping photographs of the location.",
+  brush_failed: "Splat training (Brush) failed on the paired workstation.",
+  gpu_unavailable: "The paired workstation has no usable GPU for splat training.",
+  out_of_memory: "The paired workstation ran out of memory during the reconstruction.",
+  timeout: "The reconstruction took longer than the workstation's time limit.",
+  ply_missing: "Splat training finished without producing a result.",
+  ply_invalid: "Splat training produced an invalid result.",
+  spz_conversion_failed: "The workstation could not convert the result to SPZ.",
+  spz_invalid: "The workstation's SPZ result failed validation.",
+  result_too_large: "The result is larger than the 50 MB limit.",
+  // the agent stopped on its own (shutdown, lost lease, restart)
+  cancelled: REMOTE_STOPPED_MESSAGE,
+  interrupted: REMOTE_STOPPED_MESSAGE,
+};
 
-export function agentFailureMessage(code: AgentFailureCode, message: string): string {
-  if (code === "cancelled" || code === "interrupted") return REMOTE_STOPPED_MESSAGE;
-  const clean = message.replace(PATHLIKE, " [path]").replace(/\s+/g, " ").trim().slice(0, 300);
-  return sanitizeErrorMessage(`Remote Local Agent: ${clean || "the reconstruction failed."}`);
+export function agentFailureMessage(code: AgentFailureCode): string {
+  const m = REMOTE_FAILURE_MESSAGES[code];
+  return m === REMOTE_STOPPED_MESSAGE ? m : `Remote Local Agent: ${m}`;
 }
 
 export async function failJob(
@@ -610,7 +651,7 @@ export async function failJob(
   const body = parseBody(req.body, failRequestSchema);
   const h = await held(deps, req, jobId, leaseId);
   const code = REMOTE_FAILURE_MAP[body.code];
-  const next = await failHeld(deps, h, code, agentFailureMessage(body.code, body.message), {
+  const next = await failHeld(deps, h, code, agentFailureMessage(body.code), {
     providerOperation: {
       ...(h.job.providerOperation ?? {}),
       stage: "failed",
