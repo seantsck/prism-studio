@@ -68,6 +68,12 @@ export class MemoryRepository implements Repository {
     return LOCAL_USER_ID;
   }
 
+  /** Synchronous owner/title lookup by id (the memory Local Agent store's ownership re-check). */
+  projectOwner(projectId: string): { userId: string; title: string } | null {
+    const p = this.projects.get(projectId);
+    return p ? { userId: p.project.userId, title: p.project.title } : null;
+  }
+
   async listProjects(): Promise<Project[]> {
     return [...this.projects.values()].map((p) => clone(p.project));
   }

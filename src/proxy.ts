@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { persistenceMode } from "@/lib/supabase/config";
 import { updateSession } from "@/lib/supabase/proxy";
 import { safeInternalPath } from "@/lib/auth/safe-redirect";
-import { isPublicPath } from "@/lib/auth/public-paths";
+import { isAgentProtocolPath, isPublicPath } from "@/lib/auth/public-paths";
 
 /**
  * Route protection. In supabase mode every page and API route except the auth-flow pages (/login, /forgot-password, /update-password, /auth/*) requires a verified session;
@@ -14,6 +14,8 @@ export async function proxy(request: NextRequest) {
   if (persistenceMode() !== "supabase") return NextResponse.next();
 
   const { pathname, search } = request.nextUrl;
+  // Local Agent endpoints authenticate each request themselves (pairing secret / device signature), never by session.
+  if (isAgentProtocolPath(pathname)) return NextResponse.next();
   const { response, signedIn } = await updateSession(request);
 
   // A recovery link that fell back to the Site URL arrives as /?code=… ; hand it to the callback.
