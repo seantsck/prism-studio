@@ -128,14 +128,14 @@ test.describe("reconstruction jobs (mock provider, no provider cost)", () => {
     }
   });
 
-  test("free first: nothing paid is pre-selected; Local Capture is free/local and honestly not installed", async ({
+  test("free first: nothing paid is pre-selected; Local Capture is free/local and honestly not available here", async ({
     page,
   }) => {
     ({ setUrl, shotId } = await openSet(page));
     await expect(page.getByTestId("reconstruction-jobs")).toHaveAttribute("data-loaded", "true", {
       timeout: 60_000,
     });
-    // no provider is chosen for the user (local capture is not installed, a paid one is never a default)
+    // no provider is chosen for the user (local capture is not available here, a paid one is never a default)
     await expect(page.getByTestId("recon-provider")).toHaveValue("");
     await expect(page.getByTestId("recon-generate")).toBeDisabled();
     const offered = await page
@@ -151,11 +151,15 @@ test.describe("reconstruction jobs (mock provider, no provider cost)", () => {
     await expect(status).toHaveAttribute("data-execution", "local");
     await expect(status).toHaveAttribute("data-cost", "free");
     await expect(status).toContainText("Free · runs on this machine");
-    await expect(page.getByTestId("recon-gate")).toContainText("not installed");
+    // memory mode: the local worker is a separate process and cannot share in-memory data, so it never runs here
+    await expect(page.getByTestId("recon-local-runtime")).toHaveAttribute("data-worker", "not_enabled");
+    await expect(page.getByTestId("recon-local-worker")).toHaveText("Worker: Not enabled on this server");
+    await expect(page.getByTestId("recon-gate")).toContainText("needs Supabase persistence");
     for (const n of NAMES.slice(0, 2))
       await page.getByTestId("recon-add-source").filter({ hasText: n }).click();
     await expect(page.getByTestId("recon-cost")).toContainText("Free · no per-generation cost");
     await expect(page.getByTestId("recon-ack-cost")).toHaveCount(0); // nothing to acknowledge: it is free
+    await expect(page.getByTestId("recon-gate")).toContainText("at least 3 images");
     await expect(page.getByTestId("recon-generate")).toBeDisabled(); // tools are not faked as present
   });
 

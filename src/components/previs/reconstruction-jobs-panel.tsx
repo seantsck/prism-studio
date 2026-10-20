@@ -50,7 +50,7 @@ export function providerKindLabel(s: Pick<ProviderSummary, "execution" | "cost" 
 }
 
 export type ProviderAvailability =
-  "ready" | "not_installed" | "not_configured" | "disabled" | "capability_unavailable";
+  "ready" | "not_installed" | "not_configured" | "disabled" | "unavailable" | "capability_unavailable";
 
 export function providerAvailability(
   s: Pick<ProviderSummary, "capability" | "configured" | "enabled">,
@@ -58,6 +58,7 @@ export function providerAvailability(
   if (s.capability === "not_installed") return "not_installed";
   if (!s.configured) return "not_configured";
   if (!s.enabled) return "disabled";
+  if (s.capability === "unavailable") return "unavailable";
   if (s.capability !== "available") return "capability_unavailable";
   return "ready";
 }
@@ -66,7 +67,13 @@ const AVAILABILITY_LABEL: Record<ProviderAvailability, string> = {
   not_installed: "not installed yet",
   not_configured: "not configured",
   disabled: "configured · switched off",
+  unavailable: "unavailable right now",
   capability_unavailable: "capability unavailable",
+};
+const WORKER_LABEL: Record<NonNullable<ProviderSummary["local"]>["worker"], string> = {
+  online: "Online",
+  offline: "Offline",
+  not_enabled: "Not enabled on this server",
 };
 
 export function estimateText(e: JobCostEstimate | null | undefined, testOnly: boolean): string {
@@ -146,7 +153,7 @@ export function ReconstructionJobsPanel(props: {
   const modelInfo = summary?.models.find((m) => m.id === modelId) ?? null;
   const billable = summary ? summary.cost !== "free" : false;
   const availability = summary ? providerAvailability(summary) : null;
-  // the panel offers Location reference IMAGES; video inputs arrive with local capture (M2D.3)
+  // the panel offers Location reference IMAGES (video inputs are not offered yet)
   const mode: InputMode | null = chosen.length
     ? inputModeOf(chosen.map(() => ({ kind: "image" as const })))
     : null;
@@ -168,6 +175,8 @@ export function ReconstructionJobsPanel(props: {
     if (billable && !ack) gate.push("Confirm that provider charges may apply.");
     if (chosen.length > summary.maxInputs)
       gate.push(`This provider accepts at most ${summary.maxInputs} images.`);
+    if (summary.minInputs && chosen.length > 0 && chosen.length < summary.minInputs)
+      gate.push(`This provider needs at least ${summary.minInputs} images.`);
     if (mode && !summary.inputModes.includes(mode))
       gate.push(
         mode === "single_image"
@@ -331,6 +340,24 @@ export function ReconstructionJobsPanel(props: {
           data-cost={summary.cost}
         >
           {summary.label} · {providerKindLabel(summary)} · {AVAILABILITY_LABEL[availability]}
+        </div>
+      ) : null}
+      {summary?.local ? (
+        // local execution: the same-host worker and its toolchain, as the worker last reported them
+        <div
+          className="mt-1 rounded border border-line p-1.5"
+          data-testid="recon-local-runtime"
+          data-worker={summary.local.worker}
+          data-toolchain={summary.local.toolchain}
+          data-busy={summary.local.busy ? "true" : "false"}
+        >
+          <div data-testid="recon-local-worker">Worker: {WORKER_LABEL[summary.local.worker]}</div>
+          <div data-testid="recon-local-toolchain">Toolchain: {summary.local.toolchainLabel}</div>
+          {summary.local.busy ? (
+            <div className="text-muted">
+              The local worker is running a reconstruction; new jobs wait their turn (one at a time).
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -515,6 +542,7 @@ export function ReconstructionJobsPanel(props: {
               data-status={j.status}
               data-attempt={j.attempt}
               data-previous-job-id={j.previousJobId ?? ""}
+              data-stage={j.stage ?? ""}
               onClick={() => setSelected(j.id)}
             >
               <span className="font-medium">{STATUS_LABEL[j.status]}</span> · {j.providerLabel} ·{" "}

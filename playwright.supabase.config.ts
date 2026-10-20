@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { defineConfig } from "@playwright/test";
 
 // Credentials for the signed-in flow live in .env.local (git-ignored). The Playwright process itself does not
@@ -36,6 +38,10 @@ export default defineConfig({
       WLT_API_KEY: "",
       WORLDLABS_RECONSTRUCTION_ENABLED: "",
       PRISM_STUDIO_ALLOW_PAID_GENERATION: "false",
+      // Local Capture (M2D.3B): the worker switch is on, with a throwaway work root; supabase-local-worker.spec.ts
+      // writes the worker heartbeat there (no tool runs, no worker process in this suite)
+      PRISM_LOCAL_RECONSTRUCTION_WORKER_ENABLED: "1",
+      PRISM_LOCAL_RECONSTRUCTION_ROOT: path.join(os.tmpdir(), "prism-e2e-local-worker"),
     },
   },
 });

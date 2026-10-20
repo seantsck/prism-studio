@@ -1,7 +1,7 @@
 import { lstat, mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { LocalReconstructionError } from "./types";
+import { isWithin } from "./work-root";
 
 /**
  * Isolated per-run workspaces for the local engine.
@@ -33,47 +33,8 @@ export interface Workspace {
 
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
-export function defaultWorkRoot(
-  env: Record<string, string | undefined> = process.env,
-  platform: NodeJS.Platform = process.platform,
-): string {
-  if (platform === "win32" && env.LOCALAPPDATA)
-    return path.join(env.LOCALAPPDATA, "PrismStudio", "local-reconstruction");
-  if (platform === "darwin" && env.HOME)
-    return path.join(env.HOME, "Library", "Caches", "PrismStudio", "local-reconstruction");
-  if (env.XDG_CACHE_HOME) return path.join(env.XDG_CACHE_HOME, "prism-studio", "local-reconstruction");
-  if (env.HOME) return path.join(env.HOME, ".cache", "prism-studio", "local-reconstruction");
-  return path.join(os.tmpdir(), "prism-studio-local-reconstruction");
-}
-
-/** True when `child` is `parent` or inside it (both absolute, already resolved). */
-export function isWithin(parent: string, child: string): boolean {
-  const rel = path.relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-}
-
-/**
- * The work root: an explicit absolute PRISM_LOCAL_RECONSTRUCTION_ROOT, else the per-user default. Refused when it is
- * relative or inside the repository (`repoRoot`, default the current working directory).
- */
-export function resolveWorkRoot(
-  env: Record<string, string | undefined> = process.env,
-  repoRoot: string = process.cwd(),
-): string {
-  const configured = env.PRISM_LOCAL_RECONSTRUCTION_ROOT?.trim();
-  if (configured && !path.isAbsolute(configured))
-    throw new LocalReconstructionError(
-      "workspace_failed",
-      "PRISM_LOCAL_RECONSTRUCTION_ROOT must be an absolute path.",
-    );
-  const root = path.resolve(configured || defaultWorkRoot(env));
-  if (isWithin(path.resolve(repoRoot), root))
-    throw new LocalReconstructionError(
-      "workspace_failed",
-      "The local reconstruction work root must be outside the Prism repository.",
-    );
-  return root;
-}
+// the work root's path rules live in ./work-root (no filesystem access, safe for the web server to import)
+export { defaultWorkRoot, isWithin, resolveWorkRoot } from "./work-root";
 
 export function assertRunId(runId: string) {
   if (!RUN_ID.test(runId))

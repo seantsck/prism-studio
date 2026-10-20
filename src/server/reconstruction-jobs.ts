@@ -19,7 +19,12 @@ import {
   type ReconstructionJobRecord,
   type ReconstructionProviderId,
 } from "@/domain/reconstruction/job";
-import { MAX_SPLAT_BYTES, providerEstimatedCalibration, SPLAT_FORMAT_INFO } from "@/domain/previs/splat";
+import {
+  MAX_SPLAT_BYTES,
+  providerEstimatedCalibration,
+  SPLAT_FORMAT_INFO,
+  type SplatCalibration,
+} from "@/domain/previs/splat";
 import { assetSchema, type Asset } from "@/domain/schemas";
 import { inspectSplat } from "@/lib/splat/inspect";
 import { buildObjectPath } from "@/lib/storage-paths";
@@ -86,12 +91,12 @@ export interface JobServiceDeps {
 
 const MAX_INGEST_ATTEMPTS = 3;
 
-function log(deps: JobServiceDeps, entry: Record<string, unknown>) {
+function log(deps: Pick<JobServiceDeps, "log">, entry: Record<string, unknown>) {
   (deps.log ?? ((e) => console.info(JSON.stringify(e))))({ event: "reconstruction.job", ...entry });
 }
 
 async function event(
-  deps: JobServiceDeps,
+  deps: Pick<JobServiceDeps, "repo" | "now">,
   job: ReconstructionJobRecord,
   ev: JobEvent,
   detail: Record<string, unknown> = {},
@@ -203,6 +208,13 @@ export async function createJob(
   if (!ok.ok) throw new JobServiceError("invalid_sources", ok.error);
   if (sources.length > caps.maxInputs)
     throw new JobServiceError("invalid_sources", `This provider accepts at most ${caps.maxInputs} inputs.`);
+  if (caps.minInputs && sources.length < caps.minInputs)
+    throw new JobServiceError("invalid_sources", `This provider needs at least ${caps.minInputs} images.`);
+  if (caps.inputMimes && sources.some((s) => !caps.inputMimes!.includes(s.mime ?? "")))
+    throw new JobServiceError(
+      "invalid_sources",
+      `This provider accepts only ${caps.inputMimes.map((m) => m.replace(/^\w+\//, "").toUpperCase()).join(" or ")} images.`,
+    );
   const mode = inputModeOf(sources);
   if (!caps.inputModes.includes(mode))
     throw new JobServiceError(
@@ -565,13 +577,95 @@ async function ingest(
       `Every result the provider offered is larger than Prism's ${MAX_SPLAT_BYTES / 1024 / 1024} MB splat limit (${tooLarge} checked).`,
     );
 
-  // Prism's own validation decides, not the provider's "succeeded"
-  const ext = chosen.format === "glb" ? ".glb" : SPLAT_FORMAT_INFO[chosen.format].extension;
-  const inspected = inspectSplat(bytes, `result${ext}`);
-  if (!inspected.ok)
-    return deterministic("result_invalid", `The provider result is not a valid splat: ${inspected.error}`);
+  const out = await ingestReconstructionResult(deps, job, {
+    bytes,
+    label: chosen.label,
+    fileHint: chosen.format === "glb" ? ".glb" : SPLAT_FORMAT_INFO[chosen.format].extension,
+    // what the provider claimed about scale: an ESTIMATE at most, never exact
+    calibration: providerEstimatedCalibration(extracted.metricScaleFactor, extracted.groundPlaneOffset),
+    providerResult: {
+      ...extracted.metadata,
+      resolution: chosen.label,
+      skippedTooLarge: tooLarge,
+      ingestAttempts: attempts,
+    },
+  });
+  switch (out.kind) {
+    case "succeeded":
+    case "lost_race":
+      return out.job;
+    case "invalid":
+      return deterministic(out.code, out.message.replace(/^The result/, "The provider result"));
+    case "store_failed":
+      return transient(out.message);
+  }
+}
 
+// ───────────────────────── shared result ingestion ─────────────────────────
+
+export type IngestDeps = Pick<
+  JobServiceDeps,
+  "repo" | "store" | "storage" | "userId" | "now" | "newId" | "locationName" | "log"
+>;
+
+/** A finished result, from a hosted provider's download or the local engine's output. */
+export interface ResultToIngest {
+  bytes: Uint8Array;
+  /** what the result is called (World Labs: the resolution, e.g. "full_res"; local: the quality profile) */
+  label: string;
+  /** the file extension the bytes claim to be (the validator decides what they are) */
+  fileHint: string;
+  calibration: SplatCalibration;
+  /** sanitised, URL-free provenance; stored with the job result and the reconstruction's generation metadata */
+  providerResult: Record<string, unknown>;
+  /** when the producer already hashed the bytes (the local engine), they must hash to exactly this */
+  expectedChecksum?: string | null;
+}
+
+export type IngestOutcome =
+  | { kind: "succeeded"; job: ReconstructionJobRecord }
+  /** another writer completed (or ended) this job first; ours left nothing behind */
+  | { kind: "lost_race"; job: ReconstructionJobRecord }
+  /** the bytes are not an acceptable result: retrying cannot help */
+  | { kind: "invalid"; code: "result_invalid" | "result_too_large"; message: string }
+  /** storage or the database failed: nothing was kept, and the caller may try again */
+  | { kind: "store_failed"; message: string };
+
+/**
+ * THE persistence of a reconstruction result, shared by hosted providers (M2D.2) and the local worker (M2D.3B).
+ * The job must be `ingesting` (its claimed revision). Prism's own validation decides: size cap, splat validation and
+ * checksum; then the private Asset object + row, the immutable generated reconstruction and the job's success are
+ * written all-or-nothing (persistPassBundle + completeReconstructionJob, compare-and-set on the job and exactly one
+ * reconstruction per job in the database). On any failure everything this attempt wrote is removed.
+ */
+export async function ingestReconstructionResult(
+  deps: IngestDeps,
+  job: ReconstructionJobRecord,
+  result: ResultToIngest,
+): Promise<IngestOutcome> {
+  const { bytes } = result;
+  if (bytes.length > MAX_SPLAT_BYTES)
+    return {
+      kind: "invalid",
+      code: "result_too_large",
+      message: `The result is larger than Prism's ${MAX_SPLAT_BYTES / 1024 / 1024} MB splat limit.`,
+    };
+  // Prism's own validation decides, not the producer's "succeeded"
+  const inspected = inspectSplat(bytes, `result${result.fileHint}`);
+  if (!inspected.ok)
+    return {
+      kind: "invalid",
+      code: "result_invalid",
+      message: `The result is not a valid splat: ${inspected.error}`,
+    };
   const sum = createHash("sha256").update(bytes).digest("hex");
+  if (result.expectedChecksum && result.expectedChecksum !== sum)
+    return {
+      kind: "invalid",
+      code: "result_invalid",
+      message: "The result does not match its recorded checksum.",
+    };
+
   const assetId = deps.newId();
   const info = SPLAT_FORMAT_INFO[inspected.format];
   const objectPath = buildObjectPath(job.projectId, assetId, `${assetId}${info.extension}`);
@@ -585,7 +679,7 @@ async function ingest(
     purpose: "spatial_reconstruction",
     source: "provider_output",
     name: `${location} — reconstruction (${job.provider}, attempt ${job.attempt})`,
-    originalFilename: `${chosen.label}${info.extension}`,
+    originalFilename: `${result.label}${info.extension}`,
     storageProvider: deps.storage.name,
     bucket: deps.storage.bucket,
     objectPath,
@@ -604,16 +698,13 @@ async function ingest(
       gaussianCount: inspected.gaussianCount,
       format: inspected.format,
       jobId: job.id,
-      resolution: chosen.label,
+      resolution: result.label,
     },
     createdAt: stamp,
     updatedAt: stamp,
   });
   const providerResult = {
-    ...extracted.metadata,
-    resolution: chosen.label,
-    skippedTooLarge: tooLarge,
-    ingestAttempts: attempts,
+    ...result.providerResult,
     format: inspected.format,
     gaussianCount: inspected.gaussianCount,
   };
@@ -640,11 +731,7 @@ async function ingest(
             gaussianCount: inspected.gaussianCount,
             // the job's ORDER is kept (the first image is the primary one)
             sources: job.sources.map((s) => ({ assetId: s.assetId, checksum: s.checksum })),
-            // what the provider claimed about scale: an ESTIMATE at most, never exact
-            calibration: providerEstimatedCalibration(
-              extracted.metricScaleFactor,
-              extracted.groundPlaneOffset,
-            ),
+            calibration: result.calibration,
             generation: {
               jobId: job.id,
               attempt: job.attempt,
@@ -663,7 +750,7 @@ async function ingest(
     );
     await event(deps, out.job, "succeeded", {
       reconstructionId: out.reconstruction.id,
-      resolution: chosen.label,
+      resolution: result.label,
     });
     log(deps, {
       jobId: job.id,
@@ -671,14 +758,15 @@ async function ingest(
       transition: "ingesting->succeeded",
       bytes: bytes.length,
     });
-    return out.job;
+    return { kind: "succeeded", job: out.job };
   } catch (e) {
     // the attempt's Asset row and object were already removed by persistPassBundle
-    if (e instanceof PrevisError && e.code === "conflict") {
-      // another poller completed this job first: theirs is THE reconstruction, ours left nothing behind
-      return (await deps.repo.getReconstructionJob(job.id))!;
+    if (e instanceof PrevisError && (e.code === "conflict" || e.code === "invalid")) {
+      // another writer completed or ended this job first: theirs is THE outcome, ours left nothing behind
+      const current = await deps.repo.getReconstructionJob(job.id);
+      if (current && current.revision !== job.revision) return { kind: "lost_race", job: current };
     }
-    return transient(e instanceof Error ? e.message : "Storing the result failed.");
+    return { kind: "store_failed", message: e instanceof Error ? e.message : "Storing the result failed." };
   }
 }
 

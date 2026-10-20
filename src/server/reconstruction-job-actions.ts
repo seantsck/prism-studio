@@ -14,6 +14,8 @@ import {
 import { parseCalibration, type SplatCalibration, type SplatFormat } from "@/domain/previs/splat";
 import type { Asset } from "@/domain/schemas";
 import { isBillable } from "@/lib/reconstruction/provider";
+import { workerBackedToolchain } from "@/lib/reconstruction/local-worker/status";
+import { persistenceMode } from "@/lib/supabase/config";
 import {
   buildProviders,
   defaultProviderId,
@@ -69,7 +71,12 @@ async function guarded<T>(body: () => Promise<ReconstructionResult<T>>): Promise
 }
 
 let providersCache: ReturnType<typeof buildProviders> | null = null;
-const providers = () => (providersCache ??= buildProviders());
+// Local Capture is available only while the same-host worker's heartbeat is fresh AND its toolchain is ready; the
+// status is re-read from the heartbeat on every request (never probed or started from a page load)
+const providers = () =>
+  (providersCache ??= buildProviders(process.env, {
+    localToolchain: workerBackedToolchain({ env: process.env, persistence: persistenceMode() }),
+  }));
 
 async function context(slug: string) {
   const user = await requireUser();
@@ -135,6 +142,8 @@ export interface JobView {
   actualCost: JobActualCost | null;
   sources: Array<{ ordinal: number; assetId: string; name: string }>;
   description: string | null;
+  /** the current pipeline stage of a local job (e.g. "splat_training"); null otherwise */
+  stage: string | null;
   errorCode: string | null;
   errorMessage: string | null;
   createdAt: string;
@@ -199,6 +208,10 @@ async function views(
       description:
         typeof j.providerOperation?.description === "string"
           ? (j.providerOperation.description as string)
+          : null,
+      stage:
+        j.providerOperation?.runner === "local_worker" && typeof j.providerOperation.stage === "string"
+          ? (j.providerOperation.stage as string)
           : null,
       errorCode: j.errorCode,
       errorMessage: j.errorMessage,
