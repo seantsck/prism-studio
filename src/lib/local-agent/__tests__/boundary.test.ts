@@ -183,8 +183,11 @@ describe("M2D.3C2 remote execution boundary", () => {
           "PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY",
         ),
     );
-    // the relay module reads it; the redaction lists only NAME it so its value is never logged
-    expect(readers.sort()).toEqual(["scripts/lib/safety.mjs", relay, "src/lib/auth/redact.ts"].sort());
+    // the relay module reads it; the redaction lists only NAME it so its value is never logged; the hosted test
+    // harness (db:remote-agent-jobs) plays the SERVER's role. No agent-side module is ever among them.
+    expect(readers.sort()).toEqual(
+      ["scripts/db-remote-agent-jobs.mts", "scripts/lib/safety.mjs", relay, "src/lib/auth/redact.ts"].sort(),
+    );
     // no client component reaches the relay or the job service
     for (const f of walk(path.join(ROOT, "src", "components")).filter((x) => x.endsWith(".tsx"))) {
       const text = readFileSync(path.join(ROOT, f), "utf8");

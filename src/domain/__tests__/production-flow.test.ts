@@ -141,8 +141,9 @@ describe("environment safety", () => {
 
   it("no source file reads a service-role / secret key", () => {
     // The ONLY modules that may name a server secret key: the worker's Storage sink (validates + uses it,
-    // worker process only) and the log redactor (masks it). The Next.js app never imports the sink.
-    const SECRET_HANDLING = new Set(["sink.ts", "redact.ts"]);
+    // worker process only), the log redactor (masks it), and (M2D.3C2, approved) the Prism server's agent-relay
+    // module, the single server-only reader of the dedicated relay key used for remote Local Agent jobs.
+    const SECRET_HANDLING = new Set(["sink.ts", "redact.ts", "relay-storage.ts"]);
     const root = path.join(process.cwd(), "src");
     const offenders: string[] = [];
     const walk = (dir: string) => {

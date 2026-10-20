@@ -20,8 +20,8 @@ import type { PassStoreDeps } from "../../spatial-pass-store";
  *   OWNER SCOPE  everything done for one job (read and transition it, read its frozen source Assets, write the result)
  *                runs with the PROJECT OWNER's authority: in Supabase mode as role `authenticated` with the owner's
  *                claims (rlsPreamble), so Postgres RLS still decides every row.
- *   STORAGE      private bytes through the server's dedicated agent-relay sink (PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY,
- *                server-only); only Assets of this project, under this project's path prefix, are ever read.
+ *   STORAGE      private bytes through the server's dedicated agent-relay sink (see ../relay-storage.ts; server-only);
+ *                only Assets of this project, under this project's path prefix, are ever read.
  */
 
 export interface RemoteJobRef {
