@@ -3,6 +3,7 @@ import type { ShotContext } from "./context";
 import {
   computeShotParts,
   PART_LABELS,
+  stableParts,
   VISUAL_PARTS,
   type FreshnessPart,
   type ShotParts,
@@ -179,6 +180,30 @@ export function checkProductionImage(
       `This image is ${asset.width}×${asset.height} (${formatRatio(actual)}), but this Shot's production frame is ${aspect.raw}. Re-frame it to ${aspect.raw} and upload it again: Prism does not crop it.`,
     );
   return { ok: true, width: asset.width, height: asset.height, checksum: asset.checksum, aspect };
+}
+
+/** Whether an existing image can be promoted to a Production Frame now, and if not, the truthful reason. */
+export type PromotionStatus = { ok: true } | { ok: false; reason: string };
+
+/** The approved Storyboard Frame as a Production Frame source (the same rules the server applies). */
+export function storyboardPromotionStatus(ctx: ShotContext): PromotionStatus {
+  const frame = ctx.approvedFrame;
+  if (!frame) return { ok: false, reason: "Approve a storyboard frame first." };
+  const asset = frame.assetId ? (ctx.assets.get(frame.assetId) ?? null) : null;
+  if (!asset) return { ok: false, reason: "The approved storyboard frame has no image." };
+  return assetPromotionStatus(ctx, asset);
+}
+
+/** An existing Asset (e.g. a 3D Master Frame's render) judged against THIS Shot's production aspect. */
+export function assetPromotionStatus(
+  ctx: ShotContext,
+  asset: Pick<Asset, "type" | "mime" | "objectPath" | "width" | "height" | "checksum" | "projectId"> | null,
+): PromotionStatus {
+  if (!asset) return { ok: false, reason: "That frame's image is missing." };
+  if (asset.projectId !== ctx.project.id)
+    return { ok: false, reason: "That image belongs to a different project." };
+  const r = checkProductionImage(asset, shotProductionAspect(ctx.shot, ctx.bible));
+  return r.ok ? { ok: true } : { ok: false, reason: r.problem.message };
 }
 
 // ───────────────────────── the frozen visual intent ─────────────────────────
@@ -469,7 +494,8 @@ export function draftProductionFrame(ctx: ShotContext, input: ProductionFrameDra
       sourceGenerationAttemptId: ga,
       intentSnapshot: intent as unknown as Record<string, unknown>,
       intentFingerprint,
-      parts: { ...computeShotParts(ctx) },
+      // the Shot's 13 named parts, never another frame's selection part
+      parts: { ...stableParts(computeShotParts(ctx)) },
       frameFingerprint,
       createdBy: input.userId,
       createdAt: input.now,

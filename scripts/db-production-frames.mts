@@ -14,7 +14,7 @@ import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import { PostgresProductionFrameData } from "../src/data/production-frame-postgres";
 import { ProductionFrameError } from "../src/data/production-frame-repository";
-import { AdminRepository, rlsPreamble } from "../src/data/postgres-repository";
+import { AdminRepository, UserRepository, rlsPreamble } from "../src/data/postgres-repository";
 import { buildShotContext } from "../src/domain/context";
 import { assembleGenerationPackage } from "../src/domain/generation-package";
 import { draftProductionFrame, selectedProductionFrameFreshness } from "../src/domain/production-frame";
@@ -524,6 +524,30 @@ try {
     (await sqlErr("delete from assets where id = $1", [up1.id])) !== null,
   );
 
+  // a forced persistence failure AFTER the upload's Asset was written inside the same transaction: all or nothing
+  const failedUpload = uploadAsset("db:pf failed upload");
+  const framesBeforeFailure = (await owner.listForProject(projectId)).frames.length;
+  const failedDraft = {
+    ...draftOf(data, shotA.id, failedUpload),
+    assetChecksum: sha("a checksum that is not the image's"),
+  };
+  check(
+    "a frame write that fails after the Asset write is refused by the database",
+    (await code(
+      owner.create({ draft: failedDraft, newAsset: failedUpload, select: true, userId: dev.id, now: now() }),
+    )) === "invalid",
+  );
+  const failedRows = await pool.query(
+    "select (select count(*)::int from assets where id = $1) a, (select count(*)::int from shot_production_frames where asset_id = $1) f",
+    [failedUpload.id],
+  );
+  check(
+    "…and rolled back with it: no Asset row, no frame, no selection change",
+    failedRows.rows[0].a === 0 &&
+      failedRows.rows[0].f === 0 &&
+      (await owner.listForProject(projectId)).frames.length === framesBeforeFailure,
+  );
+
   // ── 7. immutability ──
   for (const [label, sql] of [
     ["asset", "update shot_production_frames set asset_id = asset_id where id = $1"],
@@ -571,6 +595,11 @@ try {
   const selectionBeforeRefusals = (await owner.listForProject(projectId)).selections.find(
     (s) => s.shotId === shotA.id,
   )?.productionFrameId;
+  check(
+    "preview: the owner's asset read finds the Production Frame's image; a stranger's does not",
+    (await new UserRepository(pool, { sub: dev.id }).findAsset(up1.id)) !== null &&
+      (await new UserRepository(pool, { sub: stranger }).findAsset(up1.id)) === null,
+  );
   check(
     "a stranger's service sees an empty project",
     (await strangerSvc.listForProject(projectId)).frames.length === 0,

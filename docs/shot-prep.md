@@ -1,36 +1,40 @@
 # Shot prep & preflight
 
-The **Shot Prep** screen (`/projects/:p/episodes/:e/shots/:shotId`) is an inspector of 18 collapsible sections
+The **Shot Prep** screen (`/projects/:p/episodes/:e/shots/:shotId`) is an inspector of 20 collapsible sections
 rather than one 70-field form. A sticky right rail always shows the frame, the timing breakdown and live
 preflight.
 
-| #   | Section                | Contains                                                                                    | Preflight group |
-| --- | ---------------------- | ------------------------------------------------------------------------------------------- | --------------- |
-| 1   | Story                  | title, beat, purpose, status, duration mode, target duration                                | story           |
-| 2   | Source script          | linked action blocks and dialogue, link/unlink                                              | —               |
-| 3   | Performance            | linked dialogue lines, selected takes, performance gate                                     | performance     |
-| 4   | Character              | assigned characters, expression/posture/gestures                                            | character       |
-| 5   | Look                   | **Look by id** per character                                                                | —               |
-| 6   | Location / set         | location, zone, background activity                                                         | set             |
-| 7   | Camera                 | framing, size, aspect, position, height, angle, lens, aperture, movement                    | camera          |
-| 8   | Composition            | composition details                                                                         | —               |
-| 9   | Blocking               | blocking, facing, eyelines, screen direction, entry/exit, marks, poses                      | blocking        |
-| 10  | Action timing          | beats, beginning/ending pose                                                                | —               |
-| 11  | Continuity             | previous shot, weather, time, vehicle orientation, count, wardrobe/hair/makeup/jewelry/prop | continuity      |
-| 12  | Props                  | shot props                                                                                  | —               |
-| 13  | Lighting               | lighting and reference                                                                      | —               |
-| 14  | Audio                  | pre/post roll, line gap, ambience, foley, music, silence                                    | audio           |
-| 15  | Storyboard / keyframes | frame versions, approve, freshness                                                          | storyboard      |
-| 16  | Generation intent      | modality, provider, model, resolution, fps, hard/negative/forbidden constraints             | generation      |
-| 17  | Preflight              | full report, manual continuity review                                                       | —               |
-| 18  | Generation brief       | human-readable brief, export links                                                          | —               |
+| #   | Section                | Contains                                                                                                                                                            | Preflight group  |
+| --- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| 1   | Story                  | title, beat, purpose, status, duration mode, target duration                                                                                                        | story            |
+| 2   | Source script          | linked action blocks and dialogue, link/unlink                                                                                                                      | —                |
+| 3   | Performance            | linked dialogue lines, selected takes, performance gate                                                                                                             | performance      |
+| 4   | Character              | assigned characters, expression/posture/gestures                                                                                                                    | character        |
+| 5   | Look                   | **Look by id** per character                                                                                                                                        | —                |
+| 6   | Location / set         | location, zone, background activity                                                                                                                                 | set              |
+| 7   | Camera                 | framing, size, aspect, position, height, angle, lens, aperture, movement                                                                                            | camera           |
+| 8   | Composition            | composition details                                                                                                                                                 | —                |
+| 9   | Blocking               | blocking, facing, eyelines, screen direction, entry/exit, marks, poses                                                                                              | blocking         |
+| 10  | Action timing          | beats, beginning/ending pose                                                                                                                                        | —                |
+| 11  | Continuity             | previous shot, weather, time, vehicle orientation, count, wardrobe/hair/makeup/jewelry/prop                                                                         | continuity       |
+| 12  | Props                  | shot props                                                                                                                                                          | —                |
+| 13  | Lighting               | lighting and reference                                                                                                                                              | —                |
+| 14  | Audio                  | pre/post roll, line gap, ambience, foley, music, silence                                                                                                            | audio            |
+| 15  | Storyboard / keyframes | frame versions, approve, freshness                                                                                                                                  | storyboard       |
+| 16  | Production Frame       | the canonical approved still: preview, version, source, fresh/stale, history; use Storyboard / 3D Master Frame / upload ([production-frames](production-frames.md)) | production_frame |
+| 17  | Generation intent      | modality, provider, model, resolution, fps, hard/negative/forbidden constraints                                                                                     | generation       |
+| 18  | Preflight              | full report, manual continuity review                                                                                                                               | —                |
+| 19  | Generation brief       | human-readable brief, export links                                                                                                                                  | —                |
+| 20  | Generate               | submit generation, attempts and candidates                                                                                                                          | generation       |
 
 Each section header shows ✕/⚠/✓ counts for its preflight group; the first section with a blocker opens by
 default (`?section=` overrides).
 
-A **warning banner** at the top lists freshness messages (stale storyboard, changed timing) and, when the latest
-attempt's `packageFingerprint` differs from the current package, "this shot has changed since generation
-attempt N". See [production-workflow](production-workflow.md).
+A **warning banner** at the top lists freshness messages (stale storyboard, changed timing) and, when the Shot's
+production inputs (`provenance.parts.overall`) differ from the ones recorded in the latest attempt's frozen snapshot,
+"this shot has changed since generation attempt N". It compares the Shot's inputs, not the package serialisation, so a
+package schema upgrade alone never triggers it (a snapshot that never recorded the inputs identity falls back to the
+exact package fingerprint). See [production-workflow](production-workflow.md).
 
 Field definitions live in `src/domain/shot-fields.ts` (declarative specs); the form renderer and the server
 action share them, so adding a field is a one-line change plus the schema.

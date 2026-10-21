@@ -17,6 +17,7 @@
     "db:inspect": "node --env-file=.env.local scripts/db-inspect.mjs",
     "db:migrate": "node --env-file=.env.local scripts/db-migrate.mjs",
     "db:migrate:check": "node --env-file=.env.local scripts/db-migrate.mjs --check",
+    "db:migrate:dry-run-check": "node --env-file=.env.local scripts/db-migrate-dry-run-check.mjs",
     "db:validate": "node --env-file=.env.local scripts/db-validate.mjs",
     "db:behavior": "node --env-file=.env.local scripts/db-behavior.mjs",
     "db:seed": "tsx --env-file=.env.local scripts/db-seed.mts",

@@ -98,11 +98,16 @@ Start frame precedence: explicit override > selected Production Frame > approved
 - `generation_attempts.package_fingerprint` stores the package fingerprint at logging time. The trigger
   `guard_attempt_history` makes it (and prompt, negative prompt, package snapshot, model settings, input assets,
   shot id, attempt number) immutable; only review fields can change.
-- `package.provenance.fingerprint` hashes the whole package content **excluding `builtAt`** (and the provenance
-  block itself), so rebuilding an unchanged shot yields the same value. `provenance.parts` carries the per-part
-  hashes.
-- Shot Prep compares the latest attempt's fingerprint with the current package's; a mismatch shows "this shot
-  has changed since generation attempt N". The attempt itself stays interpretable.
+- `package.provenance.fingerprint` is the **exact package identity**: it hashes the whole package content
+  **excluding `builtAt`** (and the provenance block itself, the schema-version fields included), so rebuilding an
+  unchanged shot yields the same value, and a v3 package differs from a v2 package of the same Shot.
+  `provenance.parts` carries the per-part hashes and `parts.overall`, the **Shot's production-input identity** (the 13
+  named parts, plus the selected Production Frame's identity while one is selected). The two are not interchangeable
+  ([generation-package](generation-package.md#two-fingerprints-two-questions-never-interchangeable)).
+- Shot Prep compares the `parts.overall` recorded in the latest attempt's frozen snapshot with the current package's; a
+  difference shows "this shot has changed since generation attempt N". A schema upgrade alone never does. Only a
+  snapshot that recorded no `parts.overall` falls back to the exact package fingerprint. The attempt itself stays
+  interpretable and is never rewritten.
 
 ## Generate (Phase 2A)
 

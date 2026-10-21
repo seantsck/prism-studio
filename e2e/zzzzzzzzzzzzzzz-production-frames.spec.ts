@@ -65,6 +65,13 @@ test("no-3D project: empty → promote the approved Storyboard → fresh → the
   page,
   request,
 }) => {
+  // the seed's approved Storyboard (3A) is a placeholder with no stored file: the action is disabled, truthfully, no crash
+  const seeded = await openShot(page, "3A");
+  await page.goto(`${seeded}?section=production_frame`);
+  await expect(section(page).getByTestId("pf-use-storyboard")).toBeDisabled();
+  await expect(section(page).getByTestId("pf-storyboard-reason")).toContainText("has not been uploaded yet");
+  await expect(section(page).getByTestId("pf-empty")).toBeVisible();
+
   shotUrl = await openShot(page, "5A");
 
   // an approved storyboard frame with a REAL image (the seed's are placeholders): 478×200 is exactly 2.39:1

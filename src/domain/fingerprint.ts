@@ -29,7 +29,12 @@ export const FRESHNESS_PARTS = [
   "timing",
 ] as const;
 export type FreshnessPart = (typeof FRESHNESS_PARTS)[number];
-export type ShotParts = Record<FreshnessPart, string>;
+/**
+ * The Shot's named-part fingerprints. The 13 FRESHNESS_PARTS are always present. `productionFrame` (Phase 2G.1) exists
+ * ONLY while the Shot has a SELECTED Production Frame: it identifies that one selected frame (never the history), so
+ * `overall` changes when the selection meaningfully changes and is otherwise exactly what it was before 2G.1.
+ */
+export type ShotParts = Record<FreshnessPart, string> & { productionFrame?: string };
 
 /** The parts that decide what a storyboard frame must depict. */
 export const VISUAL_PARTS: readonly FreshnessPart[] = [
@@ -63,7 +68,7 @@ export const PART_LABELS: Record<FreshnessPart, string> = {
 export function computeShotParts(ctx: ShotContext): ShotParts {
   const { shot } = ctx;
   const timeline = timelineFromContext(ctx);
-  return {
+  const parts: ShotParts = {
     story: fingerprint({
       storyBeat: shot.storyBeat,
       dramaticPurpose: shot.dramaticPurpose,
@@ -142,14 +147,38 @@ export function computeShotParts(ctx: ShotContext): ShotParts {
       segments: timeline.segments.map((s) => [s.kind, s.startMs, s.endMs]),
     }),
   };
+  // The CURRENT SELECTION only (frame identity, its image checksum and the intent it represents): unselected history is
+  // never hashed, so adding a historical frame cannot change the Shot's production truth.
+  const selected = ctx.selectedProductionFrame;
+  if (selected)
+    parts.productionFrame = fingerprint({
+      frameId: selected.id,
+      frameFingerprint: selected.frameFingerprint,
+      assetChecksum: selected.assetChecksum,
+      intentFingerprint: selected.intentFingerprint,
+    });
+  return parts;
+}
+
+/** The 13 named parts only (what a stored snapshot of the Shot's state records; never the selection part). */
+export function stableParts(parts: ShotParts): Record<FreshnessPart, string> {
+  return Object.fromEntries(FRESHNESS_PARTS.map((p) => [p, parts[p]])) as Record<FreshnessPart, string>;
 }
 
 export function visualFingerprint(parts: ShotParts): string {
   return fingerprint(VISUAL_PARTS.map((p) => [p, parts[p]]));
 }
 
+/**
+ * The Shot's PRODUCTION-INPUT identity: what the Shot is, independent of how a package happens to be serialised. A
+ * Shot with no selected Production Frame hashes exactly as it did before 2G.1; a selected frame adds its own part.
+ * Cross-schema "has the Shot changed since attempt N?" reasoning compares THIS (`provenance.parts.overall`), never the
+ * package fingerprint (which is the exact identity of one frozen package shape).
+ */
 export function overallFingerprint(parts: ShotParts): string {
-  return fingerprint(FRESHNESS_PARTS.map((p) => [p, parts[p]]));
+  const named: Array<[string, string]> = FRESHNESS_PARTS.map((p) => [p, parts[p]]);
+  if (parts.productionFrame) named.push(["productionFrame", parts.productionFrame]);
+  return fingerprint(named);
 }
 
 export interface ApprovedSnapshot {
@@ -162,7 +191,7 @@ export function approvalSnapshot(ctx: ShotContext): { fingerprint: string; snaps
   const parts = computeShotParts(ctx);
   return {
     fingerprint: visualFingerprint(parts),
-    snapshot: { parts, durationMs: timelineFromContext(ctx).totalMs },
+    snapshot: { parts: stableParts(parts), durationMs: timelineFromContext(ctx).totalMs },
   };
 }
 

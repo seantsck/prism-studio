@@ -9,6 +9,7 @@ import type { Asset, ProjectData } from "@/domain/schemas";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { discardUpload, hasFile, ingestUpload } from "./ingest-upload";
 import { getPrevisRepo } from "./previs";
+import { persistUploadedFrame } from "./production-frame-upload";
 import { getProductionFrameRepo } from "./production-frames";
 import { getRepo, requireProjectFresh } from "./repo";
 
@@ -135,30 +136,14 @@ async function uploadProductionFrame_impl(form: FormData): Promise<ActionResult>
     source: "upload",
     tags: ["production-frame"],
   });
-  const drafted = draftProductionFrame(ctx, {
-    id: randomUUID(),
-    now: new Date().toISOString(),
-    userId: repo.currentUserId(),
-    source: "upload",
-    asset,
-  });
-  if (!drafted.ok) {
-    // wrong shape / type: nothing was persisted; remove the object that was just stored
-    await discardUpload(asset);
-    throw new UserFacingError(drafted.problem.message);
-  }
   try {
-    const result = await (
-      await getProductionFrameRepo()
-    ).create({
-      draft: drafted.draft,
-      newAsset: asset,
-      select: true,
-      userId: repo.currentUserId(),
-      now: drafted.draft.createdAt,
-    });
-    // an identical frame already existed: the new object was never referenced, so it is removed
-    if (!result.created) await discardUpload(asset);
+    // refused shape, a failed write or a duplicate all remove the stored object (see persistUploadedFrame)
+    const result = await persistUploadedFrame(
+      { repo: await getProductionFrameRepo(), discard: discardUpload },
+      ctx,
+      asset,
+      repo.currentUserId(),
+    );
     refresh(slug);
     return {
       ok: true,
@@ -167,7 +152,6 @@ async function uploadProductionFrame_impl(form: FormData): Promise<ActionResult>
         : `That image already exists as Production Frame v${result.frame.version}; it is canonical again.`,
     };
   } catch (err) {
-    await discardUpload(asset);
     return asUserError(err);
   }
 }

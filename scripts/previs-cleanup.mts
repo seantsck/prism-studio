@@ -154,13 +154,16 @@ const assets = (
   await pool.query(
     `select a.id, a.object_path from assets a join projects p on p.id = a.project_id
       where p.user_id = $1
-        and ((a.source = 'upload' and a.name like $2 || '%')
-          or (a.source = 'storyboard' and a.name like $2 || '%')
-          or (a.source = '3d_render' and 'master_frame' = any(a.tags))
-          or (a.source = '3d_render' and 'spatial_pass' = any(a.tags))
-          or (a.source = 'import' and 'gaussian_splat' = any(a.tags))
-          or (a.source = 'provider_output' and 'gaussian_splat' = any(a.tags))
-          or (a.source = 'local_previs' and 'previs' = any(a.tags)))`,
+        and (
+          -- images an e2e test uploaded, named by its own e2e- prefix (these may be pinned by the test's own frames)
+          (a.source in ('upload', 'storyboard') and a.name like $2 || '%')
+          -- 3D-set tidy-up: but never an image a user's Production Frame pins (a promoted Master Frame keeps its image)
+          or ((   (a.source = '3d_render' and 'master_frame' = any(a.tags))
+               or (a.source = '3d_render' and 'spatial_pass' = any(a.tags))
+               or (a.source = 'import' and 'gaussian_splat' = any(a.tags))
+               or (a.source = 'provider_output' and 'gaussian_splat' = any(a.tags))
+               or (a.source = 'local_previs' and 'previs' = any(a.tags)))
+              and not exists (select 1 from shot_production_frames pf where pf.asset_id = a.id)))`,
     [dev.id, e2ePrefix],
   )
 ).rows;
@@ -175,7 +178,9 @@ const frameRows = (
   )
 ).rows;
 const frames = frameRows.map((r) => String(r.id));
-// Phase 2G.1: Production Frames pin their image (and so cannot be dropped with it): they and their selections go first
+// Phase 2G.1: Production Frames pin their image (and so cannot be dropped with it). The asset list above holds only
+// e2e-prefixed images plus 3D-set artefacts NOT pinned by any frame, so the frames deleted below are exactly the e2e
+// test's own: a user's legitimate Production Frame is never in this set.
 const assetIdsForPf = assets.map((a) => String(a.id));
 const productionFrames = assetIdsForPf.length
   ? (

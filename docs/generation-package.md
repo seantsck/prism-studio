@@ -56,11 +56,27 @@ internal keys, not URLs, and access still goes through `/api/assets/:id` ([stora
 `provenance.fingerprint` = SHA-256 of every other key of the package (including `assets`, `freshness`,
 `readiness` and `prompt`) with `builtAt` nulled and the `provenance` block excluded, so rebuilding an unchanged
 shot gives an identical value. Because `readiness` and `freshness` are inside it, a change in preflight outcome
-also changes the fingerprint. **Production Frames and the fingerprint:** it follows the _selection_ (choosing another
-frame changes it) and ignores _unselected_ history (adding a frame changes nothing). A Shot with no selected frame has
-exactly the content of a v2 package and is hashed with the version fields of a v2 package, so existing attempts are not
-reported as "the shot changed since this attempt" when only the shape version moved. `provenance.parts` are the per-part hashes from `computeShotParts` plus
-`overall` ([production-workflow](production-workflow.md)).
+also changes the fingerprint.
+
+### Two fingerprints, two questions (never interchangeable)
+
+| Field                                              | Identifies                                                                                                                | Answers                                      | Used by                                                                                        |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `provenance.fingerprint`                           | the **exact normalised GenerationPackage**: its frozen content, schema-version fields included                            | "is this the same frozen package?"           | attempts (`package_fingerprint`), candidate sets, continuity runs, the exported/frozen package |
+| `provenance.parts.overall` (and the named `parts`) | the **Shot's production inputs** (the 13 named parts, plus the selected Production Frame's identity when one is selected) | "have the Shot's production inputs changed?" | Shot Prep's "this shot has changed since generation attempt N" only                            |
+
+A package **schema upgrade** (v2 → v3) therefore changes `provenance.fingerprint` (a v3 package and a v2 package are
+different frozen shapes) but leaves `parts.overall` unchanged for an unchanged Shot, so Shot Prep does not report a
+change merely because the package serialisation evolved. `shotChangedSinceAttempt(attempt, pkg)` compares the
+`parts.overall` recorded in the attempt's frozen snapshot with the current package's; only a snapshot that never
+recorded one falls back to comparing the exact package fingerprints. Attempts are never rewritten.
+
+**Production Frames.** The selected Production Frame adds one part, `productionFrame` (its id, frame fingerprint, image
+checksum and intent fingerprint), **only while a frame is selected**: selecting or switching frames changes both
+identities; an _unselected_ historical frame changes neither (history is never hashed); re-selecting the same frame
+changes neither. A Shot with no selected frame has exactly the `parts.overall` it had before Phase 2G.1.
+`provenance.parts` are the per-part hashes from `computeShotParts` plus `overall`
+([production-workflow](production-workflow.md)).
 
 ## Derived constraints
 

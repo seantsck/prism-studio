@@ -116,7 +116,7 @@ checksum and size, same visual intent) **returns the existing frame and re-selec
 new version. If the Shot's visual intent changed, the fingerprint differs and a **new** frame is legitimate even
 when the underlying image is the same, because its meaning differs. An upload of identical bytes with unchanged intent
 returns the existing frame; the redundant new Asset is not stored (its uploaded object is removed). Concurrent
-creates are serialised on the Shot row: versions are 1…N with no gap or duplicate, and N identical concurrent creates
+creates are serialised on the Shot row: a version is `max + 1` computed inside the creating transaction, so concurrent creates never produce a duplicate (gaplessness is not a promise: a failed attempt rolls back and takes no number, but nothing relies on consecutive numbering), and N identical concurrent creates
 make one frame.
 
 ## Selection
@@ -150,10 +150,14 @@ writes nothing. The selection never writes into `shot.generation.startFrameAsset
   Historical **v2 snapshots are not rewritten and stay readable** (every v3 key is optional; no backfill).
 - **Start-frame precedence** (image-to-video): **1. the Shot's explicit `generation.startFrameAssetId` override → 2. the selected Production Frame's image → 3. the approved Storyboard Frame's image → 4. none.** The override stays a
   deliberate execution choice; the selection table owns the canonical frame, so there is no duplicated mutable truth.
-- **Package fingerprint**: it follows the **selection** (choose another frame and it changes) and ignores **unselected
-  history** (adding a frame to a Shot that already has a selection changes nothing). A Shot with no selected frame
-  carries exactly the content of a v2 package and is hashed as v2 was, so existing attempts are not reported as "the
-  shot changed since this attempt" merely because the package shape gained an optional section.
+- **Two fingerprints** ([generation-package](generation-package.md#two-fingerprints-two-questions-never-interchangeable)):
+  `provenance.fingerprint` is the **exact package identity** (the frozen v3 content; it differs from a v2 package of the
+  same Shot) and `provenance.parts.overall` is the **Shot's production-input identity**. The selected frame contributes
+  one part (`productionFrame`: frame id, frame fingerprint, image checksum, intent fingerprint) **only while selected**,
+  so selecting or switching frames changes **both**, an unselected historical frame changes **neither**, and a Shot with
+  no selected frame has the `parts.overall` it had before 2G.1. Shot Prep's "this shot has changed since attempt N"
+  compares `parts.overall` (so a v2 → v3 package upgrade alone never reads as a change); attempts, candidate sets,
+  continuity runs and exports keep the exact package fingerprint.
 - **Preflight** `production_frame.fresh`: not applicable until a frame is selected (existing Shots keep the Storyboard
   path); passes when fresh; a **stale** selected frame **blocks image-to-video** with a clear reason, unless an explicit
   start-frame override is set (then a warning), and only warns for other modalities.

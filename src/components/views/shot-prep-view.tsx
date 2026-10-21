@@ -7,7 +7,11 @@ import { shotOrder, buildShotContext, type ShotContext } from "@/domain/context"
 import { shotSourceContent } from "@/domain/coverage";
 import { formatSeconds } from "@/domain/duration";
 import { PART_LABELS, storyboardFreshness } from "@/domain/fingerprint";
-import { assembleGenerationPackage, renderGenerationBrief } from "@/domain/generation-package";
+import {
+  assembleGenerationPackage,
+  renderGenerationBrief,
+  shotChangedSinceAttempt,
+} from "@/domain/generation-package";
 import { GenerateWorkspace } from "@/components/generation/generate-workspace";
 import { ProductionFrameSection, type MasterFrameChoice } from "@/components/views/production-frame-section";
 import {
@@ -342,10 +346,10 @@ export function ShotPrepView({
   const lastAttempt = data.attempts
     .filter((a) => a.shotId === shot.id)
     .sort((a, b) => b.attemptNumber - a.attemptNumber)[0];
-  const changedSinceAttempt =
-    lastAttempt &&
-    lastAttempt.packageFingerprint &&
-    lastAttempt.packageFingerprint !== pkg.provenance.fingerprint;
+  // "has the SHOT changed?" compares production INPUTS (provenance.parts.overall) across package schema versions; the
+  // exact package fingerprint is only the fallback for old snapshots that recorded no inputs identity
+  const sinceAttempt = lastAttempt ? shotChangedSinceAttempt(lastAttempt, pkg) : null;
+  const changedSinceAttempt = Boolean(sinceAttempt?.changed);
 
   const sectionProps = (key: string) => {
     const meta = SECTION_ORDER.find((s) => s.key === key)!;
@@ -356,7 +360,7 @@ export function ShotPrepView({
     ...freshness.messages,
     ...(changedSinceAttempt
       ? [
-          `This shot has changed since generation attempt ${lastAttempt!.attemptNumber} (package ${shortFingerprint(lastAttempt!.packageFingerprint)} → ${shortFingerprint(pkg.provenance.fingerprint)}). The attempt itself is unchanged and stays interpretable.`,
+          `This shot has changed since generation attempt ${lastAttempt!.attemptNumber} (${sinceAttempt!.basis === "inputs" ? "shot inputs" : "package"} ${shortFingerprint(sinceAttempt!.from)} → ${shortFingerprint(sinceAttempt!.to)}). The attempt itself is unchanged and stays interpretable.`,
         ]
       : []),
   ];

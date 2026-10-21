@@ -531,17 +531,11 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
   const content = { ...base, assets };
   // builtAt is excluded: rebuilding an unchanged shot must yield the same fingerprint.
   //
-  // The schema-version fields are hashed as the version whose SHAPE the content actually uses: a Shot with no selected
-  // Production Frame carries exactly the content of a v2 package, so it hashes exactly as it did before v3 existed. An
-  // existing attempt is therefore not reported as "the shot changed since this attempt" merely because the package
-  // shape gained an optional section. The same rule keeps the 3D-set precedent ("byte-identical to before").
-  const hashedVersion = productionFrame ? PACKAGE_SCHEMA_VERSION : LEGACY_PACKAGE_SCHEMA_VERSION;
-  const contentFingerprint = fingerprint({
-    ...content,
-    version: hashedVersion,
-    packageSchemaVersion: hashedVersion,
-    builtAt: null,
-  });
+  // PACKAGE IDENTITY: provenance.fingerprint is the SHA-256 of this frozen package's content (the schema-version
+  // fields included), so a v3 package and a v2 package are different frozen shapes with different identities even for
+  // an unchanged Shot. "Has the Shot itself changed?" is a different question, answered by provenance.parts.overall
+  // (see shotChangedSinceAttempt); the two are never interchangeable.
+  const contentFingerprint = fingerprint({ ...content, builtAt: null });
   return {
     ...content,
     provenance: {
@@ -557,6 +551,48 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
         ...(productionFrame ? { productionFrameId: productionFrame.frameId } : {}),
       },
     },
+  };
+}
+
+// ───────────────────────── "has the Shot changed since attempt N?" ─────────────────────────
+
+/** What the attempt-vs-now comparison used, and the two values compared (for display). */
+export interface ShotChangeSinceAttempt {
+  changed: boolean;
+  /**
+   * `inputs`: the Shot's production-input identity (`provenance.parts.overall`), comparable ACROSS package schema
+   * versions. `package`: the exact package fingerprints, used only for genuinely old snapshots that recorded no
+   * `parts.overall`.
+   */
+  basis: "inputs" | "package";
+  from: string;
+  to: string;
+}
+
+const HEX64 = /^[0-9a-f]{64}$/;
+
+/**
+ * Has the SHOT changed since a historical generation attempt? Prefers the semantic input fingerprint
+ * (`provenance.parts.overall`) of the frozen snapshot and of the current package, so a package SCHEMA upgrade alone
+ * (v2 → v3) never reads as "the shot changed". A snapshot without it falls back to the exact package fingerprint. The
+ * attempt is never rewritten. (Candidate sets, attempts, continuity runs and exports keep using the exact package
+ * identity, `provenance.fingerprint`; only this reasoning uses the inputs identity.)
+ */
+export function shotChangedSinceAttempt(
+  attempt: { packageFingerprint: string; packageSnapshot: Record<string, unknown> | null | undefined },
+  current: Pick<GenerationPackage, "provenance">,
+): ShotChangeSinceAttempt | null {
+  const prov = attempt.packageSnapshot?.provenance as { parts?: { overall?: unknown } } | undefined;
+  const then = prov?.parts?.overall;
+  const now = current.provenance.parts.overall;
+  if (typeof then === "string" && HEX64.test(then) && typeof now === "string" && HEX64.test(now))
+    return { changed: then !== now, basis: "inputs", from: then, to: now };
+  if (!attempt.packageFingerprint) return null;
+  return {
+    changed: attempt.packageFingerprint !== current.provenance.fingerprint,
+    basis: "package",
+    from: attempt.packageFingerprint,
+    to: current.provenance.fingerprint,
   };
 }
 

@@ -3,8 +3,9 @@ import { Badge, Button, Field } from "@/components/ui";
 import type { ShotContext } from "@/domain/context";
 import { PART_LABELS } from "@/domain/fingerprint";
 import {
-  checkProductionImage,
+  assetPromotionStatus,
   PRODUCTION_FRAME_SOURCE_LABEL,
+  storyboardPromotionStatus,
   productionFrameFreshness,
   shotProductionAspect,
   type ProductionFrame,
@@ -65,15 +66,7 @@ export function ProductionFrameSection({
 
   // can the approved Storyboard's image become a Production Frame? (by the same rules the server applies)
   const sbFrame = ctx.approvedFrame;
-  const sbAsset = sbFrame?.assetId ? (ctx.assets.get(sbFrame.assetId) ?? null) : null;
-  const sbCheck = !sbFrame
-    ? ({ ok: false, reason: "Approve a storyboard frame first." } as const)
-    : !sbAsset
-      ? ({ ok: false, reason: "The approved storyboard frame has no image." } as const)
-      : (() => {
-          const r = checkProductionImage(sbAsset, aspect);
-          return r.ok ? ({ ok: true } as const) : ({ ok: false, reason: r.problem.message } as const);
-        })();
+  const sbCheck = storyboardPromotionStatus(ctx);
 
   return (
     <div data-testid="production-frame-section" className="space-y-4">
@@ -174,10 +167,7 @@ export function ProductionFrameSection({
         {masterFrames.length > 0 ? (
           <div data-testid="pf-master-frames" className="space-y-1.5">
             {masterFrames.map((m) => {
-              const asset = ctx.assets.get(m.assetId) ?? null;
-              const check = asset
-                ? checkProductionImage(asset, aspect)
-                : ({ ok: false, problem: { message: "That render's image is missing." } } as const);
+              const check = assetPromotionStatus(ctx, ctx.assets.get(m.assetId) ?? null);
               return (
                 <ActionForm
                   key={m.id}
@@ -193,9 +183,7 @@ export function ProductionFrameSection({
                       {" "}
                       · {m.width}×{m.height} · {stamp(m.capturedAt)}
                     </span>
-                    {!check.ok ? (
-                      <span className="block text-[11px] text-faint">{check.problem.message}</span>
-                    ) : null}
+                    {!check.ok ? <span className="block text-[11px] text-faint">{check.reason}</span> : null}
                   </span>
                   <Button data-testid={`pf-use-master-${m.id}`} size="sm" type="submit" disabled={!check.ok}>
                     Use 3D Master Frame

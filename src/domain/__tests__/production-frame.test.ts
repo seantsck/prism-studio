@@ -4,7 +4,6 @@ import { findAssetUsage } from "@/domain/asset-usage";
 import { fingerprint } from "@/domain/hash";
 import {
   assembleGenerationPackage,
-  LEGACY_PACKAGE_SCHEMA_VERSION,
   PACKAGE_SCHEMA_VERSION,
   renderGenerationBrief,
   briefToText,
@@ -354,25 +353,14 @@ describe("freshness", () => {
 });
 
 describe("GenerationPackage v3", () => {
-  it("is version 3; a Shot with no selected frame carries exactly the content of a v2 package and hashes as v2 did", () => {
-    const data = seed();
-    const pkg = pkgOf(data);
+  it("a new package is version 3; a Shot with no selected frame carries none of the v3-only keys", () => {
+    const pkg = pkgOf(seed());
     expect(pkg.version).toBe(PACKAGE_SCHEMA_VERSION);
     expect(pkg.packageSchemaVersion).toBe(3);
     expect(pkg.references).not.toHaveProperty("productionFrame");
     expect(pkg.freshness).not.toHaveProperty("productionFrame");
     expect(pkg.provenance.sourceVersions).not.toHaveProperty("productionFrameId");
-    // the v2 formula, reproduced: version fields as 2, no provenance, builtAt null
-    const content: Record<string, unknown> = { ...pkg };
-    delete content.provenance;
-    expect(
-      fingerprint({
-        ...content,
-        version: LEGACY_PACKAGE_SCHEMA_VERSION,
-        packageSchemaVersion: LEGACY_PACKAGE_SCHEMA_VERSION,
-        builtAt: null,
-      }),
-    ).toBe(pkg.provenance.fingerprint);
+    expect(pkg.provenance.parts).not.toHaveProperty("productionFrame");
   });
 
   it("describes the SELECTED frame by value and puts its Asset in package.assets", () => {
