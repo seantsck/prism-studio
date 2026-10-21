@@ -47,7 +47,12 @@ const cleanupCli = () =>
     ["tsx", "--env-file=.env.local", "scripts/previs-cleanup.mts", "--yes", `--e2e-assets-prefix=${PREFIX}`],
     {
       cwd: process.cwd(),
-      env: { ...process.env, PRISM_STUDIO_PERSISTENCE: "supabase", NODE_ENV: "test", PRISM_STUDIO_WORKER_DEV_STORAGE: "1" },
+      env: {
+        ...process.env,
+        PRISM_STUDIO_PERSISTENCE: "supabase",
+        NODE_ENV: "test",
+        PRISM_STUDIO_WORKER_DEV_STORAGE: "1",
+      },
       encoding: "utf8",
       timeout: 120_000,
       shell: process.platform === "win32",
@@ -96,9 +101,18 @@ test("hosted: promote the approved Storyboard, upload a frame, switch, reload, a
   });
   await sb.getByRole("button", { name: "Add frame version" }).click();
   await expect.poll(() => sb.locator("form").count(), { timeout: 60_000 }).toBeGreaterThan(before);
-  const row = sb.locator("form").filter({ hasText: /v\d+ · upload/ }).last();
+  const row = sb
+    .locator("form")
+    .filter({ hasText: /v\d+ · upload/ })
+    .last();
   await row.getByRole("button", { name: "Approve" }).click();
-  await expect(sb.locator("form").filter({ hasText: /v\d+ · upload/ }).last().getByRole("button", { name: /Approved/ })).toBeVisible({
+  await expect(
+    sb
+      .locator("form")
+      .filter({ hasText: /v\d+ · upload/ })
+      .last()
+      .getByRole("button", { name: /Approved/ }),
+  ).toBeVisible({
     timeout: 60_000,
   });
 
@@ -125,33 +139,43 @@ test("hosted: promote the approved Storyboard, upload a frame, switch, reload, a
   await anonymous.dispose();
 
   // upload a production-shaped image: v2, a new private `production_frame` Asset
-  await section(page).getByTestId("pf-upload-file").setInputFiles({
-    name: `${PREFIX}-upload.png`,
-    mimeType: "image/png",
-    buffer: png(956, 400, [70, 120, 190]),
-  });
+  await section(page)
+    .getByTestId("pf-upload-file")
+    .setInputFiles({
+      name: `${PREFIX}-upload.png`,
+      mimeType: "image/png",
+      buffer: png(956, 400, [70, 120, 190]),
+    });
   await section(page).getByTestId("pf-upload-submit").click();
-  await expect(section(page).getByTestId("pf-selected")).toHaveAttribute("data-version", "2", { timeout: 60_000 });
+  await expect(section(page).getByTestId("pf-selected")).toHaveAttribute("data-version", "2", {
+    timeout: 60_000,
+  });
   await expect(items(page)).toHaveCount(2);
 
   // a wrongly shaped image is refused
-  await section(page).getByTestId("pf-upload-file").setInputFiles({
-    name: `${PREFIX}-wrong.png`,
-    mimeType: "image/png",
-    buffer: png(640, 360, [20, 20, 20]),
-  });
+  await section(page)
+    .getByTestId("pf-upload-file")
+    .setInputFiles({
+      name: `${PREFIX}-wrong.png`,
+      mimeType: "image/png",
+      buffer: png(640, 360, [20, 20, 20]),
+    });
   await section(page).getByTestId("pf-upload-submit").click();
   await expect(section(page).getByRole("alert")).toContainText("does not crop");
   await expect(items(page)).toHaveCount(2);
 
   // switch to v1, reload: the selection is persisted, history is intact
   await section(page).getByTestId("pf-select-1").click();
-  await expect(section(page).getByTestId("pf-selected")).toHaveAttribute("data-version", "1", { timeout: 60_000 });
+  await expect(section(page).getByTestId("pf-selected")).toHaveAttribute("data-version", "1", {
+    timeout: 60_000,
+  });
   await page.reload();
   await expect(section(page).getByTestId("pf-selected")).toHaveAttribute("data-version", "1");
   await expect(items(page)).toHaveCount(2);
   await section(page).getByTestId("pf-select-2").click();
-  await expect(section(page).getByTestId("pf-selected")).toHaveAttribute("data-version", "2", { timeout: 60_000 });
+  await expect(section(page).getByTestId("pf-selected")).toHaveAttribute("data-version", "2", {
+    timeout: 60_000,
+  });
 
   // staleness through a Shot change; restored afterwards
   await page.goto(`${shotUrl}?section=lighting`);
@@ -159,7 +183,10 @@ test("hosted: promote the approved Storyboard, upload a frame, switch, reload, a
   const original = await mood.inputValue();
   try {
     await mood.fill("harsh noon sun");
-    await page.locator("#lighting").getByRole("button", { name: /Save lighting/i }).click();
+    await page
+      .locator("#lighting")
+      .getByRole("button", { name: /Save lighting/i })
+      .click();
     await expect(page.locator("#lighting")).toContainText("Saved");
     await page.goto(`${shotUrl}?section=production_frame`);
     await expect(section(page).getByTestId("pf-selected")).toHaveAttribute("data-freshness", "stale");
@@ -168,7 +195,10 @@ test("hosted: promote the approved Storyboard, upload a frame, switch, reload, a
   } finally {
     await page.goto(`${shotUrl}?section=lighting`);
     await page.locator("#lighting input[name='lighting.mood']").fill(original);
-    await page.locator("#lighting").getByRole("button", { name: /Save lighting/i }).click();
+    await page
+      .locator("#lighting")
+      .getByRole("button", { name: /Save lighting/i })
+      .click();
     await expect(page.locator("#lighting")).toContainText("Saved"); // the restore is stored before moving on
   }
   await page.goto(`${shotUrl}?section=production_frame`);

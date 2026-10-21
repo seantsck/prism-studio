@@ -79,7 +79,12 @@ test("no-3D project: empty → promote the approved Storyboard → fresh → the
   const row = sb.locator("form").filter({ hasText: /v2 · upload/ });
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: "Approve" }).click();
-  await expect(sb.locator("form").filter({ hasText: /v2 · upload/ }).getByRole("button", { name: /Approved/ })).toBeVisible();
+  await expect(
+    sb
+      .locator("form")
+      .filter({ hasText: /v2 · upload/ })
+      .getByRole("button", { name: /Approved/ }),
+  ).toBeVisible();
 
   await page.goto(`${shotUrl}?section=production_frame`);
   const pf = section(page);
@@ -101,11 +106,19 @@ test("no-3D project: empty → promote the approved Storyboard → fresh → the
 
   const { json, text } = await packageOf(page, request, shotUrl);
   expect(json.packageSchemaVersion).toBe(3);
-  expect(json.references.productionFrame).toMatchObject({ version: 1, source: "storyboard", freshness: "fresh" });
+  expect(json.references.productionFrame).toMatchObject({
+    version: 1,
+    source: "storyboard",
+    freshness: "fresh",
+  });
   // the Production Frame is the start frame, and it REUSES the Storyboard's Asset (no duplicate Asset)
   expect(json.references.startFrameAssetId).toBe(json.references.productionFrame.assetId);
   expect(json.references.productionFrame.assetId).toBe(json.references.approvedStoryboardFrame.assetId);
-  expect(json.assets[json.references.productionFrame.assetId]).toMatchObject({ purpose: "storyboard", width: 478, height: 200 });
+  expect(json.assets[json.references.productionFrame.assetId]).toMatchObject({
+    purpose: "storyboard",
+    width: 478,
+    height: 200,
+  });
   expect(json).not.toHaveProperty("spatialReference");
   expect(text).toContain("Production Frame: v1 · From Storyboard · fresh");
   // by name and state only
@@ -154,7 +167,10 @@ test("upload: a production-shaped image is selected; a wrong aspect or a non-ima
   const { json } = await packageOf(page, request, shotUrl);
   expect(json.references.productionFrame).toMatchObject({ version: 2, source: "upload", freshness: "fresh" });
   expect(json.references.startFrameAssetId).toBe(json.references.productionFrame.assetId);
-  expect(json.assets[json.references.productionFrame.assetId]).toMatchObject({ purpose: "production_frame", width: 956 });
+  expect(json.assets[json.references.productionFrame.assetId]).toMatchObject({
+    purpose: "production_frame",
+    width: 956,
+  });
 });
 
 test("history: choosing another frame never deletes the others", async ({ page }) => {
@@ -184,7 +200,10 @@ test("stale: a Shot change marks the selected frame stale (it stays selected), n
   const mood = page.locator("#lighting input[name='lighting.mood']");
   const original = await mood.inputValue();
   await mood.fill("harsh noon sun");
-  await page.locator("#lighting").getByRole("button", { name: /Save lighting/i }).click();
+  await page
+    .locator("#lighting")
+    .getByRole("button", { name: /Save lighting/i })
+    .click();
   await expect(page.locator("#lighting")).toContainText("Saved");
 
   await page.goto(`${shotUrl}?section=production_frame`);
@@ -198,17 +217,26 @@ test("stale: a Shot change marks the selected frame stale (it stays selected), n
   // the frame's own record is history: it is still there, unchanged, with its image
   await expect(pf.getByTestId("pf-history-item")).toHaveCount(2);
   // preflight names the rule (a blocker for image-to-video, a warning otherwise)
-  await expect(page.locator("aside").last()).toContainText("Selected Production Frame matches the current shot");
+  await expect(page.locator("aside").last()).toContainText(
+    "Selected Production Frame matches the current shot",
+  );
 
   const { json, text } = await packageOf(page, request, shotUrl);
-  expect(json.references.productionFrame).toMatchObject({ version: 2, freshness: "stale", changedParts: ["lighting"] });
+  expect(json.references.productionFrame).toMatchObject({
+    version: 2,
+    freshness: "stale",
+    changedParts: ["lighting"],
+  });
   expect(text).toMatch(/Production Frame: v2 · Uploaded · stale/);
   expect(text).toMatch(/STALE: Lighting changed after this frame was made/);
 
   // restoring the Shot makes the same frame fresh again: nothing about the frame was ever rewritten
   await page.goto(`${shotUrl}?section=lighting`);
   await page.locator("#lighting input[name='lighting.mood']").fill(original);
-  await page.locator("#lighting").getByRole("button", { name: /Save lighting/i }).click();
+  await page
+    .locator("#lighting")
+    .getByRole("button", { name: /Save lighting/i })
+    .click();
   await expect(page.locator("#lighting")).toContainText("Saved");
   await page.goto(`${shotUrl}?section=production_frame`);
   await expect(section(page).getByTestId("pf-selected")).toHaveAttribute("data-freshness", "fresh");
