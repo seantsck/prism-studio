@@ -10,6 +10,7 @@ import {
   GENERATION_MODALITIES,
   type GenerationModality,
   type GenerationModel,
+  type GenerationPurpose,
   type GenerationReference,
   type ReferenceRole,
   type Resolution,
@@ -52,6 +53,8 @@ export interface CompatibilityInput {
 export interface CompatibilityReport {
   provider: string;
   modelId: string;
+  /** Why this generation is requested. `production_frame`: a still the human may promote; never the Shot's output. */
+  purpose: GenerationPurpose;
   modality: GenerationModality | null;
   compatible: boolean;
   errors: CompatibilityIssue[];
@@ -142,8 +145,54 @@ export function deriveReferenceCandidates(pkg: GenerationPackage): Candidate[] {
   return out;
 }
 
-function chooseModality(pkg: GenerationPackage, model: GenerationModel): GenerationModality | null {
+/** A package asset that has an actual stored file (a placeholder/seed record without bytes is never sent). */
+const hasStoredFile = (pkg: GenerationPackage, assetId: string): boolean => {
+  const a = pkg.assets[assetId];
+  return Boolean(a && a.objectPath && a.checksum && (a.type === "image" || a.type === "reference"));
+};
+
+/**
+ * Deterministic reference priority for `production_frame` image generation (Phase 2G.2), deduplicated by asset:
+ *   1 selected Production Frame · 2 approved Storyboard · 3 Character identity · 4 Character Look ·
+ *   5 Location · 6 lighting + explicit Shot references.
+ * Only explicit production data; only assets with a stored file; never the whole Project.
+ */
+export function deriveProductionFrameReferenceCandidates(pkg: GenerationPackage): Candidate[] {
+  const out: Candidate[] = [];
+  const seen = new Set<string>();
+  const push = (assetId: string | null | undefined, role: ReferenceRole, label: string) => {
+    if (!assetId || seen.has(assetId) || !hasStoredFile(pkg, assetId)) return;
+    seen.add(assetId);
+    out.push({ assetId, role, label });
+  };
+  push(pkg.references.productionFrame?.assetId, "production_frame", "Current Production Frame");
+  push(pkg.references.approvedStoryboardFrame?.assetId, "storyboard", "Approved storyboard frame");
+  for (const c of pkg.characters)
+    for (const id of c.identityReferenceAssetIds) push(id, "identity", `${c.name} identity`);
+  for (const c of pkg.characters)
+    for (const id of c.look?.referenceAssetIds ?? [])
+      push(id, "character_look", `${c.name} Look "${c.look?.name}"`);
+  for (const id of pkg.set?.referenceAssetIds ?? [])
+    push(id, "location", `${pkg.set?.name ?? "Set"} reference`);
+  push(pkg.lighting.referenceAssetId, "style", "Lighting reference");
+  for (const id of pkg.references.referenceAssetIds) push(id, "other", "Shot reference");
+  return out;
+}
+
+function chooseModality(
+  pkg: GenerationPackage,
+  model: GenerationModel,
+  purpose: GenerationPurpose,
+): GenerationModality | null {
   const supported = new Set(model.capabilities.modalities);
+  if (purpose === "production_frame") {
+    // Independent of `shot.generation.modality`: reference inputs present → image_to_image, otherwise text_to_image.
+    const hasRefs = deriveProductionFrameReferenceCandidates(pkg).length > 0;
+    const order: GenerationModality[] = hasRefs
+      ? ["image_to_image", "text_to_image"]
+      : ["text_to_image", "image_to_image"];
+    return order.find((m) => supported.has(m)) ?? null;
+  }
   const hasStart = Boolean(pkg.references.startFrameAssetId);
   const intent = pkg.generation.modality;
   const order: GenerationModality[] =
@@ -186,8 +235,12 @@ export function evaluateCompatibility(
      * approved storyboard frame stays the exact first frame and references are listed as not used.
      */
     inputMode?: InputMode;
+    /** Default `shot_output`. `production_frame` asks for a still image and ignores video-only inputs. */
+    purpose?: GenerationPurpose;
   } = {},
 ): CompatibilityReport {
+  const purpose: GenerationPurpose = opts.purpose ?? "shot_output";
+  const pfPurpose = purpose === "production_frame";
   const caps = model.capabilities;
   const errors: CompatibilityIssue[] = [];
   const warnings: CompatibilityIssue[] = [];
@@ -201,12 +254,14 @@ export function evaluateCompatibility(
     caps.references.referenceImages &&
     pkg.generation.modality === "video" &&
     caps.modalities.includes("text_to_video");
-  const modality = opts.modality ?? (referenceMode ? "text_to_video" : chooseModality(pkg, model));
-  if (!modality || !caps.modalities.includes(modality)) {
+  const modality = opts.modality ?? (referenceMode ? "text_to_video" : chooseModality(pkg, model, purpose));
+  if (!modality || !caps.modalities.includes(modality) || (pfPurpose && isVideoModality(modality))) {
     errors.push({
       id: "modality.unsupported",
       feature: "modality",
-      message: `${model.displayName} cannot do what this shot needs (${pkg.generation.modality}). It supports: ${caps.modalities.join(", ")}.`,
+      message: pfPurpose
+        ? `${model.displayName} cannot generate a still image for a Production Frame. It supports: ${caps.modalities.join(", ")}.`
+        : `${model.displayName} cannot do what this shot needs (${pkg.generation.modality}). It supports: ${caps.modalities.join(", ")}.`,
     });
   }
   const video = modality ? isVideoModality(modality) : false;
@@ -351,7 +406,10 @@ export function evaluateCompatibility(
   let endUsed: string | null = null;
   const asReference = referenceMode && video && modality === "text_to_video";
   const frameRefs: Candidate[] = [];
-  if (asReference) {
+  if (pfPurpose) {
+    // Production Frame candidates: the selected Production Frame / Storyboard are IMAGE REFERENCES (highest priority),
+    // never first/last frames of a video. Frame inputs and the Shot's explicit start-frame override do not apply.
+  } else if (asReference) {
     // Reference mode: frames cannot be keyframes, so they join the reference images (visibly, not silently).
     if (start) {
       frameRefs.push({
@@ -401,7 +459,7 @@ export function evaluateCompatibility(
         impact: "The approved storyboard frame will NOT condition the first frame of this generation.",
       });
   }
-  if (end && !asReference) {
+  if (end && !asReference && !pfPurpose) {
     if (caps.references.endFrame && video) endUsed = end;
     else
       ignored.push({
@@ -411,7 +469,7 @@ export function evaluateCompatibility(
         impact: "The end frame will NOT be used; the shot may not land on the intended final pose.",
       });
   }
-  if (start)
+  if (start && !pfPurpose)
     inputs.push({
       kind: "start_frame",
       label: "Start frame",
@@ -419,7 +477,7 @@ export function evaluateCompatibility(
       role: "start_frame",
       used: Boolean(startUsed) || frameRefs.some((f) => f.assetId === start),
     });
-  if (end)
+  if (end && !pfPurpose)
     inputs.push({
       kind: "end_frame",
       label: "End frame",
@@ -429,7 +487,9 @@ export function evaluateCompatibility(
     });
 
   // ── references ──
-  const candidates = [...frameRefs, ...deriveReferenceCandidates(pkg)];
+  const candidates = pfPurpose
+    ? deriveProductionFrameReferenceCandidates(pkg)
+    : [...frameRefs, ...deriveReferenceCandidates(pkg)];
   const accepted: GenerationReference[] = [];
   const roleSupported = (role: ReferenceRole): boolean => {
     if (!caps.references.referenceImages) return false;
@@ -488,7 +548,7 @@ export function evaluateCompatibility(
       impact: "The model does not preserve reference order; earlier references will not carry more weight.",
     });
   }
-  if (pkg.references.referenceVideoAssetId) {
+  if (pkg.references.referenceVideoAssetId && !pfPurpose) {
     const used = caps.references.referenceVideo;
     inputs.push({
       kind: "reference_video",
@@ -513,17 +573,28 @@ export function evaluateCompatibility(
     p.selectedTake?.audioAssetId ? [{ assetId: p.selectedTake.audioAssetId, speaker: p.speaker }] : [],
   );
   const conditions = caps.audio.audioConditioning || caps.audio.lipSync || caps.references.referenceAudio;
-  for (const t of audioTakes) {
-    inputs.push({
-      kind: "audio",
-      label: `${t.speaker} performance`,
-      assetId: t.assetId,
-      role: null,
-      used: conditions,
-    });
-    if (conditions) audioAssetIds.push(t.assetId);
-  }
-  if (audioTakes.length > 0 && !conditions) {
+  if (pfPurpose) {
+    // An image model receives no audio. Informational only: it never claims audio conditioning, and it is not a
+    // production intent the user has to acknowledge for a still.
+    if (audioTakes.length > 0)
+      warnings.push({
+        id: "performance_audio.image",
+        feature: "performance_audio",
+        message:
+          "Performed audio is not sent to image models. The performance only informs the emotional and pose intent in the prompt text.",
+      });
+  } else
+    for (const t of audioTakes) {
+      inputs.push({
+        kind: "audio",
+        label: `${t.speaker} performance`,
+        assetId: t.assetId,
+        role: null,
+        used: conditions,
+      });
+      if (conditions) audioAssetIds.push(t.assetId);
+    }
+  if (audioTakes.length > 0 && !conditions && !pfPurpose) {
     const speakers = [...new Set(audioTakes.map((t) => t.speaker))].join(", ");
     ignored.push({
       id: "performance_audio",
@@ -538,6 +609,7 @@ export function evaluateCompatibility(
   return {
     provider: model.provider,
     modelId: model.modelId,
+    purpose,
     modality: modality ?? null,
     compatible: errors.length === 0,
     errors,

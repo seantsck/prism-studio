@@ -5,6 +5,7 @@ import { renderPromptPlan } from "./prompt-plan";
 import {
   generationRequestSchema,
   type GenerationModel,
+  type GenerationPurpose,
   type GenerationRequest,
   type ModelAvailability,
   type PromptPlan,
@@ -34,6 +35,8 @@ export interface GateInput {
   availability: ModelAvailability | null;
   compatibility: CompatibilityReport | null;
   acknowledged: readonly string[];
+  /** Why this generation is requested (default `shot_output`). */
+  purpose?: GenerationPurpose;
   /** Live-spend gate inputs. Omitted for free (mock) models. */
   spend?: SpendGateInput | null;
 }
@@ -77,10 +80,54 @@ export function spendBlockers(s: SpendGateInput): GateBlocker[] {
   return out;
 }
 
+/**
+ * Preflight rules that describe readiness of the Shot's FINAL OUTPUT (performance takes, approvals, an approved
+ * storyboard, a duration) and therefore do not apply to an exploratory Production Frame candidate: a filmmaker must
+ * be able to generate stills BEFORE any of those exist. Everything else (story beat, characters, Looks, camera...)
+ * still applies because it is what the image depicts.
+ */
+export const PRODUCTION_FRAME_EXEMPT_RULES: ReadonlySet<string> = new Set([
+  "story.duration",
+  "performance.takes",
+  "performance.locked_text",
+  "performance.direction",
+  "approval.performance",
+  "approval.continuity",
+  "audio.ambience",
+  "storyboard.frame",
+  "storyboard.approved",
+  "storyboard.fresh",
+  "production_frame.fresh",
+  "generation.model",
+]);
+
+/** The preflight a generation of this purpose is judged by (the report itself is never mutated). */
+export function preflightForPurpose(
+  report: PreflightReport,
+  purpose: GenerationPurpose | undefined,
+): PreflightReport {
+  if (purpose !== "production_frame") return report;
+  const items = report.items.map((i) =>
+    PRODUCTION_FRAME_EXEMPT_RULES.has(i.ruleId) && (i.status === "fail" || i.status === "warn")
+      ? { ...i, status: "na" as const, detail: "Not needed to generate a Production Frame candidate." }
+      : i,
+  );
+  const blockers = items.filter((i) => i.status === "fail");
+  return {
+    ...report,
+    items,
+    blockers,
+    warnings: items.filter((i) => i.status === "warn"),
+    ready: blockers.length === 0,
+  };
+}
+
 export function evaluateGate(input: GateInput): GenerationGate {
   const blockers: GateBlocker[] = [];
+  const pfPurpose = input.purpose === "production_frame";
 
   for (const b of input.preflight.blockers) {
+    if (pfPurpose && PRODUCTION_FRAME_EXEMPT_RULES.has(b.ruleId)) continue;
     blockers.push({
       code: `preflight.${b.ruleId}`,
       source: "preflight",
@@ -89,7 +136,9 @@ export function evaluateGate(input: GateInput): GenerationGate {
   }
 
   // A stale approved storyboard means the picture Prism would condition on no longer matches the shot.
-  if (input.pkg.freshness.storyboard.status === "stale") {
+  // A stale storyboard only blocks a video output. As an image reference for a Production Frame candidate it is
+  // an edit basis the filmmaker chose; the stale/changed state is shown, not forbidden.
+  if (!pfPurpose && input.pkg.freshness.storyboard.status === "stale") {
     blockers.push({
       code: "freshness.storyboard_stale",
       source: "freshness",
@@ -149,6 +198,8 @@ export function buildGenerationRequest(args: {
   return generationRequestSchema.parse({
     schemaVersion: 1,
     modality: c.modality,
+    // absent = shot_output, so every existing request is byte-identical to before Phase 2G.2
+    ...(c.purpose === "production_frame" ? { purpose: c.purpose } : {}),
     provider: args.model.provider,
     modelId: args.model.modelId,
     prompt: {

@@ -5,7 +5,11 @@ import type {
   CandidateSetEvent,
   CandidateSetStatus,
 } from "@/domain/generation/candidates";
-import { buildOutcomeRecords, type RawAttemptOutcome } from "@/domain/generation/outcomes";
+import {
+  buildOutcomeRecords,
+  purposeOfRequestJson,
+  type RawAttemptOutcome,
+} from "@/domain/generation/outcomes";
 import type { OutcomeRecord } from "@/domain/generation/performance";
 import type { GenerationReview } from "@/domain/generation/reviews";
 import type { ProjectData } from "@/domain/schemas";
@@ -258,6 +262,7 @@ export class MemoryCandidateService implements CandidateRepository {
         projectId,
         provider: a.provider,
         model: a.model,
+        purpose: purposeOfRequestJson(a.request),
         status: a.status,
         packageSnapshot: a.packageSnapshot,
         createdAt: a.createdAt,

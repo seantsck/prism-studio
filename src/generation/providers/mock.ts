@@ -275,6 +275,94 @@ const defs: MockModelDef[] = [
       }),
     },
   },
+  // Phase 2G.2 Production Frame candidate fixtures (free): a second native-ratio model that accepts few references,
+  // and a wide-only model whose provider canvas differs from a 16:9 / 2.39:1 production frame (forces adaptation).
+  {
+    scenario: "success",
+    model: {
+      provider: MOCK_PROVIDER_ID,
+      modelId: "mock-image-lite",
+      displayName: "Mock Image Lite",
+      description: "Deterministic image model with a small reference limit. Free.",
+      kind: "mock",
+      lifecycle: "active",
+      capabilities: baseCaps({
+        modalities: ["text_to_image", "image_to_image"],
+        video: null,
+        image: {
+          resolutions: [{ width: 512, height: 288 }],
+          aspectRatios: ["16:9", "1:1"],
+          transparency: false,
+          editing: true,
+        },
+        audio: {
+          nativeDialogueAudio: false,
+          audioConditioning: false,
+          lipSync: false,
+          referenceAudio: false,
+          soundGeneration: false,
+        },
+        references: {
+          textPrompt: true,
+          negativePrompt: false,
+          referenceImages: true,
+          maxReferences: 2,
+          orderedReferences: true,
+          characterReferences: true,
+          styleReferences: true,
+          locationReferences: true,
+          startFrame: false,
+          endFrame: false,
+          referenceVideo: false,
+          referenceAudio: false,
+        },
+        commercial: { pricing: "per_output", currency: "USD", costUnit: "image", unitCost: 0.01 },
+      }),
+    },
+  },
+  {
+    scenario: "success",
+    model: {
+      provider: MOCK_PROVIDER_ID,
+      modelId: "mock-image-wide",
+      displayName: "Mock Image Wide",
+      description: "Deterministic wide-canvas image model (21:9 only). Free.",
+      kind: "mock",
+      lifecycle: "active",
+      capabilities: baseCaps({
+        modalities: ["text_to_image", "image_to_image"],
+        video: null,
+        image: {
+          resolutions: [{ width: 672, height: 288 }],
+          aspectRatios: ["21:9"],
+          transparency: false,
+          editing: true,
+        },
+        audio: {
+          nativeDialogueAudio: false,
+          audioConditioning: false,
+          lipSync: false,
+          referenceAudio: false,
+          soundGeneration: false,
+        },
+        references: {
+          textPrompt: true,
+          negativePrompt: false,
+          referenceImages: true,
+          maxReferences: 8,
+          orderedReferences: true,
+          characterReferences: true,
+          styleReferences: true,
+          locationReferences: true,
+          startFrame: false,
+          endFrame: false,
+          referenceVideo: false,
+          referenceAudio: false,
+        },
+        commercial: { pricing: "per_output", currency: "USD", costUnit: "image", unitCost: 0.01 },
+      }),
+    },
+  },
 ];
 
 for (const d of defs) generationModelSchema.parse(d.model);
@@ -476,7 +564,14 @@ export class MockProvider implements GenerationProviderAdapter {
     const now = ctx.now().toISOString();
     const outputs: ProviderOutput[] = [];
 
-    const [w, h] = token.ar === "9:16" ? [288, 512] : token.ar === "1:1" ? [384, 384] : [512, 288];
+    const [w, h] =
+      token.ar === "9:16"
+        ? [288, 512]
+        : token.ar === "1:1"
+          ? [384, 384]
+          : token.ar === "21:9"
+            ? [672, 288]
+            : [512, 288];
     const png = encodeMockPng(w, h, token.seed);
     const base64 = (b: Uint8Array) => Buffer.from(b).toString("base64");
     const stem = `mock-${token.model}-${(token.seed >>> 0).toString(16)}`;

@@ -37,6 +37,19 @@ export const VIDEO_MODALITIES: readonly GenerationModality[] = [
   "lip_sync",
 ];
 
+/**
+ * WHY a generation is requested (Phase 2G.2). Independent of the Shot's final generation modality:
+ *   shot_output       the Shot's final output (every generation before 2G.2)
+ *   production_frame  an exploratory still that a human may promote to the Shot's Production Frame
+ * Frozen on the attempt's request; it never changes `shot.generation.modality`.
+ */
+export const GENERATION_PURPOSES = ["shot_output", "production_frame"] as const;
+export type GenerationPurpose = (typeof GENERATION_PURPOSES)[number];
+
+/** The purpose of a frozen request; requests frozen before Phase 2G.2 carry none and are `shot_output`. */
+export const purposeOfRequest = (r: { purpose?: GenerationPurpose | null }): GenerationPurpose =>
+  r.purpose ?? "shot_output";
+
 /** What a reference asset is FOR. Adapters receive explicit roles; they never guess from file names. */
 export const REFERENCE_ROLES = [
   "identity",
@@ -44,6 +57,8 @@ export const REFERENCE_ROLES = [
   "location",
   "style",
   "storyboard",
+  /** The Shot's selected Production Frame, used as an image reference when generating Production Frame candidates. */
+  "production_frame",
   "start_frame",
   "end_frame",
   "motion_reference",
@@ -228,6 +243,8 @@ export type GenerationReference = z.infer<typeof generationReferenceSchema>;
 export const generationRequestSchema = z.object({
   schemaVersion: z.literal(1),
   modality: z.enum(GENERATION_MODALITIES),
+  /** Absent on requests frozen before Phase 2G.2: those are `shot_output`. */
+  purpose: z.enum(GENERATION_PURPOSES).optional(),
   provider: id,
   modelId: id,
   prompt: z.object({ positive: z.string(), negative: z.string() }),

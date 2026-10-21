@@ -1,6 +1,7 @@
 import type { ModelFit } from "./models/matrix";
 import { isSimilar, type ShotFeatureProfile, type ShotGenerationRequirements } from "./models/requirements";
-import type { OutcomeRecord } from "./performance";
+import { ofPurpose, type OutcomeRecord } from "./performance";
+import type { GenerationPurpose } from "./schemas";
 import { NEGATIVE_LABELS, type NegativeTag } from "./reviews";
 
 /**
@@ -149,11 +150,18 @@ export function recommendModels(args: {
   profile: ShotFeatureProfile | null;
   requirements: ShotGenerationRequirements | null;
   preference?: RecommendationPreference;
+  /**
+   * What is being generated. Only HUMAN reviews of the same purpose count: image candidates never feed the video
+   * models' history and video reviews never feed the image models'. Default `shot_output`.
+   */
+  purpose?: GenerationPurpose;
 }): Recommendation {
   const preference = args.preference ?? "balanced";
   const w = WEIGHTS[preference];
   // Benchmark / synthetic-fixture projects never feed production routing (their reviews exist to test tooling).
-  const reviewed = args.outcomes.filter((o) => !o.benchmark && valueOf(o.decision) != null);
+  const reviewed = ofPurpose(args.outcomes, args.purpose ?? "shot_output").filter(
+    (o) => !o.benchmark && valueOf(o.decision) != null,
+  );
 
   // history per model
   interface Hist {

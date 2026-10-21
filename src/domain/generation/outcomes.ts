@@ -1,4 +1,5 @@
 import type { GenerationPackage } from "../generation-package";
+import type { GenerationPurpose } from "./schemas";
 import { deriveShotFeatureProfile, type ShotFeatureProfile } from "./models/requirements";
 import type { OutcomeRecord } from "./performance";
 import { latestReviews, type GenerationReview } from "./reviews";
@@ -9,6 +10,8 @@ export interface RawAttemptOutcome {
   projectId: string;
   provider: string;
   model: string;
+  /** The frozen request's purpose (absent = `shot_output`). */
+  purpose?: GenerationPurpose;
   status: string;
   /** The frozen GenerationPackage JSON of the attempt (profile is derived from it, never stored twice). */
   packageSnapshot: unknown;
@@ -24,6 +27,15 @@ export interface RawAttemptOutcome {
   /** Provider-reported cost; null when unknown (never replaced by the estimate). */
   actualCostUsd: number | null;
   estimatedCostUsd: number | null;
+}
+
+/**
+ * The purpose frozen on an attempt's request JSON. Only `production_frame` is ever recorded; absence (every
+ * attempt before Phase 2G.2, and every Shot output) means `shot_output`.
+ */
+export function purposeOfRequestJson(request: unknown): GenerationPurpose | undefined {
+  const p = (request as { purpose?: unknown } | null)?.purpose;
+  return p === "production_frame" ? "production_frame" : undefined;
 }
 
 /** Defensive: attempts frozen under older package shapes yield no profile instead of throwing. */
@@ -62,6 +74,7 @@ export function buildOutcomeRecords(args: {
       projectId: a.projectId,
       provider: a.provider,
       model: a.model,
+      ...(a.purpose ? { purpose: a.purpose } : {}),
       decision: r?.decision ?? "unreviewed",
       negativeTags: r?.negativeTags ?? [],
       positiveTags: r?.positiveTags ?? [],

@@ -12,12 +12,18 @@ import {
   buildGenerationRequest,
   evaluateGate,
   extendPreflightWithCompatibility,
+  preflightForPurpose,
   type GateBlocker,
   type GenerationGate,
   type SpendGateInput,
 } from "@/domain/generation/gate";
 import { buildPromptPlan } from "@/domain/generation/prompt-plan";
-import type { CostEstimate, GenerationModel, ModelAvailability } from "@/domain/generation/schemas";
+import type {
+  CostEstimate,
+  GenerationModel,
+  GenerationPurpose,
+  ModelAvailability,
+} from "@/domain/generation/schemas";
 import { runPreflight, type PreflightReport } from "@/domain/preflight";
 import type { GenerationAttempt, ProjectData } from "@/domain/schemas";
 import type { GenerationConfig } from "./config";
@@ -61,14 +67,21 @@ export function evaluateShotForModel(args: {
   adaptation?: AdaptationChoice;
   /** Models whose first/last frames exclude reference images: which mode to use (default keyframes). */
   inputMode?: InputMode;
-  /** Normalized, non-secret model knobs (resolution tier, native audio). Recorded on the attempt. */
+  /** Normalized, non-secret model knobs (resolution tier, native audio, image quality). Recorded on the attempt. */
   providerOptions?: Record<string, unknown>;
+  /**
+   * Why the generation is requested. `production_frame` asks for a STILL candidate and never touches the Shot's
+   * own generation modality. Default `shot_output`.
+   */
+  purpose?: GenerationPurpose;
   now?: Date;
   /** Reuse an already built context/package when evaluating several models for one shot. */
   shared?: SharedShotEvaluation;
 }): Evaluation {
   const shared = args.shared ?? buildSharedEvaluation(args.data, args.shotId, args.now);
-  const { ctx, pkg, basePreflight } = shared;
+  const { ctx, pkg } = shared;
+  const purpose: GenerationPurpose = args.purpose ?? "shot_output";
+  const basePreflight = preflightForPurpose(shared.basePreflight, purpose);
   const model = args.registry.model(args.provider, args.modelId);
   const availability = model ? args.registry.availabilityOf(model) : null;
   let compatibility = model
@@ -76,6 +89,7 @@ export function evaluateShotForModel(args: {
         adaptation: args.adaptation,
         inputMode: args.inputMode,
         protectedNotes: ctx.shot.generation.protectedComposition,
+        purpose,
       })
     : null;
   const adapter = model ? args.registry.adapter(model.provider) : null;
@@ -126,6 +140,7 @@ export function evaluateShotForModel(args: {
     availability,
     compatibility,
     acknowledged: args.acknowledged ?? [],
+    purpose,
     spend,
   });
   const gate: GenerationGate =
@@ -163,6 +178,7 @@ export function prepareSubmission(args: {
   adaptation?: AdaptationChoice;
   inputMode?: InputMode;
   providerOptions?: Record<string, unknown>;
+  purpose?: GenerationPurpose;
   userId: string | null;
   idempotencyKey: string;
   config: GenerationConfig;
@@ -226,6 +242,7 @@ export function prepareSubmission(args: {
     packageSnapshot: JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>,
     packageFingerprint: pkg.provenance.fingerprint,
     modelSettings: {
+      ...(request.purpose ? { purpose: request.purpose } : {}),
       durationMs: request.durationMs,
       resolution: request.resolution,
       aspectRatio: request.aspectRatio,

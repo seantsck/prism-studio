@@ -1,5 +1,6 @@
 import { isPositiveDecision, type NegativeTag, type PositiveTag, type ReviewDecision } from "./reviews";
 import type { ShotFeatureProfile } from "./models/requirements";
+import type { GenerationPurpose } from "./schemas";
 
 /**
  * Model performance, derived from HUMAN reviews (Phase 2E). Pure and recomputed on demand: aggregates are not
@@ -10,6 +11,11 @@ export interface OutcomeRecord {
   projectId: string;
   provider: string;
   model: string;
+  /**
+   * Why the attempt was requested. Absent on records from before Phase 2G.2 (= `shot_output`). A still-image
+   * Production Frame candidate never contaminates a video model's profile, and vice versa.
+   */
+  purpose?: GenerationPurpose;
   /** Current human decision (latest review), "unreviewed" when none. */
   decision: ReviewDecision;
   negativeTags: NegativeTag[];
@@ -38,6 +44,15 @@ export interface OutcomeRecord {
   /** Provider/worker error code (e.g. submission_outcome_unknown), when the job failed. */
   errorCode?: string | null;
   createdAt: string;
+}
+
+/** The effective purpose of an outcome (absent = `shot_output`). */
+export const outcomePurpose = (r: Pick<OutcomeRecord, "purpose">): GenerationPurpose =>
+  r.purpose ?? "shot_output";
+
+/** Outcomes of one generation purpose only. */
+export function ofPurpose(records: readonly OutcomeRecord[], purpose: GenerationPurpose): OutcomeRecord[] {
+  return records.filter((r) => outcomePurpose(r) === purpose);
 }
 
 export type DataScope = "production" | "benchmark";
