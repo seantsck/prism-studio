@@ -153,6 +153,18 @@ rewritten or deleted. See [virtual-set](virtual-set.md#spatial-control-passes-ph
 Origin (the reconstruction) and placement (the scene object) are separate on purpose: re-positioning an environment never
 rewrites where it came from. See [virtual-set](virtual-set.md#gaussian-splat-location-environments-phase-2f-m2d1).
 
+## Production Frames (Phase 2G.1)
+
+| Entity                   | Table / column                                                                                              | Nature                                                                                                                                                                                                                                                              |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ProductionFrame          | `shot_production_frames` (`version`, `asset_id`, `source`, `intent_snapshot`, `parts`, `frame_fingerprint`) | IMMUTABLE history: one row per Production Frame of a Shot. References a private image Asset (a promoted Storyboard / 3D Master Frame reuses its Asset); freezes the visual intent it represents. `unique (shot_id, version)`, `unique (shot_id, frame_fingerprint)` |
+| ProductionFrameSelection | `shot_production_frame_selections`                                                                          | ONE mutable pointer per Shot to a frame of the SAME Shot and Project (composite FK). The Shot's canonical frame; changing it never touches history                                                                                                                  |
+| Asset purpose            | `assets.purpose = 'production_frame'`                                                                       | An uploaded Production Frame's image (type `image`, private)                                                                                                                                                                                                        |
+| Intent snapshot          | `prism.production-frame-intent.v1` (inside `intent_snapshot`)                                               | What the frame was approved to represent, by value; optional spatial facts only when the Shot has a 3D set                                                                                                                                                          |
+
+Distinct from the Storyboard Frame (planning), the 3D Master Frame (optional render), the Provider Canvas and the
+Delivery Frame. Needs no 3D set or GPU. See [production-frames](production-frames.md).
+
 ## Reconstruction jobs (Phase 2F M2D.2)
 
 | Entity                   | Table / column                                                                                                                                                                                                    | Nature                                                                                                                                                                                                                                                                                                                |
