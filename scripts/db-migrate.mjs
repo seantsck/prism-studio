@@ -2,6 +2,8 @@
 // Integrity: every applied file's SHA-256 is recorded in public.prism_migrations and re-verified on every run.
 //   npm run db:migrate              apply pending migrations (refuses if an applied file changed on disk)
 //   npm run db:migrate -- --check   verify only; exits non-zero on any problem, writes nothing
+//   npm run db:migrate -- --dry-run REHEARSAL: applies the pending files inside the same transaction, runs the
+//                                   pending files' own statements for real, then ALWAYS rolls back (nothing persists)
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import pg from "pg";
@@ -9,7 +11,11 @@ import { assertPlanSafe, checksumOf, planMigrations } from "./lib/migrations.mjs
 import { startScript } from "./lib/safety.mjs";
 
 const checkOnly = process.argv.includes("--check");
-const url = startScript({ mode: checkOnly ? "migrate --check (read-only)" : "migrate" });
+const dryRun = process.argv.includes("--dry-run");
+if (checkOnly && dryRun) throw new Error("Use either --check or --dry-run.");
+const url = startScript({
+  mode: checkOnly ? "migrate --check (read-only)" : dryRun ? "migrate --dry-run (rolled back)" : "migrate",
+});
 
 const dir = path.join(process.cwd(), "supabase", "migrations");
 const files = readdirSync(dir)
@@ -90,8 +96,16 @@ try {
       ]);
       console.log("applied ", f.name);
     }
-    await client.query("commit");
-    console.log("committed");
+    if (dryRun) {
+      // the rehearsal: everything above ran for real inside this transaction; none of it is kept
+      await client.query("rollback");
+      console.log(
+        `ROLLED BACK (dry run): ${plan.pending.map((p) => p.name).join(", ") || "nothing pending"} would apply cleanly`,
+      );
+    } else {
+      await client.query("commit");
+      console.log("committed");
+    }
   }
 } catch (err) {
   await client.query("rollback").catch(() => undefined);

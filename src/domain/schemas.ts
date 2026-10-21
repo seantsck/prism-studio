@@ -73,6 +73,8 @@ export const ASSET_PURPOSES = [
   "spatial_control",
   /** a reconstructed spatial environment such as a Gaussian splat (Phase 2F M2D.1) */
   "spatial_reconstruction",
+  /** a still uploaded as a Shot's Production Frame (Phase 2G.1); promoted frames reuse their existing Asset */
+  "production_frame",
 ] as const;
 export const STORAGE_PROVIDERS = ["none", "local", "supabase"] as const;
 export const DURATION_SOURCES = ["server_metadata", "browser_hint", "manual", "seed"] as const;
@@ -699,4 +701,11 @@ export interface ProjectData extends Collections {
    * Never persisted here and absent for projects without 3D sets.
    */
   spatialReferences?: Record<string, import("./previs/spatial").SpatialReference>;
+  /**
+   * Phase 2G.1: the Shots' immutable Production Frame history and their selection pointers, attached by the server
+   * loaders (like `spatialReferences`) from the Production Frame repository, in memory and Postgres mode alike.
+   * Absent = none exist. Independent of 3D sets: a project with no spatial data still has them.
+   */
+  productionFrames?: import("./production-frame").ProductionFrame[];
+  productionFrameSelections?: import("./production-frame").ProductionFrameSelection[];
 }
