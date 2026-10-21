@@ -25,6 +25,14 @@ export default async function ShotPrepPage({
   const plan = path ? performanceAudioPlanForShot(data, shotId, path.durationMs) : null;
   // what the Shot's saved character blocking would currently show in a render (null = no visible proxies)
   const blocking = await previs.listShotBlocking(shotId);
+  // the Shot's optional 3D Master Frames (none without a 3D set): only offered as a Production Frame SOURCE
+  const masterFrames = (await previs.listMasterFrames(shotId)).map((m) => ({
+    id: m.id,
+    assetId: m.assetId,
+    capturedAt: m.capturedAt,
+    width: m.renderWidth,
+    height: m.renderHeight,
+  }));
   const currentBlockingFingerprint = blocking.length
     ? renderedBlockingFingerprint(
         blocking.map((b) => b.entry),
@@ -37,6 +45,7 @@ export default async function ShotPrepPage({
       episode={episode}
       shotId={shotId}
       openSection={section}
+      masterFrames={masterFrames}
       previs={{
         pathFingerprint: path?.pathFingerprint ?? null,
         pathRevision: path?.revision ?? null,
