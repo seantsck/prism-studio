@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import type RunwayML from "@runwayml/sdk";
@@ -257,6 +258,22 @@ describe("Runway image catalog (SDK 4.22.0)", () => {
     type Typed = Extract<Body, { model: "nano_banana_2.1" }>;
     const notTyped: [Typed] extends [never] ? true : false = true;
     expect(notTyped).toBe(true);
+  });
+});
+
+describe("the 4.21.0 → 4.22.0 upgrade changes no video fact", () => {
+  // SHA-256 of the video/task request type files, byte-identical in @runwayml/sdk 4.21.0 and 4.22.0 (verified by
+  // downloading both tarballs on 2026-10-21; the 4.22.0 changelog only adds Ideogram image models). A future SDK that
+  // changes a video request shape changes a hash here, and the video catalog must then be re-audited, not assumed.
+  const PINNED: Record<string, string> = {
+    "image-to-video": "8548bf62bb5b7c76f3dbfd06441ab5122fededd64471ee15143caffccd844900",
+    "text-to-video": "d6258bf4fdf60922acff04b9d4cc3bf9cfc41c6dacb90fdf13b5e10ce921de75",
+    "video-to-video": "4d5054b9c60f725f19fbcfa90b868afcd1c0f0ea311cfb81bd93550487c188e1",
+    tasks: "71f23d324d7d9443f3c3b99d8d2aac85ec9dbb67d6bd6117bb0e3ff60a5fc4d9",
+  };
+  it.each(Object.keys(PINNED))("%s request types are unchanged", (name) => {
+    const bytes = readFileSync(path.join(process.cwd(), `node_modules/@runwayml/sdk/resources/${name}.d.ts`));
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(PINNED[name]);
   });
 });
 

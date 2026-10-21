@@ -186,7 +186,11 @@ describe("Production Frame candidates: the purpose is frozen, the Shot is untouc
     // (the seed project already has video attempts of its own: only the image candidates are production_frame)
     const candidateIds = new Set((await attemptsOf(h, shotId)).map((x) => x.id));
     expect(candidateIds.size).toBe(2);
-    expect(ofPurpose(outcomes, "production_frame").map((o) => o.attemptId).sort()).toEqual([...candidateIds].sort());
+    expect(
+      ofPurpose(outcomes, "production_frame")
+        .map((o) => o.attemptId)
+        .sort(),
+    ).toEqual([...candidateIds].sort());
     expect(ofPurpose(outcomes, "shot_output").some((o) => candidateIds.has(o.attemptId))).toBe(false);
 
     const data = await h.data();

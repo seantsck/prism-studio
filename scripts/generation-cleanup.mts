@@ -31,6 +31,19 @@ const mockSets = (
   )
 ).rows.map((r) => String(r.id));
 
+// Phase 2G.2: a Production Frame chosen from a mock candidate pins that candidate's image (the frame's Asset key has
+// no cascade), so those frames and the Shot's selection of them are removed first. Frames from ANY other source
+// (uploads, storyboards, 3D master frames, real-provider outputs) are never touched.
+const pfFrames = attempts.length
+  ? (
+      await pool.query(
+        `select id from shot_production_frames
+          where source = 'generation_output' and source_generation_attempt_id = any($1::uuid[])`,
+        [attempts],
+      )
+    ).rows.map((r) => String(r.id))
+  : [];
+
 const providerAssets = attempts.length
   ? (
       await pool.query(
@@ -57,7 +70,7 @@ const derivedAssets = attempts.length
 const assets = [...derivedAssets, ...providerAssets];
 
 console.log(
-  `mock attempts: ${attempts.length}, candidate sets: ${mockSets.length}, generated assets: ${providerAssets.length}, derived assets: ${derivedAssets.length}`,
+  `mock attempts: ${attempts.length}, candidate sets: ${mockSets.length}, generated assets: ${providerAssets.length}, derived assets: ${derivedAssets.length}, generated production frames: ${pfFrames.length}`,
 );
 if (!process.argv.includes("--yes")) {
   console.log("dry run; pass --yes to delete");
@@ -65,6 +78,13 @@ if (!process.argv.includes("--yes")) {
   process.exit(0);
 }
 
+if (pfFrames.length) {
+  await pool.query(
+    "delete from shot_production_frame_selections where production_frame_id = any($1::uuid[])",
+    [pfFrames],
+  );
+  await pool.query("delete from shot_production_frames where id = any($1::uuid[])", [pfFrames]);
+}
 if (mockSets.length)
   await pool.query("delete from generation_candidate_sets where id = any($1::uuid[])", [mockSets]);
 if (attempts.length)

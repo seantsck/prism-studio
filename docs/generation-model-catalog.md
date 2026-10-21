@@ -45,6 +45,25 @@ Every entry carries `verification`: `verifiedAt`, the sources read, `sdkVersion`
 | `veo3.1_fast` | fast Veo, native audio            | first + last frame, negative prompt                         | exactly 4 / 6 / 8 s                         | 10 (15 with audio)                             |
 | `veo3.1`      | premium Veo, native audio         | first + last frame, negative prompt                         | exactly 4 / 6 / 8 s                         | 20 (40 with audio)                             |
 
+## The still-image set (3 models, verified 2026-10-21, Phase 2G.2)
+
+`RUNWAY_IMAGE_MODELS` (`src/domain/generation/models/image-catalog.ts`) beside `RUNWAY_VIDEO_MODELS`; `RUNWAY_MODELS` is the
+combined catalog. An image entry adds `image` (quality options with Prism's explicit default, reference addressing, output
+formats, what is deliberately not exposed) and an `imageRule` price (credits per image by quality and canvas tier, credits per
+reference, per-output or per-request). Each entry carries SDK `@runwayml/sdk@4.22.0`, API version, sources, pricing version
+`runway-image-2026-10-21` and an `unstated` list.
+
+| Model                 | Role                     | References    | Prompt | Price (credits/image)                                            |
+| --------------------- | ------------------------ | ------------- | ------ | ---------------------------------------------------------------- |
+| `gpt_image_2_5_flare` | reference-rich quality   | ≤ 16, tagged  | 32,000 | low 1 · medium 5 · high 16 · xhigh 28 · max 63, +1 per reference |
+| `muse_image`          | inexpensive              | ≤ 10, ordered | 4,000  | 1                                                                |
+| `seedream5_lite`      | alternative model family | ≤ 14, ordered | 4,000  | 4                                                                |
+
+`nano_banana_2.1` appears on Runway's pricing page but not in the SDK 4.22.0 request union: recorded in
+`IMAGE_SDK_BLOCKED_MODELS`, not offered. A model whose request shape, limits, ratios, price and typing cannot all be verified
+is omitted. The video facts did not change with the SDK bump: the SHA-256 of the video and task request type files is pinned in
+`runway-image.test.ts`. See [image-shot-generator](image-shot-generator.md).
+
 Not offered, deliberately:
 
 - **Kling 3.0** (`kling3.0_standard` / `kling3.0_pro` / `kling3.0_4k`): the API reference documents them under

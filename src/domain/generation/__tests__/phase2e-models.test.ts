@@ -58,7 +58,7 @@ describe("model catalog", () => {
     for (const m of RUNWAY_VIDEO_MODELS) {
       expect(() => generationModelSchema.parse(toGenerationModel(m))).not.toThrow();
       expect(m.verification.verifiedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      expect(m.verification.sdkVersion).toBe("@runwayml/sdk@4.21.0");
+      expect(m.verification.sdkVersion).toBe("@runwayml/sdk@4.22.0");
       expect(m.verification.providerApiVersion).toBe("2024-11-06");
       expect(m.pricing.version).toBe(RUNWAY_PRICING_VERSION);
       expect(m.tiers.length).toBeGreaterThan(0);

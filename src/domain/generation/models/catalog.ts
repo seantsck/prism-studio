@@ -14,8 +14,10 @@ import type {
  * The Phase 2E video-model comparison set, served through the existing Runway adapter.
  *
  * Sources (read 2026-10-13/14):
- *   - @runwayml/sdk@4.21.0 request types: resources/image-to-video.d.ts, text-to-video.d.ts, video-to-video.d.ts
- *     (4.22.0 adds only image models; its video request types are identical, so the pin stays at 4.21.0)
+ *   - @runwayml/sdk@4.22.0 request types: resources/image-to-video.d.ts, text-to-video.d.ts, video-to-video.d.ts
+ *     (Phase 2G.2 re-audit, 2026-10-21: byte-identical to @runwayml/sdk@4.21.0, which these facts were first verified
+ *     against; the SHA-256 of each file is pinned in src/generation/__tests__/runway-image.test.ts, so no video fact
+ *     changes merely because the SDK version did)
  *   - https://docs.dev.runwayml.com/guides/pricing/  (credit price table; $0.01 per credit)
  *   - https://docs.dev.runwayml.com/guides/models/   (model cards)
  *   - https://docs.dev.runwayml.com/api.md           (POST /v1/image_to_video reference: per-model duration, ratios;
@@ -35,15 +37,15 @@ import type {
  * @runwayml/sdk version (4.21.0, 4.22.0) types it in the video request unions, so it is NOT offered: see
  * SDK_BLOCKED_MODELS below. Adding a model is one entry here plus its family compiler if the request shape is new.
  */
-export const RUNWAY_SDK_REF = "@runwayml/sdk@4.21.0";
+export const RUNWAY_SDK_REF = "@runwayml/sdk@4.22.0";
 export const RUNWAY_API_VERSION_REF = "2024-11-06";
 export const CATALOG_VERIFIED_AT = "2026-10-14";
 export const RUNWAY_PRICING_VERSION = "runway-2026-10-13";
 export const RUNWAY_USD_PER_CREDIT = 0.01;
 
 const SOURCES = [
-  "@runwayml/sdk@4.21.0 resources/image-to-video.d.ts",
-  "@runwayml/sdk@4.21.0 resources/text-to-video.d.ts",
+  "@runwayml/sdk@4.22.0 resources/image-to-video.d.ts (re-audited 2026-10-21; identical to 4.21.0)",
+  "@runwayml/sdk@4.22.0 resources/text-to-video.d.ts (re-audited 2026-10-21; identical to 4.21.0)",
   "docs.dev.runwayml.com/guides/pricing (2026-10-13)",
   "docs.dev.runwayml.com/guides/models (2026-10-14)",
   "docs.dev.runwayml.com/api.md image_to_video reference (2026-10-14)",

@@ -38,7 +38,8 @@ const base = (model: GenerationModel): GenerationRequest => {
     durationMs: video ? durationMs : null,
     resolution: null,
     // a still-image model offers its own ratio list (Muse has no exact 16:9): use one the model offers
-    aspectRatio: video || !model.capabilities.image ? "16:9" : (model.capabilities.image.aspectRatios[0] ?? null),
+    aspectRatio:
+      video || !model.capabilities.image ? "16:9" : (model.capabilities.image.aspectRatios[0] ?? null),
     fps: null,
     seed: null,
     references: [],
