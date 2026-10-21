@@ -13,6 +13,11 @@ filmmaking environment in Prism. The architecture does not change in M2D.3D.
 > **Local Capture is not production-ready until all three gates below pass.** Passing tests prove the code, not
 > the product.
 
+**Status today: PRODUCTION READY: NO.** Gate A is NOT PASSED (the relay secret is not provisioned, edge rate
+limiting is not configured, and no infrastructure logging target exists). Gate B is NOT PASSED (no verified real COLMAP,
+no Brush, no real GPU smoke run). Gate C is NOT PASSED (no room has been reconstructed). No real COLMAP or Brush run has
+occurred.
+
 ## The three production gates
 
 | Gate                       | Passes when                                                                                                                                                                                            | Who decides                                                                                            |
@@ -382,9 +387,11 @@ room). Not a whole house, an outdoor block or a warehouse. The goal is to prove 
 
 Acceptance photographs are private local material. REAL_SMOKE and REAL_ROOM upload nothing. If the remote-agent
 hosted path is tested later, only the explicitly selected project Assets cross the Prism relay. The commands refuse
-input and output directories inside the repository. `.gitignore` additionally ignores `*.spz`, `*.ply`, `*.heic`,
-`acceptance-report.json`, `human-review.json` and `/acceptance*/` as a safety net. Capture photos must never be
-committed.
+input and output directories inside the repository. `.gitignore` additionally ignores the harness's own output names
+(`splat.spz`, `splat.ply`, `acceptance-report.json`, `human-review.json`, `run-manifest.json`) and `/acceptance*/`
+as a narrow safety net. It deliberately does **not** ignore every `.spz` / `.ply`: a curated fixture under another name
+can be added normally (a fixture literally named `splat.spz` needs `git add -f` or a `!path` exception). Capture photos
+must never be committed.
 
 ## Hosted security (Gate A)
 
@@ -449,6 +456,11 @@ not need it. Application side (enforced by tests):
   requests.
 - Lease ids are never in the UI, job events or provenance.
 
+**What this does NOT control:** the application's logging settings have no effect on external load balancer, CDN,
+edge, reverse-proxy or hosting-provider access logs. They record request paths on their own, and those paths contain
+`/leases/<id>/`. Suppressing or redacting the lease id there is a **deployment gate**, and Gate A is not complete until
+the chosen hosting supports and configures it.
+
 Infrastructure (the operator's gate): reverse-proxy, edge and platform access logs record request paths, which
 contain `/leases/<id>/`. The deployment must either drop or redact that path segment (e.g. rewrite
 `/leases/[^/]+/` → `/leases/[REDACTED]/` in the log format) or exclude these routes from access logs. Where a
@@ -458,8 +470,11 @@ platform cannot do either, record it as an accepted residual (the id grants noth
 
 **NOT DEFINED.** The repository has no platform configuration (no `vercel.json`, Dockerfile, proxy or edge config).
 The only hint is that `src/lib/auth/site-url.ts` accepts `VERCEL_URL` as a fallback origin. The intended production
-origin is `https://studio.prismsuite.io` ([auth.md](auth.md)). Until a platform is chosen, the provider-neutral
-checklist is:
+origin is `https://studio.prismsuite.io` ([auth.md](auth.md)). Prism does not infer a platform from that fallback and
+adds no vendor configuration. The infrastructure must support: incoming result bodies of at least 55 MB, source
+responses of at least 64 MB, multi-minute request handling where ingestion needs it, and body streaming compatible with
+the protocol; plus server-only environment secrets, edge request controls and access-log controls. Until a platform is
+chosen, the provider-neutral checklist is:
 
 - HTTPS-only origin, with `NEXT_PUBLIC_SITE_URL` set to it;
 - per-IP rate limits as above;
