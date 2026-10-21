@@ -7,7 +7,8 @@ import {
   type ShotFeatureProfile,
   type ShotGenerationRequirements,
 } from "@/domain/generation/models/requirements";
-import { aggregateByModel, type OutcomeRecord } from "@/domain/generation/performance";
+import { aggregateByModel, ofPurpose, type OutcomeRecord } from "@/domain/generation/performance";
+import type { GenerationPurpose } from "@/domain/generation/schemas";
 import {
   capabilityFit,
   recommendModels,
@@ -36,7 +37,14 @@ export interface ModelComparison {
   fingerprint: string;
 }
 
-const toView = (fit: ModelFit, requirements: ShotGenerationRequirements): VariantView => ({
+/** "1920:1088" → "1920×1088". */
+const canvasText = (px: string | undefined): string | null => (px ? px.replace(":", "×") : null);
+
+const toView = (
+  fit: ModelFit,
+  requirements: ShotGenerationRequirements,
+  canvas: string | null,
+): VariantView => ({
   status: fit.status,
   statusLabel: FIT_LABELS[fit.status],
   blockers: fit.blockers,
@@ -52,7 +60,14 @@ const toView = (fit: ModelFit, requirements: ShotGenerationRequirements): Varian
   estimateUsd: fit.estimate?.amountUsd ?? null,
   estimateBasis: fit.estimate?.basis ?? null,
   fitScore: Math.round(capabilityFit(fit, requirements) * 1000) / 1000,
+  quality: fit.quality,
+  canvas,
 });
+
+/** A still-image model: it generates images and no video (the Production Frame candidate models). */
+const isStillModel = (m: { capabilities: { modalities: readonly string[]; video: unknown } }): boolean =>
+  m.capabilities.video == null &&
+  m.capabilities.modalities.some((x) => x === "text_to_image" || x === "image_to_image");
 
 export function buildModelComparison(args: {
   data: ProjectData;
@@ -62,17 +77,24 @@ export function buildModelComparison(args: {
   preference?: RecommendationPreference;
   /** Only these models (default: every registered model that can produce video). */
   filter?: (provider: string, modelId: string) => boolean;
+  /**
+   * What is being generated. `production_frame` compares the still-image models for a Production Frame candidate,
+   * judged by still-image criteria only and by image history only. Default `shot_output` (video models).
+   */
+  purpose?: GenerationPurpose;
   now?: Date;
 }): ModelComparison {
+  const purpose: GenerationPurpose = args.purpose ?? "shot_output";
   const shared = buildSharedEvaluation(args.data, args.shotId, args.now);
   const { pkg, ctx } = shared;
   const protectedNotes = ctx.shot.generation.protectedComposition;
-  const requirements = deriveShotRequirements(pkg, { protectedComposition: protectedNotes });
+  const requirements = deriveShotRequirements(pkg, { protectedComposition: protectedNotes, purpose });
   const profile = deriveShotFeatureProfile(pkg, requirements);
+  const outcomes = ofPurpose(args.outcomes, purpose);
 
   const models = args.registry
     .models()
-    .filter((m) => m.capabilities.video != null)
+    .filter((m) => (purpose === "production_frame" ? isStillModel(m) : m.capabilities.video != null))
     .filter((m) => (args.filter ? args.filter(m.provider, m.modelId) : true));
 
   interface Built {
@@ -83,6 +105,8 @@ export function buildModelComparison(args: {
     modes: InputMode[];
     tiers: string[];
     nativeAudio: boolean;
+    qualities: Array<{ id: string; label: string; note: string }>;
+    defaultQuality: string | null;
   }
   const built: Built[] = models.map((model) => {
     const cat = catalogModel(model.provider, model.modelId);
@@ -91,7 +115,9 @@ export function buildModelComparison(args: {
       ? ["keyframes", "references"]
       : [];
     const tiers = cat && cat.tiers.length > 1 ? cat.tiers.map((t) => t.id) : [];
-    const nativeAudio = cat?.audio.nativeGeneration === "supported";
+    const nativeAudio = purpose === "shot_output" && cat?.audio.nativeGeneration === "supported";
+    const qualities = purpose === "production_frame" ? (cat?.image?.qualities ?? []) : [];
+    const qualityList: Array<string | null> = qualities.length ? qualities.map((q) => q.id) : [null];
     const modeList: Array<InputMode | undefined> = modes.length ? modes : [undefined];
     const tierList: Array<string | null> = tiers.length ? tiers : [null];
     const audioList = nativeAudio ? [false, true] : [false];
@@ -99,31 +125,46 @@ export function buildModelComparison(args: {
     const fits: Record<string, ModelFit> = {};
     for (const mode of modeList)
       for (const tier of tierList)
-        for (const audio of audioList) {
-          const fit = evaluateModelFit({
-            pkg,
-            model,
-            catalog: cat,
-            availability,
-            options: { inputMode: mode, tierId: tier, nativeAudio: audio, protectedNotes },
-          });
-          const key = variantKey(mode ?? null, tier ?? tiers[0] ?? null, audio);
-          variants[key] = toView(fit, requirements);
-          fits[key] = fit;
-        }
-    const defaultKey = variantKey(modes[0] ?? null, tiers[0] ?? null, false);
-    return { model, variants, fits, defaultKey, modes, tiers, nativeAudio };
+        for (const audio of audioList)
+          for (const quality of qualityList) {
+            const fit = evaluateModelFit({
+              pkg,
+              model,
+              catalog: cat,
+              availability,
+              options: {
+                inputMode: mode,
+                tierId: tier,
+                nativeAudio: audio,
+                protectedNotes,
+                purpose,
+                quality,
+              },
+            });
+            const key = variantKey(mode ?? null, tier ?? tiers[0] ?? null, audio, quality);
+            const used = fit.compatibility.used;
+            const canvas =
+              purpose === "production_frame" && cat
+                ? canvasText(cat.tiers[0]?.ratios[used.aspectRatio ?? ""])
+                : null;
+            variants[key] = toView(fit, requirements, canvas);
+            fits[key] = fit;
+          }
+    const defaultQuality = purpose === "production_frame" ? (cat?.image?.defaultQuality ?? null) : null;
+    const defaultKey = variantKey(modes[0] ?? null, tiers[0] ?? null, false, defaultQuality);
+    return { model, variants, fits, defaultKey, modes, tiers, nativeAudio, qualities, defaultQuality };
   });
 
   const defaults = built.map((b) => b.fits[b.defaultKey]!);
   const recommendation = recommendModels({
     fits: defaults,
-    outcomes: args.outcomes,
+    outcomes,
     profile,
     requirements,
     preference: args.preference,
+    purpose,
   });
-  const perf = new Map(aggregateByModel(args.outcomes).map((p) => [`${p.provider}/${p.model}`, p] as const));
+  const perf = new Map(aggregateByModel(outcomes).map((p) => [`${p.provider}/${p.model}`, p] as const));
 
   const rows: ModelRow[] = built.map((b) => {
     const m = b.model;
@@ -150,6 +191,9 @@ export function buildModelComparison(args: {
             : !a.paidGenerationEnabled
               ? "paid generation is switched off"
               : null,
+      purpose,
+      qualities: b.qualities,
+      defaultQuality: b.defaultQuality,
       modes: b.modes,
       tiers: b.tiers,
       nativeAudio: b.nativeAudio,

@@ -269,7 +269,7 @@ export class PostgresCandidateData implements CandidateRepository {
       ]);
       if (att.rowCount === 0) throw new CandidateError("not_found", "That generation no longer exists.");
       if (att.rows[0].status !== "succeeded")
-        throw new CandidateError("not_succeeded", "Only a completed generation has a clip to review.");
+        throw new CandidateError("not_succeeded", "Only a completed generation can be reviewed.");
       const prev = await c.query(
         "select id from generation_reviews where attempt_id = $1 order by reviewed_at desc, id desc limit 1",
         [input.attemptId],

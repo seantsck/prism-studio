@@ -25,7 +25,7 @@ import { getRepo, requireProjectFresh } from "./repo";
  *   promoteMasterFrame       an optional 3D Master Frame's EXISTING Asset becomes one (only when one exists)
  *   uploadProductionFrame    a new private `production_frame` Asset + its frame, stored together
  *   selectProductionFrame    makes another existing frame canonical (history untouched; compare-and-set)
- *   useGeneratedFrameAsProductionFrame
+ *   chooseGeneratedFrameAsProductionFrame
  *                            Phase 2G.2: a human chooses a generated still (a `production_frame` candidate) as the
  *                            Production Frame; the attempt's existing Asset is reused (see production-frame-generated)
  *
@@ -187,7 +187,7 @@ async function selectProductionFrame_impl(form: FormData): Promise<ActionResult>
   }
 }
 
-async function useGeneratedFrame_impl(form: FormData): Promise<ActionResult> {
+async function chooseGeneratedFrame_impl(form: FormData): Promise<ActionResult> {
   const { ctx, slug } = await loadShotContext(form);
   const repo = await getRepo();
   try {
@@ -225,6 +225,6 @@ export async function uploadProductionFrame(form: FormData): Promise<ActionResul
 export async function selectProductionFrame(form: FormData): Promise<ActionResult> {
   return runAction(() => selectProductionFrame_impl(form), { name: "selectProductionFrame" });
 }
-export async function useGeneratedFrameAsProductionFrame(form: FormData): Promise<ActionResult> {
-  return runAction(() => useGeneratedFrame_impl(form), { name: "useGeneratedFrameAsProductionFrame" });
+export async function chooseGeneratedFrameAsProductionFrame(form: FormData): Promise<ActionResult> {
+  return runAction(() => chooseGeneratedFrame_impl(form), { name: "chooseGeneratedFrameAsProductionFrame" });
 }

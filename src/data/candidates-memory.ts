@@ -173,7 +173,7 @@ export class MemoryCandidateService implements CandidateRepository {
     if (!attempt) throw new CandidateError("not_found", "That generation no longer exists.");
     // a verdict on a clip needs a clip (migration 0028 enforces the same in Postgres)
     if (attempt.status !== "succeeded")
-      throw new CandidateError("not_succeeded", "Only a completed generation has a clip to review.");
+      throw new CandidateError("not_succeeded", "Only a completed generation can be reviewed.");
     const current = this.reviews
       .filter((r) => r.attemptId === input.attemptId)
       .sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt))[0];

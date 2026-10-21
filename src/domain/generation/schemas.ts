@@ -50,6 +50,13 @@ export type GenerationPurpose = (typeof GENERATION_PURPOSES)[number];
 export const purposeOfRequest = (r: { purpose?: GenerationPurpose | null }): GenerationPurpose =>
   r.purpose ?? "shot_output";
 
+/**
+ * A Production Frame candidate (an exploratory still), as opposed to an attempt at the Shot's own output. The Shot's
+ * video lifecycle, pipeline status and "the shot changed since attempt N" notice are about OUTPUT attempts only.
+ */
+export const isProductionFrameAttempt = (a: { request?: Record<string, unknown> | null }): boolean =>
+  purposeOfRequest((a.request ?? {}) as { purpose?: GenerationPurpose | null }) === "production_frame";
+
 /** What a reference asset is FOR. Adapters receive explicit roles; they never guess from file names. */
 export const REFERENCE_ROLES = [
   "identity",

@@ -6,7 +6,9 @@ import { GenerationPoller } from "@/components/generation/poller";
 import { BenchmarkBanner } from "@/components/candidates/benchmark-banner";
 import { Badge, Button, PageHeader, Panel } from "@/components/ui";
 import type { AttemptView } from "@/data/generation-repository";
-import { rollupSet } from "@/domain/generation/candidates";
+import { buildShotContext } from "@/domain/context";
+import { generatedFramePromotion } from "@/domain/generated-production-frame";
+import { candidateSetPurpose, rollupSet } from "@/domain/generation/candidates";
 import { generationSignature } from "@/domain/generation/signature";
 import { latestReviews } from "@/domain/generation/reviews";
 import { parseAdaptationPlan } from "@/domain/framing/adaptation";
@@ -40,6 +42,11 @@ export default async function CandidateSetPage({
   if (!set || set.set.projectId !== data.project.id) notFound();
 
   const shot = data.shots.find((s) => s.id === set.set.shotId);
+  // Phase 2G.2: a Production Frame candidate set is an IMAGE review surface for the Shot's Production Frame
+  const purpose = candidateSetPurpose(set.set);
+  const still = purpose === "production_frame";
+  const shotCtx = shot ? buildShotContext(data, shot.id) : null;
+  const episode = shot ? data.episodes.find((e) => e.id === shot.episodeId) : null;
   const views = new Map<string, AttemptView>();
   for (const m of set.members) {
     if (!m.attemptId) continue;
@@ -75,7 +82,28 @@ export default async function CandidateSetPage({
     const isMock = m.provider === "mock";
     const adaptations = (m.plan.adaptations as string[] | undefined) ?? [];
     const used = m.plan.referencesUsed as { used: number; total: number } | undefined;
+    const promotion =
+      still && v && shotCtx
+        ? generatedFramePromotion(shotCtx, {
+            attempt: v.attempt,
+            original: output,
+            delivery: media?.delivery?.asset ?? null,
+          })
+        : null;
     board.push({
+      imageUrl: still && shown && shown.type === "image" ? assetUrl(shown) : null,
+      quality: still ? ((m.plan.quality as string | null | undefined) ?? null) : null,
+      productionFrame:
+        still && v
+          ? {
+              available: promotion?.available ?? false,
+              reason: promotion && !promotion.available ? promotion.reason : null,
+              needsConform: promotion && !promotion.available ? promotion.code === "needs_conform" : false,
+              stale: promotion && !promotion.available ? promotion.code === "stale" : false,
+              current: shotCtx?.selectedProductionFrame?.sourceGenerationAttemptId === v.attempt.id,
+              image: promotion?.available ? promotion.image.role : null,
+            }
+          : null,
       attemptId: m.attemptId ?? `planned-${m.id}`,
       label: m.label,
       attemptNumber: v?.attempt.attemptNumber ?? null,
@@ -162,7 +190,8 @@ export default async function CandidateSetPage({
         title={set.set.title || "Candidate set"}
         subtitle={
           <>
-            Shot {shot?.shotCode ?? "?"} · {new Date(set.set.createdAt).toLocaleString()} ·{" "}
+            {still ? "Production Frame candidates · " : ""}Shot {shot?.shotCode ?? "?"} ·{" "}
+            {new Date(set.set.createdAt).toLocaleString()} ·{" "}
             <span data-testid="set-rollup">{rollup.label}</span>
           </>
         }
@@ -175,6 +204,15 @@ export default async function CandidateSetPage({
             >
               {set.set.status}
             </Badge>
+            {still && shot && episode ? (
+              <Link
+                href={`/projects/${slug}/episodes/${episode.slug}/shots/${shot.id}?section=production_frame`}
+                className="text-[12px] text-muted underline"
+                data-testid="back-to-shot-prep"
+              >
+                Back to Shot Prep
+              </Link>
+            ) : null}
             <Link href={`/projects/${slug}/candidates`} className="text-[12px] text-muted underline">
               All experiments
             </Link>
@@ -244,6 +282,8 @@ export default async function CandidateSetPage({
           setId={setId}
           candidates={board}
           canPromote={set.set.status !== "archived"}
+          purpose={purpose}
+          shotId={set.set.shotId}
         />
 
         <Panel

@@ -3,6 +3,7 @@ import { buildGenerationRequest } from "@/domain/generation/gate";
 import { isActive } from "@/domain/generation/job-state";
 import { deriveShotGenerationState } from "@/domain/generation/lifecycle";
 import { buildPromptPlan } from "@/domain/generation/prompt-plan";
+import { isProductionFrameAttempt } from "@/domain/generation/schemas";
 import { generationSignature } from "@/domain/generation/signature";
 import { renderGenerationBrief } from "@/domain/generation-package";
 import type { ProjectData } from "@/domain/schemas";
@@ -35,11 +36,17 @@ import { PromptInspector } from "./prompt-inspector";
 export async function GenerateWorkspace({ data, shotId }: { data: ProjectData; shotId: string }) {
   const registry = getRegistry();
   const repo = await getGenerationRepo();
-  const views = await repo.listShotAttempts(shotId);
+  const allViews = await repo.listShotAttempts(shotId);
+  // Production Frame candidates are stills from the Production Frame panel: they are not attempts at the Shot's own
+  // output, so they do not drive its lifecycle or appear in its output attempt history (see the candidate sets).
+  const views = allViews.filter((v) => !isProductionFrameAttempt(v.attempt));
   const shot = data.shots.find((s) => s.id === shotId)!;
 
   const shared = buildSharedEvaluation(data, shotId);
-  const models = registry.models();
+  // still-image models are offered for the Shot's output only when the Shot itself is an image Shot
+  const models = registry
+    .models()
+    .filter((m) => m.capabilities.video != null || shot.generation.modality === "image");
   const evaluations = models.map((m) =>
     evaluateShotForModel({ data, shotId, registry, provider: m.provider, modelId: m.modelId, shared }),
   );
