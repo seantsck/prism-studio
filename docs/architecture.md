@@ -88,6 +88,15 @@ Real provider adapters (the contract, queue, worker and a Mock provider exist: s
 [generation-architecture](generation-architecture.md)), automated continuity QA, model routing, budgets,
 collaboration, 3D sets, NLE export. See [roadmap](roadmap.md).
 
+## Production Frames (Phase 2G.1)
+
+The image-first path (`script → performance → Shot Prep → storyboard → Production Frame → image-to-video → edit`) needs no
+GPU, 3D set or reconstruction. Production Frames are a focused persistence service next to the other focused services
+(`ProductionFrameRepository`, memory and Postgres, same semantics), wired like the candidate and previs services but
+independent of them. The server loaders attach each Shot's frame history and selection to `ProjectData`, so
+`buildShotContext` resolves them without touching the previs repository: pure domain code, no 3D. Phase 2F spatial work
+stays optional infrastructure that can _feed_ a Production Frame. See [production-frames](production-frames.md).
+
 ## Generation (Phase 2A)
 
 Generation is a separate runtime concern: pure vocabulary in `src/domain/generation`, adapters/worker in

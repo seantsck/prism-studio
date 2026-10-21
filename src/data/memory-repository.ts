@@ -3,6 +3,7 @@ import { MemoryCandidateService } from "./candidates-memory";
 import { MemoryGenerationService } from "./generation-memory";
 import { MemoryMediaQaService } from "./media-qa-memory";
 import { MemoryPrevisService } from "./previs-memory";
+import { MemoryProductionFrameService } from "./production-frame-memory";
 import type { Repository } from "./repository";
 import type {
   Asset,
@@ -23,6 +24,7 @@ export class MemoryRepository implements Repository {
   private mediaQaService: MemoryMediaQaService | undefined;
   private candidateService: MemoryCandidateService | undefined;
   private previsService: MemoryPrevisService | undefined;
+  private productionFrameService: MemoryProductionFrameService | undefined;
 
   /** Derived-media lineage, delivery masters and continuity QA runs (same semantics as Postgres). */
   get mediaQa(): MemoryMediaQaService {
@@ -58,6 +60,15 @@ export class MemoryRepository implements Repository {
       ownerUserId: () => LOCAL_USER_ID,
     });
     return this.previsService;
+  }
+
+  /** Production Frames and their selections (Phase 2G.1; same semantics as Postgres). Independent of 3D. */
+  get productionFrames(): MemoryProductionFrameService {
+    this.productionFrameService ??= new MemoryProductionFrameService({
+      all: () => [...this.projects.values()],
+      ownerUserId: () => LOCAL_USER_ID,
+    });
+    return this.productionFrameService;
   }
 
   constructor(seed: ProjectData[] = [buildSeedProject()]) {

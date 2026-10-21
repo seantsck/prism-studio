@@ -68,6 +68,9 @@ const expectedTables = [
   // Phase 2F M2D.3C1: remote Local Agent identity
   "local_agent_pairings",
   "local_agents",
+  // Phase 2G.1: Production Frames (immutable history) and their one-per-Shot selection pointer
+  "shot_production_frames",
+  "shot_production_frame_selections",
 ];
 const tables = (await rows("select tablename, rowsecurity from pg_tables where schemaname='public'")).filter(
   (t) => t.tablename !== "prism_migrations",
@@ -111,6 +114,7 @@ const must = {
     "local_agent_pairings_secret_hash_key",
     "local_agents_public_key_fingerprint_key",
     "local_agents_pairing_id_key",
+    "shot_production_frames_shot_idx",
   ],
   triggers: [
     "dialogue_locked_guard",
@@ -133,6 +137,8 @@ const must = {
     "local_agent_pairings_guard",
     "local_agents_insert",
     "local_agents_guard",
+    "shot_production_frames_guard",
+    "shot_production_frames_asset_check",
   ],
 };
 const missingIdx = must.indexes.filter((i) => !idx.some((x) => x.indexname === i));

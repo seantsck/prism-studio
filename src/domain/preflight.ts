@@ -1,6 +1,7 @@
 import type { ShotContext } from "./context";
 import { storyboardFreshness } from "./fingerprint";
 import { validateLookLink } from "./looks";
+import { productionFrameFreshness } from "./production-frame";
 
 /**
  * Deterministic shot preflight. No AI: every rule is a pure function of ShotContext.
@@ -18,6 +19,8 @@ export const PREFLIGHT_SECTIONS = [
   "continuity",
   "audio",
   "storyboard",
+  /** Phase 2G.1: only judged when the Shot has a SELECTED Production Frame; never requires 3D */
+  "production_frame",
   "generation",
 ] as const;
 export type PreflightSection = (typeof PREFLIGHT_SECTIONS)[number];
@@ -367,6 +370,27 @@ export const PREFLIGHT_RULES: PreflightRule[] = [
       if (f.status === "stale") return warn(f.messages.join(" "));
       if (f.status === "unknown") return warn(f.messages.join(" "));
       return f.timingChange ? warn(f.messages.join(" ")) : pass();
+    },
+  },
+  // Production Frame (Phase 2G.1). Not applicable until one is selected: existing Shots keep the storyboard path.
+  {
+    id: "production_frame.fresh",
+    section: "production_frame",
+    severity: "required",
+    label: "Selected Production Frame matches the current shot",
+    evaluate: (c) => {
+      const f = c.selectedProductionFrame;
+      if (!f) return na("No Production Frame selected");
+      const fr = productionFrameFreshness(c, f);
+      if (fr.status !== "stale") return pass();
+      const why = fr.messages.join(" ");
+      // an EXPLICIT start frame wins the start-frame precedence, so the stale selection is not what gets generated
+      if (c.shot.generation.startFrameAssetId)
+        return warn(`${why} An explicit start frame is set, so it is used instead.`);
+      // image-to-video starts FROM this image: a stale one blocks. Other modalities only warn.
+      return c.shot.generation.modality === "image_to_video"
+        ? fail(`${why} Select or create a current Production Frame, or set an explicit start frame.`)
+        : warn(why);
     },
   },
   {

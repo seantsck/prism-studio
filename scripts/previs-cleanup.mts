@@ -154,22 +154,42 @@ const assets = (
   await pool.query(
     `select a.id, a.object_path from assets a join projects p on p.id = a.project_id
       where p.user_id = $1
-        and ((a.source = 'upload' and a.name like $2 || '%')
-          or (a.source = '3d_render' and 'master_frame' = any(a.tags))
-          or (a.source = '3d_render' and 'spatial_pass' = any(a.tags))
-          or (a.source = 'import' and 'gaussian_splat' = any(a.tags))
-          or (a.source = 'provider_output' and 'gaussian_splat' = any(a.tags))
-          or (a.source = 'local_previs' and 'previs' = any(a.tags)))`,
+        and (
+          -- images an e2e test uploaded, named by its own e2e- prefix (these may be pinned by the test's own frames)
+          (a.source in ('upload', 'storyboard') and a.name like $2 || '%')
+          -- 3D-set tidy-up: but never an image a user's Production Frame pins (a promoted Master Frame keeps its image)
+          or ((   (a.source = '3d_render' and 'master_frame' = any(a.tags))
+               or (a.source = '3d_render' and 'spatial_pass' = any(a.tags))
+               or (a.source = 'import' and 'gaussian_splat' = any(a.tags))
+               or (a.source = 'provider_output' and 'gaussian_splat' = any(a.tags))
+               or (a.source = 'local_previs' and 'previs' = any(a.tags)))
+              and not exists (select 1 from shot_production_frames pf where pf.asset_id = a.id)))`,
     [dev.id, e2ePrefix],
   )
 ).rows;
-const frames = (
+const frameRows = (
   await pool.query(
-    `select f.id from storyboard_frames f join projects p on p.id = f.project_id
-      where p.user_id = $1 and f.source = '3d_preview' and f.notes like '3D set master frame%'`,
-    [dev.id],
+    `select f.id, f.shot_id from storyboard_frames f join projects p on p.id = f.project_id
+      where p.user_id = $1
+        and ((f.source = '3d_preview' and f.notes like '3D set master frame%')
+          -- storyboard frames an e2e test uploaded (named by the same e2e- prefix as its image)
+          or exists (select 1 from assets a where a.id = f.asset_id and a.source = 'storyboard' and a.name like $2 || '%'))`,
+    [dev.id, e2ePrefix],
   )
-).rows.map((r) => String(r.id));
+).rows;
+const frames = frameRows.map((r) => String(r.id));
+// Phase 2G.1: Production Frames pin their image (and so cannot be dropped with it). The asset list above holds only
+// e2e-prefixed images plus 3D-set artefacts NOT pinned by any frame, so the frames deleted below are exactly the e2e
+// test's own: a user's legitimate Production Frame is never in this set.
+const assetIdsForPf = assets.map((a) => String(a.id));
+const productionFrames = assetIdsForPf.length
+  ? (
+      await pool.query(
+        "select count(*)::int n from shot_production_frames where asset_id = any($1::uuid[])",
+        [assetIdsForPf],
+      )
+    ).rows[0].n
+  : 0;
 const counts = (
   await pool.query(
     `select (select count(*)::int from location_scene_documents d join projects p on p.id = d.project_id where p.user_id = $1) as scenes,
@@ -184,7 +204,7 @@ const counts = (
   )
 ).rows[0];
 console.log(
-  `scenes: ${counts.scenes}, bookmarks: ${counts.bookmarks}, camera paths: ${counts.paths}, previs clips: ${counts.clips}, character blocking: ${counts.blocking}, spatial pass bundles: ${counts.bundles}, reconstructions: ${counts.reconstructions}, reconstruction jobs: ${counts.jobs}, previs/master-frame/spatial-pass/splat assets: ${assets.length}, storyboard frames: ${frames.length}`,
+  `scenes: ${counts.scenes}, bookmarks: ${counts.bookmarks}, camera paths: ${counts.paths}, previs clips: ${counts.clips}, character blocking: ${counts.blocking}, spatial pass bundles: ${counts.bundles}, reconstructions: ${counts.reconstructions}, reconstruction jobs: ${counts.jobs}, previs/master-frame/spatial-pass/splat assets: ${assets.length}, storyboard frames: ${frames.length}, production frames: ${productionFrames}`,
 );
 if (!process.argv.includes("--yes")) {
   console.log("dry run; pass --yes to delete");
@@ -192,7 +212,25 @@ if (!process.argv.includes("--yes")) {
   process.exit(0);
 }
 
-if (frames.length) await pool.query("delete from storyboard_frames where id = any($1::uuid[])", [frames]);
+// Production Frames are append-only for users; this maintenance tool runs as the database owner.
+if (assetIdsForPf.length) {
+  await pool.query(
+    `delete from shot_production_frame_selections where production_frame_id in
+       (select id from shot_production_frames where asset_id = any($1::uuid[]))`,
+    [assetIdsForPf],
+  );
+  await pool.query("delete from shot_production_frames where asset_id = any($1::uuid[])", [assetIdsForPf]);
+}
+if (frames.length) {
+  await pool.query("delete from storyboard_frames where id = any($1::uuid[])", [frames]);
+  // a shot whose only approved storyboard frame was removed no longer claims a storyboard approval
+  await pool.query(
+    `update shots s set approval_storyboard = false
+      where s.id = any($1::uuid[]) and s.approval_storyboard
+        and not exists (select 1 from storyboard_frames f where f.shot_id = s.id and f.approved)`,
+    [[...new Set(frameRows.map((r) => String(r.shot_id)))]],
+  );
+}
 // previs clips and master frames reference assets (no cascade): remove them with their scenes first
 await pool.query(
   `delete from shot_spatial_pass_bundles where project_id in (select id from projects where user_id = $1)`,

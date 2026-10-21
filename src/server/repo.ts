@@ -12,6 +12,7 @@ import { UserFacingError } from "./action-result";
 import { requireUser } from "./auth";
 import { getPool } from "./db";
 import { getPrevisRepo } from "./previs";
+import { getProductionFrameRepo } from "./production-frames";
 
 declare global {
   var __prismMemoryRepo: Repository | undefined;
@@ -54,10 +55,23 @@ async function withSpatialReferences(data: ProjectData): Promise<ProjectData> {
   return Object.keys(refs).length > 0 ? { ...data, spatialReferences: refs } : data;
 }
 
+/**
+ * Attach every Shot's Production Frame history and selection (Phase 2G.1). Read from the Production Frame repository
+ * (memory and Postgres alike), never from the previs repository: it works for a project with no 3D data at all.
+ */
+async function withProductionFrames(data: ProjectData): Promise<ProjectData> {
+  const { frames, selections } = await (await getProductionFrameRepo()).listForProject(data.project.id);
+  return { ...data, productionFrames: frames, productionFrameSelections: selections };
+}
+
+async function withAttachments(data: ProjectData): Promise<ProjectData> {
+  return withProductionFrames(await withSpatialReferences(data));
+}
+
 export async function requireProjectFresh(slug: string): Promise<ProjectData> {
   const data = await (await getRepo()).loadProject(slug);
   if (!data) throw new UserFacingError("That project no longer exists.");
-  return withSpatialReferences(data);
+  return withAttachments(data);
 }
 
 /**
@@ -66,7 +80,7 @@ export async function requireProjectFresh(slug: string): Promise<ProjectData> {
  */
 export const loadProjectCached = cache(async (slug: string): Promise<ProjectData | null> => {
   const data = await (await getRepo()).loadProject(slug);
-  return data ? withSpatialReferences(data) : null;
+  return data ? withAttachments(data) : null;
 });
 
 export async function requireProject(slug: string): Promise<ProjectData> {

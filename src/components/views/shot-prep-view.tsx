@@ -7,8 +7,13 @@ import { shotOrder, buildShotContext, type ShotContext } from "@/domain/context"
 import { shotSourceContent } from "@/domain/coverage";
 import { formatSeconds } from "@/domain/duration";
 import { PART_LABELS, storyboardFreshness } from "@/domain/fingerprint";
-import { assembleGenerationPackage, renderGenerationBrief } from "@/domain/generation-package";
+import {
+  assembleGenerationPackage,
+  renderGenerationBrief,
+  shotChangedSinceAttempt,
+} from "@/domain/generation-package";
 import { GenerateWorkspace } from "@/components/generation/generate-workspace";
+import { ProductionFrameSection, type MasterFrameChoice } from "@/components/views/production-frame-section";
 import {
   itemsBySection,
   runPreflight,
@@ -27,6 +32,7 @@ import { shortFingerprint } from "@/domain/hash";
 import { timelineFromContext } from "@/domain/timeline";
 import { previsStaleReasons, STALE_REASON_LABEL } from "@/domain/previs/audio-mix";
 import { isShotBlockingStale } from "@/domain/previs/spatial";
+import { PRODUCTION_FRAME_SOURCE_LABEL, selectedProductionFrameFreshness } from "@/domain/production-frame";
 import { episodePath, shotPath } from "@/lib/paths";
 import { assetUrl, cn } from "@/lib/utils";
 import {
@@ -172,10 +178,11 @@ const SECTION_ORDER: Array<{ key: string; label: string; preflight: PreflightSec
   { key: "lighting", label: "13 · Lighting", preflight: [] },
   { key: "audio", label: "14 · Audio", preflight: ["audio"] },
   { key: "storyboard", label: "15 · Storyboard / keyframes", preflight: ["storyboard"] },
-  { key: "generation", label: "16 · Generation intent", preflight: ["generation"] },
-  { key: "preflight", label: "17 · Preflight", preflight: [] },
-  { key: "brief", label: "18 · Generation brief", preflight: [] },
-  { key: "generate", label: "19 · Generate", preflight: ["generation"] },
+  { key: "production_frame", label: "16 · Production Frame", preflight: ["production_frame"] },
+  { key: "generation", label: "17 · Generation intent", preflight: ["generation"] },
+  { key: "preflight", label: "18 · Preflight", preflight: [] },
+  { key: "brief", label: "19 · Generation brief", preflight: [] },
+  { key: "generate", label: "20 · Generate", preflight: ["generation"] },
 ];
 
 function SectionChrome({
@@ -254,11 +261,14 @@ export function ShotPrepView({
   shotId,
   openSection,
   previs,
+  masterFrames = [],
 }: {
   data: ProjectData;
   episode: Episode;
   shotId: string;
   openSection?: string;
+  /** the Shot's optional 3D Master Frames (empty without a 3D set; Production Frames never require one) */
+  masterFrames?: MasterFrameChoice[];
   previs?: {
     pathFingerprint: string | null;
     pathRevision: number | null;
@@ -327,6 +337,7 @@ export function ShotPrepView({
   const brief = renderGenerationBrief(pkg);
   const timeline = timelineFromContext(ctx);
   const freshness = storyboardFreshness(ctx, ctx.approvedFrame);
+  const pfFreshness = selectedProductionFrameFreshness(ctx);
   const frame = ctx.approvedFrame ?? ctx.frames[0];
   const frameUrl = frame?.assetId ? assetUrl(ctx.assets.get(frame.assetId)) : null;
   const checks = data.continuityChecks
@@ -335,10 +346,10 @@ export function ShotPrepView({
   const lastAttempt = data.attempts
     .filter((a) => a.shotId === shot.id)
     .sort((a, b) => b.attemptNumber - a.attemptNumber)[0];
-  const changedSinceAttempt =
-    lastAttempt &&
-    lastAttempt.packageFingerprint &&
-    lastAttempt.packageFingerprint !== pkg.provenance.fingerprint;
+  // "has the SHOT changed?" compares production INPUTS (provenance.parts.overall) across package schema versions; the
+  // exact package fingerprint is only the fallback for old snapshots that recorded no inputs identity
+  const sinceAttempt = lastAttempt ? shotChangedSinceAttempt(lastAttempt, pkg) : null;
+  const changedSinceAttempt = Boolean(sinceAttempt?.changed);
 
   const sectionProps = (key: string) => {
     const meta = SECTION_ORDER.find((s) => s.key === key)!;
@@ -349,7 +360,7 @@ export function ShotPrepView({
     ...freshness.messages,
     ...(changedSinceAttempt
       ? [
-          `This shot has changed since generation attempt ${lastAttempt!.attemptNumber} (package ${shortFingerprint(lastAttempt!.packageFingerprint)} → ${shortFingerprint(pkg.provenance.fingerprint)}). The attempt itself is unchanged and stays interpretable.`,
+          `This shot has changed since generation attempt ${lastAttempt!.attemptNumber} (${sinceAttempt!.basis === "inputs" ? "shot inputs" : "package"} ${shortFingerprint(sinceAttempt!.from)} → ${shortFingerprint(sinceAttempt!.to)}). The attempt itself is unchanged and stays interpretable.`,
         ]
       : []),
   ];
@@ -1028,12 +1039,17 @@ export function ShotPrepView({
             </ActionForm>
           </SectionChrome>
 
-          {/* 16 Generation intent */}
+          {/* 16 Production Frame */}
+          <SectionChrome {...sectionProps("production_frame")}>
+            <ProductionFrameSection ctx={ctx} slug={slug} masterFrames={masterFrames} />
+          </SectionChrome>
+
+          {/* 17 Generation intent */}
           <SectionChrome {...sectionProps("generation")}>
             <SectionForm sectionKey="generation" shot={shot} data={data} />
           </SectionChrome>
 
-          {/* 17 Preflight */}
+          {/* 18 Preflight */}
           <SectionChrome {...sectionProps("preflight")}>
             <div>
               <div className="mb-2 flex items-center gap-3">
@@ -1114,7 +1130,7 @@ export function ShotPrepView({
             </div>
           </SectionChrome>
 
-          {/* 18 Generation brief */}
+          {/* 19 Generation brief */}
           <SectionChrome {...sectionProps("brief")}>
             <div className="flex flex-wrap items-center gap-3 text-[12px]">
               <a
@@ -1149,7 +1165,7 @@ export function ShotPrepView({
             </div>
           </SectionChrome>
 
-          {/* 19 Generate */}
+          {/* 20 Generate */}
           <SectionChrome {...sectionProps("generate")}>
             <GenerateWorkspace data={data} shotId={shot.id} />
           </SectionChrome>
@@ -1168,6 +1184,18 @@ export function ShotPrepView({
                 hint={frame ? `v${frame.version} ${frame.approved ? "approved" : "unapproved"}` : "no frame"}
               />
             )}
+            {ctx.selectedProductionFrame ? (
+              <div
+                data-testid="rail-production-frame"
+                className="flex items-center justify-between border-t border-line px-3 py-1.5 text-[11px]"
+              >
+                <span className="text-muted">
+                  Production Frame v{ctx.selectedProductionFrame.version} ·{" "}
+                  {PRODUCTION_FRAME_SOURCE_LABEL[ctx.selectedProductionFrame.source]}
+                </span>
+                <Badge tone={pfFreshness.status === "stale" ? "warn" : "pass"}>{pfFreshness.status}</Badge>
+              </div>
+            ) : null}
             {ctx.approvedFrame ? (
               <div className="flex items-center justify-between border-t border-line px-3 py-1.5 text-[11px]">
                 <span className="text-muted">Storyboard v{ctx.approvedFrame.version}</span>

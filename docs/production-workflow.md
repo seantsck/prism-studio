@@ -21,10 +21,14 @@ Script ─► Breakdown ─► Perform ─► Shot Prep ─► Storyboard ─►
 
 ## Shot Prep
 
-18 sections: Story, Source script, Performance, Character, Look, Location/set, Camera, Composition, Blocking,
-Action timing, Continuity, Props, Lighting, Audio, Storyboard/keyframes, Generation intent, Preflight,
-Generation brief. A right rail shows the frame, the timing breakdown and preflight. A warning banner appears
+20 sections: Story, Source script, Performance, Character, Look, Location/set, Camera, Composition, Blocking,
+Action timing, Continuity, Props, Lighting, Audio, Storyboard/keyframes, **Production Frame**, Generation intent,
+Preflight, Generation brief, Generate. A right rail shows the frame, the timing breakdown and preflight. A warning banner appears
 when the approved storyboard is stale or the package changed since the last attempt.
+
+The default filmmaking path is image-first and needs no 3D set, GPU or reconstruction:
+`script → performance → Shot Prep → storyboard → Production Frame → image-to-video → edit`. The 3D / splat / blocking /
+camera tools of Phase 2F are optional: a 3D Master Frame can be promoted into a Production Frame, but 3D never gates one.
 
 ## Gates
 
@@ -78,16 +82,32 @@ On approval a frame stores `approved_fingerprint` and `approved_snapshot = { par
 Preflight rule `storyboard.fresh` (recommended) turns stale, unknown or changed-timing into a **warning**; it does
 not block generation. Shot Prep, Storyboard and Animatic show the same messages.
 
+### Production Frames (Phase 2G.1, migration 0039)
+
+The Shot's canonical approved still. Immutable history + one selection pointer per Shot; made by promoting the approved
+Storyboard, promoting an optional 3D Master Frame, or uploading an image at the Shot's production aspect (a wrong aspect is
+refused, never cropped). Each frame freezes the visual intent it represents and the named-part fingerprints, so
+`productionFrameFreshness(ctx, frame)` says `fresh` or `stale` and WHICH parts changed (camera, blocking, characters,
+Looks, location, props, lighting, action, continuity, performance). A stale frame stays selected and is never rewritten.
+Preflight `production_frame.fresh` blocks image-to-video on a stale selected frame unless an explicit start frame is set.
+Start frame precedence: explicit override > selected Production Frame > approved Storyboard. See
+[production-frames](production-frames.md).
+
 ### Generation attempts
 
 - `generation_attempts.package_fingerprint` stores the package fingerprint at logging time. The trigger
   `guard_attempt_history` makes it (and prompt, negative prompt, package snapshot, model settings, input assets,
   shot id, attempt number) immutable; only review fields can change.
-- `package.provenance.fingerprint` hashes the whole package content **excluding `builtAt`** (and the provenance
-  block itself), so rebuilding an unchanged shot yields the same value. `provenance.parts` carries the per-part
-  hashes.
-- Shot Prep compares the latest attempt's fingerprint with the current package's; a mismatch shows "this shot
-  has changed since generation attempt N". The attempt itself stays interpretable.
+- `package.provenance.fingerprint` is the **exact package identity**: it hashes the whole package content
+  **excluding `builtAt`** (and the provenance block itself, the schema-version fields included), so rebuilding an
+  unchanged shot yields the same value, and a v3 package differs from a v2 package of the same Shot.
+  `provenance.parts` carries the per-part hashes and `parts.overall`, the **Shot's production-input identity** (the 13
+  named parts, plus the selected Production Frame's identity while one is selected). The two are not interchangeable
+  ([generation-package](generation-package.md#two-fingerprints-two-questions-never-interchangeable)).
+- Shot Prep compares the `parts.overall` recorded in the latest attempt's frozen snapshot with the current package's; a
+  difference shows "this shot has changed since generation attempt N". A schema upgrade alone never does. Only a
+  snapshot that recorded no `parts.overall` falls back to the exact package fingerprint. The attempt itself stays
+  interpretable and is never rewritten.
 
 ## Generate (Phase 2A)
 

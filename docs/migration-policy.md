@@ -66,14 +66,20 @@ would trip the checksum guard, and that is the point of the guard.
 | 0010 | `0010_storage.sql`                           | Private bucket `prism-assets` (50 MB, MIME allow-list), `storage_object_project_id()`, four ownership policies on `storage.objects`.                                                                 |
 | 0011 | `0011_frame_approval_snapshot.sql`           | `storyboard_frames.approved_snapshot` JSONB (`parts` required) so staleness can name the changed parts.                                                                                              |
 
-Later files (0012–0028) are documented in their own headers and in [generation-jobs](generation-jobs.md),
+Later files (0012–0039) are documented in their own headers and in [generation-jobs](generation-jobs.md),
 [continuity-analysis-jobs](continuity-analysis-jobs.md) and [generation-candidate-sets](generation-candidate-sets.md).
 Notable fix-forward: **0027** replaces the review append-only guard so the `on delete set null` action of 0026's
 `generation_reviews.candidate_set_id` is permitted (0026 is applied and therefore immutable). **0028** adds the
 explicit `projects.is_benchmark` classification (default false; no data is reclassified by SQL, never inferred from a
 slug) and a trigger that refuses a human review for an attempt that has not succeeded. **0029** replaces that boolean
 with the extensible `projects.purpose` enum (`production` default, `benchmark`, `test`; existing `is_benchmark = true`
-rows become `benchmark`) and drops `is_benchmark`.
+rows become `benchmark`) and drops `is_benchmark`. **0039** (Phase 2G.1) adds the immutable
+`shot_production_frames` history, the one-per-Shot `shot_production_frame_selections` pointer (composite FKs keep a
+selection inside its own Shot and Project) and the `production_frame` asset purpose; owner-only RLS, no worker
+grant ([production-frames](production-frames.md)).
+
+`npm run db:migrate -- --dry-run` rehearses the pending files: they are applied for real inside the transaction, which
+is then **always rolled back** (nothing persists). Use it before applying a migration to the hosted project.
 
 ## Adding a migration
 

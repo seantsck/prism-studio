@@ -1,4 +1,5 @@
 import { computeShotDuration, selectedTake, type ShotDuration } from "./duration";
+import type { ProductionFrame } from "./production-frame";
 import type { SpatialReference } from "./previs/spatial";
 import type {
   ActionBlock,
@@ -55,6 +56,13 @@ export interface ShotContext {
   lines: ShotLineContext[];
   frames: StoryboardFrame[];
   approvedFrame: StoryboardFrame | null;
+  /**
+   * Phase 2G.1: this Shot's immutable Production Frame history (newest version first) and its ONE canonical selection
+   * (null when none is selected). Resolved from ProjectData alone: no 3D set, GPU or previs repository involved.
+   * Freshness is `productionFrameFreshness(ctx, ctx.selectedProductionFrame)` (domain/production-frame.ts).
+   */
+  productionFrames: ProductionFrame[];
+  selectedProductionFrame: ProductionFrame | null;
   assets: Map<string, Asset>;
   duration: ShotDuration;
   /** Script content this shot links to, resolved from shot.scriptSources / audio.dialogueLineIds. */
@@ -103,6 +111,12 @@ export function buildShotContext(data: ProjectData, shotId: string): ShotContext
     });
 
   const frames = data.frames.filter((f) => f.shotId === shot.id).sort((a, b) => b.version - a.version);
+  const productionFrames = (data.productionFrames ?? [])
+    .filter((f) => f.shotId === shot.id)
+    .sort((a, b) => b.version - a.version);
+  const selectedFrameId = data.productionFrameSelections?.find(
+    (s) => s.shotId === shot.id,
+  )?.productionFrameId;
   const lineTakes = lines.flatMap((l) => l.takes);
 
   return {
@@ -120,6 +134,8 @@ export function buildShotContext(data: ProjectData, shotId: string): ShotContext
     lines,
     frames,
     approvedFrame: frames.find((f) => f.approved) ?? null,
+    productionFrames,
+    selectedProductionFrame: productionFrames.find((f) => f.id === selectedFrameId) ?? null,
     assets,
     duration: computeShotDuration(shot, lineTakes),
     sourceActions: shot.scriptSources.actionBlockIds
