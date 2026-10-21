@@ -10,3 +10,16 @@ next-env.d.ts
 playwright-report
 test-results
 .DS_Store
+
+# Real-reconstruction acceptance (M2D.3D1). The commands refuse inputs and outputs inside the repository; these
+# rules are a narrow safety net for accidentally copied acceptance evidence. They match the harness's own output names
+# only (splat.spz / splat.ply, the report, the review) and acceptance folders, NOT every .spz/.ply, so a curated
+# fixture under any other name can still be added with a plain `git add`. Capture photos are covered by the commands'
+# refusal of in-repository inputs and by /acceptance*/.
+/acceptance/
+/acceptance-*/
+**/splat.spz
+**/splat.ply
+acceptance-report.json
+human-review.json
+run-manifest.json

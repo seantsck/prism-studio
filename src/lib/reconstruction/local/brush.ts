@@ -37,6 +37,19 @@ export const BRUSH_PROFILES: Partial<Record<QualityProfile, Readonly<Record<stri
   },
 };
 
+/**
+ * REAL_SMOKE acceptance only (M2D.3D1): a tiny training run that proves Brush launches, initialises Vulkan and writes a
+ * valid PLY on this machine. Brush v0.3.0 has no device probe that does not train, so the smallest training run IS the
+ * GPU smoke test. It is NOT a quality profile: no job, worker or agent can select it, and its result is never a
+ * production reconstruction.
+ */
+export const ACCEPTANCE_SMOKE_BRUSH: Readonly<Record<string, number>> = {
+  "total-steps": 500,
+  "max-splats": 100_000,
+  "sh-degree": 3,
+  seed: 42,
+};
+
 export function brushSettings(quality: QualityProfile): Readonly<Record<string, number>> {
   const s = BRUSH_PROFILES[quality];
   if (!s)
@@ -51,10 +64,15 @@ export function brushSettings(quality: QualityProfile): Readonly<Record<string, 
 export const EXPORT_PREFIX = "prism_export_";
 
 /** The argv for one training run (no free-form option ever reaches Brush). */
-export function brushArgs(datasetDir: string, exportDir: string, quality: QualityProfile): string[] {
+export function brushArgs(
+  datasetDir: string,
+  exportDir: string,
+  quality: QualityProfile,
+  settings: Readonly<Record<string, number>> = brushSettings(quality),
+): string[] {
   if (!path.isAbsolute(datasetDir) || !path.isAbsolute(exportDir))
     throw new LocalReconstructionError("workspace_failed", "Brush paths must be absolute.", "splat_training");
-  const s = brushSettings(quality);
+  const s = settings;
   const total = s["total-steps"]!;
   return [
     datasetDir,
@@ -76,8 +94,10 @@ export function brushArgs(datasetDir: string, exportDir: string, quality: Qualit
 }
 
 /** The PLY Brush writes at the final step. */
-export const expectedExportName = (quality: QualityProfile) =>
-  `${EXPORT_PREFIX}${brushSettings(quality)["total-steps"]}.ply`;
+export const expectedExportName = (
+  quality: QualityProfile,
+  settings: Readonly<Record<string, number>> = brushSettings(quality),
+) => `${EXPORT_PREFIX}${settings["total-steps"]}.ply`;
 
 /** Checks the dataset directory before Brush sees it (Brush's discovery would otherwise guess). */
 export async function verifyBrushDataset(datasetDir: string): Promise<{ images: number }> {
@@ -168,6 +188,8 @@ export interface BrushRunOptions {
   datasetDir: string;
   exportDir: string;
   quality: QualityProfile;
+  /** REAL_SMOKE acceptance only: ACCEPTANCE_SMOKE_BRUSH instead of the quality profile's settings */
+  settings?: Readonly<Record<string, number>>;
   timeoutMs: number;
   signal?: AbortSignal;
   onIteration?: (iter: number, total: number) => void;
@@ -179,10 +201,11 @@ export async function runBrush(o: BrushRunOptions): Promise<{ plyPath: string; r
   await verifyBrushDataset(o.datasetDir);
   // the export directory is Brush's working directory, so it must exist before the process starts
   await mkdir(o.exportDir, { recursive: true });
-  const total = brushSettings(o.quality)["total-steps"]!;
+  const settings = o.settings ?? brushSettings(o.quality);
+  const total = settings["total-steps"]!;
   const result = await runProcess({
     executable: o.tool.executable,
-    args: [...o.tool.prefixArgs, ...brushArgs(o.datasetDir, o.exportDir, o.quality)],
+    args: [...o.tool.prefixArgs, ...brushArgs(o.datasetDir, o.exportDir, o.quality, settings)],
     cwd: o.exportDir,
     // info-level logs carry the refine/eval iteration lines; nothing else is configured
     env: { ...o.tool.env, RUST_LOG: "info" },
@@ -196,7 +219,7 @@ export async function runBrush(o: BrushRunOptions): Promise<{ plyPath: string; r
   });
   const failure = classifyBrushExit(result);
   if (failure) throw failure;
-  const plyPath = path.join(o.exportDir, expectedExportName(o.quality));
+  const plyPath = path.join(o.exportDir, expectedExportName(o.quality, settings));
   const s = await stat(plyPath).catch(() => null);
   if (!s || !s.isFile() || s.size === 0)
     throw new LocalReconstructionError(

@@ -242,7 +242,7 @@ export async function leaseJob(deps: RemoteJobDeps, req: IncomingRequest): Promi
     if (job.status === "ingesting") return reply(null, "no_job"); // its result is being imported: nothing to run
     const renewed = await renew(deps, scope, job, lease, d, "leased", "Leased by the paired workstation");
     if (renewed) {
-      log(deps, { jobId: job.id, agent: d.id, lease: "resumed" });
+      log(deps, { jobId: job.id, agent: d.id, resumed: true });
       return reply(leaseView(renewed.job, renewed.lease, true, ttl(deps)), null);
     }
   }

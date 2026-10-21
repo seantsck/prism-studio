@@ -64,6 +64,20 @@ Phase 2A details: [generation-architecture](generation-architecture.md), [genera
 Still open in Phase 2 scope: voice adapters populate `performance_takes` (`generated_voice`); provider
 webhook endpoints (architecture only); realtime push instead of status polling; collaboration and sharing.
 
+### Phase 2F M2D — free local reconstruction of Locations
+
+| Milestone   | Scope                                                                                                                                                                                                                                       | Status                                                          |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| M2D.3A      | Local engine: photographs → COLMAP 4.2.1 (verified build) → Brush 0.3.0 → validated PLY → SPZ ([local-reconstruction](local-reconstruction.md))                                                                                             | implemented (fake tools)                                        |
+| M2D.3B      | Same-host durable worker (`local_capture`)                                                                                                                                                                                                  | implemented (fake tools)                                        |
+| M2D.3C1     | Paired remote Local Agent identity and control plane ([local-agent-protocol](local-agent-protocol.md))                                                                                                                                      | implemented                                                     |
+| M2D.3C2     | Remote distributed execution (`local_agent_capture`): lease, source relay, signed result, shared ingestion                                                                                                                                  | **complete** (implementation validated; not production enabled) |
+| **M2D.3D1** | Production readiness + real-tool acceptance harness: readiness check, hardware policy, REAL_SMOKE/REAL_ROOM, report, human checklist, Spark render check, hosted-security gates ([reconstruction-acceptance](reconstruction-acceptance.md)) | **in progress** (no real tool run)                              |
+| M2D.3D2     | First real reconstruction: verified native tools → real room photographs → real COLMAP/Brush → real SPZ → Spark render → Prism Location → human filmmaking acceptance                                                                       | next (needs a PRACTICAL machine and approval)                   |
+
+Local Capture is not production-ready until the three acceptance gates pass: A hosted security (dedicated relay key,
+edge rate limiting, lease ids out of access logs), B real toolchain, C real reconstruction judged by a human.
+
 ### Known gaps (Phase 2A)
 
 - **No real provider adapter.** Only the Mock provider executes; nothing here has been exercised against a paid API.

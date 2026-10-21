@@ -1,11 +1,18 @@
 import type { NextConfig } from "next";
 
+/** Request paths that contain a remote-agent lease id (kept out of request logs). */
+export const AGENT_LEASE_PATH_RE = /\/api\/local-agent\/v1\/jobs\/[^/?#]+\/leases\//;
+
 const nextConfig: NextConfig = {
   // `next dev` would otherwise generate AGENTS.md in the repo root when it detects an AI agent.
   agentRules: false,
   // Audio decoding registers many OPTIONAL codec packages through dynamic import(); bundling would try to
   // resolve all of them. Keep these as plain Node dependencies resolved at runtime on the server.
   serverExternalPackages: ["audio-decode", "@audio/decode", "music-metadata", "pg"],
+  // Local Agent job routes carry a lease id in their path (/api/local-agent/v1/jobs/<job>/leases/<lease>/...). It is
+  // not a credential (every request is device-signed), but logs do not need it: the dev server's request log skips
+  // these routes. `next start` logs no requests; platform/edge logs are covered by docs/reconstruction-acceptance.md.
+  logging: { incomingRequests: { ignore: [AGENT_LEASE_PATH_RE] } },
   experimental: {
     // Uploads go through server actions; keep in step with MAX_BYTES in src/lib/upload-policy.ts (50 MB).
     serverActions: { bodySizeLimit: "55mb" },

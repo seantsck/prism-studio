@@ -79,8 +79,10 @@ on signed agent requests that carry no browser session, so in Supabase mode the 
 authority for exactly two things: reading the frozen source photographs of a job leased to an authenticated device of
 that project, and storing that job's one validated result through the shared ingestion. It is a DEDICATED secret key,
 `PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY`, distinct from the worker key so it can be scoped and rotated on its
-own. It is read only by `src/server/local-agent/relay-storage.ts` (server-only; a source test proves no other module
-reads it), only while `PRISM_LOCAL_AGENTS_ENABLED=1`, and it is never sent to a workstation (agents receive bytes
+own. Its variable is named only in `src/server/local-agent/relay-key.ts`, whose VALUE reader is used only by the
+server-only `src/server/local-agent/relay-storage.ts` and whose STATUS reader (configured / missing / invalid, never
+the value) is used only by the operator readiness check (M2D.3D1); source tests prove both. It is used only while
+`PRISM_LOCAL_AGENTS_ENABLED=1`, and it is never sent to a workstation (agents receive bytes
 over signed routes, never a key or a signed URL). Without it, remote jobs are unavailable (fail closed; nothing falls
 back to the worker key or a session). This is a deliberate change from the earlier rule that no Storage secret lives
 in the app: it was approved for M2D.3C2 and is listed as a residual risk below.
@@ -92,7 +94,9 @@ writing anything, and a result upload is refused before its body is read. Same-h
 unaffected.
 
 **Remote Local Agent production gate (deployment checklist).** M2D.3C2 is implementation-validated, NOT production
-enabled. Before `PRISM_LOCAL_AGENTS_ENABLED=1` is set on a hosted deployment:
+enabled; M2D.3D defines the three acceptance gates (hosted security, real toolchain, real reconstruction) and the
+operator procedures in [reconstruction-acceptance.md](reconstruction-acceptance.md). Before
+`PRISM_LOCAL_AGENTS_ENABLED=1` is set on a hosted deployment:
 
 1. Create a NEW, dedicated Supabase secret key (`sb_secret_…`) for the relay and set it ONLY in the Prism server's
    environment as `PRISM_STUDIO_AGENT_RELAY_SUPABASE_SECRET_KEY`. Do NOT reuse the generation worker's key
@@ -105,6 +109,14 @@ enabled. Before `PRISM_LOCAL_AGENTS_ENABLED=1` is set on a hosted deployment:
    unauthenticated `/pair`, and sensible request limits on the authenticated job routes (§15 of
    [local-agent-protocol.md](local-agent-protocol.md)). Prism has no in-process limiter by design.
 3. Complete the first real COLMAP + Brush reconstruction on supported hardware (the automated suites use fakes only).
+4. Make sure infrastructure access logs (proxy, edge, platform) drop or redact the `/leases/<id>/` path segment of the
+   job routes. Prism's own logs never print a request URL or a lease id, and `next dev`'s request log skips those
+   routes (tested); a lease id is not a credential, but no log needs it.
+5. `npm run local:acceptance:check` in the server environment reports `relay key: configured` (never the value).
+
+The deployment target is not defined yet (no platform configuration is in the repository); the provider-neutral
+checklist, including body-size and request-duration limits that a serverless platform may not meet, is in
+[reconstruction-acceptance.md](reconstruction-acceptance.md#deployment-target).
 
 Automated tests run without a dedicated relay key: the hosted test script (`db:remote-agent-jobs`) and the Supabase
 browser suite pass the existing TEST worker key's VALUE under the relay variable name to a LOCAL test server only

@@ -1,7 +1,7 @@
 import { appendFile, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { inspectSplat } from "@/lib/splat/inspect";
-import { BRUSH_PROFILES, brushSettings, runBrush } from "./brush";
+import { ACCEPTANCE_SMOKE_BRUSH, BRUSH_PROFILES, brushSettings, runBrush } from "./brush";
 import { COLMAP_SETTINGS, runColmap } from "./colmap";
 import { materializeInputs, sha256File, type InputLimits, type MaterializedInput } from "./inputs";
 import { inspectGaussianPlyFile } from "./ply";
@@ -82,6 +82,15 @@ export interface RunOptions {
   signal?: AbortSignal;
   retention?: "default" | "none";
   now?: () => string;
+  /**
+   * Acceptance harness only (M2D.3D1; never set by the worker or the agent):
+   *   smokeTraining              REAL_SMOKE: Brush runs ACCEPTANCE_SMOKE_BRUSH (a tiny run) instead of the profile
+   *   onToolStep                 COLMAP's sub-steps as they start (for the acceptance report's stage timings)
+   *   keepIntermediatesOnFailure an operator debugging a failed REAL run keeps input/colmap/brush (default: removed)
+   */
+  smokeTraining?: boolean;
+  onToolStep?: (step: "feature_extraction" | "matching" | "mapping" | "undistortion") => void;
+  keepIntermediatesOnFailure?: boolean;
 }
 
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
@@ -125,7 +134,9 @@ export async function runLocalReconstruction(
   const started = Date.now();
   const deadline = started + limits.maxRunMs;
   const remaining = (cap: number) => Math.min(cap, deadline - Date.now());
-  const brushProfile = brushSettings(request.quality); // refuses an undefined profile before any work
+  // refuses an undefined profile before any work (a smoke run must still name a real profile)
+  const profileSettings = brushSettings(request.quality);
+  const brushProfile = opts.smokeTraining ? ACCEPTANCE_SMOKE_BRUSH : profileSettings;
   if (opts.signal?.aborted) throw cancelled("preparing");
 
   let stage: LocalStage = "preparing";
@@ -172,7 +183,10 @@ export async function runLocalReconstruction(
       inputImages: inputs.length,
       timeoutMs: remaining(limits.maxCameraStageMs),
       signal: opts.signal,
-      onStep: (s) => log.write("camera_reconstruction", "colmap", `step ${s}`),
+      onStep: (s) => {
+        log.write("camera_reconstruction", "colmap", `step ${s}`);
+        opts.onToolStep?.(s);
+      },
       onLine: (l) => log.write("camera_reconstruction", "colmap", l),
     });
     log.write(
@@ -191,6 +205,7 @@ export async function runLocalReconstruction(
       datasetDir: camera.datasetDir,
       exportDir: inWorkspace(ws, "brush", "exports"),
       quality: request.quality,
+      settings: brushProfile,
       timeoutMs: remaining(limits.maxTrainingMs),
       signal: opts.signal,
       onLine: (l) => log.write("splat_training", "brush", l),
@@ -302,7 +317,8 @@ export async function runLocalReconstruction(
         inputs,
         error: { code: err.code, stage: err.stage ?? stage, message: err.message },
       }).catch(() => undefined);
-      await cleanupWorkspace(ws, "intermediates").catch(() => undefined);
+      if (!(opts.keepIntermediatesOnFailure && err.code !== "cancelled"))
+        await cleanupWorkspace(ws, "intermediates").catch(() => undefined);
       // a cancelled or failed run leaves no partial result behind
       await rm(ws.paths.output, { recursive: true, force: true }).catch(() => undefined);
     }
