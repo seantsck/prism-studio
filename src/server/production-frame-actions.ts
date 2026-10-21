@@ -8,7 +8,10 @@ import { draftProductionFrame, type ProductionFrameSource } from "@/domain/produ
 import type { Asset, ProjectData } from "@/domain/schemas";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { discardUpload, hasFile, ingestUpload } from "./ingest-upload";
+import { getGenerationRepo } from "./generation";
+import { getMediaQaRepo } from "./media-qa";
 import { getPrevisRepo } from "./previs";
+import { GeneratedFrameRefused, promoteGeneratedFrame } from "./production-frame-generated";
 import { persistUploadedFrame } from "./production-frame-upload";
 import { getProductionFrameRepo } from "./production-frames";
 import { getRepo, requireProjectFresh } from "./repo";
@@ -22,6 +25,9 @@ import { getRepo, requireProjectFresh } from "./repo";
  *   promoteMasterFrame       an optional 3D Master Frame's EXISTING Asset becomes one (only when one exists)
  *   uploadProductionFrame    a new private `production_frame` Asset + its frame, stored together
  *   selectProductionFrame    makes another existing frame canonical (history untouched; compare-and-set)
+ *   useGeneratedFrameAsProductionFrame
+ *                            Phase 2G.2: a human chooses a generated still (a `production_frame` candidate) as the
+ *                            Production Frame; the attempt's existing Asset is reused (see production-frame-generated)
  *
  * The caller never names an Asset, path, bucket or Storage location: Assets come from the project's own records, and
  * every image is judged against THE SHOT's production aspect ratio (refused, never cropped).
@@ -181,6 +187,32 @@ async function selectProductionFrame_impl(form: FormData): Promise<ActionResult>
   }
 }
 
+async function useGeneratedFrame_impl(form: FormData): Promise<ActionResult> {
+  const { ctx, slug } = await loadShotContext(form);
+  const repo = await getRepo();
+  try {
+    const result = await promoteGeneratedFrame(
+      {
+        frames: await getProductionFrameRepo(),
+        generation: await getGenerationRepo(),
+        qa: await getMediaQaRepo(),
+      },
+      ctx,
+      { attemptId: str(form, "attemptId"), userId: repo.currentUserId() },
+    );
+    refresh(slug);
+    return {
+      ok: true,
+      message: result.created
+        ? `Production Frame v${result.frame.version} is now canonical.`
+        : `That image already exists as Production Frame v${result.frame.version}; it is canonical again.`,
+    };
+  } catch (err) {
+    if (err instanceof GeneratedFrameRefused) throw new UserFacingError(err.message);
+    return asUserError(err);
+  }
+}
+
 export async function promoteStoryboardFrame(form: FormData): Promise<ActionResult> {
   return runAction(() => promoteStoryboardFrame_impl(form), { name: "promoteStoryboardFrame" });
 }
@@ -192,4 +224,7 @@ export async function uploadProductionFrame(form: FormData): Promise<ActionResul
 }
 export async function selectProductionFrame(form: FormData): Promise<ActionResult> {
   return runAction(() => selectProductionFrame_impl(form), { name: "selectProductionFrame" });
+}
+export async function useGeneratedFrameAsProductionFrame(form: FormData): Promise<ActionResult> {
+  return runAction(() => useGeneratedFrame_impl(form), { name: "useGeneratedFrameAsProductionFrame" });
 }
