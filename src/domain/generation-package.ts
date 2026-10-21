@@ -3,17 +3,33 @@ import type { DurationBreakdown } from "./duration";
 import {
   computeShotParts,
   overallFingerprint,
+  PART_LABELS,
   storyboardFreshness,
   type StoryboardFreshness,
 } from "./fingerprint";
 import { fingerprint } from "./hash";
 import { runPreflight } from "./preflight";
+import {
+  PRODUCTION_FRAME_SOURCE_LABEL,
+  productionFramePackageRef,
+  selectedProductionFrameFreshness,
+  type ProductionFrameFreshness,
+  type ProductionFramePackageRef,
+} from "./production-frame";
 import type { Asset, Shot } from "./schemas";
 import { timelineFromContext, type TimelineSegment } from "./timeline";
 import type { SpatialReference } from "./previs/spatial";
 
-/** Bump when the package SHAPE changes. Attempts keep the version they were built with. */
-export const PACKAGE_SCHEMA_VERSION = 2 as const;
+/**
+ * Bump when the package SHAPE changes. Attempts keep the version they were built with (history is never rewritten).
+ *   v2  Phase 2F and earlier
+ *   v3  Phase 2G.1: `references.productionFrame` + `freshness.productionFrame` + the Production Frame Asset (present
+ *       ONLY when the Shot has a selected Production Frame), and the start-frame precedence below
+ * Packages of v2 stay readable: every v3-only key is optional.
+ */
+export const PACKAGE_SCHEMA_VERSION = 3 as const;
+export const LEGACY_PACKAGE_SCHEMA_VERSION = 2 as const;
+export type PackageSchemaVersion = typeof LEGACY_PACKAGE_SCHEMA_VERSION | typeof PACKAGE_SCHEMA_VERSION;
 
 /** Self-describing asset record embedded in the package so history stays interpretable if the asset later changes. */
 export interface PackageAsset {
@@ -45,8 +61,8 @@ export interface GenerationPackage {
    * has no 3D set, so packages for such Shots are byte-identical to those built before 3D sets existed.
    */
   spatialReference?: SpatialReference;
-  version: typeof PACKAGE_SCHEMA_VERSION;
-  packageSchemaVersion: typeof PACKAGE_SCHEMA_VERSION;
+  version: PackageSchemaVersion;
+  packageSchemaVersion: PackageSchemaVersion;
   builtAt: string;
   project: { id: string; title: string; slug: string; defaultLanguage: string };
   episode: { id: string; number: number; title: string };
@@ -170,9 +186,16 @@ export interface GenerationPackage {
     generatorNotes: string;
   };
   references: {
+    /**
+     * The image-to-video start frame. Precedence (v3): the Shot's explicit `generation.startFrameAssetId` override, then
+     * the SELECTED Production Frame's image, then the approved Storyboard Frame's image, else null. (v2: the first and
+     * last only.) The Shot's own start-frame field is never written from the selection: it stays an explicit override.
+     */
     startFrameAssetId: string | null;
     endFrameAssetId: string | null;
     approvedStoryboardFrame: { frameId: string; assetId: string | null; version: number } | null;
+    /** v3: the Shot's SELECTED Production Frame, by value. Omitted when none is selected (and in every v2 package). */
+    productionFrame?: ProductionFramePackageRef;
     referenceAssetIds: string[];
     referenceVideoAssetId: string | null;
     referenceAudioAssetId: string | null;
@@ -186,7 +209,7 @@ export interface GenerationPackage {
   };
   /** Every asset id referenced anywhere in this package, described by value. */
   assets: Record<string, PackageAsset>;
-  freshness: { storyboard: StoryboardFreshness };
+  freshness: { storyboard: StoryboardFreshness; productionFrame?: ProductionFrameFreshness };
   readiness: { ready: boolean; score: number; blockers: string[]; warnings: string[] };
   prompt: { positive: string; negative: string };
   provenance: {
@@ -201,6 +224,8 @@ export interface GenerationPackage {
       locationId: string | null;
       selectedTakeIds: string[];
       storyboardFrameId: string | null;
+      /** v3: only when a Production Frame is selected */
+      productionFrameId?: string;
     };
   };
 }
@@ -305,6 +330,9 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
   ]).join(". ");
 
   const approved = ctx.approvedFrame;
+  // The selected Production Frame (if any). An unselected historical frame never reaches the package, so adding one
+  // cannot change it; changing the SELECTION does.
+  const productionFrame = productionFramePackageRef(ctx);
   const timeline = timelineFromContext(ctx);
   const base: Omit<GenerationPackage, "assets" | "provenance"> = {
     version: PACKAGE_SCHEMA_VERSION,
@@ -412,11 +440,13 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
       generatorNotes: shot.constraints.generatorNotes,
     },
     references: {
-      startFrameAssetId: shot.generation.startFrameAssetId ?? approved?.assetId ?? null,
+      startFrameAssetId:
+        shot.generation.startFrameAssetId ?? productionFrame?.assetId ?? approved?.assetId ?? null,
       endFrameAssetId: shot.generation.endFrameAssetId,
       approvedStoryboardFrame: approved
         ? { frameId: approved.id, assetId: approved.assetId, version: approved.version }
         : null,
+      ...(productionFrame ? { productionFrame } : {}),
       referenceAssetIds: shot.generation.referenceAssetIds,
       referenceVideoAssetId: shot.generation.referenceVideoAssetId,
       referenceAudioAssetId:
@@ -431,7 +461,10 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
       resolution: shot.generation.resolution,
       fps: shot.generation.fps,
     },
-    freshness: { storyboard: storyboardFreshness(ctx, approved) },
+    freshness: {
+      storyboard: storyboardFreshness(ctx, approved),
+      ...(productionFrame ? { productionFrame: selectedProductionFrameFreshness(ctx) } : {}),
+    },
     readiness: {
       ready: report.ready,
       score: report.score,
@@ -455,6 +488,8 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
     base.references.startFrameAssetId,
     base.references.endFrameAssetId,
     base.references.approvedStoryboardFrame?.assetId,
+    // the Production Frame's image is described by value too, even when an explicit override wins the start frame
+    base.references.productionFrame?.assetId,
     base.references.referenceVideoAssetId,
     base.references.referenceAudioAssetId,
     base.spatialReference?.masterFrameAssetId,
@@ -495,7 +530,18 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
   const parts = computeShotParts(ctx);
   const content = { ...base, assets };
   // builtAt is excluded: rebuilding an unchanged shot must yield the same fingerprint.
-  const contentFingerprint = fingerprint({ ...content, builtAt: null });
+  //
+  // The schema-version fields are hashed as the version whose SHAPE the content actually uses: a Shot with no selected
+  // Production Frame carries exactly the content of a v2 package, so it hashes exactly as it did before v3 existed. An
+  // existing attempt is therefore not reported as "the shot changed since this attempt" merely because the package
+  // shape gained an optional section. The same rule keeps the 3D-set precedent ("byte-identical to before").
+  const hashedVersion = productionFrame ? PACKAGE_SCHEMA_VERSION : LEGACY_PACKAGE_SCHEMA_VERSION;
+  const contentFingerprint = fingerprint({
+    ...content,
+    version: hashedVersion,
+    packageSchemaVersion: hashedVersion,
+    builtAt: null,
+  });
   return {
     ...content,
     provenance: {
@@ -508,6 +554,7 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
         locationId: ctx.location?.id ?? null,
         selectedTakeIds: ctx.lines.flatMap((l) => (l.selectedTake ? [l.selectedTake.id] : [])),
         storyboardFrameId: approved?.id ?? null,
+        ...(productionFrame ? { productionFrameId: productionFrame.frameId } : {}),
       },
     },
   };
@@ -640,6 +687,18 @@ export function renderGenerationBrief(pkg: GenerationPackage): BriefSection[] {
   sec_(sec("Hard constraints", pkg.constraints.hard));
   sec_(sec("Negative constraints", pkg.constraints.negative));
   sec_(sec("Project guardrails", pkg.constraints.guardrails));
+  const pf = pkg.references.productionFrame;
+  if (pf) {
+    // by name and state only: never a path, URL or checksum (those are diagnostics/export provenance)
+    const changed = pf.changedParts.map((p) => PART_LABELS[p]);
+    sec_(
+      sec("Production Frame", [
+        `Production Frame: v${pf.version} · ${PRODUCTION_FRAME_SOURCE_LABEL[pf.source]} · ${pf.freshness}`,
+        pf.freshness === "stale" &&
+          `STALE: ${changed.join(", ") || "the Shot changed"} changed after this frame was made`,
+      ]),
+    );
+  }
   sec_(
     sec("References", [
       pkg.references.approvedStoryboardFrame &&
