@@ -86,7 +86,7 @@ export function referencedProductionFrameAssetId(request: unknown): string | nul
  */
 export function generatedFrameStaleness(
   ctx: ShotContext,
-  attempt: Pick<GeneratedFrameCandidate["attempt"], "request" | "packageSnapshot">,
+  attempt: Pick<GeneratedFrameCandidate["attempt"], "id" | "request" | "packageSnapshot">,
 ): { changed: string[]; unknown: boolean } | null {
   const snap = (attempt.packageSnapshot as { provenance?: { parts?: Record<string, string> } } | null)
     ?.provenance?.parts;
@@ -94,7 +94,11 @@ export function generatedFrameStaleness(
   const now = computeShotParts(ctx);
   const changed: string[] = FRESHNESS_PARTS.filter((p) => snap[p] !== undefined && snap[p] !== now[p]);
   const used = referencedProductionFrameAssetId(attempt.request);
-  if (used && used !== (ctx.selectedProductionFrame?.assetId ?? null)) changed.push("productionFrame");
+  const selected = ctx.selectedProductionFrame;
+  // A refinement of v1 is stale once ANOTHER frame is canonical. When the canonical frame IS this very candidate
+  // (it was promoted already), using it again is the duplicate-promotion path, not a stale one.
+  if (used && used !== (selected?.assetId ?? null) && selected?.sourceGenerationAttemptId !== attempt.id)
+    changed.push("productionFrame");
   return changed.length > 0 ? { changed, unknown: false } : null;
 }
 

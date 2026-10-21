@@ -196,6 +196,34 @@ describe("Use as Production Frame — the stale-candidate rule", () => {
     if (!p.available) expect(p.changedParts).toEqual(["productionFrame"]);
   });
 
+  it("a refinement that is itself the canonical frame is not stale: using it again is the duplicate-promotion path", () => {
+    const data = seed();
+    const v1Asset = outputAsset(data, { width: 1912, height: 800, label: "v1" });
+    data.assets.push(v1Asset);
+    const f1 = { ...draftFor(data, "3A", { asset: v1Asset }), version: 1 };
+    attach(data, [f1], f1);
+    // R was generated FROM v1 and then promoted: v2 is canonical and IS R
+    const r = candidateOf(data, { references: [{ role: "production_frame", assetId: v1Asset.id }] });
+    data.assets.push(r.original!);
+    const f2 = {
+      ...draftFor(data, "3A", {
+        asset: r.original!,
+        source: "generation_output",
+        sourceGenerationAttemptId: r.attempt.id,
+      }),
+      version: 2,
+    };
+    attach(data, [f1, f2], f2);
+    expect(generatedFramePromotion(contextOf(data, "3A"), r).available).toBe(true);
+    // ANOTHER refinement of v1 is stale: v2 (not its basis, and not itself) is canonical
+    const sibling = candidateOf(data, { references: [{ role: "production_frame", assetId: v1Asset.id }] });
+    expect(generatedFramePromotion(contextOf(data, "3A"), sibling)).toMatchObject({
+      available: false,
+      code: "stale",
+      changedParts: ["productionFrame"],
+    });
+  });
+
   it("choosing candidate A does not make its sibling B stale (same intent; the human may still choose B)", () => {
     const data = seed();
     const a = candidateOf(data, { original: outputAsset(data, { width: 1912, height: 800, label: "A" }) });
