@@ -1048,7 +1048,14 @@ export function ShotPrepView({
               ctx={ctx}
               slug={slug}
               masterFrames={masterFrames}
-              candidates={<ProductionFrameCandidates data={data} shotId={shotId} />}
+              // the planner is rendered only when this section is the open one: it carries the same model-compare
+              // controls as the Generate workspace, and one page must never hold two of them at once
+              candidates={
+                openKey === "production_frame" ? (
+                  <ProductionFrameCandidates data={data} shotId={shotId} />
+                ) : undefined
+              }
+              openHref={`${shotPath(slug, episode.slug, shotId)}?section=production_frame`}
             />
           </SectionChrome>
 

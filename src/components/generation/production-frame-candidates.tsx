@@ -60,7 +60,7 @@ export async function ProductionFrameCandidates({ data, shotId }: { data: Projec
         ) : (
           <p className="text-muted" data-testid="pf-text-only">
             No stored reference images: candidates are made from the Shot&apos;s written intent alone
-            (text-to-image). No 3D set, GPU or storyboard is needed.
+            (text-to-image). Nothing else has to exist first.
           </p>
         )}
         <p className="text-[11px] text-faint">

@@ -1,5 +1,5 @@
 import type { ShotContext } from "./context";
-import { computeShotParts, FRESHNESS_PARTS } from "./fingerprint";
+import { computeShotParts, FRESHNESS_PARTS, PART_LABELS, type FreshnessPart } from "./fingerprint";
 import { purposeOfRequest, type GenerationPurpose } from "./generation/schemas";
 import {
   checkProductionImage,
@@ -45,6 +45,10 @@ export type GeneratedFrameBlockCode =
   | "stale"
   | "needs_conform"
   | "bad_image";
+
+/** "lighting" → "Lighting"; the selected frame's own part reads as "Production Frame". */
+const changedPartLabel = (p: string): string =>
+  p === "productionFrame" ? "Production Frame" : (PART_LABELS[p as FreshnessPart] ?? p);
 
 export const SHOT_CHANGED_MESSAGE =
   "The Shot changed after this candidate was generated. Regenerate it from the current Production Frame intent before using it.";
@@ -129,7 +133,7 @@ export function generatedFramePromotion(
       "stale",
       stale.unknown
         ? `${SHOT_CHANGED_MESSAGE} (Prism cannot verify what this candidate was generated from.)`
-        : `${SHOT_CHANGED_MESSAGE} (Changed: ${stale.changed.join(", ")}.)`,
+        : `${SHOT_CHANGED_MESSAGE} (Changed: ${stale.changed.map(changedPartLabel).join(", ")}.)`,
       stale.changed,
     );
   }

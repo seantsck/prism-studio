@@ -143,10 +143,12 @@ export function buildModelComparison(args: {
             });
             const key = variantKey(mode ?? null, tier ?? tiers[0] ?? null, audio, quality);
             const used = fit.compatibility.used;
+            // the documented canvas of a catalog model; otherwise the canvas the compatibility engine planned
             const canvas =
-              purpose === "production_frame" && cat
-                ? canvasText(cat.tiers[0]?.ratios[used.aspectRatio ?? ""])
-                : null;
+              purpose !== "production_frame"
+                ? null
+                : (canvasText(cat?.tiers[0]?.ratios[used.aspectRatio ?? ""]) ??
+                  (used.resolution ? `${used.resolution.width}×${used.resolution.height}` : null));
             variants[key] = toView(fit, requirements, canvas);
             fits[key] = fit;
           }
