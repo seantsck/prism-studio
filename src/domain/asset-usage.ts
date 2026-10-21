@@ -21,6 +21,7 @@ export type AssetUsageKind =
   | "shot_lighting_reference"
   | "performance_take"
   | "storyboard_frame"
+  | "production_frame"
   | "attempt_input"
   | "attempt_output"
   | "set3d_model";
@@ -119,6 +120,17 @@ export function findAssetUsage(data: ProjectData, assetId: string): AssetUsageRe
     direct.push({
       kind: "storyboard_frame",
       label: `Shot ${shotCode(f.shotId)} · storyboard v${f.version}${f.approved ? " (approved)" : ""}`,
+      entityId: f.id,
+      shotId: f.shotId,
+    });
+    affected.add(f.shotId);
+  }
+  // an immutable Production Frame pins its image (a promoted frame shares the Storyboard / Master Frame Asset)
+  for (const f of data.productionFrames ?? []) {
+    if (f.assetId !== assetId) continue;
+    direct.push({
+      kind: "production_frame",
+      label: `Shot ${shotCode(f.shotId)} · Production Frame v${f.version}`,
       entityId: f.id,
       shotId: f.shotId,
     });
