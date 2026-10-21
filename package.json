@@ -50,6 +50,7 @@
     "local:acceptance:verdict": "tsx scripts/reconstruction-acceptance.mts verdict",
     "db:local-agents": "tsx --env-file=.env.local scripts/db-local-agents.mts",
     "db:remote-agent-jobs": "tsx --env-file=.env.local scripts/db-remote-agent-jobs.mts",
+    "db:production-frames": "tsx --env-file=.env.local scripts/db-production-frames.mts",
     "db:continuity-analysis": "tsx --env-file=.env.local scripts/db-continuity-analysis.mts",
     "continuity:worker": "tsx --env-file=.env.local scripts/continuity-worker.mts",
     "continuity:pre-paid:check": "tsx --env-file=.env.local scripts/continuity-pre-paid-check.mts",
