@@ -1,6 +1,7 @@
 import { LOCAL_USER_ID, buildSeedProject } from "./seed";
 import { MemoryCandidateService } from "./candidates-memory";
 import { MemoryGenerationService } from "./generation-memory";
+import { MemoryLocationViewService } from "./location-view-memory";
 import { MemoryMediaQaService } from "./media-qa-memory";
 import { MemoryPrevisService } from "./previs-memory";
 import { MemoryProductionFrameService } from "./production-frame-memory";
@@ -12,6 +13,7 @@ import type {
   Project,
   ProjectBible,
   ProjectData,
+  Shot,
 } from "@/domain/schemas";
 
 type Keyed = { id: string };
@@ -25,6 +27,7 @@ export class MemoryRepository implements Repository {
   private candidateService: MemoryCandidateService | undefined;
   private previsService: MemoryPrevisService | undefined;
   private productionFrameService: MemoryProductionFrameService | undefined;
+  private locationViewService: MemoryLocationViewService | undefined;
 
   /** Derived-media lineage, delivery masters and continuity QA runs (same semantics as Postgres). */
   get mediaQa(): MemoryMediaQaService {
@@ -69,6 +72,15 @@ export class MemoryRepository implements Repository {
       ownerUserId: () => LOCAL_USER_ID,
     });
     return this.productionFrameService;
+  }
+
+  /** Location Views and the Shots' view selections (Phase 2G.3; same semantics as Postgres). Independent of 3D. */
+  get locationViews(): MemoryLocationViewService {
+    this.locationViewService ??= new MemoryLocationViewService({
+      all: () => [...this.projects.values()],
+      ownerUserId: () => LOCAL_USER_ID,
+    });
+    return this.locationViewService;
   }
 
   constructor(seed: ProjectData[] = [buildSeedProject()]) {
@@ -146,6 +158,9 @@ export class MemoryRepository implements Repository {
     const i = list.findIndex((x) => x.id === next.id);
     if (i >= 0) list[i] = next;
     else list.push(next);
+    // the memory twin of migration 0040's trigger on shots.location_id: a Shot that moves to another Location loses
+    // a Location View selection of its previous Location in the same write
+    if (name === "shots") this.locationViewService?.onShotSaved(next as unknown as Shot);
   }
 
   async upsertMany<K extends CollectionName>(

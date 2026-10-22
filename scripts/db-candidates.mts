@@ -59,6 +59,26 @@ const sink = new LocalDiskSink(sinkRoot);
 const createdAttemptIds: string[] = [];
 const createdSetIds: string[] = [];
 const createdAssetIds: string[] = [];
+// History-safe baselines, taken BEFORE this test creates anything. The demo project may legitimately hold real candidate
+// history (e.g. retained paid provider runs): it is never deleted to satisfy this test, and no count is assumed.
+let baselineStandaloneAttemptIds = new Set<string>();
+let baselineMemberAttemptIds = new Set<string>();
+let baselineProjectId: string | null = null;
+/** reviews and preferred/promoted marks on the baseline standalone attempts, by attempt id */
+const reviewStateOf = async (ids: string[]) =>
+  JSON.stringify(
+    (
+      await pool.query(
+        `select ga.id,
+                (select count(*)::int from generation_reviews r where r.attempt_id = ga.id) as reviews,
+                (select count(*)::int from generation_candidate_sets s
+                  where s.preferred_attempt_id = ga.id or s.promoted_attempt_id = ga.id) as marks
+           from generation_attempts ga where ga.id = any($1::uuid[]) order by ga.id`,
+        [ids],
+      )
+    ).rows,
+  );
+let baselineReviewState = "";
 
 /** One statement in its own transaction as a given security context; always rolled back. */
 async function raw(preamble: string, sql: string, params: unknown[] = []) {
@@ -84,6 +104,34 @@ try {
   const projectId = data.project.id;
   const shot = data.shots.find((s) => s.shotCode === "3A")!;
   const revision = (await ownerGen.projectRevision("ojousama"))!;
+  baselineProjectId = projectId;
+  baselineStandaloneAttemptIds = new Set(
+    (
+      await pool.query(
+        `select ga.id from generation_attempts ga
+          where ga.project_id = $1
+            and not exists (select 1 from generation_candidate_members m where m.attempt_id = ga.id)`,
+        [projectId],
+      )
+    ).rows.map((r) => String(r.id)),
+  );
+  baselineMemberAttemptIds = new Set(
+    (
+      await pool.query(
+        `select distinct m.attempt_id from generation_candidate_members m
+           join generation_attempts ga on ga.id = m.attempt_id
+          where ga.project_id = $1`,
+        [projectId],
+      )
+    ).rows.map((r) => String(r.attempt_id)),
+  );
+  baselineReviewState = await reviewStateOf([...baselineStandaloneAttemptIds]);
+  // non-vacuous: the seeded demo project has standalone attempts (membership is decided ONLY by the member relation)
+  check(
+    "the demo project has standalone attempts to protect (baseline is not empty)",
+    baselineStandaloneAttemptIds.size > 0,
+    "no standalone attempts found: run `npm run db:seed` first",
+  );
 
   // ── 1. structure and security ──
   const TABLES = [
@@ -556,9 +604,17 @@ try {
     "outcomes carry a shot feature profile from the frozen package",
     mine.every((o) => o.profile !== null),
   );
+  // the invariant: attempts that were standalone when this test STARTED are still standalone (zero is fine). Attempts
+  // that already belonged to a candidate set (retained history) are neither required to be standalone nor touched.
+  const baseline = outcomes.filter((o) => baselineStandaloneAttemptIds.has(o.attemptId));
   check(
-    "standalone seeded attempts remain standalone and unreviewed",
-    outcomes.filter((o) => !createdAttemptIds.includes(o.attemptId)).every((o) => !o.inCandidateSet),
+    "attempts standalone before the test remain standalone",
+    baseline.length === baselineStandaloneAttemptIds.size && baseline.every((o) => !o.inCandidateSet),
+    `${baseline.length}/${baselineStandaloneAttemptIds.size}`,
+  );
+  check(
+    "…and gained no review, Best or promotion from this test",
+    (await reviewStateOf([...baselineStandaloneAttemptIds])) === baselineReviewState,
   );
   const perf = aggregateByModel(mine);
   const m169 = perf.find((p) => p.model === "mock-video-169");
@@ -597,6 +653,24 @@ try {
 const left = await pool.query(
   "select (select count(*) from generation_candidate_sets where title like 'db:candidates%')::int as sets, (select count(*) from generation_reviews where attempt_id = any($1::uuid[]))::int as reviews",
   [createdAttemptIds],
+);
+// pre-existing candidate history survives the test and its cleanup (whatever its size, including none)
+const memberNow = baselineProjectId
+  ? new Set(
+      (
+        await pool.query(
+          `select distinct m.attempt_id from generation_candidate_members m
+             join generation_attempts ga on ga.id = m.attempt_id
+            where ga.project_id = $1`,
+          [baselineProjectId],
+        )
+      ).rows.map((r) => String(r.attempt_id)),
+    )
+  : new Set<string>();
+check(
+  "historical candidate memberships present before the test are all still present",
+  [...baselineMemberAttemptIds].every((id) => memberNow.has(id)),
+  `${[...baselineMemberAttemptIds].filter((id) => memberNow.has(id)).length}/${baselineMemberAttemptIds.size}`,
 );
 check(
   "cleanup: no test sets or reviews remain",

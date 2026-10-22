@@ -62,6 +62,11 @@ export const REFERENCE_ROLES = [
   "identity",
   "character_look",
   "location",
+  /**
+   * Phase 2G.3: THE canonical Location View the Shot selected (one named viewpoint of its Location), never a generic
+   * Location reference photo. Requests frozen before 2G.3 never contain it.
+   */
+  "location_view",
   "style",
   "storyboard",
   /** The Shot's selected Production Frame, used as an image reference when generating Production Frame candidates. */

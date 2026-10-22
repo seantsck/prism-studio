@@ -192,6 +192,14 @@ longer matches the Shot is refused as **stale**. The Asset is either the provide
 whichever actually matches the production aspect. No new migration. Full rules and the Runway image models:
 [image-shot-generator](image-shot-generator.md).
 
+## Saving a Production Frame as a Location View (Phase 2G.3)
+
+Shot Prep → Production Frame → **Save as Location View** turns the Shot's **selected, fresh** Production Frame into an
+immutable canonical view of the Shot's Location (`source = production_frame`, `sourceProductionFrameId`), reusing the
+frame's Asset (no copy). A stale frame is refused: it no longer depicts the Shot's intent. Saving a view selects nothing
+and changes nothing about the Shot. The intent snapshot gains an optional `location.view` (the selected view's identity)
+when a Shot has one; older snapshots stay valid and are never rewritten. See [location-views](location-views.md).
+
 ## Tests
 
 | What                                                                                                           | Where                                                |

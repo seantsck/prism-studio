@@ -12,6 +12,7 @@ import { UserFacingError } from "./action-result";
 import { requireUser } from "./auth";
 import { getPool } from "./db";
 import { getPrevisRepo } from "./previs";
+import { getLocationViewRepo } from "./location-views";
 import { getProductionFrameRepo } from "./production-frames";
 
 declare global {
@@ -64,8 +65,17 @@ async function withProductionFrames(data: ProjectData): Promise<ProjectData> {
   return { ...data, productionFrames: frames, productionFrameSelections: selections };
 }
 
+/**
+ * Attach every Location's canonical views and every Shot's view selection (Phase 2G.3), from the Location View
+ * repository (memory and Postgres alike). No 3D data is involved.
+ */
+async function withLocationViews(data: ProjectData): Promise<ProjectData> {
+  const { views, selections } = await (await getLocationViewRepo()).listForProject(data.project.id);
+  return { ...data, locationViews: views, shotLocationViewSelections: selections };
+}
+
 async function withAttachments(data: ProjectData): Promise<ProjectData> {
-  return withProductionFrames(await withSpatialReferences(data));
+  return withLocationViews(await withProductionFrames(await withSpatialReferences(data)));
 }
 
 export async function requireProjectFresh(slug: string): Promise<ProjectData> {

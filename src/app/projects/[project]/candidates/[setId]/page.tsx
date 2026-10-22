@@ -142,6 +142,10 @@ export default async function CandidateSetPage({
       totalMs: ms(v?.job?.createdAt, v?.job?.completedAt),
       adaptations,
       referencesUsed: used ? `${used.used}/${used.total} images` : "—",
+      // the frozen request's own labels: what was ACTUALLY sent, never re-derived from today's Shot
+      sentReferences: (
+        (v?.attempt.request as { references?: Array<{ label?: unknown }> } | null)?.references ?? []
+      ).map((r) => String(r.label ?? "reference")),
       inputMode: m.inputMode,
       tier: m.tierId,
       nativeAudio: m.nativeAudio,

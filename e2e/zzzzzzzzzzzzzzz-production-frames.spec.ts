@@ -112,7 +112,7 @@ test("no-3D project: empty → promote the approved Storyboard → fresh → the
   await expect(page.getByTestId("rail-production-frame")).toContainText("Production Frame v1");
 
   const { json, text } = await packageOf(page, request, shotUrl);
-  expect(json.packageSchemaVersion).toBe(3);
+  expect(json.packageSchemaVersion).toBe(4); // the current package shape (Phase 2G.3)
   expect(json.references.productionFrame).toMatchObject({
     version: 1,
     source: "storyboard",

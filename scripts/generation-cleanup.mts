@@ -68,9 +68,18 @@ const derivedAssets = attempts.length
     ).rows
   : [];
 const assets = [...derivedAssets, ...providerAssets];
+// Phase 2G.3: a Location View saved from a mock-generated frame pins that image too (its Asset key has no cascade). Only
+// views whose image is one of the mock attempts' own generated/derived files are removed; every other view is kept.
+const mockViews = assets.length
+  ? (
+      await pool.query("select id from location_views where asset_id = any($1::uuid[])", [
+        assets.map((a) => a.id),
+      ])
+    ).rows.map((r) => String(r.id))
+  : [];
 
 console.log(
-  `mock attempts: ${attempts.length}, candidate sets: ${mockSets.length}, generated assets: ${providerAssets.length}, derived assets: ${derivedAssets.length}, generated production frames: ${pfFrames.length}`,
+  `mock attempts: ${attempts.length}, candidate sets: ${mockSets.length}, generated assets: ${providerAssets.length}, derived assets: ${derivedAssets.length}, generated production frames: ${pfFrames.length}, location views of them: ${mockViews.length}`,
 );
 if (!process.argv.includes("--yes")) {
   console.log("dry run; pass --yes to delete");
@@ -78,6 +87,8 @@ if (!process.argv.includes("--yes")) {
   process.exit(0);
 }
 
+// Location Views are append-only for users; this maintenance tool runs as the database owner (selections cascade)
+if (mockViews.length) await pool.query("delete from location_views where id = any($1::uuid[])", [mockViews]);
 if (pfFrames.length) {
   await pool.query(
     "delete from shot_production_frame_selections where production_frame_id = any($1::uuid[])",

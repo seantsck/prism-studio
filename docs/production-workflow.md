@@ -104,6 +104,17 @@ that is not the production aspect needs the production conform first. Production
 pointer (never `attempt.approved`); ⭐ Best is only the experiment's preference. See
 [image-shot-generator](image-shot-generator.md).
 
+### Location Views (Phase 2G.3, migration 0040)
+
+A Location owns immutable canonical **Location Views** (one named viewpoint = one image + a semantic view spec). Shot
+Prep → Production Frame starts with a **Location View** block: the Shot chooses one view of its own Location (or none;
+none is never a blocker). The choice is part of the Shot's **location** part, so changing it stales the approved
+Storyboard, the selected Production Frame and earlier Production Frame candidates, and changes `parts.overall`.
+Production Frame candidates then receive the view's image as the `location_view` reference (after the Production Frame,
+Storyboard and Character references, before generic Location references); a fresh selected Production Frame can be saved
+as a new view ("Save as Location View", same Asset). A selection of another Location's view never resolves (preflight
+`set.location_view` blocks). See [location-views](location-views.md).
+
 ### Generation attempts
 
 - `generation_attempts.package_fingerprint` stores the package fingerprint at logging time. The trigger

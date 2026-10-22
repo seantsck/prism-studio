@@ -71,6 +71,9 @@ const expectedTables = [
   // Phase 2G.1: Production Frames (immutable history) and their one-per-Shot selection pointer
   "shot_production_frames",
   "shot_production_frame_selections",
+  // Phase 2G.3: immutable canonical Location Views and their one-per-Shot selection pointer
+  "location_views",
+  "shot_location_view_selections",
 ];
 const tables = (await rows("select tablename, rowsecurity from pg_tables where schemaname='public'")).filter(
   (t) => t.tablename !== "prism_migrations",
@@ -115,6 +118,8 @@ const must = {
     "local_agents_public_key_fingerprint_key",
     "local_agents_pairing_id_key",
     "shot_production_frames_shot_idx",
+    "location_views_location_idx",
+    "shot_location_view_selections_view_idx",
   ],
   triggers: [
     "dialogue_locked_guard",
@@ -139,6 +144,10 @@ const must = {
     "local_agents_guard",
     "shot_production_frames_guard",
     "shot_production_frames_asset_check",
+    "location_views_guard",
+    "location_views_asset_check",
+    "shot_location_view_selections_location_check",
+    "shots_location_view_selection_clear",
   ],
 };
 const missingIdx = must.indexes.filter((i) => !idx.some((x) => x.indexname === i));

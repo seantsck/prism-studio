@@ -353,10 +353,10 @@ describe("freshness", () => {
 });
 
 describe("GenerationPackage v3", () => {
-  it("a new package is version 3; a Shot with no selected frame carries none of the v3-only keys", () => {
+  it("a new package is the current version (4); a Shot with no selected frame carries none of the v3-only keys", () => {
     const pkg = pkgOf(seed());
     expect(pkg.version).toBe(PACKAGE_SCHEMA_VERSION);
-    expect(pkg.packageSchemaVersion).toBe(3);
+    expect(pkg.packageSchemaVersion).toBe(4); // Phase 2G.3 bumped the shape to v4; the v3-only keys below are still absent
     expect(pkg.references).not.toHaveProperty("productionFrame");
     expect(pkg.freshness).not.toHaveProperty("productionFrame");
     expect(pkg.provenance.sourceVersions).not.toHaveProperty("productionFrameId");
@@ -493,7 +493,7 @@ describe("NO-3D flow: a project with no spatial data, no GPU and no reconstructi
     attach(data, [frame], frame);
     expect(data.assets.length).toBe(assetsBefore);
     const pkg = pkgOf(data);
-    expect(pkg.version).toBe(3);
+    expect(pkg.version).toBe(4);
     expect(pkg.references.productionFrame).toMatchObject({
       source: "storyboard",
       version: 1,

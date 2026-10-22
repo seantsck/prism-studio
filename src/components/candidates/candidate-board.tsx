@@ -79,6 +79,11 @@ export interface BoardCandidate {
   totalMs: number | null;
   adaptations: string[];
   referencesUsed: string;
+  /**
+   * What each image sent to the model WAS, in order, from the attempt's frozen request (e.g. `Canonical Location View
+   * "Doorway"`). Absent before submission and for requests that sent none.
+   */
+  sentReferences?: string[];
   inputMode: string | null;
   tier: string | null;
   nativeAudio: boolean;
@@ -632,6 +637,16 @@ function CandidateCard({
           {c.inputMode ? ` · ${c.inputMode}` : ""}
           {c.tier && !still ? ` · ${c.tier}` : ""}
           {c.nativeAudio ? " · provider audio" : ""}
+          {c.sentReferences && c.sentReferences.length > 0 ? (
+            <ol
+              data-testid="candidate-references"
+              className="mt-0.5 list-decimal pl-4 text-[10.5px] text-muted"
+            >
+              {c.sentReferences.map((label, i) => (
+                <li key={i}>{label}</li>
+              ))}
+            </ol>
+          ) : null}
         </dd>
       </dl>
       {c.adaptations.length > 0 ? (

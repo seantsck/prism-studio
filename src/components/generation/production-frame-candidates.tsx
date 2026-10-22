@@ -15,7 +15,8 @@ const ROLE_LABEL: Record<string, string> = {
   storyboard: "Approved Storyboard",
   identity: "Character identity",
   character_look: "Character Look",
-  location: "Location",
+  location_view: "Location View",
+  location: "Location reference",
   style: "Lighting reference",
   other: "Shot reference",
 };

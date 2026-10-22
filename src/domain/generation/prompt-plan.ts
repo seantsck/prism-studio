@@ -1,4 +1,5 @@
 import type { GenerationPackage } from "../generation-package";
+import { describeLocationView } from "../location-view";
 import { PROMPT_SECTIONS, type PromptPlan, type PromptSectionKey } from "./schemas";
 
 const TITLES: Record<PromptSectionKey, string> = {
@@ -72,6 +73,8 @@ export function buildPromptPlan(
         `${pkg.set.name}${pkg.set.zone ? ` — ${pkg.set.zone}` : ""}${pkg.set.locked ? " (locked set)" : ""}`,
       pkg.set?.description,
       pkg.set?.geography && `geography: ${pkg.set.geography}`,
+      // v4: the Shot's chosen canonical viewpoint, in words (its image, when the model takes one, is the evidence)
+      ...(pkg.references.locationView ? describeLocationView(pkg.references.locationView) : []),
       pkg.continuity.weather && `weather: ${pkg.continuity.weather}`,
       pkg.continuity.timeOfDay && `time of day: ${pkg.continuity.timeOfDay}`,
       pkg.props.length ? `props: ${pkg.props.map((p) => p.name).join(", ")}` : "",

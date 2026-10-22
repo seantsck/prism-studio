@@ -76,7 +76,11 @@ with the extensible `projects.purpose` enum (`production` default, `benchmark`, 
 rows become `benchmark`) and drops `is_benchmark`. **0039** (Phase 2G.1) adds the immutable
 `shot_production_frames` history, the one-per-Shot `shot_production_frame_selections` pointer (composite FKs keep a
 selection inside its own Shot and Project) and the `production_frame` asset purpose; owner-only RLS, no worker
-grant ([production-frames](production-frames.md)).
+grant ([production-frames](production-frames.md)). **0040** (Phase 2G.3) adds the immutable `location_views` (composite
+FKs to the Location and the Asset, an Asset-facts trigger, an update guard) and the one-per-Shot
+`shot_location_view_selections` pointer (composite FK carrying the view's Location, a same-Location trigger, and a trigger
+on `shots.location_id` that clears a selection of the old Location's view); owner-only RLS, no worker grant, no new
+asset purpose ([location-views](location-views.md)).
 
 `npm run db:migrate -- --dry-run` rehearses the pending files: they are applied for real inside the transaction, which
 is then **always rolled back** (nothing persists). Use it before applying a migration to the hosted project.

@@ -261,6 +261,17 @@ export interface ProductionFrameIntentSnapshot {
     description: string;
     geography: string;
     referenceAssetIds: string[];
+    /**
+     * Phase 2G.3: the Shot's selected canonical Location View, by identity. Optional, so every snapshot made before
+     * 2G.3 (or without a selected view) stays valid as written and is never rewritten.
+     */
+    view?: {
+      viewId: string;
+      name: string;
+      kind: string;
+      assetId: string;
+      viewFingerprint: string;
+    };
   } | null;
   props: Array<{ id: string; name: string }>;
   lighting: {
@@ -359,6 +370,17 @@ export function buildProductionFrameIntent(ctx: ShotContext): ProductionFrameInt
           description: location.description,
           geography: location.geography,
           referenceAssetIds: [...location.referenceAssetIds],
+          ...(ctx.selectedLocationView
+            ? {
+                view: {
+                  viewId: ctx.selectedLocationView.id,
+                  name: ctx.selectedLocationView.name,
+                  kind: ctx.selectedLocationView.kind,
+                  assetId: ctx.selectedLocationView.assetId,
+                  viewFingerprint: ctx.selectedLocationView.viewFingerprint,
+                },
+              }
+            : {}),
         }
       : null,
     props: ctx.props.map((p) => ({ id: p.id, name: p.name })),
@@ -574,4 +596,25 @@ export function productionFramePackageRef(ctx: ShotContext): ProductionFramePack
     freshness: fr.status === "stale" ? "stale" : "fresh",
     changedParts: fr.changedParts,
   };
+}
+
+// ───────────────────────── Production Frame → Location View (Phase 2G.3) ─────────────────────────
+
+export type SaveAsViewStatus = { ok: true } | { ok: false; reason: string };
+
+/**
+ * "Save as Location View" from Shot Prep: only a SELECTED and FRESH Production Frame of a Shot that has a Location may
+ * become canonical Location truth. A stale frame no longer depicts the Shot's intent, so it is refused.
+ */
+export function productionFrameToViewStatus(ctx: ShotContext): SaveAsViewStatus {
+  if (!ctx.location) return { ok: false, reason: "This Shot has no Location." };
+  const f = ctx.selectedProductionFrame;
+  if (!f) return { ok: false, reason: "Select a Production Frame first." };
+  if (productionFrameFreshness(ctx, f).status !== "fresh")
+    return {
+      ok: false,
+      reason:
+        "The selected Production Frame is stale: it no longer matches the Shot. Create or select a current one before saving it as a Location View.",
+    };
+  return { ok: true };
 }

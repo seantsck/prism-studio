@@ -1,4 +1,5 @@
 import { ActionForm } from "@/components/action-form";
+import { LocationViewSpecFields } from "@/components/location-views/location-view-ui";
 import { Badge, Button, Field } from "@/components/ui";
 import type { ShotContext } from "@/domain/context";
 import { PART_LABELS } from "@/domain/fingerprint";
@@ -7,10 +8,12 @@ import {
   PRODUCTION_FRAME_SOURCE_LABEL,
   storyboardPromotionStatus,
   productionFrameFreshness,
+  productionFrameToViewStatus,
   shotProductionAspect,
   type ProductionFrame,
 } from "@/domain/production-frame";
 import { assetUrl } from "@/lib/utils";
+import { saveProductionFrameAsLocationView } from "@/server/location-view-actions";
 import {
   promoteMasterFrame,
   promoteStoryboardFrame,
@@ -76,6 +79,8 @@ export function ProductionFrameSection({
   // can the approved Storyboard's image become a Production Frame? (by the same rules the server applies)
   const sbFrame = ctx.approvedFrame;
   const sbCheck = storyboardPromotionStatus(ctx);
+  // Phase 2G.3: only a selected, FRESH frame of a Shot with a Location may become a canonical Location View
+  const asView = productionFrameToViewStatus(ctx);
 
   return (
     <div data-testid="production-frame-section" className="space-y-4">
@@ -150,6 +155,42 @@ export function ProductionFrameSection({
           </p>
         </div>
       )}
+
+      {selected && ctx.location ? (
+        <details data-testid="pf-save-as-view" className="border border-line">
+          <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[12px] font-medium">
+            Save as Location View
+            <span className="ml-2 text-[11px] font-normal text-muted">
+              make this frame a canonical view of {ctx.location.name} that other Shots can reuse
+            </span>
+          </summary>
+          <div className="border-t border-line p-2.5">
+            {asView.ok ? (
+              <ActionForm
+                action={saveProductionFrameAsLocationView}
+                resetOnSuccess
+                successMessage="Location View saved"
+                className="grid grid-cols-2 items-end gap-2"
+              >
+                {hidden}
+                <LocationViewSpecFields location={ctx.location} compact testIdPrefix="pf-view" />
+                <div className="col-span-2 text-[11px] text-muted">
+                  The view reuses this frame&apos;s image (nothing is copied). It does not change this Shot.
+                </div>
+                <div className="col-span-2">
+                  <Button data-testid="pf-save-as-view-submit" size="sm" type="submit">
+                    Save as Location View
+                  </Button>
+                </div>
+              </ActionForm>
+            ) : (
+              <p data-testid="pf-save-as-view-reason" className="text-[12px] text-warn">
+                {asView.reason}
+              </p>
+            )}
+          </div>
+        </details>
+      ) : null}
 
       {/* ways to make one */}
       <div className="space-y-2 border-t border-line pt-3">

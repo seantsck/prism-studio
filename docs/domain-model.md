@@ -165,6 +165,18 @@ rewrites where it came from. See [virtual-set](virtual-set.md#gaussian-splat-loc
 Distinct from the Storyboard Frame (planning), the 3D Master Frame (optional render), the Provider Canvas and the
 Delivery Frame. Needs no 3D set or GPU. See [production-frames](production-frames.md).
 
+## Location Views (Phase 2G.3)
+
+| Entity                | Table / column                                                                                          | Nature                                                                                                                                                                                                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LocationView          | `location_views` (`location_id`, `name`, `kind`, `asset_id`, `source`, `view_spec`, `view_fingerprint`) | IMMUTABLE canonical viewpoint of a Location: a private image Asset (reused for every source but upload) + `prism.location-view-spec.v1` (zone, entrance, viewpoint, orientation, camera words; no coordinates). `unique (location_id, view_fingerprint)`; no "current version" pointer |
+| LocationViewSelection | `shot_location_view_selections`                                                                         | ONE mutable pointer per Shot to a view of the SAME Project and of the Shot's own Location (composite FK + trigger); cleared by a trigger when the Shot's Location changes                                                                                                              |
+| Asset purpose         | `assets.purpose = 'location_ref'` (existing)                                                            | An uploaded Location View's image                                                                                                                                                                                                                                                      |
+
+ShotContext exposes `locationViews` (the effective Location's views), `selectedLocationView` and `locationViewIssue`.
+The selected view is part of the Shot's `location` part and of GenerationPackage v4 (`references.locationView`). Needs
+no 3D set or GPU. See [location-views](location-views.md).
+
 ## Reconstruction jobs (Phase 2F M2D.2)
 
 | Entity                   | Table / column                                                                                                                                                                                                    | Nature                                                                                                                                                                                                                                                                                                                |
