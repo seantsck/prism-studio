@@ -708,4 +708,10 @@ export interface ProjectData extends Collections {
    */
   productionFrames?: import("./production-frame").ProductionFrame[];
   productionFrameSelections?: import("./production-frame").ProductionFrameSelection[];
+  /**
+   * Phase 2G.3: every Location's immutable canonical Location Views and each Shot's ONE view selection, attached by the
+   * server loaders from the Location View repository (memory and Postgres alike). Absent = none exist. No 3D involved.
+   */
+  locationViews?: import("./location-view").LocationView[];
+  shotLocationViewSelections?: import("./location-view").LocationViewSelection[];
 }

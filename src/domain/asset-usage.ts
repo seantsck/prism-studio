@@ -22,6 +22,7 @@ export type AssetUsageKind =
   | "performance_take"
   | "storyboard_frame"
   | "production_frame"
+  | "location_view"
   | "attempt_input"
   | "attempt_output"
   | "set3d_model";
@@ -135,6 +136,14 @@ export function findAssetUsage(data: ProjectData, assetId: string): AssetUsageRe
       shotId: f.shotId,
     });
     affected.add(f.shotId);
+  }
+  // an immutable Location View pins its image (a promoted view shares the Production Frame / reference Asset)
+  for (const v of data.locationViews ?? []) {
+    if (v.assetId !== assetId) continue;
+    const place = data.locations.find((l) => l.id === v.locationId)?.name ?? "Location";
+    direct.push({ kind: "location_view", label: `${place} · Location View "${v.name}"`, entityId: v.id });
+    for (const sel of data.shotLocationViewSelections ?? [])
+      if (sel.locationViewId === v.id) affected.add(sel.shotId);
   }
   for (const a of data.attempts) {
     if (a.inputAssetIds.includes(assetId))
