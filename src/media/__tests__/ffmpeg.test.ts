@@ -22,13 +22,14 @@ const ff = (args: string[]) =>
 
 beforeAll(() => {
   if (!available) return;
+  // FINITE sources: the duration lives in the lavfi expression itself. A bare `-t` placed after `-i` binds to the NEXT
+  // input/output group, so with a second input it limited the AUDIO and left the 24 fps video unbounded; `-shortest`
+  // then cut the video at a point that depended on how fast frames were produced (54-98 frames under CPU load).
   const src = (size: string, secs: number) => [
     "-f",
     "lavfi",
     "-i",
-    `testsrc2=size=${size}:rate=24`,
-    "-t",
-    String(secs),
+    `testsrc2=size=${size}:rate=24:duration=${secs}`,
   ];
   const enc = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "28"];
   ff([...src("640x360", 2), ...enc, f("v169.mp4")]);
@@ -43,7 +44,6 @@ beforeAll(() => {
     ...enc,
     "-c:a",
     "aac",
-    "-shortest",
     f("v169-audio.mp4"),
   ]);
   ff(["-f", "lavfi", "-i", "testsrc2=size=320x180:rate=1", "-frames:v", "1", f("still.png")]);
