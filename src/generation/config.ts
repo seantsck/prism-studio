@@ -70,8 +70,12 @@ export function readGenerationConfig(env: Env = process.env): GenerationConfig {
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
   // The mock provider is on by default outside production and must be enabled explicitly there.
-  const enabledProviders = [...new Set([...listed, ...(production ? [] : ["mock"])])];
+  let enabledProviders = [...new Set([...listed, ...(production ? [] : ["mock"])])];
   if (production && env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER === "1") enabledProviders.push("mock");
+  // Opt-out for ONE process (e.g. a live paid run that should not even list the free mock). The default is unchanged,
+  // and a registered mock is never a fallback anyway: every job names its own provider.
+  if (env.PRISM_STUDIO_DISABLE_MOCK_PROVIDER === "1")
+    enabledProviders = enabledProviders.filter((p) => p !== "mock");
 
   return {
     enabledProviders: [...new Set(enabledProviders)],

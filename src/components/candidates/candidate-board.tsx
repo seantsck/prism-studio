@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button, Kbd } from "@/components/ui";
-import { describeDims } from "./output-dims";
+import { describeDims, type FrozenProviderRequest } from "./output-dims";
 import {
   NEGATIVE_LABELS,
   NEGATIVE_TAGS,
@@ -65,8 +65,10 @@ export interface BoardCandidate {
   durationMs: number | null;
   /** Dimensions of the stored provider output asset, when recorded. */
   resolution: string | null;
-  /** Requested provider canvas from the frozen request, when it carries one. */
-  providerCanvas: string | null;
+  /** What was ACTUALLY sent to the provider, from the stored output's frozen provenance (null = not recorded). */
+  requestedProvider: FrozenProviderRequest | null;
+  /** The adaptation plan's planning canvas (a plan, never presented as the request). */
+  planningCanvas: string | null;
   /** Dimensions of the conformed delivery master (only when it is not the provider original). */
   deliveryResolution: string | null;
   deliveryNote: string;
@@ -485,7 +487,8 @@ function CandidateCard({
   const dims = describeDims({
     recorded: c.resolution,
     measured,
-    requestedCanvas: c.providerCanvas,
+    requested: c.requestedProvider,
+    planningCanvas: c.planningCanvas,
     deliveryResolution: c.deliveryResolution,
     deliveryNote: c.deliveryNote,
   });
@@ -609,8 +612,14 @@ function CandidateCard({
         ) : null}
         <dt className="text-muted">Actual output</dt>
         <dd data-testid="dims-actual">{dims.actualOutput}</dd>
-        <dt className="text-muted">Provider canvas</dt>
+        <dt className="text-muted">Requested provider canvas</dt>
         <dd data-testid="dims-canvas">{dims.providerCanvas}</dd>
+        {dims.planningCanvas ? (
+          <>
+            <dt className="text-muted">Planning canvas</dt>
+            <dd data-testid="dims-planning">{dims.planningCanvas}</dd>
+          </>
+        ) : null}
         <dt className="text-muted">Delivery</dt>
         <dd data-testid="dims-delivery">{dims.delivery}</dd>
         <dt className="text-muted">Generation / total</dt>
