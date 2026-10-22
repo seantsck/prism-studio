@@ -91,15 +91,21 @@ a stored file** (a seed/placeholder record without bytes is never sent). Priorit
 2. the approved **Storyboard** frame
 3. Character **identity** references
 4. Character **Look** references
-5. **Location** references
-6. the lighting reference and the Shot's explicit references
+5. the Shot's selected canonical **Location View** (role `location_view`, Phase 2G.3; [location-views](location-views.md))
+6. generic **Location** references
+7. the lighting reference
+8. the Shot's explicit references
+
+Each image is sent once, under its most specific role: a Production Frame that is also the selected Location View is sent
+as `production_frame`; a generic Location reference that is also the view is sent as `location_view`. A model that takes no
+images gets the view's words in the PromptPlan and the disclosure "Location View image not supplied to this model".
 
 If the Shot needs more references than a model accepts, Prism does **not** drop any silently: the candidate is **blocked** with
 "N references selected; X accepts at most M". The request modality is `image_to_image` when references exist and the model takes
 them, otherwise `text_to_image` (no 3D, no storyboard, no Production Frame needed).
 
 Runway reference **tags** (3-16 characters, start with a letter, letters/digits/underscore, unique) are compiled **inside the
-adapter**: `ProductionFrame`, `Storyboard`, `YumekoIdentity`, `YumekoLook`, `SeanIdentity`, `Location`, `Lighting`, `ShotRef`,
+adapter**: `ProductionFrame`, `Storyboard`, `YumekoIdentity`, `YumekoLook`, `SeanIdentity`, `LocationView`, `Location`, `Lighting`, `ShotRef`,
 with a numeric suffix on collisions. The prompt carries a legend ("`@ProductionFrame` is Current Production Frame. …") so the
 model is never asked to infer which image is which. Tags never appear in the GenerationPackage, the intent snapshot or the Shot.
 
