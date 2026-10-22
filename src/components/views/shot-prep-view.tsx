@@ -15,6 +15,7 @@ import {
 import { GenerateWorkspace } from "@/components/generation/generate-workspace";
 import { ProductionFrameCandidates } from "@/components/generation/production-frame-candidates";
 import { isProductionFrameAttempt } from "@/domain/generation/schemas";
+import { LocationViewSection } from "@/components/views/location-view-section";
 import { ProductionFrameSection, type MasterFrameChoice } from "@/components/views/production-frame-section";
 import {
   itemsBySection,
@@ -1044,6 +1045,10 @@ export function ShotPrepView({
 
           {/* 16 Production Frame */}
           <SectionChrome {...sectionProps("production_frame")}>
+            {/* Phase 2G.3: the Shot's canonical Location View comes before the frame and its generation controls */}
+            <div className="mb-4">
+              <LocationViewSection ctx={ctx} slug={slug} />
+            </div>
             <ProductionFrameSection
               ctx={ctx}
               slug={slug}

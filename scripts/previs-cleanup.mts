@@ -163,7 +163,9 @@ const assets = (
                or (a.source = 'import' and 'gaussian_splat' = any(a.tags))
                or (a.source = 'provider_output' and 'gaussian_splat' = any(a.tags))
                or (a.source = 'local_previs' and 'previs' = any(a.tags)))
-              and not exists (select 1 from shot_production_frames pf where pf.asset_id = a.id)))`,
+              and not exists (select 1 from shot_production_frames pf where pf.asset_id = a.id)
+              -- nor one a Location View pins (Phase 2G.3: a Master Frame may have become a canonical view)
+              and not exists (select 1 from location_views lv where lv.asset_id = a.id)))`,
     [dev.id, e2ePrefix],
   )
 ).rows;
@@ -212,7 +214,10 @@ if (!process.argv.includes("--yes")) {
   process.exit(0);
 }
 
-// Production Frames are append-only for users; this maintenance tool runs as the database owner.
+// Production Frames and Location Views are append-only for users; this maintenance tool runs as the database owner.
+// Only views of the images in the list above (the e2e test's own uploads) are removed; selections cascade.
+if (assetIdsForPf.length)
+  await pool.query("delete from location_views where asset_id = any($1::uuid[])", [assetIdsForPf]);
 if (assetIdsForPf.length) {
   await pool.query(
     `delete from shot_production_frame_selections where production_frame_id in
