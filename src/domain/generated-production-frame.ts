@@ -16,7 +16,7 @@ import type { Asset, GenerationAttempt } from "./schemas";
  * human chooses it ("Use as Production Frame") and only while it still depicts the Shot's current intent:
  *
  *   1. it is this Shot's, this Project's, a succeeded `production_frame` attempt with a still-image output;
- *   2. the Shot has not changed since (the stale rule below);
+ *   2. its CANDIDATE INPUT BASIS (what it was actually generated from, frozen on the attempt) still holds;
  *   3. a PRODUCTION-SHAPED image exists: the selected delivery conform, or the provider original when it already
  *      matches the production aspect. A wrong-aspect provider original is never promoted and never silently cropped.
  *
@@ -46,12 +46,19 @@ export type GeneratedFrameBlockCode =
   | "needs_conform"
   | "bad_image";
 
-/** "lighting" → "Lighting"; the selected frame's own part reads as "Production Frame". */
-const changedPartLabel = (p: string): string =>
-  p === "productionFrame" ? "Production Frame" : (PART_LABELS[p as FreshnessPart] ?? p);
+/** The input-basis component that names the Production Frame a candidate used as its image reference. */
+export const PRODUCTION_FRAME_REFERENCE = "productionFrameReference" as const;
+
+/** "lighting" → "Lighting changed"; the referenced frame reads as "Production Frame reference changed". */
+const changedPartText = (p: string): string =>
+  p === PRODUCTION_FRAME_REFERENCE
+    ? "Production Frame reference changed"
+    : `${PART_LABELS[p as FreshnessPart] ?? p} changed`;
 
 export const SHOT_CHANGED_MESSAGE =
   "The Shot changed after this candidate was generated. Regenerate it from the current Production Frame intent before using it.";
+export const REFERENCE_CHANGED_MESSAGE =
+  "This candidate was generated from a Production Frame that is no longer the canonical one. Regenerate it from the current Production Frame before using it.";
 export const NEEDS_CONFORM_MESSAGE = "Create the production conform first.";
 
 export type GeneratedFramePromotion =
@@ -68,42 +75,90 @@ const blocked = (
   changedParts: string[] = [],
 ): GeneratedFramePromotion => ({ available: false, code, reason, changedParts });
 
-/** The Asset id of the Production Frame a candidate used as an image reference (null when it used none). */
-export function referencedProductionFrameAssetId(request: unknown): string | null {
-  const refs = (request as { references?: Array<{ role?: string; assetId?: string }> } | null)?.references;
-  return refs?.find((r) => r.role === "production_frame")?.assetId ?? null;
+/**
+ * THE CANDIDATE INPUT BASIS (Phase 2G.2): what a Production Frame candidate was ACTUALLY generated from, reconstructed
+ * only from the attempt's own frozen records, never from whatever happens to be selected today.
+ *
+ * Three related but distinct identities exist; this is the third:
+ *   1. `GenerationPackage.provenance.fingerprint`   exact frozen package identity (attempts, sets, exports keep it)
+ *   2. `GenerationPackage.provenance.parts.overall` the Shot's production-input identity: the 13 named parts PLUS the
+ *                                                   currently selected Production Frame (2G.1)
+ *   3. the candidate input basis (this)             the 13 named parts the candidate was generated from, plus the
+ *                                                   Production Frame ONLY IF that frame was one of its image inputs
+ * A candidate is NOT judged by (2): `parts.overall` changes whenever ANY frame is selected, so selecting sibling A
+ * would wrongly stale B and C, which were generated from the same Shot truth and never saw A.
+ */
+export interface CandidateInputBasis {
+  /** The 13 named Shot part fingerprints frozen in `packageSnapshot.provenance.parts` (null = not recorded). */
+  namedParts: Partial<Record<FreshnessPart, string>> | null;
+  /**
+   * The Production Frame this candidate received as an image reference, or null when it used none. `assetId` comes from
+   * the frozen request (what was actually sent); the frame identity comes from the frozen package snapshot.
+   */
+  productionFrameReference: { assetId: string; frameId: string | null; version: number | null } | null;
+}
+
+/** Reconstructs a candidate's input basis from its frozen request and package snapshot alone. */
+export function candidateInputBasis(
+  attempt: Pick<GeneratedFrameCandidate["attempt"], "request" | "packageSnapshot">,
+): CandidateInputBasis {
+  const snap = attempt.packageSnapshot as {
+    provenance?: { parts?: Record<string, string> };
+    references?: { productionFrame?: { frameId?: string; assetId?: string; version?: number } };
+  } | null;
+  const parts = snap?.provenance?.parts;
+  const namedParts =
+    parts && typeof parts === "object"
+      ? (Object.fromEntries(
+          FRESHNESS_PARTS.filter((p) => typeof parts[p] === "string").map((p) => [p, parts[p]!]),
+        ) as Partial<Record<FreshnessPart, string>>)
+      : null;
+  const refs = (attempt.request as { references?: Array<{ role?: string; assetId?: string }> } | null)
+    ?.references;
+  const usedAssetId = refs?.find((r) => r.role === "production_frame")?.assetId ?? null;
+  const pf = snap?.references?.productionFrame;
+  return {
+    namedParts: namedParts && Object.keys(namedParts).length > 0 ? namedParts : null,
+    productionFrameReference: usedAssetId
+      ? {
+          assetId: usedAssetId,
+          frameId: pf && pf.assetId === usedAssetId ? (pf.frameId ?? null) : null,
+          version: pf && pf.assetId === usedAssetId ? (pf.version ?? null) : null,
+        }
+      : null,
+  };
 }
 
 /**
- * Which of the Shot's production inputs differ from the ones this candidate was generated from.
+ * Which parts of a candidate's input basis no longer hold. Named parts: any frozen part that differs from the Shot now.
+ * Production Frame reference: only when the candidate USED one, and another frame is canonical now (it was an edit of
+ * v1 and v2 is now the basis). When the canonical frame IS this very candidate, using it again is the
+ * duplicate-promotion path, not staleness.
  *
- * The comparison is the attempt's frozen `packageSnapshot.provenance.parts` against the current Shot's, over the 13
- * NAMED parts (the Shot's intent: camera, blocking, characters, Looks, location, props, lighting, action,
- * performance, continuity, story, timing, constraints) — the same parts `provenance.parts.overall` is built from.
- * The selected Production Frame's own part is deliberately NOT compared as part of the intent, because choosing
- * candidate A must not make its sibling B "stale" (they were generated for the same intent; B is still a valid
- * candidate, and the human may still choose it). It matters in exactly one way, handled here: a candidate that used
- * the Production Frame as its image reference is stale once ANOTHER frame became canonical (it was an edit of v1,
- * and v2 is now the basis).
- *
- * Returns null when nothing changed; `unknown` when the snapshot cannot be compared (never treated as fresh).
+ * Returns null when the basis holds; `unknown` when the basis cannot be reconstructed (never treated as fresh).
  */
-export function generatedFrameStaleness(
+export function candidateInputStaleness(
   ctx: ShotContext,
   attempt: Pick<GeneratedFrameCandidate["attempt"], "id" | "request" | "packageSnapshot">,
 ): { changed: string[]; unknown: boolean } | null {
-  const snap = (attempt.packageSnapshot as { provenance?: { parts?: Record<string, string> } } | null)
-    ?.provenance?.parts;
-  if (!snap || typeof snap !== "object") return { changed: [], unknown: true };
+  const basis = candidateInputBasis(attempt);
+  if (!basis.namedParts) return { changed: [], unknown: true };
   const now = computeShotParts(ctx);
-  const changed: string[] = FRESHNESS_PARTS.filter((p) => snap[p] !== undefined && snap[p] !== now[p]);
-  const used = referencedProductionFrameAssetId(attempt.request);
+  const changed: string[] = FRESHNESS_PARTS.filter(
+    (p) => basis.namedParts![p] !== undefined && basis.namedParts![p] !== now[p],
+  );
+  const ref = basis.productionFrameReference;
   const selected = ctx.selectedProductionFrame;
-  // A refinement of v1 is stale once ANOTHER frame is canonical. When the canonical frame IS this very candidate
-  // (it was promoted already), using it again is the duplicate-promotion path, not a stale one.
-  if (used && used !== (selected?.assetId ?? null) && selected?.sourceGenerationAttemptId !== attempt.id)
-    changed.push("productionFrame");
+  if (ref && selected?.sourceGenerationAttemptId !== attempt.id) {
+    const stillCanonical = ref.frameId ? selected?.id === ref.frameId : selected?.assetId === ref.assetId;
+    if (!stillCanonical) changed.push(PRODUCTION_FRAME_REFERENCE);
+  }
   return changed.length > 0 ? { changed, unknown: false } : null;
+}
+
+/** The generation attempt behind the Shot's CURRENT Production Frame (null when none, or not generated). */
+export function currentProductionFrameAttemptId(ctx: ShotContext): string | null {
+  return ctx.selectedProductionFrame?.sourceGenerationAttemptId ?? null;
 }
 
 /** Whether "Use as Production Frame" is available for a candidate right now, and if not, the truthful reason. */
@@ -127,13 +182,18 @@ export function generatedFramePromotion(
   if (c.original.type !== "image")
     return blocked("not_image", "A Production Frame must be an image; this output is not.");
 
-  const stale = generatedFrameStaleness(ctx, a);
+  const stale = candidateInputStaleness(ctx, a);
   if (stale) {
+    // only the referenced frame moved (the Shot itself did not change): say exactly that
+    const lead =
+      !stale.unknown && stale.changed.every((p) => p === PRODUCTION_FRAME_REFERENCE)
+        ? REFERENCE_CHANGED_MESSAGE
+        : SHOT_CHANGED_MESSAGE;
     return blocked(
       "stale",
       stale.unknown
         ? `${SHOT_CHANGED_MESSAGE} (Prism cannot verify what this candidate was generated from.)`
-        : `${SHOT_CHANGED_MESSAGE} (Changed: ${stale.changed.map(changedPartLabel).join(", ")}.)`,
+        : `${lead} (${stale.changed.map(changedPartText).join("; ")}.)`,
       stale.changed,
     );
   }

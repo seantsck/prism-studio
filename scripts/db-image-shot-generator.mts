@@ -135,6 +135,12 @@ try {
     updatedAt: new Date(Date.now() - 2000).toISOString(),
   });
   const revision = (await ownerGen.projectRevision("ojousama"))!;
+  // the EXACT Shot row (every column) before generating: compared again after the candidates exist
+  const shotRow = async () =>
+    JSON.stringify(
+      (await pool.query("select row_to_json(s) r from shots s where id = $1", [shotId])).rows[0].r,
+    );
+  const shotRowBefore = await shotRow();
   const assetsBefore = (
     await pool.query("select count(*)::int n from assets where project_id = $1", [projectId])
   ).rows[0].n as number;
@@ -222,6 +228,10 @@ try {
       outputs.rows.every(
         (r) => r.type === "image" && r.purpose === "generation_output" && r.source === "provider_output",
       ),
+  );
+  check(
+    "the exact Shot row is unchanged by generating candidates (every column)",
+    (await shotRow()) === shotRowBefore,
   );
   check(
     "generating candidates did not touch the Shot: modality and start-frame override unchanged, no frame selected",

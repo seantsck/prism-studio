@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildShotContext, type ShotContext } from "@/domain/context";
+import { assembleGenerationPackage } from "@/domain/generation-package";
 import { parseAdaptationPlan } from "@/domain/framing/adaptation";
 import { candidateSetPurpose } from "@/domain/generation/candidates";
 import { ofPurpose } from "@/domain/generation/performance";
@@ -123,10 +124,10 @@ describe("Production Frame candidates: the purpose is frozen, the Shot is untouc
     expect(new Set(jobs.map((j) => j!.id)).size).toBe(3);
 
     // generating candidates never mutates the Shot
+    // the EXACT Shot record before and after: modality, start-frame override, approvals, everything
     const after = (await h.data()).shots.find((s) => s.id === shotId)!;
-    expect(after.generation).toEqual(before.generation);
-    expect(after.generation.startFrameAssetId ?? null).toBe(before.generation.startFrameAssetId ?? null);
-    expect(after.approval).toEqual(before.approval);
+    expect(after).toEqual(before);
+    expect(after.generation.modality).toBe(before.generation.modality);
     const { ctx } = await ctxOf(h, shotId);
     expect(ctx.selectedProductionFrame).toBeNull();
   });
@@ -221,6 +222,34 @@ describe("Production Frame candidates: the purpose is frozen, the Shot is untouc
     // counted for the image purpose, invisible to the (default) video purpose
     expect(img.models[0]!.sample.other + img.models[0]!.sample.similar).toBe(1);
     expect(asVideo.models[0]!.sample.other + asVideo.models[0]!.sample.similar).toBe(0);
+  });
+});
+
+describe("NO-GPU path (memory): no spatial reference, no 3D, no COLMAP / Brush / Vulkan", () => {
+  it("text-only candidates → mock image generation → human review → Use as Production Frame → image-to-video start frame", async () => {
+    const { h, shotId } = await setup();
+    const { ctx: before } = await ctxOf(h, shotId);
+    expect(before.spatial ?? null).toBeNull(); // this Shot has no 3D data at all
+    expect(assembleGenerationPackage(before)).not.toHaveProperty("spatialReference");
+
+    const result = await generate(h, shotId, THREE_NATIVE);
+    await drain(h);
+    const [a] = await attemptsOf(h, shotId);
+    expect(a!.requestModality).toBe("text_to_image");
+    await h.repo.candidates.setPreferred(result.view.set.id, a!.id, null, h.clock.now.toISOString());
+    const promoted = await promoteGeneratedFrame(deps(h), (await ctxOf(h, shotId)).ctx, {
+      attemptId: a!.id,
+      userId: null,
+    });
+
+    const { ctx } = await ctxOf(h, shotId);
+    expect(ctx.selectedProductionFrame?.id).toBe(promoted.frame.id);
+    const pkg = assembleGenerationPackage(ctx);
+    expect(pkg.references.productionFrame).toMatchObject({ source: "generation_output", freshness: "fresh" });
+    // downstream image-to-video starts from the generated Production Frame (no explicit override is set)
+    expect(pkg.references.startFrameAssetId).toBe(promoted.frame.assetId);
+    expect(pkg).not.toHaveProperty("spatialReference");
+    expect(JSON.stringify(pkg)).not.toMatch(/colmap|brush|vulkan|splat/i);
   });
 });
 

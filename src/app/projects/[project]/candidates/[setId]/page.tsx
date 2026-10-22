@@ -7,7 +7,10 @@ import { BenchmarkBanner } from "@/components/candidates/benchmark-banner";
 import { Badge, Button, PageHeader, Panel } from "@/components/ui";
 import type { AttemptView } from "@/data/generation-repository";
 import { buildShotContext } from "@/domain/context";
-import { generatedFramePromotion } from "@/domain/generated-production-frame";
+import {
+  currentProductionFrameAttemptId,
+  generatedFramePromotion,
+} from "@/domain/generated-production-frame";
 import { candidateSetPurpose, rollupSet } from "@/domain/generation/candidates";
 import { generationSignature } from "@/domain/generation/signature";
 import { latestReviews } from "@/domain/generation/reviews";
@@ -100,7 +103,8 @@ export default async function CandidateSetPage({
               reason: promotion && !promotion.available ? promotion.reason : null,
               needsConform: promotion && !promotion.available ? promotion.code === "needs_conform" : false,
               stale: promotion && !promotion.available ? promotion.code === "stale" : false,
-              current: shotCtx?.selectedProductionFrame?.sourceGenerationAttemptId === v.attempt.id,
+              // derived ONLY from the selected frame's source attempt (never Best, approval or recency)
+              current: shotCtx ? currentProductionFrameAttemptId(shotCtx) === v.attempt.id : false,
               image: promotion?.available ? promotion.image.role : null,
             }
           : null,

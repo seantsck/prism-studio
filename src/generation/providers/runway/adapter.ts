@@ -68,6 +68,19 @@ type CreateImage = (
   opts?: { signal?: AbortSignal | null; timeout?: number },
 ) => PromiseLike<{ id: string; estimatedCost?: { credits: number } }>;
 
+/**
+ * Compile-time proof that the REAL SDK's `textToImage.create` satisfies the narrowed signature above (the client object is
+ * narrowed once, at construction, for the video endpoints too). If an SDK change broke the image call shape, this line
+ * would stop compiling instead of the mismatch hiding behind that narrowing.
+ */
+const sdkImageCreateMatches: RunwayML["textToImage"]["create"] extends (
+  body: RunwayML.TextToImageCreateParams,
+  opts?: never,
+) => PromiseLike<{ id: string }>
+  ? true
+  : never = true;
+void sdkImageCreateMatches;
+
 type Create = (
   body: Record<string, unknown>,
   opts?: { signal?: AbortSignal | null; timeout?: number },

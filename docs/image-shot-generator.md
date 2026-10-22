@@ -128,7 +128,7 @@ existing Phase 2C ffmpeg pipeline, which already handles stills) must exist firs
 An explicit human action, available only for a candidate that is:
 
 - a **succeeded** attempt of **this Shot and Project** with request purpose `production_frame` and a still-image output;
-- **not stale** (below); and
+- **fresh** against its candidate input basis (below); and
 - backed by a **production-shaped image**.
 
 Image source: **(A)** the attempt's selected production conform, else **(B)** the provider original when it already matches the
@@ -143,27 +143,47 @@ PRODUCTION FRAME** badge derives from the selected frame's `sourceGenerationAtte
 here uses `generation_attempts.approved` (Production Frame selection is the one canonical pointer); the legacy video "Promote to
 Shot" flow is unchanged and is simply not offered for image sets.
 
-### The stale-candidate rule
+### Candidate freshness: the candidate input basis
 
-A generated image must never be promoted while pretending it depicts newer Shot intent. Before promotion Prism compares the
-attempt's frozen `packageSnapshot.provenance.parts` with the current Shot over the 13 **named parts** (camera, blocking,
-characters, Looks, location, props, lighting, action, performance, continuity, story, timing, constraints: the parts
-`provenance.parts.overall` is built from). A difference **refuses** promotion with:
+A generated image must never be promoted while pretending it depicts newer Shot intent. A candidate is judged against **the
+input truth it actually saw**: its _candidate input basis_ (`candidateInputBasis` in `src/domain/generated-production-frame.ts`),
+reconstructed only from the attempt's own frozen records and never from whatever is selected today:
 
-> The Shot changed after this candidate was generated. Regenerate it from the current Production Frame intent before using it.
+- the **13 named Shot part fingerprints** frozen in its `packageSnapshot.provenance.parts` (story, camera, blocking, characters,
+  Looks, location, props, lighting, action, continuity, constraints, performance, timing);
+- the **Production Frame it used as an image reference**, if any: the Asset id from its frozen request (what was actually sent)
+  and the frame id and version from its frozen package snapshot;
+- its purpose, `production_frame`, from the frozen request.
 
-followed by the changed parts. The candidate is never rewritten: it stays valid history, shown **STALE** relative to the current
-Shot.
+Three related identities exist, and they are **not** interchangeable:
 
-The selected Production Frame is handled precisely, not as a blanket "anything changed":
+| Identity                                     | What it identifies                                                                                       | Used for                                                  |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `GenerationPackage.provenance.fingerprint`   | the exact frozen package                                                                                 | attempts, candidate sets, continuity runs, exports (2G.1) |
+| `GenerationPackage.provenance.parts.overall` | the Shot's production inputs: 13 named parts **plus the currently selected Production Frame**            | "this shot has changed since generation attempt N" (2G.1) |
+| the **candidate input basis** (2G.2)         | the 13 named parts the candidate was generated from, plus a Production Frame **only if it was an input** | whether a candidate can still become the Production Frame |
 
-- A candidate generated **from Production Frame v1** (as its image reference) stays usable while v1 is canonical and becomes
-  stale once **another** frame is canonical (it was an edit of v1, and v2 is now the basis). Using a refinement that _is_ the
-  canonical frame again is the duplicate-promotion path, not a stale one.
-- Choosing candidate A **does not** make its sibling B stale: both depict the same Shot intent, and the human may still choose B
-  (otherwise Best-vs-current independence, and "A then B then back to A", could not work). So the comparison uses the named
-  parts plus the frame identity a candidate actually used as a reference, rather than `parts.overall` including the selection
-  part. This is a deliberate reading of the requirement; the tests pin it.
+A candidate is deliberately **not** judged by `parts.overall`: that identity changes whenever any frame is selected, so
+selecting sibling A would wrongly stale B and C, which were generated from the same Shot truth and never saw A.
+
+The rule, with its three cases (each pinned by a test):
+
+1. **Siblings stay fresh.** Generate A, B and C while no Production Frame is selected; use A as the Production Frame. B and C are
+   **still fresh** and usable without regenerating, unless a named production input changed. A shows **CURRENT PRODUCTION FRAME**.
+2. **A referenced frame that changes stales its candidates.** With Production Frame v1 selected, generate A, B and C that use v1
+   as an image reference; then make v2 canonical. A, B and C are **stale**: "This candidate was generated from a Production Frame
+   that is no longer the canonical one. Regenerate it from the current Production Frame before using it. (Production Frame
+   reference changed.)". Making v1 canonical again makes them usable again. A refinement that _is_ the canonical frame can be used
+   again (the duplicate-promotion path).
+3. **A named input that changes stales its candidates.** Change a Character's identity, a Look or wardrobe, the camera, lighting,
+   location, blocking or the selected performance (or any other named part) after generation: the candidate is **stale**:
+
+   > The Shot changed after this candidate was generated. Regenerate it from the current Production Frame intent before using it.
+
+   followed by what changed ("Lighting changed").
+
+Promotion of a stale candidate is **refused**. The candidate is never rewritten: it stays valid history, shown **STALE** relative to
+the current Shot. A candidate whose basis cannot be reconstructed is never treated as fresh.
 
 ## Candidate sets and the review surface
 

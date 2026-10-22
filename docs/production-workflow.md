@@ -99,7 +99,7 @@ From Shot Prep → Production Frame the filmmaker can **generate candidates**: s
 same model comparison and candidate-set workflow, filtered to still-image models), compare and review them (Good /
 Shortlist / Best / Reject), and **Use as Production Frame**. The generation _purpose_ `production_frame` is independent of
 the Shot's own modality: generating stills never changes `shot.generation.modality`, the start-frame override, the selection
-or any 3D state. One attempt is one image. A candidate whose Shot has since changed is **stale** and refused; a provider canvas
+or any 3D state. One attempt is one image. A candidate is judged by its **candidate input basis** (the named parts it was generated from, plus a Production Frame only if it used one as a reference), not by the Shot's current `parts.overall`: a named input that changed, or a referenced frame that is no longer canonical, makes it **stale** and refused, while choosing a sibling never does; a provider canvas
 that is not the production aspect needs the production conform first. Production Frame selection is the one canonical
 pointer (never `attempt.approved`); ⭐ Best is only the experiment's preference. See
 [image-shot-generator](image-shot-generator.md).

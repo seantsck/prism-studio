@@ -3,15 +3,21 @@ import { describe, expect, it } from "vitest";
 import {
   draftGeneratedProductionFrame,
   generatedFramePromotion,
-  generatedFrameStaleness,
+  candidateInputBasis,
+  candidateInputStaleness,
+  currentProductionFrameAttemptId,
   NEEDS_CONFORM_MESSAGE,
+  PRODUCTION_FRAME_REFERENCE,
+  REFERENCE_CHANGED_MESSAGE,
   SHOT_CHANGED_MESSAGE,
   type GeneratedFrameCandidate,
 } from "@/domain/generated-production-frame";
+import { FRESHNESS_PARTS } from "@/domain/fingerprint";
 import { assembleGenerationPackage } from "@/domain/generation-package";
+import { deriveProductionFrameReferenceCandidates } from "@/domain/generation/compatibility";
 import type { Asset } from "@/domain/schemas";
 import { seed, shotByCode } from "./helpers";
-import { attach, contextOf, draftFor, newUploadAsset, T } from "./production-frame-fixtures";
+import { attach, contextOf, draftFor, newUploadAsset, storeImage, T } from "./production-frame-fixtures";
 
 /**
  * Phase 2G.2: when may a GENERATED still become the Shot's Production Frame? Pure rules. Everything is fictional, in
@@ -170,7 +176,7 @@ describe("Use as Production Frame — the stale-candidate rule", () => {
     const data = seed();
     const c = candidateOf(data);
     (c.attempt as { packageSnapshot: unknown }).packageSnapshot = {};
-    expect(generatedFrameStaleness(contextOf(data, "3A"), c.attempt)).toEqual({ changed: [], unknown: true });
+    expect(candidateInputStaleness(contextOf(data, "3A"), c.attempt)).toEqual({ changed: [], unknown: true });
     expect(generatedFramePromotion(contextOf(data, "3A"), c)).toMatchObject({
       available: false,
       code: "stale",
@@ -193,7 +199,7 @@ describe("Use as Production Frame — the stale-candidate rule", () => {
     attach(data, [f1, f2], f2); // the human switched to v2 before promoting
     const p = generatedFramePromotion(contextOf(data, "3A"), c);
     expect(p).toMatchObject({ available: false, code: "stale" });
-    if (!p.available) expect(p.changedParts).toEqual(["productionFrame"]);
+    if (!p.available) expect(p.changedParts).toEqual(["productionFrameReference"]);
   });
 
   it("a refinement that is itself the canonical frame is not stale: using it again is the duplicate-promotion path", () => {
@@ -220,7 +226,7 @@ describe("Use as Production Frame — the stale-candidate rule", () => {
     expect(generatedFramePromotion(contextOf(data, "3A"), sibling)).toMatchObject({
       available: false,
       code: "stale",
-      changedParts: ["productionFrame"],
+      changedParts: ["productionFrameReference"],
     });
   });
 
@@ -238,6 +244,239 @@ describe("Use as Production Frame — the stale-candidate rule", () => {
     expect(generatedFramePromotion(contextOf(data, "3A"), b).available).toBe(true);
     // and A itself is still promotable (re-selecting it is the duplicate-promotion path)
     expect(generatedFramePromotion(contextOf(data, "3A"), a).available).toBe(true);
+  });
+});
+
+describe("the candidate input basis (what a candidate was ACTUALLY generated from)", () => {
+  it("is reconstructed from the frozen attempt alone: named parts, purpose, and the Production Frame it used", () => {
+    const data = seed();
+    const v1Asset = outputAsset(data, { width: 1912, height: 800, label: "v1" });
+    data.assets.push(v1Asset);
+    const f1 = { ...draftFor(data, "3A", { asset: v1Asset }), version: 1 };
+    attach(data, [f1], f1);
+    const c = candidateOf(data, { references: [{ role: "production_frame", assetId: v1Asset.id }] });
+    const frozen = JSON.parse(JSON.stringify(c.attempt)); // only what was persisted
+    // what is selected TODAY is irrelevant to the basis: clear the selection entirely
+    attach(data, [f1], null);
+    const basis = candidateInputBasis(frozen);
+    expect(Object.keys(basis.namedParts ?? {}).sort()).toEqual([...FRESHNESS_PARTS].sort());
+    expect(basis.productionFrameReference).toEqual({ assetId: v1Asset.id, frameId: f1.id, version: 1 });
+    expect((frozen.request as { purpose: string }).purpose).toBe("production_frame");
+    // a candidate generated with NO Production Frame input has no frame in its basis, whatever is selected later
+    const text = candidateOf(seed());
+    expect(candidateInputBasis(text.attempt).productionFrameReference).toBeNull();
+  });
+
+  it("is a different identity from provenance.parts.overall (which follows the CURRENT selection)", () => {
+    const data = seed();
+    const c = candidateOf(data);
+    const before = assembleGenerationPackage(contextOf(data, "3A")).provenance.parts.overall;
+    const a = outputAsset(data, { width: 1912, height: 800, label: "sel" });
+    data.assets.push(a);
+    const f = { ...draftFor(data, "3A", { asset: a }), version: 1 };
+    attach(data, [f], f);
+    const after = assembleGenerationPackage(contextOf(data, "3A")).provenance.parts.overall;
+    expect(after).not.toBe(before); // the Shot's production-input identity moved with the selection…
+    expect(candidateInputStaleness(contextOf(data, "3A"), c.attempt)).toBeNull(); // …the candidate's basis did not
+  });
+});
+
+describe("MERGE-CRITICAL: sibling selection never stales siblings", () => {
+  it("no frame selected → A/B/C from the same Shot truth → use A → B and C stay fresh, A is current", () => {
+    const data = seed();
+    const [a, b, c] = ["A", "B", "C"].map((l) =>
+      candidateOf(data, { original: outputAsset(data, { width: 1912, height: 800, label: l }) }),
+    ) as [GeneratedFrameCandidate, GeneratedFrameCandidate, GeneratedFrameCandidate];
+    data.assets.push(a.original!, b.original!, c.original!);
+    const drafted = draftGeneratedProductionFrame(contextOf(data, "3A"), a, {
+      id: randomUUID(),
+      now: T,
+      userId: null,
+    });
+    if (!drafted.ok) throw new Error(drafted.reason);
+    const frame = { ...drafted.draft, version: 1 };
+    attach(data, [frame], frame);
+    const ctx = contextOf(data, "3A");
+    expect(currentProductionFrameAttemptId(ctx)).toBe(a.attempt.id);
+    for (const sibling of [b, c]) {
+      expect(candidateInputStaleness(ctx, sibling.attempt)).toBeNull(); // fresh
+      expect(generatedFramePromotion(ctx, sibling).available).toBe(true); // usable without regenerating
+    }
+  });
+});
+
+describe("MERGE-CRITICAL: a change of the REFERENCED Production Frame stales the candidates made from it", () => {
+  it("v1 selected → A/B/C generated with v1 as a reference → v2 selected → A/B/C stale and refused", () => {
+    const data = seed();
+    const v1Asset = outputAsset(data, { width: 1912, height: 800, label: "v1" });
+    const v2Asset = outputAsset(data, { width: 1912, height: 800, label: "v2" });
+    data.assets.push(v1Asset, v2Asset);
+    const f1 = { ...draftFor(data, "3A", { asset: v1Asset }), version: 1 };
+    const f2 = { ...draftFor(data, "3A", { asset: v2Asset }), version: 2 };
+    attach(data, [f1, f2], f1);
+    const made = ["A", "B", "C"].map((l) =>
+      candidateOf(data, {
+        original: outputAsset(data, { width: 1912, height: 800, label: l }),
+        references: [{ role: "production_frame", assetId: v1Asset.id }],
+      }),
+    );
+    for (const m of made) expect(generatedFramePromotion(contextOf(data, "3A"), m).available).toBe(true);
+
+    attach(data, [f1, f2], f2);
+    for (const m of made) {
+      const p = generatedFramePromotion(contextOf(data, "3A"), m);
+      expect(p).toMatchObject({
+        available: false,
+        code: "stale",
+        changedParts: [PRODUCTION_FRAME_REFERENCE],
+      });
+      if (!p.available) {
+        expect(p.reason.startsWith(REFERENCE_CHANGED_MESSAGE)).toBe(true);
+        expect(p.reason).toContain("Production Frame reference changed");
+      }
+    }
+  });
+});
+
+describe("named-part staleness: every relevant production input stales a candidate (the attempt is never touched)", () => {
+  type Mutate = (d: Data) => void;
+  const ctx3A = (d: Data) => contextOf(d, "3A");
+  const cases: Array<[string, string, Mutate]> = [
+    [
+      "character identity",
+      "characters",
+      (d) => {
+        const id = ctx3A(d).characters[0]!.character!.id;
+        d.characters.find((x) => x.id === id)!.physicalDescription = "now with a scar";
+      },
+    ],
+    [
+      "Look / wardrobe",
+      "looks",
+      (d) => {
+        const id = ctx3A(d).characters.find((x) => x.look)!.look!.id;
+        d.looks.find((x) => x.id === id)!.wardrobe = "a different coat";
+      },
+    ],
+    ["camera", "camera", (d) => void (shotByCode(d, "3A").composition.lens = "135mm")],
+    ["lighting", "lighting", (d) => void (shotByCode(d, "3A").lighting.mood = "harsh noon sun")],
+    [
+      "location",
+      "location",
+      (d) => {
+        const id = ctx3A(d).location!.id;
+        d.locations.find((x) => x.id === id)!.description = "the gate after the storm";
+      },
+    ],
+    ["blocking", "blocking", (d) => void (shotByCode(d, "3A").spatial.subjectBlocking = "she walks away")],
+    [
+      "performance",
+      "performance",
+      (d) => {
+        const id = ctx3A(d).lines[0]!.line.id;
+        d.dialogueLines.find((x) => x.id === id)!.originalText = "A different line.";
+      },
+    ],
+  ];
+  it.each(cases)("%s", (_label: string, part: string, mutate: Mutate): void => {
+    const data = seed();
+    const c = candidateOf(data);
+    const frozen = JSON.stringify(c.attempt);
+    mutate(data);
+    const p = generatedFramePromotion(contextOf(data, "3A"), c);
+    expect(p).toMatchObject({ available: false, code: "stale" });
+    if (!p.available) {
+      expect(p.changedParts).toContain(part);
+      expect(p.reason.startsWith(SHOT_CHANGED_MESSAGE)).toBe(true);
+    }
+    expect(JSON.stringify(c.attempt)).toBe(frozen);
+  });
+});
+
+describe("Production Frame reference order (deterministic, deduplicated, stored bytes only)", () => {
+  it("frame → storyboard → identity → Look → location → lighting → explicit refs; placeholders never sent", () => {
+    const data = seed();
+    const ctx0 = contextOf(data, "3A");
+    // before anything is stored, every seed reference is a placeholder (no bytes): nothing is sent
+    expect(deriveProductionFrameReferenceCandidates(assembleGenerationPackage(ctx0))).toEqual([]);
+    // give every referenced image real stored facts
+    for (const id of Object.keys(assembleGenerationPackage(ctx0).assets)) {
+      const a = data.assets.find((x) => x.id === id);
+      if (a && (a.type === "image" || a.type === "reference"))
+        storeImage(data, id, { width: 800, height: 800 });
+    }
+    // and one stored image for each remaining role (the seed has none for these)
+    const stored = (label: string) => {
+      const a = outputAsset(data, { width: 800, height: 800, label });
+      data.assets.push(a);
+      return a.id;
+    };
+    const lookId = ctx0.characters.find((x) => x.look)!.look!.id;
+    const look = stored("look");
+    data.looks.find((x) => x.id === lookId)!.referenceAssetIds = [look];
+    const loc = stored("location");
+    data.locations.find((x) => x.id === ctx0.location!.id)!.referenceAssetIds = [loc];
+    const light = stored("lighting");
+    shotByCode(data, "3A").lighting.referenceAssetId = light;
+    const explicit = stored("explicit");
+    const identity = ctx0.characters.flatMap((c) => c.identityRefs.map((r) => r.assetId))[0]!;
+    // an explicit Shot reference that duplicates an identity image is sent ONCE, at its highest priority
+    shotByCode(data, "3A").generation.referenceAssetIds = [explicit, identity];
+    const pfAsset = outputAsset(data, { width: 1912, height: 800, label: "pf" });
+    data.assets.push(pfAsset);
+    const f = { ...draftFor(data, "3A", { asset: pfAsset }), version: 1 };
+    attach(data, [f], f);
+
+    const refs = deriveProductionFrameReferenceCandidates(assembleGenerationPackage(contextOf(data, "3A")));
+    const roles = refs.map((r) => r.role);
+    const identities = roles.filter((r) => r === "identity").length;
+    expect(identities).toBeGreaterThan(0);
+    expect(roles).toEqual([
+      "production_frame",
+      "storyboard",
+      ...Array<string>(identities).fill("identity"),
+      "character_look",
+      "location",
+      "style",
+      "other",
+    ]);
+    expect(refs[0]!.assetId).toBe(pfAsset.id);
+    expect(refs.filter((r) => r.assetId === identity)).toHaveLength(1); // deduplicated
+    expect(refs.find((r) => r.assetId === identity)!.role).toBe("identity"); // at its highest priority
+    expect(refs.at(-1)!.assetId).toBe(explicit);
+    // deterministic
+    expect(
+      deriveProductionFrameReferenceCandidates(assembleGenerationPackage(contextOf(data, "3A"))),
+    ).toEqual(refs);
+  });
+});
+
+describe("CURRENT PRODUCTION FRAME derives only from the selected frame's source attempt", () => {
+  it("follows selection and reselection, never Best, approval or recency", () => {
+    const data = seed();
+    const a = candidateOf(data, { original: outputAsset(data, { width: 1912, height: 800, label: "A" }) });
+    const b = candidateOf(data, { original: outputAsset(data, { width: 1912, height: 800, label: "B" }) });
+    data.assets.push(a.original!, b.original!);
+    const da = draftGeneratedProductionFrame(contextOf(data, "3A"), a, {
+      id: randomUUID(),
+      now: T,
+      userId: null,
+    });
+    const db = draftGeneratedProductionFrame(contextOf(data, "3A"), b, {
+      id: randomUUID(),
+      now: T,
+      userId: null,
+    });
+    if (!da.ok || !db.ok) throw new Error("draft refused");
+    const fa = { ...da.draft, version: 1 };
+    const fb = { ...db.draft, version: 2 };
+    expect(currentProductionFrameAttemptId(contextOf(data, "3A"))).toBeNull();
+    attach(data, [fa, fb], fb);
+    expect(currentProductionFrameAttemptId(contextOf(data, "3A"))).toBe(b.attempt.id);
+    attach(data, [fa, fb], fa); // reselect the older frame: the badge moves with it
+    expect(currentProductionFrameAttemptId(contextOf(data, "3A"))).toBe(a.attempt.id);
+    attach(data, [fa, fb], null);
+    expect(currentProductionFrameAttemptId(contextOf(data, "3A"))).toBeNull();
   });
 });
 

@@ -13,7 +13,12 @@ import {
   normalizeReview,
 } from "@/domain/generation/reviews";
 import { PREFERENCES, type RecommendationPreference } from "@/domain/generation/recommendation";
-import { purposeOfRequest, type GenerationPurpose } from "@/domain/generation/schemas";
+import { candidateSetPurpose } from "@/domain/generation/candidates";
+import {
+  isProductionFrameAttempt,
+  purposeOfRequest,
+  type GenerationPurpose,
+} from "@/domain/generation/schemas";
 import { CandidateSetBlockedError, submitCandidateSet } from "@/generation/candidate-set";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { requireUser } from "./auth";
@@ -246,6 +251,12 @@ async function promoteCandidate_impl(form: FormData) {
   if (!set || set.set.projectId !== data.project.id) throw new UserFacingError("That set no longer exists.");
   if (!set.members.some((m) => m.attemptId === view.attempt.id))
     throw new UserFacingError("That generation is not a candidate of this set.");
+  // A Production Frame candidate is a still for the Shot's canonical frame, never the Shot's final output: it is chosen
+  // with "Use as Production Frame" (the selection pointer), not approved as the Shot's output attempt.
+  if (candidateSetPurpose(set.set) === "production_frame" || isProductionFrameAttempt(view.attempt))
+    throw new UserFacingError(
+      "This is a Production Frame candidate: use it as the Production Frame instead.",
+    );
   if (view.attempt.status !== "succeeded")
     throw new UserFacingError("Only a completed generation can be promoted.");
   const now = new Date().toISOString();

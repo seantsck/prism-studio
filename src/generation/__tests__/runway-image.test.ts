@@ -668,6 +668,16 @@ describe("Runway image tasks: poll, result and failures", () => {
     expect(prov).not.toMatch(/authorization|bearer/i);
   });
 
+  it("no provider-reported cost means UNKNOWN actual cost, never the estimate passed off as actual", async () => {
+    const { fake, provider } = make();
+    const req = request("muse_image", { aspectRatio: "21:9" });
+    await provider.submit(req, plan(), ctx());
+    fake.tasks.set("img_1", { id: "img_1", status: "SUCCEEDED", output: ["https://x.cloudfront.net/o.png"] });
+    const r = await provider.fetchResult(refFor(), req, ctx());
+    expect(r.cost).toMatchObject({ amount: null, units: null, basis: "Runway reported no cost" });
+    expect(r.provenance.metadata).toMatchObject({ credits: null });
+  });
+
   it("a succeeded task with no output is an error; an unfinished task is not ready", async () => {
     const { fake, provider } = make();
     const req = request("muse_image", { aspectRatio: "21:9" });
