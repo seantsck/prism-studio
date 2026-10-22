@@ -1,6 +1,7 @@
 import "server-only";
 import { projectRun } from "@/continuity/service";
 import type { QaStatus } from "@/domain/continuity/status";
+import { isProductionFrameAttempt } from "@/domain/generation/schemas";
 import type { ProjectData } from "@/domain/schemas";
 import { getMediaQaRepo } from "./media-qa";
 
@@ -32,8 +33,9 @@ export async function loadPipeline(data: ProjectData): Promise<PipelineSummary> 
 
   const shots = new Map<string, ShotPipeline>();
   for (const shot of data.shots) {
+    // output attempts only: Production Frame candidates (stills) are not the Shot's generated output
     const attempts = data.attempts
-      .filter((a) => a.shotId === shot.id)
+      .filter((a) => a.shotId === shot.id && !isProductionFrameAttempt(a))
       .sort((a, b) => b.attemptNumber - a.attemptNumber);
     const succeeded = attempts.filter((a) => a.status === "succeeded");
     // The attempt a person would be looking at: the approved one, else the newest completed one.

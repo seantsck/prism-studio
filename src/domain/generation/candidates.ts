@@ -1,6 +1,7 @@
 import type { CompatibilityReport } from "./compatibility";
 import type { ModelFit } from "./models/matrix";
 import type { GenerationPackage } from "../generation-package";
+import type { GenerationPurpose } from "./schemas";
 
 /**
  * Candidate sets (Phase 2E): an intentional comparison experiment. One shared production package, several
@@ -8,6 +9,17 @@ import type { GenerationPackage } from "../generation-package";
  */
 export const CANDIDATE_SET_STATUSES = ["open", "decided", "archived"] as const;
 export type CandidateSetStatus = (typeof CANDIDATE_SET_STATUSES)[number];
+
+/**
+ * The generation PURPOSE of a candidate set (Phase 2G.2), machine-readable in the set's frozen recommendation JSON
+ * (`generationPurpose`). No schema change: a set without it is a `shot_output` set (every set before 2G.2).
+ * Distinct from the free-text `purpose` column, which is the filmmaker's own note about the experiment.
+ */
+export function candidateSetPurpose(set: {
+  recommendation: Record<string, unknown> | null;
+}): GenerationPurpose {
+  return set.recommendation?.generationPurpose === "production_frame" ? "production_frame" : "shot_output";
+}
 
 export const MAX_CANDIDATES_DEFAULT = 6;
 export const CANDIDATE_LABELS = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
@@ -210,6 +222,7 @@ interface DisclosureCandidate {
   label: string;
   displayName: string;
   fit: Pick<ModelFit, "packaging" | "tierId" | "nativeAudio" | "inputMode" | "referencesUsed"> & {
+    quality?: string | null;
     compatibility: Pick<CompatibilityReport, "used" | "adaptation">;
   };
 }
@@ -218,7 +231,9 @@ interface DisclosureCandidate {
 export function describeComparison(
   pkg: GenerationPackage,
   candidates: DisclosureCandidate[],
+  purpose: GenerationPurpose = "shot_output",
 ): ComparisonDisclosure {
+  const still = purpose === "production_frame";
   const same: string[] = [];
   if (pkg.characters.length > 0)
     same.push(
@@ -228,13 +243,16 @@ export function describeComparison(
   if (looks.length) same.push(`Look: ${[...new Set(looks)].join(", ")}`);
   if (pkg.set) same.push(`Location: ${pkg.set.name}`);
   if (pkg.references.approvedStoryboardFrame) same.push("Approved storyboard frame");
+  if (pkg.references.productionFrame) same.push("Current Production Frame");
   const takes = pkg.performance.filter((p) => p.selectedTake).length;
-  if (takes > 0) same.push(`Performance: ${takes} selected take(s)`);
+  if (takes > 0 && !still) same.push(`Performance: ${takes} selected take(s)`);
   const move = pkg.camera.movement.trim();
   if (move || pkg.camera.shotSize.trim())
     same.push(`Camera intent: ${[pkg.camera.shotSize, move].filter(Boolean).join(", ")}`);
   same.push(
-    `Production ${pkg.style.aspectRatio || "ratio unset"} · ${(pkg.timing.durationMs / 1000).toFixed(1)} s`,
+    still
+      ? `Production frame ${pkg.style.aspectRatio || "ratio unset"} (one still image per candidate)`
+      : `Production ${pkg.style.aspectRatio || "ratio unset"} · ${(pkg.timing.durationMs / 1000).toFixed(1)} s`,
   );
 
   const different: string[] = [];
@@ -245,22 +263,24 @@ export function describeComparison(
 
   if (distinct((c) => c.fit.compatibility.used.aspectRatio).size > 1)
     different.push(`Provider ratio: ${list((c) => c.fit.compatibility.used.aspectRatio ?? "native")}`);
-  if (distinct((c) => c.fit.compatibility.used.durationMs).size > 1)
+  if (!still && distinct((c) => c.fit.compatibility.used.durationMs).size > 1)
     different.push(
       `Generated duration: ${list((c) => `${((c.fit.compatibility.used.durationMs ?? 0) / 1000).toFixed(1)} s`)}`,
     );
   if (distinct((c) => c.fit.referencesUsed.used).size > 1)
     different.push(`Reference images used: ${list((c) => String(c.fit.referencesUsed.used))}`);
-  if (distinct((c) => Boolean(c.fit.compatibility.used.startFrameAssetId)).size > 1)
+  if (!still && distinct((c) => Boolean(c.fit.compatibility.used.startFrameAssetId)).size > 1)
     different.push(
       `Start frame as exact first frame: ${list((c) => (c.fit.compatibility.used.startFrameAssetId ? "yes" : "no"))}`,
     );
-  if (distinct((c) => c.fit.compatibility.used.audioAssetIds.length).size > 1)
+  if (!still && distinct((c) => c.fit.compatibility.used.audioAssetIds.length).size > 1)
     different.push(
       `Performed audio supplied: ${list((c) => (c.fit.compatibility.used.audioAssetIds.length ? "yes" : "no"))}`,
     );
   if (distinct((c) => c.fit.tierId).size > 1)
     different.push(`Resolution tier: ${list((c) => c.fit.tierId ?? "—")}`);
+  if (still && distinct((c) => c.fit.quality ?? null).size > 1)
+    different.push(`Quality: ${list((c) => c.fit.quality ?? "n/a")}`);
   if (distinct((c) => c.fit.nativeAudio).size > 1)
     different.push(`Provider-generated audio: ${list((c) => (c.fit.nativeAudio ? "on" : "off"))}`);
   if (distinct((c) => c.fit.inputMode).size > 1)

@@ -75,6 +75,12 @@ recorded one falls back to comparing the exact package fingerprints. Attempts ar
 checksum and intent fingerprint), **only while a frame is selected**: selecting or switching frames changes both
 identities; an _unselected_ historical frame changes neither (history is never hashed); re-selecting the same frame
 changes neither. A Shot with no selected frame has exactly the `parts.overall` it had before Phase 2G.1.
+**Derived artifacts are not automatically judged by `parts.overall`.** A Production Frame _candidate_ (Phase 2G.2) is judged by
+its own **candidate input basis**: the 13 named parts it was generated from, plus a Production Frame only when that frame was one
+of its image inputs. Selecting another frame changes `parts.overall` but must not stale sibling candidates that never saw it
+([image-shot-generator](image-shot-generator.md#candidate-freshness-the-candidate-input-basis)). Three related identities,
+three questions: exact package, Shot production inputs, and what a candidate actually saw.
+
 `provenance.parts` are the per-part hashes from `computeShotParts` plus `overall`
 ([production-workflow](production-workflow.md)).
 

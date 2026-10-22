@@ -13,6 +13,12 @@ import {
   normalizeReview,
 } from "@/domain/generation/reviews";
 import { PREFERENCES, type RecommendationPreference } from "@/domain/generation/recommendation";
+import { candidateSetPurpose } from "@/domain/generation/candidates";
+import {
+  isProductionFrameAttempt,
+  purposeOfRequest,
+  type GenerationPurpose,
+} from "@/domain/generation/schemas";
 import { CandidateSetBlockedError, submitCandidateSet } from "@/generation/candidate-set";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { requireUser } from "./auth";
@@ -30,6 +36,8 @@ const selectionsSchema = z
       inputMode: z.enum(["keyframes", "references"]).nullable().optional(),
       tierId: z.string().max(16).nullable().optional(),
       nativeAudio: z.boolean().optional(),
+      /** Still-image quality (Production Frame candidates); validated against the model by the planner. */
+      quality: z.string().max(16).nullable().optional(),
     }),
   )
   .min(1)
@@ -68,6 +76,9 @@ async function createCandidateSet_impl(form: FormData) {
   const preference = (PREFERENCES as readonly string[]).includes(prefRaw)
     ? (prefRaw as RecommendationPreference)
     : undefined;
+  // the purpose is a closed set: anything else is a normal Shot-output set
+  const generationPurpose: GenerationPurpose =
+    str(form, "generationPurpose") === "production_frame" ? "production_frame" : "shot_output";
   const confirmedRaw = str(form, "confirmedTotalUsd");
   const confirmedTotalUsd = confirmedRaw === "" ? null : Number(confirmedRaw);
 
@@ -86,6 +97,7 @@ async function createCandidateSet_impl(form: FormData) {
         inputMode: s.inputMode ?? null,
         tierId: s.tierId ?? null,
         nativeAudio: s.nativeAudio ?? false,
+        quality: s.quality ?? null,
       })),
       acknowledgeAll: str(form, "ackAll") === "1",
       confirmedTotalUsd:
@@ -95,6 +107,7 @@ async function createCandidateSet_impl(form: FormData) {
       userId: actorOf(user),
       projectRevision: revision.revision,
       preference,
+      generationPurpose,
     });
     setId = out.view.set.id;
   } catch (err) {
@@ -146,10 +159,18 @@ async function reviewCandidate_impl(form: FormData) {
     if (e instanceof ReviewValidationError) throw new UserFacingError(e.message);
     throw e;
   }
-  // A review is a verdict on a clip. A failed / cancelled / queued attempt has no clip, so it can never be
-  // reviewed as though one existed (its provider failure stays visible as the attempt's own status).
-  if (view.attempt.status !== "succeeded")
-    throw new UserFacingError("Only a completed generation has a clip to review.");
+  // A review is a verdict on what was generated (a clip, or a still image for a Production Frame candidate). A
+  // failed / cancelled / queued attempt has nothing to review, so it can never be reviewed as though it had
+  // (its provider failure stays visible as the attempt's own status).
+  if (view.attempt.status !== "succeeded") {
+    const noun =
+      purposeOfRequest((view.attempt.request ?? {}) as { purpose?: GenerationPurpose }) === "production_frame"
+        ? "image"
+        : "clip";
+    throw new UserFacingError(
+      `Only a completed generation has ${noun === "image" ? "an" : "a"} ${noun} to review.`,
+    );
+  }
   const set = await candidates.findSetForAttempt(view.attempt.id);
   await candidates.recordReview({
     projectId: data.project.id,
@@ -230,6 +251,12 @@ async function promoteCandidate_impl(form: FormData) {
   if (!set || set.set.projectId !== data.project.id) throw new UserFacingError("That set no longer exists.");
   if (!set.members.some((m) => m.attemptId === view.attempt.id))
     throw new UserFacingError("That generation is not a candidate of this set.");
+  // A Production Frame candidate is a still for the Shot's canonical frame, never the Shot's final output: it is chosen
+  // with "Use as Production Frame" (the selection pointer), not approved as the Shot's output attempt.
+  if (candidateSetPurpose(set.set) === "production_frame" || isProductionFrameAttempt(view.attempt))
+    throw new UserFacingError(
+      "This is a Production Frame candidate: use it as the Production Frame instead.",
+    );
   if (view.attempt.status !== "succeeded")
     throw new UserFacingError("Only a completed generation can be promoted.");
   const now = new Date().toISOString();

@@ -58,6 +58,11 @@ class FakeRunway {
     return {
       textToVideo: { create: create("t2v") },
       imageToVideo: { create: create("i2v") },
+      textToImage: {
+        create: async () => {
+          throw new Error("the video adapter suite never calls textToImage");
+        },
+      },
       tasks: {
         retrieve: async (id) => {
           this.retrieves += 1;

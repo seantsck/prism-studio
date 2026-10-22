@@ -10,10 +10,25 @@ import type { GenerationModality } from "../schemas";
  */
 export type Support = "supported" | "unsupported" | "unknown";
 
-export type ModelFamily = "runway_gen4" | "veo" | "seedance" | "hailuo";
+export type ModelFamily =
+  | "runway_gen4"
+  | "veo"
+  | "seedance"
+  | "hailuo"
+  // Phase 2G.2 still-image families (Runway text_to_image endpoint, one request shape each)
+  | "gpt_image"
+  | "seedream"
+  | "muse_image";
 
 /** What the model is for, in the comparison set (descriptive, not a quality ranking). */
-export type ModelRole = "flagship" | "fast_low_cost" | "reference_rich" | "premium_audio" | "cinematic";
+export type ModelRole =
+  | "flagship"
+  | "fast_low_cost"
+  | "reference_rich"
+  | "premium_audio"
+  | "cinematic"
+  /** An image model from a different model family than the other candidates (candidate diversity, not quality). */
+  | "alternative_family";
 
 export interface CatalogVerification {
   /** ISO date the capabilities were last checked against the sources below. */
@@ -63,6 +78,37 @@ export type CreditRule = {
   minimumCredits: number | null;
 };
 
+/**
+ * Still-image credit rule (Phase 2G.2). Credits per generated IMAGE by quality then canvas tier; reference images
+ * may add credits. Prism always sends `outputCount: 1`, so one attempt is one image.
+ */
+export interface ImageCreditRule {
+  /** quality id ("default" for models without a quality option) → tier id → credits per image. */
+  perImage: Record<string, Record<string, number>>;
+  /** What Prism sends when the user chooses nothing (never the provider's hidden default when that costs more). */
+  defaultQuality: string;
+  /** Credits per reference image. */
+  perReferenceImage: number;
+  /** Runway bills references once per generated image or once per request. */
+  referenceBilling: "per_output" | "per_request" | "none";
+}
+
+/** Still-image facts of a catalog model (Phase 2G.2). */
+export interface CatalogImageSpec {
+  /** Quality options the model types; empty = the model has no quality option. */
+  qualities: Array<{ id: string; label: string; note: string }>;
+  /** Prism's explicit default (sent on every request when the model has qualities). */
+  defaultQuality: string | null;
+  /** How references are addressed from the prompt text. */
+  referenceAddressing: "tags" | "order" | "none";
+  /** Output formats the request type accepts (null = no `outputFormat` field). */
+  outputFormats: string[] | null;
+  /** Largest `outputCount` the provider accepts. Prism sends 1 regardless. */
+  providerMaxOutputCount: number;
+  /** Capabilities of the SDK type that Prism deliberately does not expose, with the reason. */
+  notExposed: string[];
+}
+
 export interface CatalogPricing {
   /** Versioned configuration identifier; recorded with estimates so history is never re-priced. */
   version: string;
@@ -71,6 +117,8 @@ export interface CatalogPricing {
   usdPerCredit: number;
   currency: "USD";
   rule: CreditRule;
+  /** Still-image models: the image credit rule (the video `rule` is then empty). */
+  imageRule?: ImageCreditRule;
 }
 
 export interface CatalogInputs {
@@ -123,6 +171,8 @@ export interface CatalogModel {
    */
   planningCanvas?: { width: number; height: number };
   pricing: CatalogPricing;
+  /** Still-image facts (Phase 2G.2); absent on video models. */
+  image?: CatalogImageSpec;
   /** Provider concurrency advisory (account-tier dependent; real value comes from configuration). */
   concurrencyNote: string;
 }

@@ -14,6 +14,7 @@ import { evaluateCompatibility } from "../compatibility";
 import { buildGenerationRequest } from "../gate";
 import {
   RUNWAY_PRICING_VERSION,
+  RUNWAY_IMAGE_MODELS,
   RUNWAY_VIDEO_MODELS,
   catalogModel,
   estimateCredits,
@@ -57,7 +58,7 @@ describe("model catalog", () => {
     for (const m of RUNWAY_VIDEO_MODELS) {
       expect(() => generationModelSchema.parse(toGenerationModel(m))).not.toThrow();
       expect(m.verification.verifiedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      expect(m.verification.sdkVersion).toBe("@runwayml/sdk@4.21.0");
+      expect(m.verification.sdkVersion).toBe("@runwayml/sdk@4.22.0");
       expect(m.verification.providerApiVersion).toBe("2024-11-06");
       expect(m.pricing.version).toBe(RUNWAY_PRICING_VERSION);
       expect(m.tiers.length).toBeGreaterThan(0);
@@ -327,8 +328,12 @@ describe("Runway request shapes per model family", () => {
 
   it("the adapter exposes every catalog model and prices through the catalog", () => {
     const provider = new RunwayProvider({ env: {}, clientFactory: () => ({}) as never });
-    expect(provider.listModels().map((m) => m.modelId)).toEqual(RUNWAY_VIDEO_MODELS.map((m) => m.modelId));
-    expect(runwayModels()).toHaveLength(6);
+    // video models first (unchanged), then the Phase 2G.2 still-image models
+    expect(provider.listModels().map((m) => m.modelId)).toEqual([
+      ...RUNWAY_VIDEO_MODELS.map((m) => m.modelId),
+      ...RUNWAY_IMAGE_MODELS.map((m) => m.modelId),
+    ]);
+    expect(runwayModels()).toHaveLength(6 + RUNWAY_IMAGE_MODELS.length);
     const { request, model } = make("veo3.1_fast");
     const e = provider.estimateCost(request, model);
     expect(e.currency).toBe("USD");

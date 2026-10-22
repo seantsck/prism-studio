@@ -178,7 +178,19 @@ No image generation (OpenAI, Gemini, Google, Runway, Kling, fal, Replicate: **0 
 padding conform; no continuity analysis of the frame (the structured facts are stored for it); no change to Phase 2F.
 **Phase 2G.2 (Image Shot Generator)** adds Production Frame _candidates_: multiple generated stills, human compare and
 review, and selection of the canonical frame, again with no 3D requirement; a generated image becomes a Production Frame
-with `source = 'generation_output'` without redesigning this table.
+with `source = 'generation_output'` without redesigning this table (see the next section).
+
+## Generated frames (Phase 2G.2)
+
+`source = 'generation_output'` and `sourceGenerationAttemptId` are now used. A human chooses a succeeded
+`production_frame` candidate ("Use as Production Frame"): the frame **reuses the attempt's existing private Asset** (no copy)
+and is drafted by the same `draftProductionFrame`, created and selected through the same repository, so versions, duplicate
+promotion (same checksum, aspect and intent returns the existing frame) and selection are unchanged. The image is the
+attempt's selected **production conform** or the provider original when it already matches the production aspect; a
+wrong-aspect original is refused with "Create the production conform first." and never silently cropped. A candidate that no
+longer matches the Shot is refused as **stale**. The Asset is either the provider original or the deterministic conform,
+whichever actually matches the production aspect. No new migration. Full rules and the Runway image models:
+[image-shot-generator](image-shot-generator.md).
 
 ## Tests
 

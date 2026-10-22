@@ -1,18 +1,28 @@
-# Runway provider (Gen-4.5)
+# Runway provider (Gen-4.5 video; still-image models since Phase 2G.2)
 
 First real provider adapter. Lives entirely in `src/generation/providers/runway/` and registers through the same
 adapter contract as the Mock provider; the Shot domain, GenerationPackage, queue, worker, attempt history,
 output asset model and review UI are unchanged.
 
-| Item           | Value                                                                                           |
-| -------------- | ----------------------------------------------------------------------------------------------- |
-| Provider id    | `runway`                                                                                        |
-| SDK            | `@runwayml/sdk` **4.21.0** (pinned), official                                                   |
-| API version    | `X-Runway-Version: 2024-11-06`, set in one place: `runway/config.ts`                            |
-| Model          | `gen4.5` (the only Runway model Prism registers)                                                |
-| Modalities     | `text_to_video`, `image_to_video`                                                               |
-| Credential     | `RUNWAYML_API_SECRET` (server/worker only)                                                      |
-| Pricing source | https://docs.dev.runwayml.com/guides/pricing/ — 12 credits/s, $0.01/credit (checked 2026-10-13) |
+| Item           | Value                                                                                                       |
+| -------------- | ----------------------------------------------------------------------------------------------------------- |
+| Provider id    | `runway`                                                                                                    |
+| SDK            | `@runwayml/sdk` **4.22.0** (pinned exactly), official; the video request types are byte-identical to 4.21.0 |
+| API version    | `X-Runway-Version: 2024-11-06`, set in one place: `runway/config.ts`                                        |
+| Model          | `gen4.5` (the only Runway model Prism registers)                                                            |
+| Modalities     | `text_to_video`, `image_to_video`                                                                           |
+| Credential     | `RUNWAYML_API_SECRET` (server/worker only)                                                                  |
+| Pricing source | https://docs.dev.runwayml.com/guides/pricing/ — 12 credits/s, $0.01/credit (checked 2026-10-13)             |
+
+## Still-image models (Phase 2G.2)
+
+The same adapter also serves `gpt_image_2_5_flare`, `muse_image` and `seedream5_lite` through `client.textToImage.create`
+(text_to_image / image_to_image), polled and fetched with the same task API. Every request body is built against the SDK's
+own request union (no `as any`, no hand-written REST); `outputCount` is always 1; GPT Image's quality is always sent
+explicitly (default `medium`); references are tagged (GPT Image) or ordered (Muse, Seedream); the prompt carries a legend of
+which image is which. Prices ($0.01/credit, `runway-image-2026-10-21`): GPT Image low 1 / medium 5 / high 16 / xhigh 28 / max 63
+(+1 per reference per image), Muse 1, Seedream 4. `nano_banana_2.1` is priced but not typed by the SDK: not offered. See
+[image-shot-generator](../image-shot-generator.md). **No real image call has been made yet.**
 
 ## Account requirements
 

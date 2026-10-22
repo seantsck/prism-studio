@@ -156,3 +156,100 @@ export function omissionsAsIgnoredFeatures(omissions: PromptOmission[], limit: n
     },
   ];
 }
+
+// ───────────────────────── still images (Phase 2G.2) ─────────────────────────
+
+/**
+ * PromptPlan → Runway image `promptText`. The SAME plan as video; only the rendering differs.
+ *
+ * A still captures ONE moment: the opening pose and each character's expression/posture/gesture are kept, the
+ * timed beats, the ending pose and the timing section are not (they describe motion over time). Spoken dialogue
+ * and performed-take lines are never sent (an image model has no audio; nothing here claims audio conditioning).
+ * Negative constraints are not sent (these models have no negative field); the compatibility engine already made
+ * the user acknowledge that. The reference legend is reserved FIRST so a long prompt can never cut it off.
+ */
+const IMAGE_PRIORITY: PromptSectionKey[] = [
+  "subject",
+  "composition",
+  "action",
+  "identity",
+  "wardrobe",
+  "performance",
+  "environment",
+  "lighting",
+  "camera",
+  "provider_adaptation",
+  "continuity",
+  "hard_constraints",
+];
+
+/** Keeps the frame-defining action lines (opening pose, expressions...), drops motion-over-time lines. */
+export function stillActionLines(lines: string[]): string[] {
+  return lines
+    .filter((l) => !/^\d+(\.\d+)?s: /.test(l) && !/^ends: /.test(l))
+    .map((l) => l.replace(/^begins: /, "pose at the frame: "));
+}
+
+export function compileRunwayImagePrompt(
+  plan: PromptPlan,
+  limit: number,
+  opts: { modelName: string; legend?: string },
+): CompiledPrompt {
+  const legend = opts.legend ?? "";
+  const room = Math.max(0, limit - (legend ? legend.length + 1 : 0));
+  const byKey = new Map(plan.sections.map((s) => [s.key, s] as const));
+  const notes: string[] = [];
+  const included = new Map<PromptSectionKey, string[]>();
+  const omissions: PromptOmission[] = [];
+  let used = 0;
+  for (const key of IMAGE_PRIORITY) {
+    const section = byKey.get(key);
+    if (!section) continue;
+    const lines =
+      key === "performance"
+        ? performanceLines(section.lines)
+        : key === "action"
+          ? stillActionLines(section.lines)
+          : section.lines;
+    const label = LABEL[key] ?? section.title;
+    const kept: string[] = [];
+    for (const line of lines) {
+      const cost = (kept.length === 0 ? label.length + 2 : 0) + line.length + 2;
+      if (used + cost <= room) {
+        kept.push(line);
+        used += cost;
+      } else if (used === 0 && kept.length === 0) {
+        const cut = Math.max(0, room - label.length - 6);
+        kept.push(`${line.slice(0, cut)}…`);
+        used = room;
+      }
+    }
+    if (kept.length > 0) included.set(key, kept);
+    if (kept.length < lines.length) {
+      omissions.push({
+        section: key,
+        label,
+        omittedLines: lines.length - kept.length,
+        totalLines: lines.length,
+      });
+    }
+  }
+  if (byKey.has("timing") || byKey.has("action"))
+    notes.push(
+      "A still shows one moment: the opening pose is kept; timed beats and the ending pose are not sent.",
+    );
+  if (byKey.has("performance"))
+    notes.push(
+      `Spoken dialogue and performed audio are not sent: ${opts.modelName} generates a still image.`,
+    );
+  if (byKey.has("negative_constraints"))
+    notes.push(`Negative constraints are not sent: ${opts.modelName} has no negative prompt field.`);
+
+  const order = plan.sections.map((s) => s.key);
+  const body = [...included.entries()]
+    .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
+    .map(([key, lines]) => `${LABEL[key] ?? key}: ${lines.join("; ")}.`)
+    .join(" ")
+    .slice(0, room);
+  return { text: [body, legend].filter(Boolean).join(" "), omissions, notes };
+}

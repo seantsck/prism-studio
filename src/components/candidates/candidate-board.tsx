@@ -15,12 +15,34 @@ import {
   type ReviewDecision,
 } from "@/domain/generation/reviews";
 import { markBest, promoteCandidate, reviewCandidate } from "@/server/candidate-actions";
+import { createDeliveryConform } from "@/server/media-actions";
+import { chooseGeneratedFrameAsProductionFrame } from "@/server/production-frame-actions";
 
 /**
  * The comparison workspace: 2-up / 3-up / grid, synchronized start/pause/seek/loop, audio solo, same-position
  * frame comparison, fast human review (buttons AND keys 1/2/3/B) and an explicit "Promote to Shot".
  * Videos load lazily and pause when off-screen; nothing is preloaded in bulk.
+ *
+ * Phase 2G.2: a Production Frame candidate set (`purpose="production_frame"`) is an IMAGE review surface: large
+ * stills, no playback controls, the same Good / Shortlist / Best / Reject review, and "Use as Production Frame"
+ * instead of "Promote to Shot". Best (this experiment's preference) and CURRENT PRODUCTION FRAME (the Shot's
+ * canonical visual) are separate on purpose.
  */
+
+/** What "Use as Production Frame" can do for one candidate right now (computed on the server). */
+export interface BoardProductionFrame {
+  available: boolean;
+  /** Why not, in plain language (null when available). */
+  reason: string | null;
+  /** The candidate's own image is not production-shaped and no conform exists yet. */
+  needsConform: boolean;
+  /** The Shot changed after this candidate was generated. */
+  stale: boolean;
+  /** This candidate is the source of the Shot's currently selected Production Frame. */
+  current: boolean;
+  /** Which stored image would become the frame. */
+  image: "delivery_conform" | "provider_original" | null;
+}
 export interface BoardCandidate {
   attemptId: string;
   label: string;
@@ -32,6 +54,12 @@ export interface BoardCandidate {
   status: string;
   statusNote: string;
   videoUrl: string | null;
+  /** Still-image candidates: the image shown (the production conform when one is selected, else the original). */
+  imageUrl?: string | null;
+  /** Still-image candidates: quality requested (null = the model has none). */
+  quality?: string | null;
+  /** Still-image candidates only. */
+  productionFrame?: BoardProductionFrame | null;
   posterUrl: string | null;
   frames: Array<{ atMs: number; url: string }>;
   durationMs: number | null;
@@ -134,12 +162,18 @@ export function CandidateBoard({
   setId,
   candidates,
   canPromote,
+  purpose = "shot_output",
+  shotId = "",
 }: {
   projectSlug: string;
   setId: string;
   candidates: BoardCandidate[];
   canPromote: boolean;
+  /** `production_frame`: still images for the Shot's Production Frame (an image review surface). */
+  purpose?: "shot_output" | "production_frame";
+  shotId?: string;
 }) {
+  const still = purpose === "production_frame";
   const [layout, setLayout] = useState<Layout>(candidates.length >= 3 ? "3" : "2");
   const videos = useRef<Map<string, HTMLVideoElement>>(new Map());
   const [loop, setLoop] = useState(true);
@@ -193,6 +227,53 @@ export function CandidateBoard({
   const grid =
     layout === "2" ? "md:grid-cols-2" : layout === "3" ? "md:grid-cols-3" : "md:grid-cols-2 xl:grid-cols-3";
   const withVideo = candidates.filter((c) => c.videoUrl);
+
+  const layoutPicker = (
+    <span className="ml-auto flex items-center gap-1 text-[11px] text-muted">
+      layout
+      {(["2", "3", "grid"] as const).map((l) => (
+        <button
+          key={l}
+          type="button"
+          onClick={() => setLayout(l)}
+          aria-pressed={layout === l}
+          data-testid={`layout-${l}`}
+          className={`rounded-[3px] border px-1.5 py-0.5 ${layout === l ? "border-accent text-fg" : "border-line2"}`}
+        >
+          {l === "grid" ? "grid" : `${l}-up`}
+        </button>
+      ))}
+    </span>
+  );
+
+  if (still) {
+    return (
+      <div className="space-y-3" data-testid="candidate-board" data-purpose="production_frame">
+        <div className="flex flex-wrap items-center gap-2 border border-line bg-panel px-3 py-2 text-[11px] text-muted">
+          <span className="font-semibold uppercase tracking-wide">Production Frame candidates</span>
+          <span>
+            ⭐ Best is this experiment&apos;s preference. &quot;Use as Production Frame&quot; is a separate,
+            explicit choice.
+          </span>
+          {layoutPicker}
+        </div>
+        <div className={`grid gap-3 ${grid}`}>
+          {candidates.map((c) => (
+            <CandidateCard
+              key={c.attemptId}
+              c={c}
+              projectSlug={projectSlug}
+              setId={setId}
+              shotId={shotId}
+              canPromote={canPromote}
+              still
+              register={() => undefined}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3" data-testid="candidate-board">
@@ -366,13 +447,19 @@ function CandidateCard({
   setId,
   canPromote,
   register,
+  still = false,
+  shotId = "",
 }: {
   c: BoardCandidate;
   projectSlug: string;
   setId: string;
   canPromote: boolean;
   register: (el: HTMLVideoElement | null) => void;
+  still?: boolean;
+  shotId?: string;
 }) {
+  const noun = still ? "image" : "clip";
+  const pf = c.productionFrame ?? null;
   const [rejecting, setRejecting] = useState(false);
   const [measured, setMeasured] = useState<string | null>(null);
   const [more, setMore] = useState(false);
@@ -419,7 +506,7 @@ function CandidateCard({
       aria-label={
         reviewable
           ? `Candidate ${c.label}: ${c.modelLabel}. Keys: 1 good, 2 shortlist, 3 reject, B best.`
-          : `Candidate ${c.label}: ${c.modelLabel}. No clip to review (${c.status.replace(/_/g, " ")}).`
+          : `Candidate ${c.label}: ${c.modelLabel}. No ${noun} to review (${c.status.replace(/_/g, " ")}).`
       }
       className={`space-y-2 border bg-panel p-2.5 outline-none focus-visible:ring-1 focus-visible:ring-accent ${
         c.promoted ? "border-pass" : c.preferred ? "border-accent" : "border-line"
@@ -431,6 +518,8 @@ function CandidateCard({
       data-decision={decision}
       data-preferred={c.preferred ? "1" : "0"}
       data-promoted={c.promoted ? "1" : "0"}
+      data-current-frame={pf?.current ? "1" : "0"}
+      data-stale={pf?.stale ? "1" : "0"}
     >
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="rounded-[3px] bg-panel2 px-1.5 text-[12px] font-semibold">{c.label}</span>
@@ -449,10 +538,39 @@ function CandidateCard({
         </Badge>
         {c.preferred ? <Badge tone="accent">Best</Badge> : null}
         {c.promoted ? <Badge tone="pass">Promoted to shot</Badge> : null}
+        {pf?.current ? (
+          <span data-testid="current-production-frame">
+            <Badge tone="pass">CURRENT PRODUCTION FRAME</Badge>
+          </span>
+        ) : null}
+        {still && reviewable && pf?.stale ? (
+          <span data-testid="candidate-stale">
+            <Badge tone="warn">STALE</Badge>
+          </span>
+        ) : null}
         {reviewable ? <Badge tone={DECISION_TONE[decision]}>{DECISION_TEXT[decision]}</Badge> : null}
       </div>
 
-      {c.videoUrl ? (
+      {still ? (
+        c.imageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={c.imageUrl}
+            alt={`Candidate ${c.label} (${c.modelLabel})`}
+            loading="lazy"
+            className="max-h-[70vh] w-full border border-line bg-black object-contain"
+            data-testid="candidate-image"
+          />
+        ) : (
+          <div className="flex aspect-video items-center justify-center border border-dashed border-line2 text-[11.5px] text-muted">
+            {c.status === "failed" || c.status === "not_submitted"
+              ? c.statusNote || "This candidate did not produce an image."
+              : c.status === "cancelled"
+                ? "Cancelled"
+                : "Generating…"}
+          </div>
+        )
+      ) : c.videoUrl ? (
         <LazyVideo
           src={c.videoUrl}
           poster={c.posterUrl}
@@ -477,8 +595,18 @@ function CandidateCard({
             ? "free (mock)"
             : `est ${money(c.estimateUsd, c.currency)} · actual ${money(c.actualUsd, c.currency)}`}
         </dd>
-        <dt className="text-muted">Duration</dt>
-        <dd>{secs(c.durationMs)}</dd>
+        {still ? null : (
+          <>
+            <dt className="text-muted">Duration</dt>
+            <dd>{secs(c.durationMs)}</dd>
+          </>
+        )}
+        {still && c.quality ? (
+          <>
+            <dt className="text-muted">Quality</dt>
+            <dd data-testid="candidate-quality">{c.quality}</dd>
+          </>
+        ) : null}
         <dt className="text-muted">Actual output</dt>
         <dd data-testid="dims-actual">{dims.actualOutput}</dd>
         <dt className="text-muted">Provider canvas</dt>
@@ -493,7 +621,7 @@ function CandidateCard({
         <dd>
           {c.referencesUsed}
           {c.inputMode ? ` · ${c.inputMode}` : ""}
-          {c.tier ? ` · ${c.tier}` : ""}
+          {c.tier && !still ? ` · ${c.tier}` : ""}
           {c.nativeAudio ? " · provider audio" : ""}
         </dd>
       </dl>
@@ -630,7 +758,51 @@ function CandidateCard({
             </ActionForm>
           </details>
 
-          {canPromote ? (
+          {still ? (
+            <div className="space-y-1 pt-1" data-testid="use-as-production-frame">
+              <ActionForm
+                action={chooseGeneratedFrameAsProductionFrame}
+                quiet={false}
+                successMessage="Production Frame saved"
+                className="flex items-center gap-2"
+              >
+                <input type="hidden" name="projectSlug" value={projectSlug} />
+                <input type="hidden" name="shotId" value={shotId} />
+                <input type="hidden" name="attemptId" value={c.attemptId} />
+                <Button
+                  size="sm"
+                  variant="primary"
+                  type="submit"
+                  disabled={!pf?.available}
+                  data-testid="use-as-pf"
+                >
+                  {pf?.current ? "Current Production Frame" : "Use as Production Frame"}
+                </Button>
+              </ActionForm>
+              {pf && !pf.available && pf.reason ? (
+                <div
+                  className={`text-[11px] ${pf.stale ? "text-warn" : "text-muted"}`}
+                  data-testid="pf-unavailable-reason"
+                >
+                  {pf.reason}
+                </div>
+              ) : null}
+              {pf?.needsConform ? (
+                <ActionForm
+                  action={createDeliveryConform}
+                  quiet={false}
+                  successMessage="Production conform created"
+                  className="flex items-center gap-2"
+                >
+                  <input type="hidden" name="projectSlug" value={projectSlug} />
+                  <input type="hidden" name="attemptId" value={c.attemptId} />
+                  <Button size="sm" type="submit" data-testid="create-production-conform">
+                    Create production conform
+                  </Button>
+                </ActionForm>
+              ) : null}
+            </div>
+          ) : canPromote ? (
             <ActionForm
               action={promoteCandidate}
               quiet={false}
@@ -651,7 +823,7 @@ function CandidateCard({
       <div className="flex items-center justify-between text-[10.5px] text-faint">
         <span>
           {!reviewable
-            ? "No clip to review"
+            ? `No ${noun} to review`
             : c.reviewCount > 0
               ? `${c.reviewCount} review(s) in history`
               : "No review yet"}
@@ -662,7 +834,7 @@ function CandidateCard({
             </>
           ) : null}
         </span>
-        {c.detailHref ? (
+        {c.detailHref && !still ? (
           <a className="underline" href={c.detailHref}>
             Open review
           </a>

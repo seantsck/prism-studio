@@ -49,6 +49,16 @@ the comparison works for the successful outputs. Same-shot concurrency is allowe
   supersedes the shot's previously approved attempt, history intact) plus a record on the set. Losing candidates are
   never deleted; they are training data.
 
+## Production Frame candidate sets (Phase 2G.2)
+
+The same sets, tables and review workflow; no second candidate table. A set made of still images for the Shot's Production
+Frame carries `generationPurpose: "production_frame"` in its frozen recommendation JSON (and in every member's plan), and each
+attempt's immutable request carries `purpose: "production_frame"`. Such a set is an **image review surface** (large stills,
+no playback controls, modality-aware copy) and offers **Use as Production Frame** instead of **Promote to Shot**. ⭐ Best is the
+experiment's preference; **CURRENT PRODUCTION FRAME** (derived from the selected frame's source attempt) is the Shot's canonical
+visual; they are independent. One candidate is one attempt is one image. Image reviews feed the model history only for the same
+purpose. See [image-shot-generator](image-shot-generator.md).
+
 ## Backward compatibility
 
 Existing attempts are untouched. An attempt outside any set is labelled **Standalone generation**; no candidate history

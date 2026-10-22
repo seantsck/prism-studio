@@ -20,12 +20,24 @@ import type {
 import {
   catalogModel,
   estimateCredits,
+  estimateImageCredits,
+  isImageCatalogModel,
+  RUNWAY_MODELS,
   RUNWAY_PRICING_VERSION,
-  RUNWAY_VIDEO_MODELS,
   toGenerationModel,
 } from "@/domain/generation/models/catalog";
 import type { CatalogModel } from "@/domain/generation/models/types";
-import { compileRunwayPrompt, omissionsAsIgnoredFeatures } from "./compile";
+import { compileRunwayImagePrompt, compileRunwayPrompt, omissionsAsIgnoredFeatures } from "./compile";
+import {
+  buildImageCall,
+  imageQualityFor,
+  imageRatioFor,
+  IMAGE_OUTPUT_COUNT,
+  referenceLegend,
+  runwayImageTags,
+  validateImageRequest,
+  type ResolvedImageReference,
+} from "./image-families";
 import {
   buildCall,
   canvasOf,
@@ -50,6 +62,25 @@ import {
 } from "./config";
 import { mapRunwayError, mapRunwayFailure } from "./errors";
 
+/** Typed against the SDK's own request union: no cast, no hand-written body. */
+type CreateImage = (
+  body: RunwayML.TextToImageCreateParams,
+  opts?: { signal?: AbortSignal | null; timeout?: number },
+) => PromiseLike<{ id: string; estimatedCost?: { credits: number } }>;
+
+/**
+ * Compile-time proof that the REAL SDK's `textToImage.create` satisfies the narrowed signature above (the client object is
+ * narrowed once, at construction, for the video endpoints too). If an SDK change broke the image call shape, this line
+ * would stop compiling instead of the mismatch hiding behind that narrowing.
+ */
+const sdkImageCreateMatches: RunwayML["textToImage"]["create"] extends (
+  body: RunwayML.TextToImageCreateParams,
+  opts?: never,
+) => PromiseLike<{ id: string }>
+  ? true
+  : never = true;
+void sdkImageCreateMatches;
+
 type Create = (
   body: Record<string, unknown>,
   opts?: { signal?: AbortSignal | null; timeout?: number },
@@ -59,6 +90,8 @@ type Create = (
 export interface RunwayClientLike {
   textToVideo: { create: Create };
   imageToVideo: { create: Create };
+  /** Still images (SDK 4.22.0): Production Frame candidates. */
+  textToImage: { create: CreateImage };
   tasks: {
     retrieve(id: string, opts?: { signal?: AbortSignal | null }): PromiseLike<RunwayTask>;
     delete(id: string, opts?: { signal?: AbortSignal | null }): PromiseLike<unknown>;
@@ -93,9 +126,9 @@ export function gen45Model(maxConcurrency = 1): GenerationModel {
   return toGenerationModel(catalogModel(RUNWAY_PROVIDER_ID, RUNWAY_GEN45)!, { maxConcurrency });
 }
 
-/** Every catalog video model as a provider-independent GenerationModel. */
+/** Every catalog model (video and still image) as a provider-independent GenerationModel. */
 export function runwayModels(maxConcurrency = 1): GenerationModel[] {
-  return RUNWAY_VIDEO_MODELS.map((m) => toGenerationModel(m, { maxConcurrency }));
+  return RUNWAY_MODELS.map((m) => toGenerationModel(m, { maxConcurrency }));
 }
 
 export class RunwayProvider implements GenerationProviderAdapter {
@@ -127,7 +160,7 @@ export class RunwayProvider implements GenerationProviderAdapter {
       displayName: "Runway",
       kind: "real",
       description:
-        "Runway API (developer platform): Runway Gen-4 models plus hosted Veo, Seedance and Hailuo. Paid generation: credits are consumed per second of video.",
+        "Runway API (developer platform): Runway Gen-4 models plus hosted Veo, Seedance and Hailuo video, and hosted still-image models (GPT Image, Seedream, Muse). Paid generation: credits are consumed per second of video or per image.",
       requiredConfig: [RUNWAY_SECRET_ENV],
       webhooks: false,
     };
@@ -151,6 +184,19 @@ export class RunwayProvider implements GenerationProviderAdapter {
     return catalogModel(RUNWAY_PROVIDER_ID, modelId);
   }
 
+  /** The image prompt and the reference tags it names: pure given the frozen request and plan. */
+  private compileImagePrompt(model: CatalogModel, request: GenerationRequest, plan: PromptPlan) {
+    const tags =
+      model.image?.referenceAddressing === "tags"
+        ? runwayImageTags(request.references)
+        : request.references.map(() => null);
+    const legend = referenceLegend(model, request.references, tags);
+    return {
+      ...compileRunwayImagePrompt(plan, promptLimit(model), { modelName: model.displayName, legend }),
+      tags,
+    };
+  }
+
   private compilePrompt(model: CatalogModel, plan: PromptPlan) {
     return compileRunwayPrompt(plan, promptLimit(model), {
       modelName: model.displayName,
@@ -169,6 +215,7 @@ export class RunwayProvider implements GenerationProviderAdapter {
         notes: [`${request.modelId} is not in the Prism model catalog.`],
       };
     }
+    if (isImageCatalogModel(model)) return this.compileImageRequest(model, request, plan);
     const compiled = this.compilePrompt(model, plan);
     const { ratio, tier, defaulted, aspect } = ratioFor(model, request);
     const endpoint = endpointFor(request);
@@ -212,16 +259,74 @@ export class RunwayProvider implements GenerationProviderAdapter {
     };
   }
 
+  private compileImageRequest(
+    model: CatalogModel,
+    request: GenerationRequest,
+    plan: PromptPlan,
+  ): CompiledRequestSummary {
+    const compiled = this.compileImagePrompt(model, request, plan);
+    const ratio = imageRatioFor(model, request);
+    const quality = imageQualityFor(model, request);
+    const credits = estimateImageCredits(model, this.imagePricingInputs(model, request));
+    const notes = [...compiled.notes];
+    for (const o of compiled.omissions) {
+      notes.push(
+        `Prompt limit: ${o.omittedLines} of ${o.totalLines} ${o.label.toLowerCase()} line(s) not sent.`,
+      );
+    }
+    notes.push("One attempt is one image: Prism always requests outputCount 1.");
+    return {
+      endpoint: `POST /v1/text_to_image (${request.modelId})`,
+      fields: {
+        model: request.modelId,
+        purpose: request.purpose ?? "shot_output",
+        requestModality: request.modality,
+        promptText: compiled.text,
+        promptTextLength: compiled.text.length,
+        ratio,
+        quality,
+        outputCount: IMAGE_OUTPUT_COUNT,
+        referenceCount: request.references.length,
+        referenceTags: compiled.tags,
+        negativePromptSent: false,
+        estimatedCredits: credits.credits,
+        apiVersion: RUNWAY_API_VERSION,
+      },
+      attachments: request.references.map((r, i) => ({
+        role: `reference:${r.role}${compiled.tags[i] ? `:@${compiled.tags[i]}` : `:#${i + 1}`}`,
+        assetId: r.assetId,
+      })),
+      notes,
+    };
+  }
+
+  private imagePricingInputs(model: CatalogModel, request: GenerationRequest) {
+    return {
+      tierId: model.tiers[0]!.id,
+      quality: imageQualityFor(model, request),
+      referenceImages: request.references.length,
+      outputCount: IMAGE_OUTPUT_COUNT,
+    };
+  }
+
   additionalIgnoredFeatures(request: GenerationRequest, plan: PromptPlan): IgnoredFeature[] {
     const model = this.cat(request.modelId);
     if (!model) return [];
+    if (isImageCatalogModel(model)) {
+      return omissionsAsIgnoredFeatures(
+        this.compileImagePrompt(model, request, plan).omissions,
+        promptLimit(model),
+      );
+    }
     return omissionsAsIgnoredFeatures(this.compilePrompt(model, plan).omissions, promptLimit(model));
   }
 
   validateRequest(request: GenerationRequest, model: GenerationModel) {
     const cat = this.cat(model.modelId);
     if (!cat) return { ok: false, errors: [`Unsupported Runway model ${model.modelId}.`] };
-    const errors = validateForModel(cat, request);
+    const errors = isImageCatalogModel(cat)
+      ? validateImageRequest(cat, request)
+      : validateForModel(cat, request);
     return { ok: errors.length === 0, errors };
   }
 
@@ -239,6 +344,10 @@ export class RunwayProvider implements GenerationProviderAdapter {
 
   estimateCost(request: GenerationRequest, model: GenerationModel): CostEstimate {
     const cat = this.cat(model.modelId);
+    if (cat && isImageCatalogModel(cat)) {
+      const r = estimateImageCredits(cat, this.imagePricingInputs(cat, request));
+      return { amount: r.amountUsd, currency: RUNWAY_PRICING.currency, basis: r.basis, units: r.credits };
+    }
     if (!cat || request.durationMs == null) {
       return {
         amount: null,
@@ -307,7 +416,9 @@ export class RunwayProvider implements GenerationProviderAdapter {
   ): Promise<GenerationSubmission> {
     const model = this.cat(request.modelId);
     const errors = model
-      ? validateForModel(model, request)
+      ? isImageCatalogModel(model)
+        ? validateImageRequest(model, request)
+        : validateForModel(model, request)
       : [`Unsupported Runway model ${request.modelId}.`];
     if (!model || errors.length > 0) {
       throw new GenerationProviderError("invalid_request", "runway_invalid_request", errors[0]!, {
@@ -315,6 +426,7 @@ export class RunwayProvider implements GenerationProviderAdapter {
       });
     }
     const client = this.client();
+    if (isImageCatalogModel(model)) return this.submitImage(client, model, request, plan, ctx);
     try {
       const uris: ResolvedInputs = { first: null, last: null, references: [], audio: [] };
       if (request.startFrameAssetId)
@@ -327,6 +439,37 @@ export class RunwayProvider implements GenerationProviderAdapter {
         endpoint === "image_to_video"
           ? await client.imageToVideo.create(body, { signal: ctx.signal })
           : await client.textToVideo.create(body, { signal: ctx.signal });
+      if (!created?.id) {
+        throw new GenerationProviderError("permanent", "runway_no_task_id", "Runway returned no task id.");
+      }
+      return {
+        providerJobId: created.id,
+        providerRequestId: null,
+        state: "queued",
+        providerStatus: "PENDING",
+        acceptedAt: ctx.now().toISOString(),
+      };
+    } catch (err) {
+      throw mapRunwayError(err);
+    }
+  }
+
+  /** Production Frame candidates: ONE text_to_image task that returns ONE image. */
+  private async submitImage(
+    client: RunwayClientLike,
+    model: CatalogModel,
+    request: GenerationRequest,
+    plan: PromptPlan,
+    ctx: ProviderContext,
+  ): Promise<GenerationSubmission> {
+    try {
+      const refs: ResolvedImageReference[] = [];
+      for (const r of request.references) {
+        refs.push({ uri: await this.inputUri(r.assetId, "image", ctx), role: r.role, label: r.label });
+      }
+      const compiled = this.compileImagePrompt(model, request, plan);
+      const { body } = buildImageCall(model, request, compiled.text, refs);
+      const created: { id: string } = await client.textToImage.create(body, { signal: ctx.signal });
       if (!created?.id) {
         throw new GenerationProviderError("permanent", "runway_no_task_id", "Runway returned no task id.");
       }
@@ -375,6 +518,89 @@ export class RunwayProvider implements GenerationProviderAdapter {
           "Runway returned an unknown task state.",
         );
     }
+  }
+
+  /** The single still image of a succeeded text_to_image task, with safe provenance only. */
+  private imageResult(
+    ref: ProviderJobRef,
+    request: GenerationRequest,
+    cat: CatalogModel,
+    task: RunwayTask,
+    url: string,
+    credits: number | null,
+    ctx: ProviderContext,
+  ): GenerationResult {
+    const ratio = imageRatioFor(cat, request);
+    const canvas = canvasOf(ratio);
+    const quality = imageQualityFor(cat, request);
+    const png = cat.image?.outputFormats?.includes("png") === true;
+    const tags = cat.image?.referenceAddressing === "tags" ? runwayImageTags(request.references) : null;
+    return {
+      outputs: [
+        {
+          role: "primary",
+          position: 0,
+          kind: "image",
+          filename: `runway-${ref.providerJobId.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40)}.png`,
+          // We ask for png where the request has a format field; otherwise the real type is sniffed on ingest.
+          mime: png ? "image/png" : null,
+          // Transport only: consumed by safe-fetch/ingest and never persisted (not in the Asset, not in provenance).
+          source: { type: "url", url },
+          reported: {
+            width: canvas?.width ?? null,
+            height: canvas?.height ?? null,
+            durationMs: null,
+            fps: null,
+          },
+        },
+      ],
+      provenance: {
+        provider: RUNWAY_PROVIDER_ID,
+        model: request.modelId,
+        providerJobId: ref.providerJobId,
+        providerRequestId: null,
+        providerModelVersion: null,
+        seed: null,
+        startedAt: task.createdAt ?? null,
+        completedAt: ctx.now().toISOString(),
+        actualDurationMs: null,
+        actualResolution: null,
+        actualFps: null,
+        finishReason: "SUCCEEDED",
+        usedInputs: request.references.map((r) => `reference:${r.role}`),
+        settings: {
+          model: request.modelId,
+          purpose: request.purpose ?? "shot_output",
+          modality: request.modality,
+          ratio,
+          providerCanvas: canvas,
+          quality,
+          outputCount: IMAGE_OUTPUT_COUNT,
+          outputPosition: 0,
+          outputFormat: png ? "png" : null,
+          references: request.references.map((r, i) => ({
+            assetId: r.assetId,
+            role: r.role,
+            tag: tags?.[i] ?? null,
+          })),
+        },
+        metadata: {
+          runwayApiVersion: RUNWAY_API_VERSION,
+          credits,
+          estimatedCredits: task.estimatedCost?.credits ?? null,
+          pricingVersion: cat.pricing.version,
+        },
+      },
+      cost:
+        credits == null
+          ? { amount: null, currency: RUNWAY_PRICING.currency, basis: "Runway reported no cost", units: null }
+          : {
+              amount: round4(credits * RUNWAY_PRICING.usdPerCredit),
+              currency: RUNWAY_PRICING.currency,
+              basis: `Runway reported ${credits} credits × $${RUNWAY_PRICING.usdPerCredit}/credit`,
+              units: credits,
+            },
+    };
   }
 
   async cancel(
@@ -427,6 +653,7 @@ export class RunwayProvider implements GenerationProviderAdapter {
     }
     const credits = typeof task.cost?.credits === "number" ? task.cost.credits : null;
     const cat = this.cat(request.modelId);
+    if (cat && isImageCatalogModel(cat)) return this.imageResult(ref, request, cat, task, url, credits, ctx);
     const ratioInfo = cat ? ratioFor(cat, request) : null;
     const ratio = ratioInfo?.ratio ?? null;
     const canvas = canvasOf(ratio);

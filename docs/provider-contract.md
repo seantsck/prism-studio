@@ -38,6 +38,14 @@ Declared per model, evaluated deterministically by `evaluateCompatibility(packag
 **Do not declare capabilities a provider does not have.** Providers that are not integrated simply have no
 adapter.
 
+## Generation purpose and still images (Phase 2G.2)
+
+`GenerationRequest.purpose` (`shot_output` | `production_frame`, absent = `shot_output`) says WHY a generation is requested and is
+independent of the Shot's own modality. A `production_frame` request is a still: `text_to_image` (no reference) or
+`image_to_image` (references present), with the Production Frame / Storyboard as ordinary prioritised **image references**
+(never first/last frames), no duration and no audio. Adapters keep provider syntax (reference tags, endpoints) inside the adapter.
+An adapter that returns several images for one request is not used that way in 2G.2: Prism requests exactly one.
+
 ## What the compatibility engine decides
 
 | Situation                                                                                | Outcome                                                                       |

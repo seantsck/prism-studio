@@ -5,7 +5,11 @@ import type {
   CandidateSetEvent,
   CandidateSetStatus,
 } from "@/domain/generation/candidates";
-import { buildOutcomeRecords, type RawAttemptOutcome } from "@/domain/generation/outcomes";
+import {
+  buildOutcomeRecords,
+  purposeOfRequestJson,
+  type RawAttemptOutcome,
+} from "@/domain/generation/outcomes";
 import type { OutcomeRecord } from "@/domain/generation/performance";
 import type { GenerationReview, NegativeTag, PositiveTag, ReviewDecision } from "@/domain/generation/reviews";
 import {
@@ -265,7 +269,7 @@ export class PostgresCandidateData implements CandidateRepository {
       ]);
       if (att.rowCount === 0) throw new CandidateError("not_found", "That generation no longer exists.");
       if (att.rows[0].status !== "succeeded")
-        throw new CandidateError("not_succeeded", "Only a completed generation has a clip to review.");
+        throw new CandidateError("not_succeeded", "Only a completed generation can be reviewed.");
       const prev = await c.query(
         "select id from generation_reviews where attempt_id = $1 order by reviewed_at desc, id desc limit 1",
         [input.attemptId],
@@ -372,6 +376,7 @@ export class PostgresCandidateData implements CandidateRepository {
     return this.tx(async (c) => {
       const attempts = await c.query(
         `select a.id, a.project_id, a.provider, a.model, a.status, a.package_snapshot, a.created_at,
+                a.request->>'purpose' as request_purpose,
                 j.created_at as job_created_at, j.submitted_at, j.completed_at, j.last_error_category,
                 j.last_error_code,
                 (select amount from generation_costs x where x.attempt_id = a.id and x.kind = 'actual'
@@ -404,6 +409,7 @@ export class PostgresCandidateData implements CandidateRepository {
         projectId: String(r.project_id),
         provider: String(r.provider),
         model: String(r.model),
+        purpose: purposeOfRequestJson({ purpose: r.request_purpose }),
         status: String(r.status),
         packageSnapshot: r.package_snapshot,
         createdAt: iso(r.created_at),

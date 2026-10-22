@@ -1,6 +1,7 @@
 /**
  * Runway: every provider-specific constant lives here, in one place, so API/pricing changes are a one-file edit.
- * Verified against @runwayml/sdk 4.21.0 types and docs.dev.runwayml.com on 2026-10-13.
+ * Verified against @runwayml/sdk types and docs.dev.runwayml.com: video 2026-10-13 (4.21.0; the video request types are
+ * byte-identical in 4.22.0, re-audited 2026-10-21), still images 2026-10-21 (4.22.0).
  */
 export const RUNWAY_PROVIDER_ID = "runway";
 

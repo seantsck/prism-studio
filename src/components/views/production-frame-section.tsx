@@ -47,10 +47,19 @@ export function ProductionFrameSection({
   ctx,
   slug,
   masterFrames,
+  candidates,
+  openHref,
 }: {
   ctx: ShotContext;
   slug: string;
   masterFrames: MasterFrameChoice[];
+  /** Where "Generate candidates" opens the planner when it is not rendered inline. */
+  openHref?: string;
+  /**
+   * Phase 2G.2: the "Generate candidates" panel (image models, candidate sets), rendered by the page because it reads
+   * generation state. Absent in tests of this section alone.
+   */
+  candidates?: React.ReactNode;
 }) {
   const shotId = ctx.shot.id;
   const selected = ctx.selectedProductionFrame;
@@ -137,7 +146,7 @@ export function ProductionFrameSection({
           <div className="text-[12.5px] font-medium">No Production Frame yet.</div>
           <p className="mt-0.5 text-[12px] text-muted">
             This is the approved image Prism will carry into image-to-video and continuity. Use the approved
-            Storyboard, or upload an image.
+            Storyboard, upload an image, or generate candidates and choose one.
           </p>
         </div>
       )}
@@ -215,6 +224,40 @@ export function ProductionFrameSection({
           </Button>
         </ActionForm>
       </div>
+
+      {/* Phase 2G.2: generate still-image candidates (no 3D, no GPU; the provider renders them) */}
+      {candidates ? (
+        <details data-testid="pf-generate" className="border border-line">
+          <summary
+            data-testid="pf-generate-summary"
+            className="cursor-pointer select-none px-2.5 py-1.5 text-[12px] font-medium"
+          >
+            {selected ? "Generate alternatives" : "Generate candidates"}
+            <span className="ml-2 text-[11px] font-normal text-muted">
+              still images from image models; you choose one
+            </span>
+          </summary>
+          <div className="border-t border-line p-2.5">{candidates}</div>
+        </details>
+      ) : null}
+
+      {!candidates && openHref ? (
+        <div className="flex items-center justify-between gap-3 border border-line px-2.5 py-1.5">
+          <span className="text-[12px]">
+            {selected ? "Generate alternatives" : "Generate candidates"}
+            <span className="block text-[11px] text-faint">
+              still images from image models; you choose one
+            </span>
+          </span>
+          <a
+            data-testid="pf-generate-link"
+            href={openHref}
+            className="rounded-[3px] border border-line2 px-2 py-1 text-[12px] hover:border-accent"
+          >
+            {selected ? "Generate alternatives" : "Generate candidates"}
+          </a>
+        </div>
+      ) : null}
 
       {/* history */}
       {ctx.productionFrames.length > 0 ? (

@@ -19,6 +19,7 @@ import {
   type Recommendation,
   type RecommendationPreference,
 } from "@/domain/generation/recommendation";
+import type { GenerationPurpose } from "@/domain/generation/schemas";
 import type { ProjectData } from "@/domain/schemas";
 import type { GenerationConfig } from "./config";
 import type { ModelRegistry } from "./registry";
@@ -40,6 +41,8 @@ export interface CandidateSelection {
   inputMode?: InputMode | null;
   tierId?: string | null;
   nativeAudio?: boolean;
+  /** Still-image quality (Production Frame candidates); null = the model's explicit Prism default. */
+  quality?: string | null;
 }
 
 export interface CandidatePlanItem {
@@ -56,6 +59,8 @@ export interface CandidatePlanItem {
 }
 
 export interface CandidateSetPlan {
+  /** Why these candidates are generated. `production_frame`: still images the filmmaker may promote. */
+  purpose: GenerationPurpose;
   items: CandidatePlanItem[];
   spend: SetSpendPlan;
   disclosure: ComparisonDisclosure;
@@ -80,12 +85,15 @@ const toOptions = (s: CandidateSelection) => ({
   inputMode: s.inputMode ?? undefined,
   tierId: s.tierId ?? null,
   nativeAudio: Boolean(s.nativeAudio),
+  quality: s.quality ?? null,
 });
 
 function providerOptionsOf(fit: ModelFit, s: CandidateSelection): Record<string, unknown> {
   const o: Record<string, unknown> = {};
   if (fit.tierId) o.resolutionTier = fit.tierId;
   if (s.nativeAudio) o.nativeAudio = true;
+  // image quality is always EXPLICIT when the model has one: never the provider's hidden default
+  if (fit.quality) o.quality = fit.quality;
   return o;
 }
 
@@ -97,8 +105,11 @@ export function planCandidateSet(args: {
   selections: readonly CandidateSelection[];
   outcomes: readonly OutcomeRecord[];
   preference?: RecommendationPreference;
+  /** Default `shot_output`. */
+  purpose?: GenerationPurpose;
   now?: Date;
 }): CandidateSetPlan {
+  const purpose: GenerationPurpose = args.purpose ?? "shot_output";
   const shared = buildSharedEvaluation(args.data, args.shotId, args.now);
   const { pkg, ctx } = shared;
   const protectedNotes = ctx.shot.generation.protectedComposition;
@@ -113,7 +124,7 @@ export function planCandidateSet(args: {
       model,
       catalog: catalogModel(s.provider, s.modelId),
       availability,
-      options: { ...toOptions(s), protectedNotes },
+      options: { ...toOptions(s), protectedNotes, purpose },
     });
     const evaluation = evaluateShotForModel({
       data: args.data,
@@ -125,6 +136,7 @@ export function planCandidateSet(args: {
       adaptation: fit.adaptationChoice,
       inputMode: fit.inputMode ?? undefined,
       providerOptions: providerOptionsOf(fit, s),
+      purpose,
       now: args.now,
       shared,
     });
@@ -153,7 +165,7 @@ export function planCandidateSet(args: {
     maxCandidates: args.config.candidateSet.maxCandidates,
   });
 
-  const requirements = deriveShotRequirements(pkg, { protectedComposition: protectedNotes });
+  const requirements = deriveShotRequirements(pkg, { protectedComposition: protectedNotes, purpose });
   const profile = deriveShotFeatureProfile(pkg, requirements);
   const recommendation = recommendModels({
     fits: items.map((i) => i.fit),
@@ -161,10 +173,12 @@ export function planCandidateSet(args: {
     profile,
     requirements,
     preference: args.preference,
+    purpose,
   });
   const disclosure = describeComparison(
     pkg,
     items.map((it) => ({ label: it.label, displayName: it.fit.displayName, fit: it.fit })),
+    purpose,
   );
 
   const blockers = [
@@ -172,6 +186,7 @@ export function planCandidateSet(args: {
     ...items.flatMap((it) => it.blockers.map((m) => `${it.label} · ${it.fit.displayName}: ${m}`)),
   ];
   return {
+    purpose,
     items,
     spend,
     disclosure,
@@ -213,6 +228,8 @@ export async function submitCandidateSet(args: {
   userId: string | null;
   projectRevision: string | null;
   preference?: RecommendationPreference;
+  /** Default `shot_output`. `production_frame`: one STILL image per candidate; the Shot is never changed. */
+  generationPurpose?: GenerationPurpose;
   now?: Date;
 }): Promise<CandidateSubmitResult> {
   const now = args.now ?? new Date();
@@ -225,6 +242,7 @@ export async function submitCandidateSet(args: {
     selections: args.selections,
     outcomes,
     preference: args.preference,
+    purpose: args.generationPurpose,
     now,
   });
   if (!plan.allowed)
@@ -261,6 +279,8 @@ export async function submitCandidateSet(args: {
     ceilingUsd: args.config.candidateSet.maxUsd,
     recommendation: {
       ...freezeRecommendation(plan.recommendation),
+      // machine-readable purpose of the set (no schema: it lives in the frozen recommendation JSON)
+      generationPurpose: plan.purpose,
       // recommended vs chosen is itself product data: recorded, never nagged about
       chosen: plan.items.map((i) => ({
         provider: i.selection.provider,
@@ -282,6 +302,8 @@ export async function submitCandidateSet(args: {
       nativeAudio: it.fit.nativeAudio,
       estimateUsd: it.estimateUsd,
       plan: {
+        generationPurpose: plan.purpose,
+        quality: it.fit.quality,
         status: it.fit.status,
         adaptations: it.fit.adaptations,
         limitations: it.fit.limitations,
@@ -316,6 +338,7 @@ export async function submitCandidateSet(args: {
         adaptation: it.fit.adaptationChoice,
         inputMode: it.fit.inputMode ?? undefined,
         providerOptions: providerOptionsOf(it.fit, it.selection),
+        purpose: plan.purpose,
         userId: args.userId,
         idempotencyKey: key,
         config: args.config,

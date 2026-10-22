@@ -1,8 +1,8 @@
 import type { GenerationPackage } from "../../generation-package";
 import type { DurationStrategy, FramingStrategy } from "../../framing/adaptation";
 import { evaluateCompatibility, type CompatibilityReport, type InputMode } from "../compatibility";
-import type { GenerationModel, ModelAvailability } from "../schemas";
-import { estimateCredits, tierById } from "./catalog";
+import type { GenerationModel, GenerationPurpose, ModelAvailability } from "../schemas";
+import { estimateCredits, estimateImageCredits, isImageCatalogModel, tierById } from "./catalog";
 import type { CatalogModel } from "./types";
 
 /**
@@ -56,6 +56,10 @@ export interface ModelFitOptions {
   tierId?: string | null;
   nativeAudio?: boolean;
   protectedNotes?: string[];
+  /** `production_frame`: a still-image candidate (default `shot_output`). */
+  purpose?: GenerationPurpose;
+  /** Still-image quality option (null = the model's explicit Prism default). */
+  quality?: string | null;
 }
 
 export interface ModelFit {
@@ -73,6 +77,9 @@ export interface ModelFit {
   /** The strategies the preview applied (what a candidate-set submission records as the user's choice). */
   adaptationChoice: { framing: FramingStrategy | null; duration: DurationStrategy | null };
   tierId: string | null;
+  /** Still-image quality that will be requested (null = the model has no quality option). */
+  quality: string | null;
+  purpose: GenerationPurpose;
   nativeAudio: boolean;
   packaging: PackagingRow[];
   referencesUsed: { used: number; total: number };
@@ -96,10 +103,12 @@ export function evaluateModelFit(args: {
 }): ModelFit {
   const { pkg, model, catalog } = args;
   const o = args.options ?? {};
+  const purpose: GenerationPurpose = o.purpose ?? "shot_output";
   const base = evaluateCompatibility(pkg, model, {
     adaptation: { framing: o.framing ?? null, duration: o.duration ?? null },
     inputMode: o.inputMode,
     protectedNotes: o.protectedNotes,
+    purpose,
   });
 
   // Preview adaptation: apply each model's own recommendation so the matrix shows "ADAPTATION REQUIRED + how"
@@ -122,6 +131,7 @@ export function evaluateModelFit(args: {
           adaptation: { framing: framingChoice, duration: durationChoice },
           inputMode: o.inputMode,
           protectedNotes: o.protectedNotes,
+          purpose,
         })
       : base;
 
@@ -293,7 +303,17 @@ export function evaluateModelFit(args: {
   const durationMs = report.used.durationMs;
   const tier = catalog ? tierById(catalog, o.tierId ?? null) : null;
   let estimate: ModelFit["estimate"] = null;
-  if (durationMs != null) {
+  const quality = catalog?.image ? (o.quality ?? catalog.image.defaultQuality) : null;
+  if (catalog && tier && isImageCatalogModel(catalog)) {
+    // a still has no duration: one image, priced by quality/canvas tier and the references it carries
+    const r = estimateImageCredits(catalog, {
+      tierId: tier.id,
+      quality,
+      referenceImages: report.used.references.length,
+      outputCount: 1,
+    });
+    estimate = { amountUsd: r.amountUsd, credits: r.credits, basis: r.basis, currency: "USD" };
+  } else if (durationMs != null) {
     if (catalog && tier) {
       const r = estimateCredits(catalog, {
         seconds: durationMs / 1000,
@@ -320,15 +340,18 @@ export function evaluateModelFit(args: {
     ? `${seconds(report.duration.productionMs)} · ${report.duration.ok ? "supported" : `supports ${report.duration.supported}`}`
     : "n/a";
   const nativeSupport = caps.audio.nativeDialogueAudio || caps.audio.soundGeneration;
-  const audioText = report.inputs.some((i) => i.kind === "audio")
-    ? report.used.audioAssetIds.length > 0
-      ? "Performance supplied as reference"
-      : nativeSupport
-        ? "Performance not used (model generates its own audio)"
-        : "Performance not used"
-    : nativeSupport
-      ? "Native audio available"
-      : "No audio input";
+  const audioText =
+    purpose === "production_frame"
+      ? "No audio (still image)"
+      : report.inputs.some((i) => i.kind === "audio")
+        ? report.used.audioAssetIds.length > 0
+          ? "Performance supplied as reference"
+          : nativeSupport
+            ? "Performance not used (model generates its own audio)"
+            : "Performance not used"
+        : nativeSupport
+          ? "Native audio available"
+          : "No audio input";
 
   return {
     provider: model.provider,
@@ -343,6 +366,8 @@ export function evaluateModelFit(args: {
     inputMode: report.inputMode,
     adaptationChoice: { framing: framingChoice, duration: durationChoice },
     tierId: tier?.id ?? null,
+    quality,
+    purpose,
     nativeAudio,
     packaging,
     referencesUsed: { used: referencesUsed, total: referencesTotal },

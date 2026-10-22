@@ -1,5 +1,6 @@
 import type { GenerationPackage } from "../../generation-package";
-import { deriveReferenceCandidates } from "../compatibility";
+import { deriveProductionFrameReferenceCandidates, deriveReferenceCandidates } from "../compatibility";
+import type { GenerationPurpose } from "../schemas";
 
 /**
  * What THIS shot asks of a generator, derived only from structured Prism production truth (the frozen
@@ -7,6 +8,8 @@ import { deriveReferenceCandidates } from "../compatibility";
  * stored field says so, and each one carries the reason in plain language.
  */
 export interface ShotGenerationRequirements {
+  /** Why the generation is requested: a Production Frame still is judged by still-image criteria only. */
+  purpose?: GenerationPurpose;
   production: {
     aspectRatio: string | null;
     durationMs: number | null;
@@ -53,8 +56,9 @@ const need = (needed: boolean, yes: string, no: string): Need => ({ needed, beca
 
 export function deriveShotRequirements(
   pkg: GenerationPackage,
-  opts: { protectedComposition?: string[] } = {},
+  opts: { protectedComposition?: string[]; purpose?: GenerationPurpose } = {},
 ): ShotGenerationRequirements {
+  const still = opts.purpose === "production_frame";
   const identity = new Set<string>();
   const looks = new Set<string>();
   for (const c of pkg.characters) {
@@ -62,7 +66,9 @@ export function deriveShotRequirements(
     for (const id of c.look?.referenceAssetIds ?? []) looks.add(id);
   }
   const location = new Set(pkg.set?.referenceAssetIds ?? []);
-  const referenceImageCount = deriveReferenceCandidates(pkg).length;
+  const referenceImageCount = (
+    still ? deriveProductionFrameReferenceCandidates(pkg) : deriveReferenceCandidates(pkg)
+  ).length;
   const audio = pkg.performance.filter((p) => Boolean(p.selectedTake?.audioAssetId)).length;
   const hasDialogue = pkg.performance.length > 0 || pkg.sourceScript.dialogue.length > 0;
   const aspect = pkg.style.aspectRatio || null;
@@ -73,7 +79,9 @@ export function deriveShotRequirements(
   const hasVideo = Boolean(pkg.references.referenceVideoAssetId);
   const nonStandard = aspect != null && !STANDARD_RATIOS.includes(aspect);
 
+  const STILL_NA = "Not applicable to a still-image Production Frame candidate.";
   return {
+    ...(still ? { purpose: "production_frame" as const } : {}),
     production: {
       aspectRatio: aspect,
       durationMs: duration,
@@ -94,27 +102,39 @@ export function deriveShotRequirements(
     hasDialogue,
     protectedComposition: (opts.protectedComposition ?? []).map((s) => s.trim()).filter(Boolean),
     needs: {
-      startFrame: need(
-        hasStart,
-        "An approved storyboard/start frame exists and should condition the first frame.",
-        "No start frame: text-to-video is acceptable.",
-      ),
+      startFrame: still
+        ? need(
+            false,
+            "",
+            "References, not a first frame: the Production Frame / Storyboard are image references.",
+          )
+        : need(
+            hasStart,
+            "An approved storyboard/start frame exists and should condition the first frame.",
+            "No start frame: text-to-video is acceptable.",
+          ),
       multipleImageReferences: need(
         identity.size + looks.size >= 2,
         `${identity.size} identity and ${looks.size} Look reference image(s) carry the character; a model that takes only a start frame will not use them.`,
         "Fewer than two identity/Look references.",
       ),
-      audio: need(
-        audio > 0,
-        `${audio} selected performance take(s) with audio.`,
-        "No selected performance audio.",
-      ),
-      videoReference: need(hasVideo, "A motion reference video is attached.", "No reference video."),
-      longDuration: need(
-        duration != null && duration > LONG_DURATION_MS,
-        `Production duration ${duration! / 1000}s is above ${LONG_DURATION_MS / 1000}s.`,
-        "Duration fits short-clip models.",
-      ),
+      audio: still
+        ? need(false, "", `Image models take no audio. ${STILL_NA}`)
+        : need(
+            audio > 0,
+            `${audio} selected performance take(s) with audio.`,
+            "No selected performance audio.",
+          ),
+      videoReference: still
+        ? need(false, "", STILL_NA)
+        : need(hasVideo, "A motion reference video is attached.", "No reference video."),
+      longDuration: still
+        ? need(false, "", STILL_NA)
+        : need(
+            duration != null && duration > LONG_DURATION_MS,
+            `Production duration ${duration! / 1000}s is above ${LONG_DURATION_MS / 1000}s.`,
+            "Duration fits short-clip models.",
+          ),
       multiCharacter: need(
         characterCount >= 2,
         `${characterCount} characters in frame.`,

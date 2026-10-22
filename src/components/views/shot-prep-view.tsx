@@ -13,6 +13,8 @@ import {
   shotChangedSinceAttempt,
 } from "@/domain/generation-package";
 import { GenerateWorkspace } from "@/components/generation/generate-workspace";
+import { ProductionFrameCandidates } from "@/components/generation/production-frame-candidates";
+import { isProductionFrameAttempt } from "@/domain/generation/schemas";
 import { ProductionFrameSection, type MasterFrameChoice } from "@/components/views/production-frame-section";
 import {
   itemsBySection,
@@ -343,8 +345,9 @@ export function ShotPrepView({
   const checks = data.continuityChecks
     .filter((c) => c.shotId === shot.id)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // the Shot's OUTPUT attempts: a Production Frame candidate (an exploratory still) is not an attempt at the output
   const lastAttempt = data.attempts
-    .filter((a) => a.shotId === shot.id)
+    .filter((a) => a.shotId === shot.id && !isProductionFrameAttempt(a))
     .sort((a, b) => b.attemptNumber - a.attemptNumber)[0];
   // "has the SHOT changed?" compares production INPUTS (provenance.parts.overall) across package schema versions; the
   // exact package fingerprint is only the fallback for old snapshots that recorded no inputs identity
@@ -1041,7 +1044,19 @@ export function ShotPrepView({
 
           {/* 16 Production Frame */}
           <SectionChrome {...sectionProps("production_frame")}>
-            <ProductionFrameSection ctx={ctx} slug={slug} masterFrames={masterFrames} />
+            <ProductionFrameSection
+              ctx={ctx}
+              slug={slug}
+              masterFrames={masterFrames}
+              // the planner is rendered only when this section is the open one: it carries the same model-compare
+              // controls as the Generate workspace, and one page must never hold two of them at once
+              candidates={
+                openKey === "production_frame" ? (
+                  <ProductionFrameCandidates data={data} shotId={shotId} />
+                ) : undefined
+              }
+              openHref={`${shotPath(slug, episode.slug, shotId)}?section=production_frame`}
+            />
           </SectionChrome>
 
           {/* 17 Generation intent */}

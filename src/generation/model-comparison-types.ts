@@ -1,6 +1,7 @@
 import type { InputMode } from "@/domain/generation/compatibility";
 import type { FitStatus, PackagingRow } from "@/domain/generation/models/matrix";
 import type { ModelPerformance } from "@/domain/generation/performance";
+import type { GenerationPurpose } from "@/domain/generation/schemas";
 
 /**
  * Serializable view types of the model comparison. Kept free of server-only imports so client components can
@@ -22,6 +23,10 @@ export interface VariantView {
   estimateUsd: number | null;
   estimateBasis: string | null;
   fitScore: number;
+  /** Still-image quality this variant requests (null = the model has none). */
+  quality: string | null;
+  /** The provider canvas the request would use, "1920×1088" (still images; null otherwise). */
+  canvas: string | null;
 }
 
 export interface ModelRow {
@@ -35,6 +40,11 @@ export interface ModelRow {
   role: string | null;
   available: boolean;
   unavailableReason: string | null;
+  /** Why the comparison is made: `production_frame` rows are still-image models. */
+  purpose: GenerationPurpose;
+  /** Still-image quality options (empty = none). The default is explicit and shown before spend. */
+  qualities: Array<{ id: string; label: string; note: string }>;
+  defaultQuality: string | null;
   /** Variant knobs the user can choose (empty arrays = nothing to choose). */
   modes: InputMode[];
   tiers: string[];
@@ -63,5 +73,9 @@ export interface ModelRow {
   > | null;
 }
 
-export const variantKey = (mode: InputMode | null, tier: string | null, audio: boolean) =>
-  `${mode ?? "-"}|${tier ?? "-"}|${audio ? "audio" : "silent"}`;
+export const variantKey = (
+  mode: InputMode | null,
+  tier: string | null,
+  audio: boolean,
+  quality: string | null = null,
+) => `${mode ?? "-"}|${tier ?? "-"}|${audio ? "audio" : "silent"}${quality ? `|q:${quality}` : ""}`;

@@ -93,6 +93,17 @@ Preflight `production_frame.fresh` blocks image-to-video on a stale selected fra
 Start frame precedence: explicit override > selected Production Frame > approved Storyboard. See
 [production-frames](production-frames.md).
 
+### Production Frame candidates (Phase 2G.2, no migration)
+
+From Shot Prep → Production Frame the filmmaker can **generate candidates**: several still images from image models (the
+same model comparison and candidate-set workflow, filtered to still-image models), compare and review them (Good /
+Shortlist / Best / Reject), and **Use as Production Frame**. The generation _purpose_ `production_frame` is independent of
+the Shot's own modality: generating stills never changes `shot.generation.modality`, the start-frame override, the selection
+or any 3D state. One attempt is one image. A candidate is judged by its **candidate input basis** (the named parts it was generated from, plus a Production Frame only if it used one as a reference), not by the Shot's current `parts.overall`: a named input that changed, or a referenced frame that is no longer canonical, makes it **stale** and refused, while choosing a sibling never does; a provider canvas
+that is not the production aspect needs the production conform first. Production Frame selection is the one canonical
+pointer (never `attempt.approved`); ⭐ Best is only the experiment's preference. See
+[image-shot-generator](image-shot-generator.md).
+
 ### Generation attempts
 
 - `generation_attempts.package_fingerprint` stores the package fingerprint at logging time. The trigger

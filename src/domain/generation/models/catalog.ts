@@ -1,4 +1,5 @@
 import type { GenerationModel, ModelCapabilities } from "../schemas";
+import { RUNWAY_IMAGE_MODELS } from "./image-catalog";
 import type {
   CatalogModel,
   CatalogPricing,
@@ -13,8 +14,10 @@ import type {
  * The Phase 2E video-model comparison set, served through the existing Runway adapter.
  *
  * Sources (read 2026-10-13/14):
- *   - @runwayml/sdk@4.21.0 request types: resources/image-to-video.d.ts, text-to-video.d.ts, video-to-video.d.ts
- *     (4.22.0 adds only image models; its video request types are identical, so the pin stays at 4.21.0)
+ *   - @runwayml/sdk@4.22.0 request types: resources/image-to-video.d.ts, text-to-video.d.ts, video-to-video.d.ts
+ *     (Phase 2G.2 re-audit, 2026-10-21: byte-identical to @runwayml/sdk@4.21.0, which these facts were first verified
+ *     against; the SHA-256 of each file is pinned in src/generation/__tests__/runway-image.test.ts, so no video fact
+ *     changes merely because the SDK version did)
  *   - https://docs.dev.runwayml.com/guides/pricing/  (credit price table; $0.01 per credit)
  *   - https://docs.dev.runwayml.com/guides/models/   (model cards)
  *   - https://docs.dev.runwayml.com/api.md           (POST /v1/image_to_video reference: per-model duration, ratios;
@@ -34,15 +37,15 @@ import type {
  * @runwayml/sdk version (4.21.0, 4.22.0) types it in the video request unions, so it is NOT offered: see
  * SDK_BLOCKED_MODELS below. Adding a model is one entry here plus its family compiler if the request shape is new.
  */
-export const RUNWAY_SDK_REF = "@runwayml/sdk@4.21.0";
+export const RUNWAY_SDK_REF = "@runwayml/sdk@4.22.0";
 export const RUNWAY_API_VERSION_REF = "2024-11-06";
 export const CATALOG_VERIFIED_AT = "2026-10-14";
 export const RUNWAY_PRICING_VERSION = "runway-2026-10-13";
 export const RUNWAY_USD_PER_CREDIT = 0.01;
 
 const SOURCES = [
-  "@runwayml/sdk@4.21.0 resources/image-to-video.d.ts",
-  "@runwayml/sdk@4.21.0 resources/text-to-video.d.ts",
+  "@runwayml/sdk@4.22.0 resources/image-to-video.d.ts (re-audited 2026-10-21; identical to 4.21.0)",
+  "@runwayml/sdk@4.22.0 resources/text-to-video.d.ts (re-audited 2026-10-21; identical to 4.21.0)",
   "docs.dev.runwayml.com/guides/pricing (2026-10-13)",
   "docs.dev.runwayml.com/guides/models (2026-10-14)",
   "docs.dev.runwayml.com/api.md image_to_video reference (2026-10-14)",
@@ -440,8 +443,60 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
   },
 ];
 
+export { RUNWAY_IMAGE_MODELS };
+
+/** Every Runway catalog model (video, then still image), in a stable order. */
+export const RUNWAY_MODELS: readonly CatalogModel[] = [...RUNWAY_VIDEO_MODELS, ...RUNWAY_IMAGE_MODELS];
+
 export function catalogModel(provider: string, modelId: string): CatalogModel | null {
-  return RUNWAY_VIDEO_MODELS.find((m) => m.provider === provider && m.modelId === modelId) ?? null;
+  return RUNWAY_MODELS.find((m) => m.provider === provider && m.modelId === modelId) ?? null;
+}
+
+/** A still-image model (it has an image credit rule and no video modality). */
+export const isImageCatalogModel = (m: CatalogModel): boolean => m.pricing.imageRule != null;
+
+export interface ImagePricingInputs {
+  tierId: string;
+  /** null = the model's Prism default quality. */
+  quality: string | null;
+  referenceImages: number;
+  /** Prism always sends 1; kept explicit so the basis string can say so. */
+  outputCount: number;
+}
+
+/**
+ * Credits and USD for a still-image request from the versioned image rule only. Reference images may add credits
+ * (per generated image or once per request, as the provider documents). Never re-prices history: actual cost always
+ * comes from the provider's reported credits.
+ */
+export function estimateImageCredits(model: CatalogModel, input: ImagePricingInputs): PricingResult {
+  const rule = model.pricing.imageRule;
+  if (!rule)
+    return { credits: null, amountUsd: null, basis: `${model.displayName} has no image price`, parts: [] };
+  const quality = input.quality ?? rule.defaultQuality;
+  const byTier = rule.perImage[quality];
+  const perImage = byTier?.[input.tierId] ?? byTier?.[defaultTier(model).id];
+  if (perImage == null) {
+    return { credits: null, amountUsd: null, basis: `No price for quality ${quality}`, parts: [] };
+  }
+  const n = Math.max(1, input.outputCount);
+  const parts: string[] = [`${perImage} cr × ${n} image${n === 1 ? "" : "s"}`];
+  let credits = perImage * n;
+  if (rule.perReferenceImage > 0 && input.referenceImages > 0) {
+    const refs =
+      rule.perReferenceImage * input.referenceImages * (rule.referenceBilling === "per_output" ? n : 1);
+    credits += refs;
+    parts.push(
+      `${rule.perReferenceImage} cr × ${input.referenceImages} reference${input.referenceImages === 1 ? "" : "s"}`,
+    );
+  }
+  credits = Math.round(credits * 100) / 100;
+  return {
+    credits,
+    amountUsd: Math.round(credits * model.pricing.usdPerCredit * 10_000) / 10_000,
+    basis: `${credits} credits (${parts.join(" + ")}) × ${model.pricing.usdPerCredit}/credit; ${model.pricing.version}`,
+    parts,
+  };
 }
 
 export function defaultTier(model: CatalogModel): CatalogTier {
@@ -534,6 +589,7 @@ export function estimateCredits(model: CatalogModel, input: PricingInputs): Pric
  * (never an optimistic one); the catalog entry keeps the full tri-state truth.
  */
 export function toGenerationModel(m: CatalogModel, opts: { maxConcurrency?: number } = {}): GenerationModel {
+  if (isImageCatalogModel(m)) return toImageGenerationModel(m, opts);
   const first = defaultTier(m);
   const unitCost = estimateCredits(m, {
     seconds: 1,
@@ -600,6 +656,84 @@ export function toGenerationModel(m: CatalogModel, opts: { maxConcurrency?: numb
         m.pricing.rule.minimumCredits != null ? `, minimum ${m.pricing.rule.minimumCredits} credits` : ""
       })`,
       unitCost: unitCost.amountUsd,
+    },
+  };
+  return {
+    provider: m.provider,
+    modelId: m.modelId,
+    displayName: m.displayName,
+    description: m.summary,
+    kind: "real",
+    lifecycle:
+      m.availability === "retired" ? "retired" : m.availability === "deprecated" ? "deprecated" : "active",
+    capabilities: caps,
+  };
+}
+
+function toImageGenerationModel(m: CatalogModel, opts: { maxConcurrency?: number }): GenerationModel {
+  const first = defaultTier(m);
+  const unit = estimateImageCredits(m, {
+    tierId: first.id,
+    quality: null,
+    referenceImages: 0,
+    outputCount: 1,
+  });
+  // ascending by area: `caps.image.resolutions.at(-1)` is the largest canvas
+  const canvases = m.tiers
+    .flatMap((t) => Object.values(t.ratios))
+    .flatMap((v) => {
+      const p = /^(\d{3,5}):(\d{3,5})$/.exec(v);
+      return p ? [{ width: Number(p[1]), height: Number(p[2]) }] : [];
+    })
+    .sort((a, b) => a.width * a.height - b.width * b.height);
+  const refs = m.inputs.referenceImages === "supported";
+  const caps: ModelCapabilities = {
+    modalities: m.modalities,
+    references: {
+      textPrompt: true,
+      negativePrompt: false,
+      referenceImages: refs,
+      maxReferences: refs ? (m.inputs.maxReferenceImages ?? 0) : 0,
+      orderedReferences: m.image?.referenceAddressing !== "none",
+      characterReferences: refs,
+      styleReferences: refs,
+      locationReferences: refs,
+      startFrame: false,
+      endFrame: false,
+      referenceVideo: false,
+      referenceAudio: false,
+      keyframesExcludeReferences: false,
+    },
+    video: null,
+    image: {
+      resolutions: canvases,
+      aspectRatios: m.aspectRatios,
+      transparency: false,
+      editing: refs,
+    },
+    audio: {
+      nativeDialogueAudio: false,
+      audioConditioning: false,
+      lipSync: false,
+      referenceAudio: false,
+      soundGeneration: false,
+    },
+    operational: {
+      mode: "async",
+      polling: true,
+      webhook: false,
+      cancellation: true,
+      idempotency: false,
+      maxConcurrency: opts.maxConcurrency ?? 1,
+      recommendedPollIntervalMs: 5_000,
+      jobTimeoutMs: 15 * 60_000,
+      rateLimitNotes: m.concurrencyNote,
+    },
+    commercial: {
+      pricing: "per_output",
+      currency: "USD",
+      costUnit: `image (${unit.credits ?? "?"} credits at the default quality, no references)`,
+      unitCost: unit.amountUsd,
     },
   };
   return {
