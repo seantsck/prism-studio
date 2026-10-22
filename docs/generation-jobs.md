@@ -98,6 +98,12 @@ npm run worker:generation -- --once          # one tick
 npm run worker:generation -- --dry-run       # show what is due; touches nothing
 ```
 
+The startup banner separates **REAL providers** (external services that may bill, e.g. Runway) from **LOCAL TEST
+providers** (the free in-process mock, on by default outside production). A registered mock is never a fallback: every job
+names its own provider, so a failed Runway job stays a failed Runway job (pinned by
+`src/generation/__tests__/no-provider-fallback.test.ts`). To keep the mock out of one process, for example a live paid run,
+set `PRISM_STUDIO_DISABLE_MOCK_PROVIDER=1` for that process; the defaults do not change.
+
 It prints the target Supabase project, refuses any other, redacts everything, and has no Next.js dependency, so
 it deploys unchanged to a VPS/container. Storage credentials: see [storage](storage.md) and
 [security-model](security-model.md) (`PRISM_STUDIO_WORKER_SERVICE_KEY`).

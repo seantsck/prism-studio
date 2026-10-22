@@ -2,6 +2,22 @@ import type { GenerationModel, GenerationProviderInfo, ModelAvailability } from 
 import { missingConfig, readGenerationConfig, type GenerationConfig } from "./config";
 import type { GenerationProviderAdapter } from "./provider";
 import { MockProvider } from "./providers/mock";
+
+/**
+ * Which enabled providers are REAL (call an external service, may bill) and which are LOCAL TEST providers (the free
+ * in-process mock). A disclosure only: provider choice stays explicit per job, so a registered mock can never be used
+ * in place of a real provider.
+ */
+export function providerDisclosure(
+  infos: readonly Pick<GenerationProviderInfo, "provider" | "kind">[],
+  enabled: readonly string[],
+): { real: string[]; localTest: string[] } {
+  const on = infos.filter((i) => enabled.includes(i.provider));
+  return {
+    real: on.filter((i) => i.kind === "real").map((i) => i.provider),
+    localTest: on.filter((i) => i.kind === "mock").map((i) => i.provider),
+  };
+}
 import { RunwayProvider } from "./providers/runway/adapter";
 
 /**

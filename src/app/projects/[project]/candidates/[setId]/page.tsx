@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ActionForm } from "@/components/action-form";
 import { CandidateBoard, type BoardCandidate } from "@/components/candidates/candidate-board";
+import { candidateCanvasFacts } from "@/components/candidates/output-dims";
 import { GenerationPoller } from "@/components/generation/poller";
 import { BenchmarkBanner } from "@/components/candidates/benchmark-banner";
 import { Badge, Button, PageHeader, Panel } from "@/components/ui";
@@ -80,7 +81,8 @@ export default async function CandidateSetPage({
       if (set.set.preferredAttemptId === v?.attempt.id) winnerCost = actual;
     }
     const plan = media?.plan ?? parseAdaptationPlan(v?.attempt.adaptationPlan);
-    const output = v?.outputs.find((o) => o.output.role === "primary")?.asset ?? null;
+    const primaryOutput = v?.outputs.find((o) => o.output.role === "primary") ?? null;
+    const output = primaryOutput?.asset ?? null;
     const shown = media?.delivery?.asset ?? output;
     const isMock = m.provider === "mock";
     const adaptations = (m.plan.adaptations as string[] | undefined) ?? [];
@@ -125,9 +127,9 @@ export default async function CandidateSetPage({
       durationMs: shown?.durationMs ?? v?.attempt.durationMs ?? null,
       // the stored PROVIDER file's own dimensions (the delivery master, if any, is reported separately)
       resolution: output?.width && output?.height ? `${output.width}×${output.height}` : null,
-      providerCanvas: plan?.framing.providerCanvas
-        ? `${plan.framing.providerCanvas.width}×${plan.framing.providerCanvas.height}`
-        : null,
+      // what was ACTUALLY sent, from the stored output's frozen provider provenance (never today's catalog, never
+      // the plan); the plan's canvas is passed separately and labelled as planning geometry
+      ...candidateCanvasFacts(primaryOutput?.output.provenance ?? null, plan?.framing.providerCanvas),
       deliveryNote: media?.delivery?.isOriginal === false ? "conformed master" : "provider original",
       deliveryResolution:
         media?.delivery?.isOriginal === false && shown?.width && shown?.height

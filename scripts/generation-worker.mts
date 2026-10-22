@@ -11,7 +11,7 @@ import pg from "pg";
 import { PostgresGenerationData } from "../src/data/generation-postgres";
 import { readGenerationConfig } from "../src/generation/config";
 import { consoleLogger } from "../src/generation/log";
-import { createRegistry } from "../src/generation/registry";
+import { createRegistry, providerDisclosure } from "../src/generation/registry";
 import { createOutputSink, SinkConfigError } from "../src/generation/sink";
 import { GenerationWorker } from "../src/generation/worker";
 import { WORKER_ROLE } from "./lib/worker-role-spec.mjs";
@@ -93,7 +93,18 @@ const pool = new pg.Pool({
 const available = registry.availability();
 console.log(`DB role:           ${WORKER_ROLE} — ${dbMode}`);
 console.log(`Supabase project:  ${PRISM_STUDIO_REF}`);
-console.log(`Providers enabled: ${config.enabledProviders.join(", ") || "(none)"}`);
+const disclosure = providerDisclosure(
+  registry.adapters().map((a) => a.info()),
+  config.enabledProviders,
+);
+console.log(`REAL providers enabled:       ${disclosure.real.join(", ") || "(none)"}`);
+console.log(
+  `LOCAL TEST providers enabled: ${disclosure.localTest.join(", ") || "(none)"}${
+    disclosure.localTest.length
+      ? " (free, in-process; used ONLY by jobs that name them, never as a fallback)"
+      : ""
+  }`,
+);
 for (const m of available) {
   const credential =
     m.kind === "mock" ? "n/a (free)" : m.missingConfig.length === 0 ? "configured" : "MISSING";

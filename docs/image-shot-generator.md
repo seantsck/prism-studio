@@ -235,11 +235,26 @@ from any other source.
 | UI, memory mode                                                                              | `e2e/zzzzzzzzzzzzzzzz-image-shot-generator.spec.ts`        |
 | UI, hosted stack (Supabase Auth, RLS, real worker, private Storage; mock provider)           | `e2e/supabase-image-shot-generator.spec.ts`                |
 
-## First live smoke (not run)
+## Live smoke (passed, 2026-10-22)
 
-Planned, **not executed, needs explicit approval of the spend**: one Shot, the three registered models at their default quality
-with no references (about $0.10 in total), reviewed by a human. Until that is approved and run, every Runway image path above
-is proven only against the fake SDK boundary.
+Explicitly approved, capped at $0.10. One 2.39:1 Shot of the demo project, the three registered models at their default
+quality, no references, through the real worker against Runway:
+
+| Model                 | Requested provider canvas | Actual output | Cost (Runway-reported = estimate) |
+| --------------------- | ------------------------- | ------------- | --------------------------------- |
+| `gpt_image_2_5_flare` | 2048×880 (21:9)           | 2048×880 PNG  | $0.05                             |
+| `muse_image`          | 2352×1008 (21:9)          | 2352×1008 PNG | $0.01                             |
+| `seedream5_lite`      | 3136×1344 (21:9)          | 3136×1344 PNG | $0.04                             |
+
+**$0.10 in total, 3 attempts, 3 jobs, 0 retries, all succeeded, no fallback.** All three were refused as the Production Frame
+until conformed (21:9 ≠ 2.39:1). The GPT Image still was conformed to 2048×856 and used as the Production Frame: promotion
+created no Asset (the frame references the conform), the Shot row was byte-identical before and after, and Best (on another
+candidate) stayed independent of the current frame. No GPU, no 3D, no video call.
+
+Two findings, fixed in 2G.2.1: the candidate card labelled the plan's canvas ("1920×822") as the requested canvas (now read
+only from the frozen provider provenance; see [human-generation-review](human-generation-review.md#picture-size-on-a-candidate-card)),
+and the worker banner did not distinguish the free local mock from real providers (now "REAL" vs "LOCAL TEST", with a
+per-process opt-out; a registered mock was never a fallback).
 
 ## What 2G.2 does not do
 

@@ -155,27 +155,38 @@ describe("benchmark reviews are kept but never become production history", () =>
 });
 
 describe("candidate picture-size semantics", () => {
-  const base = { deliveryResolution: null, deliveryNote: "provider original" };
+  const base = { deliveryResolution: null, deliveryNote: "provider original", planningCanvas: null };
+  const sent = (canvas: string | null, ratioLabel: string | null = null, tier: string | null = null) => ({
+    canvas,
+    ratioLabel,
+    tier,
+  });
 
   it("shows the recorded provider-file size, never the request", () => {
     const t = describeDims({
       ...base,
       recorded: "1280x720",
       measured: "1344x768",
-      requestedCanvas: "1280x720",
+      requested: sent("1280×720"),
     });
     expect(t.actualOutput).toBe("1280x720");
-    expect(t.providerCanvas).toBe("1280x720 (requested)");
+    expect(t.providerCanvas).toBe("1280×720");
   });
 
-  it("Hailuo case: no canvas was frozen and no size was recorded, so the size read from the file is shown", () => {
-    const t = describeDims({ ...base, recorded: null, measured: "1344x768", requestedCanvas: null });
+  it("Hailuo case: an aspect label and a tier were sent (no pixels), and the size read from the file is shown", () => {
+    const t = describeDims({
+      ...base,
+      recorded: null,
+      measured: "1344x768",
+      requested: sent(null, "16:9", "768p"),
+    });
     expect(t.actualOutput).toBe("1344x768 (read from the file)");
-    expect(t.providerCanvas).toMatch(/^unknown/);
+    expect(t.providerCanvas).toBe("16:9 at the 768p tier (aspect sent, no pixel canvas)");
+    expect(t.providerCanvas).not.toMatch(/d+×d+/); // no manufactured pixel size
   });
 
   it("is honest when nothing is known (no invented numbers, no blank dash)", () => {
-    const t = describeDims({ ...base, recorded: null, measured: null, requestedCanvas: null });
+    const t = describeDims({ ...base, recorded: null, measured: null, requested: null });
     expect(t.actualOutput).toMatch(/^unknown/);
     expect(t.providerCanvas).toMatch(/^unknown/);
   });
@@ -184,7 +195,8 @@ describe("candidate picture-size semantics", () => {
     const t = describeDims({
       recorded: "1344x768",
       measured: null,
-      requestedCanvas: null,
+      requested: null,
+      planningCanvas: null,
       deliveryResolution: "1280x720",
       deliveryNote: "conformed master",
     });

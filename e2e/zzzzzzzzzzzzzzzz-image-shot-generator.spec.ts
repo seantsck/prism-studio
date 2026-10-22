@@ -106,7 +106,13 @@ test("Generate candidates: three still images from three image models, no 3D set
     // modality-aware copy: nothing calls a still a clip
     await expect(card(page, id)).not.toContainText(/clip|watch|video/i);
   }
-  await expect(card(page, "mock-image-wide").getByTestId("dims-canvas")).toContainText("672");
+  // what was SENT (the mock takes an aspect label) vs the plan's geometry, never conflated
+  await expect(card(page, "mock-image-wide").getByTestId("dims-canvas")).toContainText(
+    "21:9 (aspect sent, no pixel canvas)",
+  );
+  await expect(card(page, "mock-image-wide").getByTestId("dims-planning")).toContainText(
+    "672×288 (plan, not a request)",
+  );
 });
 
 test("Compare and review: Reject one, mark another Best; Best is NOT the Production Frame", async ({

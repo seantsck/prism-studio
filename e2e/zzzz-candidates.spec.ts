@@ -105,7 +105,7 @@ test("compare side by side: layouts, synchronized controls, same-position frames
   // per-candidate metadata (provider, model, cost, duration, canvas, delivery, timings)
   const meta = card(page, "A").getByTestId("candidate-meta");
   await expect(meta).toContainText("Cost");
-  await expect(meta).toContainText("Provider canvas");
+  await expect(meta).toContainText("Requested provider canvas");
   await expect(meta).toContainText("Generation / total");
   // picture size is never a blank dash: the actual output and the requested canvas are separate, honest rows
   await expect(card(page, "A").getByTestId("dims-actual")).not.toHaveText("—");
