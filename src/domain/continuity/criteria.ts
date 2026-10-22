@@ -1,5 +1,6 @@
 import type { GenerationPackage } from "../generation-package";
 import type { GenerationAdaptationPlan } from "../framing/adaptation";
+import { characterImages } from "../generation/compatibility";
 import { fingerprint } from "../hash";
 import type { ContinuityCriterion, ReferenceItem, ReferenceSet } from "./model";
 
@@ -118,19 +119,22 @@ export function buildCriteria(ctx: CriteriaContext): ContinuityCriterion[] {
   }
 
   // ── semantic: characters ──
+  // Phase 2G.4: a locked assignment's entry IS its Character Continuity Lock's frozen appearance (the package is built
+  // from it), so these criteria judge against the Lock; the source names it so a reviewer knows which basis applies.
   for (const c of pkg.characters) {
+    const lock = c.continuityLock ? ` · Character Continuity Lock "${c.continuityLock.name}"` : "";
     add({
       key: `identity:${c.characterId}`,
       category: "identity",
       severity: "critical",
       title: `${c.name} — identity`,
-      sourceRef: `Character identity references (${c.identityReferenceAssetIds.length})`,
+      sourceRef: `Character identity references (${c.identityReferenceAssetIds.length})${lock}`,
       expected: clean(c.physicalDescription) || `Matches ${c.name}'s identity references`,
       handler: "analyzer",
       capability: "image_identity",
     });
     if (c.look) {
-      const ref = `Look "${c.look.name}"${c.look.locked ? " (locked)" : ""}`;
+      const ref = `Look "${c.look.name}"${c.look.locked ? " (locked)" : ""}${lock}`;
       add({
         key: `wardrobe:${c.characterId}`,
         category: "wardrobe",
@@ -378,11 +382,11 @@ export function buildReferenceSet(
     items.push({ role, label, assetId, checksum: pkg.assets[assetId]?.checksum ?? null, text: null });
   };
 
+  // identity / Look images: a locked assignment's come from its frozen Continuity Lock (never today's library)
   for (const c of pkg.characters) {
-    for (const id of c.identityReferenceAssetIds) asset("identity", `${c.name} identity`, id);
-    for (const id of c.look?.referenceAssetIds ?? []) {
-      asset("look", `${c.name} Look "${c.look?.name}"`, id);
-    }
+    const images = characterImages(pkg, c);
+    for (const i of images.identity) asset("identity", i.label, i.assetId);
+    for (const i of images.look) asset("look", i.label, i.assetId);
   }
   asset("storyboard", "Approved storyboard frame", pkg.references.approvedStoryboardFrame?.assetId);
   for (const id of pkg.set?.referenceAssetIds ?? [])

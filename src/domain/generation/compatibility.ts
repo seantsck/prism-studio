@@ -1,3 +1,4 @@
+import { lockedReferenceLabel } from "../character-continuity";
 import type { GenerationPackage } from "../generation-package";
 import {
   buildAdaptationPlan,
@@ -117,6 +118,43 @@ interface Candidate {
   label: string;
 }
 
+interface CharacterImage {
+  assetId: string;
+  label: string;
+}
+
+/**
+ * One assigned Character's identity and Look images with their request labels. A locked assignment's images come from
+ * its frozen Character Continuity Lock (v5), in frozen order, labelled with the slot and the Lock; an unlocked one's
+ * from the package's live entry exactly as before 2G.4. Never both: a locked entry's ids ARE the Lock's (the package
+ * is assembled from one resolved appearance), so no reference is ever sent twice.
+ */
+export function characterImages(
+  pkg: GenerationPackage,
+  c: GenerationPackage["characters"][number],
+): { identity: CharacterImage[]; look: CharacterImage[] } {
+  const lock = c.continuityLock
+    ? pkg.references.characterContinuity?.find(
+        (l) => l.characterId === c.characterId && l.lockId === c.continuityLock?.lockId,
+      )
+    : undefined;
+  if (lock) {
+    const sorted = [...lock.references].sort((a, b) => a.position - b.position);
+    const of = (role: "identity" | "look") =>
+      sorted
+        .filter((r) => r.role === role)
+        .map((r) => ({ assetId: r.assetId, label: lockedReferenceLabel(lock, r) }));
+    return { identity: of("identity"), look: of("look") };
+  }
+  return {
+    identity: c.identityReferenceAssetIds.map((assetId) => ({ assetId, label: `${c.name} identity` })),
+    look: (c.look?.referenceAssetIds ?? []).map((assetId) => ({
+      assetId,
+      label: `${c.name} Look "${c.look?.name}"`,
+    })),
+  };
+}
+
 /** Ordered reference candidates the package implies, deduplicated by asset. Start/end frames are separate. */
 export function deriveReferenceCandidates(pkg: GenerationPackage): Candidate[] {
   const out: Candidate[] = [];
@@ -134,10 +172,9 @@ export function deriveReferenceCandidates(pkg: GenerationPackage): Candidate[] {
 
   const view = pkg.references.locationView;
   for (const c of pkg.characters) {
-    for (const id of c.identityReferenceAssetIds)
-      if (id !== view?.assetId) push(id, "identity", `${c.name} identity`);
-    for (const id of c.look?.referenceAssetIds ?? [])
-      if (id !== view?.assetId) push(id, "character_look", `${c.name} Look "${c.look?.name}"`);
+    const images = characterImages(pkg, c);
+    for (const i of images.identity) if (i.assetId !== view?.assetId) push(i.assetId, "identity", i.label);
+    for (const i of images.look) if (i.assetId !== view?.assetId) push(i.assetId, "character_look", i.label);
   }
   // v4: the Shot's canonical Location View before the Location's generic reference photos
   if (view) push(view.assetId, "location_view", locationViewLabel(view.name));
@@ -159,10 +196,12 @@ const hasStoredFile = (pkg: GenerationPackage, assetId: string): boolean => {
 export const locationViewLabel = (name: string) => `Canonical Location View "${name}"`;
 
 /**
- * Deterministic reference priority for `production_frame` image generation (Phase 2G.2, extended in 2G.3), deduplicated
- * by asset:
+ * Deterministic reference priority for `production_frame` image generation (Phase 2G.2, extended in 2G.3 and 2G.4),
+ * deduplicated by asset:
  *   1 selected Production Frame · 2 approved Storyboard · 3 Character identity · 4 Character Look ·
  *   5 selected Location View · 6 generic Location references · 7 lighting · 8 explicit Shot references.
+ * Characters in Shot assignment order; identity before Look. A Character with a selected Continuity Lock contributes
+ * ONLY the Lock's frozen images (identity in slot order, then Look in frozen order); one without, its live images.
  * An image is sent ONCE, under its most specific role: the Shot's own pictures (Production Frame, Storyboard) outrank
  * the Location View; the Location View outranks every generic role (identity / Look / Location / lighting / Shot
  * reference), so an image that is both is never spent twice and never mislabelled as generic.
@@ -179,12 +218,11 @@ export function deriveProductionFrameReferenceCandidates(pkg: GenerationPackage)
   const view = pkg.references.locationView;
   push(pkg.references.productionFrame?.assetId, "production_frame", "Current Production Frame");
   push(pkg.references.approvedStoryboardFrame?.assetId, "storyboard", "Approved storyboard frame");
-  for (const c of pkg.characters)
-    for (const id of c.identityReferenceAssetIds)
-      if (id !== view?.assetId) push(id, "identity", `${c.name} identity`);
-  for (const c of pkg.characters)
-    for (const id of c.look?.referenceAssetIds ?? [])
-      if (id !== view?.assetId) push(id, "character_look", `${c.name} Look "${c.look?.name}"`);
+  const images = pkg.characters.map((c) => characterImages(pkg, c));
+  for (const c of images)
+    for (const i of c.identity) if (i.assetId !== view?.assetId) push(i.assetId, "identity", i.label);
+  for (const c of images)
+    for (const i of c.look) if (i.assetId !== view?.assetId) push(i.assetId, "character_look", i.label);
   if (view) push(view.assetId, "location_view", locationViewLabel(view.name));
   for (const id of pkg.set?.referenceAssetIds ?? [])
     push(id, "location", `${pkg.set?.name ?? "Set"} reference`);
@@ -537,6 +575,19 @@ export function evaluateCompatibility(
     });
     accepted.length = 0;
   }
+  // truthful: a Continuity Lock's appearance is still described in words, but the model never sees its images
+  const lockedAssets = new Set(
+    (pkg.references.characterContinuity ?? []).flatMap((l) => l.references.map((r) => r.assetId)),
+  );
+  const droppedLocked = [...droppedByRole.values()].flat().filter((c) => lockedAssets.has(c.assetId));
+  if (droppedLocked.length > 0)
+    ignored.push({
+      id: "references.character_continuity",
+      feature: "references",
+      label: `${droppedLocked.length} Character Continuity Lock image${droppedLocked.length === 1 ? "" : "s"}`,
+      impact:
+        "Character reference images not supplied to this model. The locked identity and Look are described in the prompt text only; the result is NOT conditioned on those images.",
+    });
   for (const [role, list] of droppedByRole) {
     if (role === "location_view") {
       // truthful: the view's viewpoint is still described in words, but the model never sees its image

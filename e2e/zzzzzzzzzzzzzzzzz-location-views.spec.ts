@@ -118,7 +118,7 @@ test("Shot Prep: choose 'Doorway' for Shot 4C; the package carries it by value",
   await expect(lv.getByTestId("lv-selected")).toContainText("Doorway", { timeout: 15_000 });
 
   const json = await packageOf(page, request, shotUrl);
-  expect(json.version).toBe(4);
+  expect(json.version).toBe(5);
   expect(json.references.locationView).toMatchObject({ name: "Doorway", kind: "entrance" });
   expect(json.assets[json.references.locationView!.assetId]).toMatchObject({
     purpose: "location_ref",

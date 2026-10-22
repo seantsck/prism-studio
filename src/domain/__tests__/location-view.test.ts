@@ -166,7 +166,7 @@ describe("ShotContext → GenerationPackage v4 → PromptPlan (no Production Fra
   it("package v4 carries references.locationView by value and describes its Asset", () => {
     const { data, view, asset } = seedWithView();
     const pkg = pkgOf(data);
-    expect(pkg.version).toBe(4);
+    expect(pkg.version).toBe(5);
     expect(pkg.references.locationView).toMatchObject({
       viewId: view.id,
       locationId: view.locationId,
@@ -190,7 +190,7 @@ describe("ShotContext → GenerationPackage v4 → PromptPlan (no Production Fra
   it("without a selected view a v4 package carries no locationView key and the Shot hashes as before 2G.3", () => {
     const { data } = seedWithView("2A", { select: false });
     const pkg = pkgOf(data);
-    expect(pkg.version).toBe(4);
+    expect(pkg.version).toBe(5);
     expect(pkg.references).not.toHaveProperty("locationView");
     expect(pkg.provenance.sourceVersions).not.toHaveProperty("locationViewId");
     // the location part is exactly the pre-2G.3 value (views that exist but are not selected change nothing)

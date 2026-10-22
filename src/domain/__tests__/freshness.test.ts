@@ -149,7 +149,7 @@ describe("generation package fingerprint", () => {
   it("embeds self-describing assets and provenance so history stays interpretable", () => {
     const data = seed();
     const pkg = build(data, "3A", "2026-01-01T00:00:00Z");
-    expect(pkg.packageSchemaVersion).toBe(4);
+    expect(pkg.packageSchemaVersion).toBe(5);
     expect(Object.keys(pkg.assets).length).toBeGreaterThan(0);
     const take = pkg.performance[0].selectedTake!;
     expect(pkg.assets[take.audioAssetId!]).toMatchObject({ type: "audio", id: take.audioAssetId });

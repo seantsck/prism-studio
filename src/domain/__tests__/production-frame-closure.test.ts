@@ -67,7 +67,7 @@ describe("the two fingerprints are not interchangeable", () => {
     const pkg = pkgOf(data);
     const { attempt, fp, legacyOverall } = v2Attempt(pkg);
     // package identity: a v3 package and a v2 package are different frozen shapes
-    expect(pkg.version).toBe(4); // the current shape (Phase 2G.3)
+    expect(pkg.version).toBe(5); // the current shape (Phase 2G.4)
     expect(fp).not.toBe(pkg.provenance.fingerprint);
     // the Shot's production-input identity is exactly the pre-2G.1 value (the legacy rule reproduced above)
     expect(overallOf(pkg)).toBe(legacyOverall);

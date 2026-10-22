@@ -1,3 +1,4 @@
+import { characterContinuityPackageRef, type CharacterContinuityPackageRef } from "./character-continuity";
 import type { ShotContext } from "./context";
 import type { DurationBreakdown } from "./duration";
 import {
@@ -34,13 +35,17 @@ import type { SpatialReference } from "./previs/spatial";
  *       ONLY when the Shot has a selected Production Frame), and the start-frame precedence below
  *   v4  Phase 2G.3: `references.locationView` + the Location View Asset (present ONLY when the Shot has a selected,
  *       valid Location View), whose identity is also part of the Shot's `location` part
- * Packages of v2 and v3 stay readable: every later key is optional. No historical package is ever rewritten.
+ *   v5  Phase 2G.4: `references.characterContinuity` + `characters[].continuityLock` + every locked reference image in
+ *       `assets` (present ONLY for assignments with a selected, valid Character Continuity Lock). A locked
+ *       assignment's `characters[]` entry describes the Lock's frozen appearance: the appearance Prism actually sends
+ * Packages of v2, v3 and v4 stay readable: every later key is optional. No historical package is ever rewritten.
  */
-export const PACKAGE_SCHEMA_VERSION = 4 as const;
-export const PREVIOUS_PACKAGE_SCHEMA_VERSION = 3 as const;
+export const PACKAGE_SCHEMA_VERSION = 5 as const;
+export const PREVIOUS_PACKAGE_SCHEMA_VERSION = 4 as const;
 export const LEGACY_PACKAGE_SCHEMA_VERSION = 2 as const;
 export type PackageSchemaVersion =
   | typeof LEGACY_PACKAGE_SCHEMA_VERSION
+  | 3
   | typeof PREVIOUS_PACKAGE_SCHEMA_VERSION
   | typeof PACKAGE_SCHEMA_VERSION;
 
@@ -121,6 +126,11 @@ export interface GenerationPackage {
     gestures: string;
     physicalInteractions: string;
     performanceNotes: string;
+    /**
+     * v5: the Character Continuity Lock this entry's appearance comes from (by identity; the full frozen record is in
+     * `references.characterContinuity`). Omitted for an assignment without a selected Lock (and in every v2-v4 package).
+     */
+    continuityLock?: { lockId: string; name: string; lockFingerprint: string };
   }>;
   set: {
     locationId: string;
@@ -214,6 +224,11 @@ export interface GenerationPackage {
      * is selected (and in every v2/v3 package). Its image is described in `assets`; it is never a start frame.
      */
     locationView?: LocationViewPackageRef;
+    /**
+     * v5: every selected Character Continuity Lock, by value (frozen facts + ordered reference images with checksums),
+     * in Shot assignment order. Omitted when no assignment has one (and in every v2-v4 package).
+     */
+    characterContinuity?: CharacterContinuityPackageRef[];
     referenceAssetIds: string[];
     referenceVideoAssetId: string | null;
     referenceAudioAssetId: string | null;
@@ -246,6 +261,8 @@ export interface GenerationPackage {
       productionFrameId?: string;
       /** v4: only when a Location View is selected */
       locationViewId?: string;
+      /** v5: only when ≥1 Character Continuity Lock is selected; keyed by Character id */
+      characterContinuityLocks?: Record<string, { lockId: string; lockFingerprint: string }>;
     };
   };
 }
@@ -257,34 +274,44 @@ const uniq = <T>(xs: T[]) => [...new Set(xs)];
 export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date()): GenerationPackage {
   const { shot, scene, bible, location } = ctx;
   const report = runPreflight(ctx);
-  const names = ctx.characters.map((c) => c.character?.name ?? "Unknown");
+  // Phase 2G.4: each assignment's appearance is resolved ONCE (the selected Continuity Lock, else the live Character /
+  // IdentityRefs / Look) and packaged from that, so `characters[]` describes exactly what Prism sends.
+  const names = ctx.characters.map((c) => c.appearance.name);
 
-  const characters: GenerationPackage["characters"] = ctx.characters.map((c) => ({
-    characterId: c.assignment.characterId,
-    name: c.character?.name ?? "Unknown",
-    physicalDescription: c.character?.physicalDescription ?? "",
-    look: c.look
-      ? {
-          id: c.look.id,
-          name: c.look.name,
-          locked: c.look.locked,
-          wardrobe: c.look.wardrobe,
-          shoes: c.look.shoes,
-          jewelry: c.look.jewelry,
-          hair: c.look.hair,
-          makeup: c.look.makeup,
-          grooming: c.look.grooming,
-          accessories: c.look.accessories,
-          referenceAssetIds: c.look.referenceAssetIds,
-        }
-      : null,
-    identityReferenceAssetIds: c.identityRefs.flatMap((r) => (r.assetId ? [r.assetId] : [])),
-    expression: c.assignment.expression,
-    posture: c.assignment.posture,
-    gestures: c.assignment.gestures,
-    physicalInteractions: c.assignment.physicalInteractions,
-    performanceNotes: c.assignment.performanceNotes,
-  }));
+  const characters: GenerationPackage["characters"] = ctx.characters.map((c) => {
+    const a = c.appearance;
+    return {
+      characterId: c.assignment.characterId,
+      name: a.name,
+      physicalDescription: a.physicalDescription,
+      look: a.look
+        ? {
+            id: a.look.id,
+            name: a.look.name,
+            locked: a.look.locked,
+            wardrobe: a.look.wardrobe,
+            shoes: a.look.shoes,
+            jewelry: a.look.jewelry,
+            hair: a.look.hair,
+            makeup: a.look.makeup,
+            grooming: a.look.grooming,
+            accessories: a.look.accessories,
+            referenceAssetIds: a.look.referenceAssetIds,
+          }
+        : null,
+      identityReferenceAssetIds: a.identityReferenceAssetIds,
+      // shot-specific performance stays live on the assignment, locked or not
+      expression: c.assignment.expression,
+      posture: c.assignment.posture,
+      gestures: c.assignment.gestures,
+      physicalInteractions: c.assignment.physicalInteractions,
+      performanceNotes: c.assignment.performanceNotes,
+      ...(a.lock ? { continuityLock: { ...a.lock } } : {}),
+    };
+  });
+  const characterContinuity = ctx.characters.flatMap((c) =>
+    c.continuityLock ? [characterContinuityPackageRef(c.continuityLock)] : [],
+  );
 
   const performance: GenerationPackage["performance"] = ctx.lines.map((l) => ({
     lineId: l.line.id,
@@ -322,7 +349,14 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
   }
   if (location?.locked) derivedHard.push(`Set is locked: ${location.name}. Do not alter its geography.`);
   for (const c of characters)
-    if (c.look?.locked) derivedHard.push(`${c.name} wears locked Look "${c.look.name}". Do not change it.`);
+    if (c.continuityLock)
+      derivedHard.push(
+        c.look
+          ? `${c.name} wears Look "${c.look.name}" exactly as frozen by Character Continuity Lock "${c.continuityLock.name}". Do not change it.`
+          : `${c.name}'s appearance is frozen by Character Continuity Lock "${c.continuityLock.name}". Do not change it.`,
+      );
+    else if (c.look?.locked)
+      derivedHard.push(`${c.name} wears locked Look "${c.look.name}". Do not change it.`);
   if (shot.continuity.weather) derivedHard.push(`Weather: ${shot.continuity.weather}. Do not change it.`);
 
   const negative = uniq([
@@ -470,6 +504,7 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
         : null,
       ...(productionFrame ? { productionFrame } : {}),
       ...(locationView ? { locationView } : {}),
+      ...(characterContinuity.length > 0 ? { characterContinuity } : {}),
       referenceAssetIds: shot.generation.referenceAssetIds,
       referenceVideoAssetId: shot.generation.referenceVideoAssetId,
       referenceAudioAssetId:
@@ -506,6 +541,8 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
   const addIds = (ids: Array<string | null | undefined>) => ids.forEach((i) => i && assetIds.add(i));
   for (const c of base.characters)
     addIds([...c.identityReferenceAssetIds, ...(c.look?.referenceAssetIds ?? [])]);
+  // every image a selected Continuity Lock froze (v5), described by value like every other reference
+  for (const l of base.references.characterContinuity ?? []) addIds(l.references.map((r) => r.assetId));
   addIds(base.set?.referenceAssetIds ?? []);
   addIds([
     base.references.startFrameAssetId,
@@ -575,6 +612,16 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
         storyboardFrameId: approved?.id ?? null,
         ...(productionFrame ? { productionFrameId: productionFrame.frameId } : {}),
         ...(locationView ? { locationViewId: locationView.viewId } : {}),
+        ...(characterContinuity.length > 0
+          ? {
+              characterContinuityLocks: Object.fromEntries(
+                characterContinuity.map((l) => [
+                  l.characterId,
+                  { lockId: l.lockId, lockFingerprint: l.lockFingerprint },
+                ]),
+              ),
+            }
+          : {}),
       },
     },
   };
@@ -658,6 +705,7 @@ export function renderGenerationBrief(pkg: GenerationPackage): BriefSection[] {
       "Characters",
       pkg.characters.flatMap((c) => [
         `${c.name}${c.look ? ` — Look: ${c.look.name}${c.look.locked ? " (locked)" : ""}` : " — NO LOOK ASSIGNED"}`,
+        c.continuityLock && `  Continuity Lock: ${c.continuityLock.name}`,
         c.look && `  Wardrobe: ${c.look.wardrobe}`,
         c.look && c.look.shoes && `  Shoes: ${c.look.shoes}`,
         c.look && c.look.hair && `  Hair: ${c.look.hair}`,
