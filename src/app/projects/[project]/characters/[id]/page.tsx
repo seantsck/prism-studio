@@ -1,6 +1,10 @@
 import { notFound } from "next/navigation";
 import { Badge, Button, Field, PageHeader, Panel } from "@/components/ui";
 import { FramePlaceholder } from "@/components/shared";
+import {
+  CONTINUITY_LOCK_EXPLANATION,
+  ContinuityLockCard,
+} from "@/components/character-continuity/continuity-lock-ui";
 import { IDENTITY_SLOTS } from "@/domain/schemas";
 import { assetUrl } from "@/lib/utils";
 import {
@@ -11,7 +15,9 @@ import {
   setLookLocked,
   setVoiceLocked,
   uploadIdentityRef,
+  uploadLookReference,
 } from "@/server/actions";
+import { createCharacterContinuityLock } from "@/server/character-continuity-actions";
 import { requireProject } from "@/server/repo";
 import { ActionForm } from "@/components/action-form";
 
@@ -29,6 +35,18 @@ export default async function CharacterPage({
   const refs = data.identityRefs.filter((r) => r.characterId === c.id);
   const looks = data.looks.filter((l) => l.characterId === c.id);
   const voices = data.voiceProfiles.filter((v) => v.characterId === c.id);
+  // Phase 2G.4: this Character's immutable Continuity Locks, grouped by the Look they froze (null = no Look)
+  const locks = (data.characterContinuityLocks ?? [])
+    .filter((l) => l.characterId === c.id)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const lockGroups = [...new Set(locks.map((l) => l.sourceLookId))].map((lookId) => ({
+    lookId,
+    title: lookId
+      ? `Look "${looks.find((l) => l.id === lookId)?.name ?? locks.find((l) => l.sourceLookId === lookId)?.facts.look?.name ?? "removed"}"`
+      : "No Look",
+    locks: locks.filter((l) => l.sourceLookId === lookId),
+  }));
+  const assetsById = new Map(data.assets.map((a) => [a.id, a]));
   const identityLocked = refs.length > 0 && refs.every((r) => r.locked);
   const hidden = <input type="hidden" name="projectSlug" value={slug} />;
 
@@ -102,7 +120,7 @@ export default async function CharacterPage({
               const asset = data.assets.find((a) => a.id === ref?.assetId);
               const url = assetUrl(asset);
               return (
-                <div key={slot} className="border border-line p-2">
+                <div key={slot} data-testid={`identity-slot-${slot}`} className="border border-line p-2">
                   <div className="mb-1 flex items-center justify-between text-[11px] uppercase tracking-wide text-muted">
                     {slot.replace("_", " ")}
                     {ref?.locked ? <Badge tone="pass">locked</Badge> : null}
@@ -121,8 +139,14 @@ export default async function CharacterPage({
                     {hidden}
                     <input type="hidden" name="characterId" value={c.id} />
                     <input type="hidden" name="slot" value={slot} />
-                    <input type="file" name="file" accept="image/*" className="!p-0.5 text-[11px]" />
-                    <Button size="sm" type="submit">
+                    <input
+                      data-testid="identity-file"
+                      type="file"
+                      name="file"
+                      accept="image/*"
+                      className="!p-0.5 text-[11px]"
+                    />
+                    <Button data-testid="identity-upload" size="sm" type="submit">
                       Upload
                     </Button>
                   </ActionForm>
@@ -173,6 +197,46 @@ export default async function CharacterPage({
                       ) : null}
                     </div>
                   </ActionForm>
+                  <div className="mt-2 text-[12px]">
+                    <div className="mb-1 text-muted">
+                      Look reference images ({l.referenceAssetIds.length})
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {l.referenceAssetIds.map((aid) => {
+                        const url = assetUrl(assetsById.get(aid));
+                        return url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            key={aid}
+                            data-testid="look-ref-thumb"
+                            src={url}
+                            alt={`${l.name} reference`}
+                            className="h-14 border border-line object-cover"
+                          />
+                        ) : (
+                          <span key={aid} className="border border-line px-1 text-[11px] text-muted">
+                            placeholder
+                          </span>
+                        );
+                      })}
+                    </div>
+                    {!l.locked ? (
+                      <ActionForm action={uploadLookReference} className="mt-1 flex gap-1">
+                        {hidden}
+                        <input type="hidden" name="lookId" value={l.id} />
+                        <input
+                          data-testid="look-ref-file"
+                          type="file"
+                          name="file"
+                          accept="image/*"
+                          className="!p-0.5 text-[11px]"
+                        />
+                        <Button data-testid="look-ref-upload" size="sm" type="submit">
+                          Add Look image
+                        </Button>
+                      </ActionForm>
+                    ) : null}
+                  </div>
                   <ActionForm action={setLookLocked} className="mt-2">
                     {hidden}
                     <input type="hidden" name="id" value={l.id} />
@@ -223,6 +287,61 @@ export default async function CharacterPage({
               </ActionForm>
             </details>
           </div>
+        </Panel>
+
+        <Panel title={`Continuity Locks (${locks.length})`} className="xl:col-span-2">
+          <p className="mb-2 text-[12px] text-muted">
+            {CONTINUITY_LOCK_EXPLANATION} A Lock is immutable: it copies today&apos;s identity facts, the
+            chosen Look and their stored images, so later edits here never change a Shot that relies on it. No
+            images are generated or copied.
+          </p>
+          <ActionForm
+            action={createCharacterContinuityLock}
+            className="mb-3 flex flex-wrap items-end gap-2 border border-dashed border-line2 p-2"
+          >
+            {hidden}
+            <input type="hidden" name="characterId" value={c.id} />
+            <Field label="Look">
+              <select data-testid="cl-look" name="lookId" defaultValue={looks[0]?.id ?? ""}>
+                {looks.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+                <option value="">No Look (intentional)</option>
+              </select>
+            </Field>
+            <Field label="Name" className="min-w-[260px] flex-1">
+              <input
+                data-testid="cl-name"
+                name="name"
+                required
+                maxLength={120}
+                defaultValue={`${c.name} — ${looks[0]?.name ?? "No Look"}`}
+              />
+            </Field>
+            <Button data-testid="cl-create" type="submit" variant="primary">
+              Create Continuity Lock
+            </Button>
+          </ActionForm>
+          {locks.length === 0 ? (
+            <p data-testid="cl-none" className="text-[12px] text-muted">
+              No Continuity Locks yet. Shots use {c.name}&apos;s current identity references and Looks.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {lockGroups.map((g) => (
+                <div key={g.lookId ?? "none"} data-testid="cl-group" className="space-y-1.5">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                    {g.title}
+                  </div>
+                  {g.locks.map((l) => (
+                    <ContinuityLockCard key={l.id} lock={l} assets={assetsById} />
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
         </Panel>
 
         <Panel title={`Voice profiles (${voices.length})`} className="xl:col-span-2">
