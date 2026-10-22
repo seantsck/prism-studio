@@ -200,6 +200,19 @@ frame's Asset (no copy). A stale frame is refused: it no longer depicts the Shot
 and changes nothing about the Shot. The intent snapshot gains an optional `location.view` (the selected view's identity)
 when a Shot has one; older snapshots stay valid and are never rewritten. See [location-views](location-views.md).
 
+## Character Continuity Locks (Phase 2G.4)
+
+A Shot Character assignment may rely on an immutable Character Continuity Lock. The intent snapshot then describes the
+Lock's frozen appearance and gains an optional `characters[].continuityLock` (Lock id, name and fingerprint). Older
+snapshots and unlocked assignments stay exactly as written. Freshness flows through the existing `characters` / `looks`
+parts:
+
+- switching Lock A → B stales the selected Production Frame and earlier candidates;
+- editing the master Look or IdentityRefs under the SAME Lock does not;
+- a Shot without a Lock is judged exactly as before.
+
+See [character-continuity-locks](character-continuity-locks.md).
+
 ## Tests
 
 | What                                                                                                           | Where                                                |

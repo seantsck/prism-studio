@@ -177,6 +177,20 @@ ShotContext exposes `locationViews` (the effective Location's views), `selectedL
 The selected view is part of the Shot's `location` part and of GenerationPackage v4 (`references.locationView`). Needs
 no 3D set or GPU. See [location-views](location-views.md).
 
+## Character Continuity Locks (Phase 2G.4)
+
+| Entity                       | Table / column                                                                                                                   | Nature                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CharacterContinuityLock      | `character_continuity_locks` (`character_id`, `source_look_id`, `name`, `facts_snapshot`, `reference_count`, `lock_fingerprint`) | IMMUTABLE approved appearance of one Character in one exact Look (or intentionally none): `prism.character-continuity-facts.v1` by value (name, physical description, continuity rules, Look facts). `unique (character_id, lock_fingerprint)`; `source_look_id` is historical (checked at creation, not a FK); no "current Lock" pointer |
+| CharacterContinuityLockAsset | `character_continuity_lock_assets` (`lock_id`, `position`, `asset_id`, `role`, `identity_slot`, `label`, `asset_checksum`, size) | The Lock's exact reference images in frozen order (identity by slot, then Look). Existing Assets reused, never copied; facts checked against the Asset; immutable, complete at commit, never grows (deferred membership check). The Asset FK is deferred (0042) so a Project cascade passes                                               |
+| CharacterContinuitySelection | `shot_character_continuity_selections` (`shot_id`, `character_id`, `continuity_lock_id`)                                         | ONE mutable pointer per Shot Character assignment: a Lock of the SAME Character (composite FK) whose Look IS the assignment's (trigger), cascading from the assignment row; cleared by a trigger when the assignment's Look changes                                                                                                       |
+
+`character_identity_refs` and `character_looks` stay the editable source library. Each `ShotContext.characters[]`
+entry exposes `continuityLocks`, the selected `continuityLock`, `continuityLockIssue` and the resolved, authoritative
+`appearance` (the Lock's frozen facts and images, else the live library). The Lock is part of the `characters` / `looks`
+parts and of GenerationPackage v5 (`references.characterContinuity`). Needs no generation, 3D set or GPU. See
+[character-continuity-locks](character-continuity-locks.md).
+
 ## Reconstruction jobs (Phase 2F M2D.2)
 
 | Entity                   | Table / column                                                                                                                                                                                                    | Nature                                                                                                                                                                                                                                                                                                                |
