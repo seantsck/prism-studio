@@ -85,6 +85,7 @@ const TAG_BASE: Partial<Record<GenerationReference["role"], string>> = {
   production_frame: "ProductionFrame",
   storyboard: "Storyboard",
   location: "Location",
+  location_view: "LocationView",
   style: "Lighting",
   other: "ShotRef",
 };
@@ -104,7 +105,8 @@ function nameOfLabel(label: string): string {
 
 /**
  * Deterministic, provider-safe tags (3–16 chars, start with a letter, letters/digits/underscore only, unique).
- * Role + subject: ProductionFrame · Storyboard · YumekoIdentity · YumekoLook · Location · Lighting · ShotRef.
+ * Role + subject: ProductionFrame · Storyboard · YumekoIdentity · YumekoLook · LocationView · Location · Lighting ·
+ * ShotRef.
  * Provider tag syntax stays inside this adapter: nothing here leaks into the GenerationPackage or the domain.
  */
 export function runwayImageTags(refs: readonly Pick<ResolvedImageReference, "role" | "label">[]): string[] {

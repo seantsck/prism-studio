@@ -96,6 +96,13 @@ export interface CandidateInputBasis {
    * the frozen request (what was actually sent); the frame identity comes from the frozen package snapshot.
    */
   productionFrameReference: { assetId: string; frameId: string | null; version: number | null } | null;
+  /**
+   * Phase 2G.3: the canonical Location View this candidate received as an image reference, or null when none was SENT
+   * (no view selected, the view's image went under a more specific role, or the model took no images). Read from the
+   * frozen request only, never inferred from today's selection. The view's identity is also inside the frozen
+   * `location` part, so choosing another view stales the candidate through `namedParts`.
+   */
+  locationViewReference: { assetId: string; viewId: string | null } | null;
 }
 
 /** Reconstructs a candidate's input basis from its frozen request and package snapshot alone. */
@@ -104,7 +111,10 @@ export function candidateInputBasis(
 ): CandidateInputBasis {
   const snap = attempt.packageSnapshot as {
     provenance?: { parts?: Record<string, string> };
-    references?: { productionFrame?: { frameId?: string; assetId?: string; version?: number } };
+    references?: {
+      productionFrame?: { frameId?: string; assetId?: string; version?: number };
+      locationView?: { viewId?: string; assetId?: string };
+    };
   } | null;
   const parts = snap?.provenance?.parts;
   const namedParts =
@@ -116,6 +126,8 @@ export function candidateInputBasis(
   const refs = (attempt.request as { references?: Array<{ role?: string; assetId?: string }> } | null)
     ?.references;
   const usedAssetId = refs?.find((r) => r.role === "production_frame")?.assetId ?? null;
+  const viewAssetId = refs?.find((r) => r.role === "location_view")?.assetId ?? null;
+  const lv = snap?.references?.locationView;
   const pf = snap?.references?.productionFrame;
   return {
     namedParts: namedParts && Object.keys(namedParts).length > 0 ? namedParts : null,
@@ -125,6 +137,9 @@ export function candidateInputBasis(
           frameId: pf && pf.assetId === usedAssetId ? (pf.frameId ?? null) : null,
           version: pf && pf.assetId === usedAssetId ? (pf.version ?? null) : null,
         }
+      : null,
+    locationViewReference: viewAssetId
+      ? { assetId: viewAssetId, viewId: lv && lv.assetId === viewAssetId ? (lv.viewId ?? null) : null }
       : null,
   };
 }

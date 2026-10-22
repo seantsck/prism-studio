@@ -132,11 +132,15 @@ export function deriveReferenceCandidates(pkg: GenerationPackage): Candidate[] {
   if (startFrameAssetId) seen.add(startFrameAssetId);
   if (endFrameAssetId) seen.add(endFrameAssetId);
 
+  const view = pkg.references.locationView;
   for (const c of pkg.characters) {
-    for (const id of c.identityReferenceAssetIds) push(id, "identity", `${c.name} identity`);
+    for (const id of c.identityReferenceAssetIds)
+      if (id !== view?.assetId) push(id, "identity", `${c.name} identity`);
     for (const id of c.look?.referenceAssetIds ?? [])
-      push(id, "character_look", `${c.name} Look "${c.look?.name}"`);
+      if (id !== view?.assetId) push(id, "character_look", `${c.name} Look "${c.look?.name}"`);
   }
+  // v4: the Shot's canonical Location View before the Location's generic reference photos
+  if (view) push(view.assetId, "location_view", locationViewLabel(view.name));
   for (const id of pkg.set?.referenceAssetIds ?? [])
     push(id, "location", `${pkg.set?.name ?? "Set"} reference`);
   push(pkg.lighting.referenceAssetId, "style", "Lighting reference");
@@ -151,10 +155,17 @@ const hasStoredFile = (pkg: GenerationPackage, assetId: string): boolean => {
   return Boolean(a && a.objectPath && a.checksum && (a.type === "image" || a.type === "reference"));
 };
 
+/** How a request labels the canonical Location View image (adapters show it to the model verbatim). */
+export const locationViewLabel = (name: string) => `Canonical Location View "${name}"`;
+
 /**
- * Deterministic reference priority for `production_frame` image generation (Phase 2G.2), deduplicated by asset:
+ * Deterministic reference priority for `production_frame` image generation (Phase 2G.2, extended in 2G.3), deduplicated
+ * by asset:
  *   1 selected Production Frame · 2 approved Storyboard · 3 Character identity · 4 Character Look ·
- *   5 Location · 6 lighting + explicit Shot references.
+ *   5 selected Location View · 6 generic Location references · 7 lighting · 8 explicit Shot references.
+ * An image is sent ONCE, under its most specific role: the Shot's own pictures (Production Frame, Storyboard) outrank
+ * the Location View; the Location View outranks every generic role (identity / Look / Location / lighting / Shot
+ * reference), so an image that is both is never spent twice and never mislabelled as generic.
  * Only explicit production data; only assets with a stored file; never the whole Project.
  */
 export function deriveProductionFrameReferenceCandidates(pkg: GenerationPackage): Candidate[] {
@@ -165,13 +176,16 @@ export function deriveProductionFrameReferenceCandidates(pkg: GenerationPackage)
     seen.add(assetId);
     out.push({ assetId, role, label });
   };
+  const view = pkg.references.locationView;
   push(pkg.references.productionFrame?.assetId, "production_frame", "Current Production Frame");
   push(pkg.references.approvedStoryboardFrame?.assetId, "storyboard", "Approved storyboard frame");
   for (const c of pkg.characters)
-    for (const id of c.identityReferenceAssetIds) push(id, "identity", `${c.name} identity`);
+    for (const id of c.identityReferenceAssetIds)
+      if (id !== view?.assetId) push(id, "identity", `${c.name} identity`);
   for (const c of pkg.characters)
     for (const id of c.look?.referenceAssetIds ?? [])
-      push(id, "character_look", `${c.name} Look "${c.look?.name}"`);
+      if (id !== view?.assetId) push(id, "character_look", `${c.name} Look "${c.look?.name}"`);
+  if (view) push(view.assetId, "location_view", locationViewLabel(view.name));
   for (const id of pkg.set?.referenceAssetIds ?? [])
     push(id, "location", `${pkg.set?.name ?? "Set"} reference`);
   push(pkg.lighting.referenceAssetId, "style", "Lighting reference");
@@ -494,7 +508,7 @@ export function evaluateCompatibility(
   const roleSupported = (role: ReferenceRole): boolean => {
     if (!caps.references.referenceImages) return false;
     if (role === "identity" || role === "character_look") return caps.references.characterReferences;
-    if (role === "location") return caps.references.locationReferences;
+    if (role === "location" || role === "location_view") return caps.references.locationReferences;
     if (role === "style") return caps.references.styleReferences;
     return true;
   };
@@ -524,6 +538,17 @@ export function evaluateCompatibility(
     accepted.length = 0;
   }
   for (const [role, list] of droppedByRole) {
+    if (role === "location_view") {
+      // truthful: the view's viewpoint is still described in words, but the model never sees its image
+      ignored.push({
+        id: "references.location_view",
+        feature: "references",
+        label: list[0]!.label,
+        impact:
+          "Location View image not supplied to this model. Its viewpoint is described in the prompt text only; the result is NOT conditioned on the image.",
+      });
+      continue;
+    }
     ignored.push({
       id: `references.${role}`,
       feature: "references",

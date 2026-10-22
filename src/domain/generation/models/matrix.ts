@@ -214,6 +214,10 @@ export function evaluateModelFit(args: {
           state = "not_used_mode";
           detail =
             "Keyframe mode: this model cannot combine first/last frames with references. Switch to reference mode to use it.";
+        } else if (i.role === "location_view") {
+          state = "unsupported";
+          detail =
+            "Location View image not supplied to this model; its viewpoint is described in the prompt only.";
         } else if (!caps.references.referenceImages) {
           state = "unsupported";
           detail = "This model takes no reference images.";
