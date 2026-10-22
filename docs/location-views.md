@@ -89,9 +89,15 @@ Choose / Clear use compare-and-set (the view the browser saw), so two tabs never
 - a trigger on `shots` (`after update of location_id`, only when it really changed) deletes a selection of the old
   Location's view in the same statement. The memory repository mirrors it (`onShotSaved`).
 
-**Effective Location** is what Prism uses everywhere else: the Shot's own `spatial.locationId`
-(`shots.location_id`), which a new Shot copies from its Scene. ShotContext has no read-time Scene fallback, so neither
-does this.
+**Effective Location** is what Prism uses everywhere else, and the rule is deliberate:
+
+- **Scene Location seeds a new Shot.** Creating a Shot copies its Scene's Location into the Shot.
+- **After creation, the Shot's Location is explicit persisted production state**: `shots.location_id`
+  (`shot.spatial.locationId`), which `buildShotContext` resolves. There is **no** read-time
+  `shot.location_id ?? scene.location_id` fallback: adding one would silently change the location fingerprint (and so
+  the production truth) of every existing Shot whose own Location is empty, merely because a resolution rule changed.
+  Changing a Scene's Location therefore never changes an existing Shot's Location or its Location View selection.
+- **A Location View selection is validated against the Shot's persisted Location** (server and database).
 
 If an invalid pointer ever exists anyway (historical or out-of-band data), ShotContext resolves `selectedLocationView =
 null` with `locationViewIssue`, the package never contains it, and preflight `set.location_view` **blocks** generation
