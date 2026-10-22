@@ -16,7 +16,7 @@ import { PostgresProductionFrameData } from "../src/data/production-frame-postgr
 import { ProductionFrameError } from "../src/data/production-frame-repository";
 import { AdminRepository, UserRepository, rlsPreamble } from "../src/data/postgres-repository";
 import { buildShotContext } from "../src/domain/context";
-import { assembleGenerationPackage } from "../src/domain/generation-package";
+import { assembleGenerationPackage, PACKAGE_SCHEMA_VERSION } from "../src/domain/generation-package";
 import { draftProductionFrame, selectedProductionFrameFreshness } from "../src/domain/production-frame";
 import { assetSchema, type Asset, type ProjectData } from "../src/domain/schemas";
 import { assertDevUserExists, readDevUserEnv } from "./lib/dev-user.mjs";
@@ -659,8 +659,8 @@ try {
   );
   const pkg = assembleGenerationPackage(ctx, new Date("2026-10-21T00:00:00Z"));
   check(
-    "a package built from the database state is version 3 and names the selected frame by value",
-    pkg.version === 3 && pkg.references.productionFrame?.frameId === selectedId,
+    "a package built from the database state is the current version and names the selected frame by value",
+    pkg.version === PACKAGE_SCHEMA_VERSION && pkg.references.productionFrame?.frameId === selectedId,
   );
   check("…without any spatial reference", !("spatialReference" in pkg) && ctx.spatial === undefined);
   check(
