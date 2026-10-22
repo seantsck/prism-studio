@@ -1,4 +1,9 @@
 import { computeShotDuration, selectedTake, type ShotDuration } from "./duration";
+import {
+  resolveShotLocationViews,
+  type LocationView,
+  type LocationViewSelectionIssue,
+} from "./location-view";
 import type { ProductionFrame } from "./production-frame";
 import type { SpatialReference } from "./previs/spatial";
 import type {
@@ -63,6 +68,15 @@ export interface ShotContext {
    */
   productionFrames: ProductionFrame[];
   selectedProductionFrame: ProductionFrame | null;
+  /**
+   * Phase 2G.3: the immutable canonical views of the Shot's effective Location (newest first; empty without a
+   * Location) and the ONE the Shot selected. `selectedLocationView` is null when none is selected AND when the stored
+   * selection does not resolve to a view of the Shot's current Location; the latter is reported in `locationViewIssue`
+   * (a data-integrity problem that blocks generation, never a silent fallback to another Location's image).
+   */
+  locationViews: LocationView[];
+  selectedLocationView: LocationView | null;
+  locationViewIssue: LocationViewSelectionIssue | null;
   assets: Map<string, Asset>;
   duration: ShotDuration;
   /** Script content this shot links to, resolved from shot.scriptSources / audio.dialogueLineIds. */
@@ -118,6 +132,7 @@ export function buildShotContext(data: ProjectData, shotId: string): ShotContext
     (s) => s.shotId === shot.id,
   )?.productionFrameId;
   const lineTakes = lines.flatMap((l) => l.takes);
+  const locationViews = resolveShotLocationViews(data, shot);
 
   return {
     project: data.project,
@@ -136,6 +151,9 @@ export function buildShotContext(data: ProjectData, shotId: string): ShotContext
     approvedFrame: frames.find((f) => f.approved) ?? null,
     productionFrames,
     selectedProductionFrame: productionFrames.find((f) => f.id === selectedFrameId) ?? null,
+    locationViews: locationViews.views,
+    selectedLocationView: locationViews.selected,
+    locationViewIssue: locationViews.issue,
     assets,
     duration: computeShotDuration(shot, lineTakes),
     sourceActions: shot.scriptSources.actionBlockIds

@@ -16,6 +16,13 @@ import {
   type ProductionFrameFreshness,
   type ProductionFramePackageRef,
 } from "./production-frame";
+import {
+  describeLocationView,
+  LOCATION_VIEW_KIND_LABEL,
+  LOCATION_VIEW_SOURCE_LABEL,
+  locationViewPackageRef,
+  type LocationViewPackageRef,
+} from "./location-view";
 import type { Asset, Shot } from "./schemas";
 import { timelineFromContext, type TimelineSegment } from "./timeline";
 import type { SpatialReference } from "./previs/spatial";
@@ -25,11 +32,17 @@ import type { SpatialReference } from "./previs/spatial";
  *   v2  Phase 2F and earlier
  *   v3  Phase 2G.1: `references.productionFrame` + `freshness.productionFrame` + the Production Frame Asset (present
  *       ONLY when the Shot has a selected Production Frame), and the start-frame precedence below
- * Packages of v2 stay readable: every v3-only key is optional.
+ *   v4  Phase 2G.3: `references.locationView` + the Location View Asset (present ONLY when the Shot has a selected,
+ *       valid Location View), whose identity is also part of the Shot's `location` part
+ * Packages of v2 and v3 stay readable: every later key is optional. No historical package is ever rewritten.
  */
-export const PACKAGE_SCHEMA_VERSION = 3 as const;
+export const PACKAGE_SCHEMA_VERSION = 4 as const;
+export const PREVIOUS_PACKAGE_SCHEMA_VERSION = 3 as const;
 export const LEGACY_PACKAGE_SCHEMA_VERSION = 2 as const;
-export type PackageSchemaVersion = typeof LEGACY_PACKAGE_SCHEMA_VERSION | typeof PACKAGE_SCHEMA_VERSION;
+export type PackageSchemaVersion =
+  | typeof LEGACY_PACKAGE_SCHEMA_VERSION
+  | typeof PREVIOUS_PACKAGE_SCHEMA_VERSION
+  | typeof PACKAGE_SCHEMA_VERSION;
 
 /** Self-describing asset record embedded in the package so history stays interpretable if the asset later changes. */
 export interface PackageAsset {
@@ -196,6 +209,11 @@ export interface GenerationPackage {
     approvedStoryboardFrame: { frameId: string; assetId: string | null; version: number } | null;
     /** v3: the Shot's SELECTED Production Frame, by value. Omitted when none is selected (and in every v2 package). */
     productionFrame?: ProductionFramePackageRef;
+    /**
+     * v4: the Shot's SELECTED canonical Location View, by value (image identity + semantic viewSpec). Omitted when none
+     * is selected (and in every v2/v3 package). Its image is described in `assets`; it is never a start frame.
+     */
+    locationView?: LocationViewPackageRef;
     referenceAssetIds: string[];
     referenceVideoAssetId: string | null;
     referenceAudioAssetId: string | null;
@@ -226,6 +244,8 @@ export interface GenerationPackage {
       storyboardFrameId: string | null;
       /** v3: only when a Production Frame is selected */
       productionFrameId?: string;
+      /** v4: only when a Location View is selected */
+      locationViewId?: string;
     };
   };
 }
@@ -333,6 +353,8 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
   // The selected Production Frame (if any). An unselected historical frame never reaches the package, so adding one
   // cannot change it; changing the SELECTION does.
   const productionFrame = productionFramePackageRef(ctx);
+  // The selected canonical Location View (if any, and only when valid for the Shot's Location).
+  const locationView = locationViewPackageRef(ctx.selectedLocationView);
   const timeline = timelineFromContext(ctx);
   const base: Omit<GenerationPackage, "assets" | "provenance"> = {
     version: PACKAGE_SCHEMA_VERSION,
@@ -447,6 +469,7 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
         ? { frameId: approved.id, assetId: approved.assetId, version: approved.version }
         : null,
       ...(productionFrame ? { productionFrame } : {}),
+      ...(locationView ? { locationView } : {}),
       referenceAssetIds: shot.generation.referenceAssetIds,
       referenceVideoAssetId: shot.generation.referenceVideoAssetId,
       referenceAudioAssetId:
@@ -490,6 +513,8 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
     base.references.approvedStoryboardFrame?.assetId,
     // the Production Frame's image is described by value too, even when an explicit override wins the start frame
     base.references.productionFrame?.assetId,
+    // the selected Location View's image (v4), described by value like every other reference
+    base.references.locationView?.assetId,
     base.references.referenceVideoAssetId,
     base.references.referenceAudioAssetId,
     base.spatialReference?.masterFrameAssetId,
@@ -549,6 +574,7 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
         selectedTakeIds: ctx.lines.flatMap((l) => (l.selectedTake ? [l.selectedTake.id] : [])),
         storyboardFrameId: approved?.id ?? null,
         ...(productionFrame ? { productionFrameId: productionFrame.frameId } : {}),
+        ...(locationView ? { locationViewId: locationView.viewId } : {}),
       },
     },
   };
@@ -732,6 +758,16 @@ export function renderGenerationBrief(pkg: GenerationPackage): BriefSection[] {
         `Production Frame: v${pf.version} · ${PRODUCTION_FRAME_SOURCE_LABEL[pf.source]} · ${pf.freshness}`,
         pf.freshness === "stale" &&
           `STALE: ${changed.join(", ") || "the Shot changed"} changed after this frame was made`,
+      ]),
+    );
+  }
+  const lv = pkg.references.locationView;
+  if (lv) {
+    // by name and meaning only: never a path, URL or checksum
+    sec_(
+      sec("Location View", [
+        `${lv.name} · ${LOCATION_VIEW_KIND_LABEL[lv.kind]} · ${LOCATION_VIEW_SOURCE_LABEL[lv.source]} · ${lv.width}×${lv.height}`,
+        ...describeLocationView(lv).slice(1),
       ]),
     );
   }

@@ -372,6 +372,18 @@ export const PREFLIGHT_RULES: PreflightRule[] = [
       return f.timingChange ? warn(f.messages.join(" ")) : pass();
     },
   },
+  // Location View (Phase 2G.3). Optional: no selection is never a blocker. A stored selection that does not resolve to a
+  // view of the Shot's CURRENT Location is a data-integrity problem: generation is blocked rather than sending it.
+  {
+    id: "set.location_view",
+    section: "set",
+    severity: "required",
+    label: "Selected Location View belongs to the Shot's Location",
+    evaluate: (c) => {
+      if (c.locationViewIssue) return fail(c.locationViewIssue.message);
+      return c.selectedLocationView ? pass() : na("No Location View selected");
+    },
+  },
   // Production Frame (Phase 2G.1). Not applicable until one is selected: existing Shots keep the storyboard path.
   {
     id: "production_frame.fresh",

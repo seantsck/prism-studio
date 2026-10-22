@@ -1,5 +1,6 @@
 import type { ShotContext } from "./context";
 import { fingerprint } from "./hash";
+import { locationViewPartIdentity } from "./location-view";
 import { timelineFromContext } from "./timeline";
 
 /**
@@ -65,6 +66,22 @@ export const PART_LABELS: Record<FreshnessPart, string> = {
   timing: "Derived timing",
 };
 
+function locationPart(ctx: ShotContext): Record<string, unknown> | null {
+  const view = locationViewPartIdentity(ctx);
+  if (!ctx.location) return view ? { view } : null;
+  return {
+    id: ctx.location.id,
+    description: ctx.location.description,
+    geography: ctx.location.geography,
+    zones: ctx.location.zones,
+    entrances: ctx.location.entrances,
+    lighting: ctx.location.lighting,
+    referenceAssetIds: ctx.location.referenceAssetIds,
+    locked: ctx.location.locked,
+    ...(view ? { view } : {}),
+  };
+}
+
 export function computeShotParts(ctx: ShotContext): ShotParts {
   const { shot } = ctx;
   const timeline = timelineFromContext(ctx);
@@ -102,20 +119,9 @@ export function computeShotParts(ctx: ShotContext): ShotParts {
           : null,
       ),
     ),
-    location: fingerprint(
-      ctx.location
-        ? {
-            id: ctx.location.id,
-            description: ctx.location.description,
-            geography: ctx.location.geography,
-            zones: ctx.location.zones,
-            entrances: ctx.location.entrances,
-            lighting: ctx.location.lighting,
-            referenceAssetIds: ctx.location.referenceAssetIds,
-            locked: ctx.location.locked,
-          }
-        : null,
-    ),
+    // Phase 2G.3: the Shot's SELECTED Location View is part of its location intent. `view` is present only while one is
+    // selected (or a stored selection is invalid), so a Shot without one hashes exactly as it did before 2G.3.
+    location: fingerprint(locationPart(ctx)),
     props: fingerprint(ctx.props.map((p) => [p.id, p.name, p.description]).sort()),
     lighting: fingerprint(shot.lighting),
     // Beat ids are regenerated on every save, so they are not part of the content.
