@@ -80,7 +80,19 @@ it stays what it is, and the candidate review is recorded separately on the boar
 
 ## Picture size on a candidate card
 
-"Actual output" is the stored provider file's own dimensions (probed from the video track at ingest; for a historical
-asset with none recorded, read from the file in the browser). "Provider canvas" is the frozen request's canvas and is
-shown as unknown when the model family takes a resolution tier instead (Hailuo 3). The request is never presented as the
-output. A conformed delivery master is reported separately.
+Five sizes are kept apart: the **production frame** (what the filmmaker designed), the **planning canvas** (the
+adaptation plan's generic geometry), the **requested provider canvas** (what Prism actually sent), the **actual output** and
+the **delivery** master.
+
+- "Actual output" is the stored provider file's own dimensions (probed at ingest; for a historical asset with none
+  recorded, read from the file in the browser). The request is never presented as the output.
+- "Requested provider canvas" is read **only** from the stored output's frozen provider provenance
+  (`provider.settings.providerCanvas`, or a pixel `ratio` such as `1280:720`). It is never recomputed from today's catalog
+  and never borrowed from the plan. A model family that takes an aspect label and/or a resolution tier (Hailuo 3, the mock)
+  shows exactly that ("16:9 at the 768p tier (aspect sent, no pixel canvas)"), with no manufactured pixels. An older attempt
+  without recorded request geometry shows "unknown".
+- "Planning canvas" appears only when the exact request is not known, labelled "(plan, not a request)".
+- A conformed delivery master is reported separately.
+
+Phase 2G.2.1 fixed a card that showed the plan's canvas as the request: the live image smoke displayed "1920×822
+(requested)" while Runway had been sent, and returned, 2048×880.
