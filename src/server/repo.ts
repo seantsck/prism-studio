@@ -12,6 +12,7 @@ import { UserFacingError } from "./action-result";
 import { requireUser } from "./auth";
 import { getPool } from "./db";
 import { getPrevisRepo } from "./previs";
+import { getCharacterContinuityRepo } from "./character-continuity";
 import { getLocationViewRepo } from "./location-views";
 import { getProductionFrameRepo } from "./production-frames";
 
@@ -74,8 +75,19 @@ async function withLocationViews(data: ProjectData): Promise<ProjectData> {
   return { ...data, locationViews: views, shotLocationViewSelections: selections };
 }
 
+/**
+ * Attach every Character's Continuity Locks and every Shot Character assignment's Lock selection (Phase 2G.4), from the
+ * Character Continuity repository (memory and Postgres alike). No provider, 3D or GPU data is involved.
+ */
+async function withCharacterContinuity(data: ProjectData): Promise<ProjectData> {
+  const { locks, selections } = await (await getCharacterContinuityRepo()).listForProject(data.project.id);
+  return { ...data, characterContinuityLocks: locks, shotCharacterContinuitySelections: selections };
+}
+
 async function withAttachments(data: ProjectData): Promise<ProjectData> {
-  return withLocationViews(await withProductionFrames(await withSpatialReferences(data)));
+  return withCharacterContinuity(
+    await withLocationViews(await withProductionFrames(await withSpatialReferences(data))),
+  );
 }
 
 export async function requireProjectFresh(slug: string): Promise<ProjectData> {

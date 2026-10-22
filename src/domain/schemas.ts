@@ -714,4 +714,12 @@ export interface ProjectData extends Collections {
    */
   locationViews?: import("./location-view").LocationView[];
   shotLocationViewSelections?: import("./location-view").LocationViewSelection[];
+  /**
+   * Phase 2G.4: every Character's immutable Character Continuity Locks (with their frozen reference images) and each
+   * Shot Character assignment's ONE Lock selection, attached by the server loaders from the Character Continuity
+   * repository (memory and Postgres alike). Absent = none exist: every Shot then reads the live Character, IdentityRefs
+   * and Look exactly as before 2G.4.
+   */
+  characterContinuityLocks?: import("./character-continuity").CharacterContinuityLock[];
+  shotCharacterContinuitySelections?: import("./character-continuity").CharacterContinuitySelection[];
 }
