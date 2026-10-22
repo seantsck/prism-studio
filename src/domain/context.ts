@@ -1,3 +1,12 @@
+import {
+  liveAppearance,
+  lockedAppearance,
+  orphanContinuitySelections,
+  resolveAssignmentContinuity,
+  type CharacterContinuityLock,
+  type ContinuityLockSelectionIssue,
+  type ResolvedCharacterAppearance,
+} from "./character-continuity";
 import { computeShotDuration, selectedTake, type ShotDuration } from "./duration";
 import {
   resolveShotLocationViews,
@@ -34,6 +43,17 @@ export interface ShotCharacterContext {
   look: CharacterLook | null;
   identityRefs: IdentityRef[];
   voiceProfiles: VoiceProfile[];
+  /**
+   * Phase 2G.4: every Character Continuity Lock of this Character (newest first), the ONE selected for this assignment
+   * (null when none is selected AND when the stored selection does not match the assignment's Character / Look /
+   * project; the latter is `continuityLockIssue`, a data-integrity problem that blocks generation, never a silent
+   * fallback), and the AUTHORITATIVE appearance: from the selected Lock, else from the live Character / IdentityRefs /
+   * Look exactly as before 2G.4. `character`, `look` and `identityRefs` stay the editable source library.
+   */
+  continuityLocks: CharacterContinuityLock[];
+  continuityLock: CharacterContinuityLock | null;
+  continuityLockIssue: ContinuityLockSelectionIssue | null;
+  appearance: ResolvedCharacterAppearance;
 }
 
 export interface ShotLineContext {
@@ -77,6 +97,11 @@ export interface ShotContext {
   locationViews: LocationView[];
   selectedLocationView: LocationView | null;
   locationViewIssue: LocationViewSelectionIssue | null;
+  /**
+   * Phase 2G.4: stored Character Continuity selections of this Shot whose Character is no longer assigned to it (only
+   * reachable through a data-integrity problem; blocks generation). Valid selections live on `characters[]`.
+   */
+  continuityLockOrphans: ContinuityLockSelectionIssue[];
   assets: Map<string, Asset>;
   duration: ShotDuration;
   /** Script content this shot links to, resolved from shot.scriptSources / audio.dialogueLineIds. */
@@ -100,13 +125,25 @@ export function buildShotContext(data: ProjectData, shotId: string): ShotContext
     null;
   const assets = new Map(data.assets.map((a) => [a.id, a]));
 
-  const characters = shot.characters.map<ShotCharacterContext>((assignment) => ({
-    assignment,
-    character: data.characters.find((c) => c.id === assignment.characterId) ?? null,
-    look: data.looks.find((l) => l.id === assignment.lookId) ?? null,
-    identityRefs: data.identityRefs.filter((r) => r.characterId === assignment.characterId),
-    voiceProfiles: data.voiceProfiles.filter((v) => v.characterId === assignment.characterId),
-  }));
+  const characters = shot.characters.map<ShotCharacterContext>((assignment) => {
+    const character = data.characters.find((c) => c.id === assignment.characterId) ?? null;
+    const look = data.looks.find((l) => l.id === assignment.lookId) ?? null;
+    const identityRefs = data.identityRefs.filter((r) => r.characterId === assignment.characterId);
+    const continuity = resolveAssignmentContinuity(data, shot, assignment);
+    return {
+      assignment,
+      character,
+      look,
+      identityRefs,
+      voiceProfiles: data.voiceProfiles.filter((v) => v.characterId === assignment.characterId),
+      continuityLocks: continuity.locks,
+      continuityLock: continuity.selected,
+      continuityLockIssue: continuity.issue,
+      appearance: continuity.selected
+        ? lockedAppearance(continuity.selected)
+        : liveAppearance({ character, look, identityRefs }),
+    };
+  });
 
   const lines = shot.audio.dialogueLineIds
     .map((lineId) => data.dialogueLines.find((l) => l.id === lineId))
@@ -154,6 +191,7 @@ export function buildShotContext(data: ProjectData, shotId: string): ShotContext
     locationViews: locationViews.views,
     selectedLocationView: locationViews.selected,
     locationViewIssue: locationViews.issue,
+    continuityLockOrphans: orphanContinuitySelections(data, shot),
     assets,
     duration: computeShotDuration(shot, lineTakes),
     sourceActions: shot.scriptSources.actionBlockIds

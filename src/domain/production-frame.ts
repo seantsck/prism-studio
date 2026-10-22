@@ -253,6 +253,11 @@ export interface ProductionFrameIntentSnapshot {
     gestures: string;
     physicalInteractions: string;
     performanceNotes: string;
+    /**
+     * Phase 2G.4: the Character Continuity Lock the appearance above came from, by identity. Optional, so every
+     * snapshot made before 2G.4 (or for an unlocked assignment) stays valid as written and is never rewritten.
+     */
+    continuityLock?: { lockId: string; name: string; lockFingerprint: string };
   }>;
   location: {
     id: string;
@@ -341,27 +346,32 @@ export function buildProductionFrameIntent(ctx: ShotContext): ProductionFrameInt
       aspectRatio: shot.composition.aspectRatio || bible.aspectRatio,
     },
     framing: { ...shot.composition },
-    characters: ctx.characters.map((c) => ({
-      characterId: c.assignment.characterId,
-      name: c.character?.name ?? "Unknown",
-      physicalDescription: c.character?.physicalDescription ?? "",
-      lookId: c.look?.id ?? null,
-      lookName: c.look?.name ?? null,
-      wardrobe: c.look?.wardrobe ?? "",
-      shoes: c.look?.shoes ?? "",
-      hair: c.look?.hair ?? "",
-      makeup: c.look?.makeup ?? "",
-      jewelry: c.look?.jewelry ?? "",
-      grooming: c.look?.grooming ?? "",
-      accessories: c.look?.accessories ?? "",
-      identityReferenceAssetIds: c.identityRefs.flatMap((r) => (r.assetId ? [r.assetId] : [])),
-      lookReferenceAssetIds: [...(c.look?.referenceAssetIds ?? [])],
-      expression: c.assignment.expression,
-      posture: c.assignment.posture,
-      gestures: c.assignment.gestures,
-      physicalInteractions: c.assignment.physicalInteractions,
-      performanceNotes: c.assignment.performanceNotes,
-    })),
+    // the AUTHORITATIVE appearance (Phase 2G.4): a selected Continuity Lock's frozen facts, else the live library
+    characters: ctx.characters.map((c) => {
+      const a = c.appearance;
+      return {
+        characterId: c.assignment.characterId,
+        name: a.name,
+        physicalDescription: a.physicalDescription,
+        lookId: a.look?.id ?? null,
+        lookName: a.look?.name ?? null,
+        wardrobe: a.look?.wardrobe ?? "",
+        shoes: a.look?.shoes ?? "",
+        hair: a.look?.hair ?? "",
+        makeup: a.look?.makeup ?? "",
+        jewelry: a.look?.jewelry ?? "",
+        grooming: a.look?.grooming ?? "",
+        accessories: a.look?.accessories ?? "",
+        identityReferenceAssetIds: [...a.identityReferenceAssetIds],
+        lookReferenceAssetIds: [...(a.look?.referenceAssetIds ?? [])],
+        expression: c.assignment.expression,
+        posture: c.assignment.posture,
+        gestures: c.assignment.gestures,
+        physicalInteractions: c.assignment.physicalInteractions,
+        performanceNotes: c.assignment.performanceNotes,
+        ...(a.lock ? { continuityLock: { ...a.lock } } : {}),
+      };
+    }),
     location: location
       ? {
           id: location.id,
