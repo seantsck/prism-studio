@@ -13,6 +13,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const EP = "/projects/ojousama/episodes/ep-1";
 test.describe.configure({ mode: "serial" });
+const initialStale = new Map<string, string>();
 
 const cards = (page: Page) => page.getByTestId("sequence-card");
 const card = (page: Page, code: string) =>
@@ -113,7 +114,10 @@ test("reorder within a Scene: the order changes, the stored links do not; mismat
     "[data-testid='sequence-scene'][data-scene-number='1'] [data-testid='sequence-card']",
   );
   expect(await codes(scene1)).toEqual(["1A", "1B", "1C"]);
-  await expect(card(page, "1C")).toHaveAttribute("data-stale", "false");
+  // earlier specs may already have staled a Shot (e.g. Yumeko's new identity images stale 1C): record, then compare
+  for (const code of ["1A", "1B", "1C"])
+    initialStale.set(code, (await card(page, code).getAttribute("data-stale"))!);
+  expect(initialStale.get("1B"), "1B (no Characters) starts fresh").toBe("false");
 
   await drag(page, "1C", "1B");
   await page.reload();
@@ -145,7 +149,7 @@ test("explicit sync: preview → confirm → links follow the order; dependent S
   await page.reload();
   for (const code of ["1A", "1C", "1B", "2A"])
     await expect(card(page, code)).toHaveAttribute("data-link-status", "synced");
-  // nothing was marked by hand: the changed continuity part stales the approved Storyboards of 1C and 1B
+  // nothing was marked by hand: the changed continuity part stales the approved Storyboards of 1C and 1B (1B was fresh)
   for (const code of ["1C", "1B"]) {
     await expect(card(page, code)).toHaveAttribute("data-stale", "true");
     await expect(card(page, code).getByTestId("sequence-stale")).toBeVisible();
@@ -153,8 +157,8 @@ test("explicit sync: preview → confirm → links follow the order; dependent S
     await expect(card(page, code).getByTestId("sequence-stale-details")).toContainText("Continuity changed");
   }
   await page.getByTestId("sequence-filter-stale").click();
-  await expect(card(page, "1C")).toBeVisible();
-  await expect(card(page, "1A")).toBeHidden();
+  await expect(card(page, "1B")).toBeVisible();
+  if (initialStale.get("1A") === "false") await expect(card(page, "1A")).toBeHidden();
   await page.getByTestId("sequence-filter-all").click();
   await expect(card(page, "1A")).toBeVisible();
 });
@@ -169,6 +173,11 @@ test("restore: drag back and sync again: the seed order, links and freshness ret
   expect(await codes(scene1)).toEqual(["1A", "1B", "1C"]);
   await sync(page, ["1B: 1C → 1A", "1C: 1A → 1B", "2A: 1B → 1C"]);
   await page.reload();
-  for (const code of ["1B", "1C"]) await expect(card(page, code)).toHaveAttribute("data-stale", "false");
+  for (const code of ["1A", "1B", "1C"])
+    await expect(card(page, code)).toHaveAttribute("data-stale", initialStale.get(code)!);
+  if (initialStale.get("1C") === "true")
+    await expect(card(page, "1C").getByTestId("sequence-stale-details")).not.toContainText(
+      "Continuity changed",
+    );
   await expect(page.getByTestId("sequence-summary-link-mismatches")).toHaveText("0");
 });
