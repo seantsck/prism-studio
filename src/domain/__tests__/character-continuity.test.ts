@@ -11,6 +11,7 @@ import {
   checkLockImage,
   draftCharacterContinuityLock,
   lockCoverage,
+  MAX_LOCK_REFERENCES,
 } from "@/domain/character-continuity";
 import { buildShotContext, type ShotContext } from "@/domain/context";
 import { buildCriteria, buildReferenceSet } from "@/domain/continuity/criteria";
@@ -32,6 +33,7 @@ import { referenceLegend, runwayImageTags } from "@/generation/providers/runway/
 import { catalogModel } from "@/domain/generation/models/catalog";
 import {
   addImage,
+  addLook,
   assignLook,
   attachLocks,
   characterByName,
@@ -250,6 +252,113 @@ describe("Character Continuity Lock: an immutable snapshot of approved appearanc
     copy.height = front.height;
     data.identityRefs.find((r) => r.assetId === front.id)!.assetId = copy.id;
     expect(lockFor(data, "Yumeko", ivory).lockFingerprint).toBe(a.lockFingerprint);
+  });
+});
+
+// ───────────────────────── the reference cap: refuse, never truncate ─────────────────────────
+
+describe(`Continuity Lock reference cap (${MAX_LOCK_REFERENCES}): an oversized basis is refused whole`, () => {
+  /** Yumeko with `identity` uploaded identity images (additional slot) and a Look holding `look` uploaded images. */
+  function wide(identity: number, look: number) {
+    const data = seed();
+    const ids = Array.from({ length: identity }, (_, i) =>
+      uploadIdentity(data, "Yumeko", "additional", `cap-identity-${i}`),
+    );
+    const wideLook = addLook(data, "Yumeko", "Wide");
+    const looks = Array.from({ length: look }, (_, i) => uploadLookRef(data, wideLook, `cap-look-${i}`));
+    return { data, ids, looks, wideLook };
+  }
+  const draftWide = (data: ProjectData, look: ProjectData["looks"][number]) => {
+    const yumeko = characterByName(data, "Yumeko");
+    return draftCharacterContinuityLock({
+      id: "cap",
+      now: T,
+      userId: null,
+      projectId: data.project.id,
+      name: "Yumeko — Wide",
+      character: yumeko,
+      look,
+      identityRefs: data.identityRefs.filter((r) => r.characterId === yumeko.id),
+      assets: data.assets,
+    });
+  };
+
+  it("the seed's own Yumeko identity entries are placeholders (the counts below are the uploads alone)", () => {
+    const { data, wideLook } = wide(0, 0);
+    const r = draftWide(data, wideLook);
+    expect(r.ok && r.draft.references.length).toBe(0);
+  });
+
+  it(`A. exactly ${MAX_LOCK_REFERENCES} valid unique images: the Lock freezes all of them, positions 0..${MAX_LOCK_REFERENCES - 1}`, () => {
+    const { data, ids, looks, wideLook } = wide(4, 60);
+    const r = draftWide(data, wideLook);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.draft.references).toHaveLength(MAX_LOCK_REFERENCES);
+    expect(r.draft.references.map((x) => x.position)).toEqual([...Array(MAX_LOCK_REFERENCES).keys()]);
+    expect(r.draft.references.map((x) => x.assetId)).toEqual([...ids, ...looks].map((a) => a.id));
+    expect(lockCoverage(r.draft)).toMatchObject({ identityCount: 4, lookCount: 60 });
+    // the fingerprint still hashes every frozen reference
+    expect(r.draft.lockFingerprint).toBe(
+      characterContinuityLockFingerprint(
+        r.draft.characterId,
+        r.draft.sourceLookId,
+        r.draft.facts,
+        r.draft.references,
+      ),
+    );
+  });
+
+  it(`B. ${MAX_LOCK_REFERENCES + 1} valid unique images: refused, naming both counts; no Lock is drafted`, () => {
+    const { data, wideLook } = wide(5, 60);
+    const r = draftWide(data, wideLook);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.message).toBe(
+      `This appearance has 65 usable reference images. A Continuity Lock supports at most 64. Remove some Identity or Look references before creating the Lock.`,
+    );
+    expect(r).not.toHaveProperty("draft");
+  });
+
+  it(`C. ${MAX_LOCK_REFERENCES + 1} source entries that dedupe to ${MAX_LOCK_REFERENCES} unique images: accepted; identity outranks Look`, () => {
+    const { data, ids, wideLook } = wide(5, 59);
+    // the Look also lists one of the identity images: the same Asset is frozen once, as identity
+    wideLook.referenceAssetIds = [...wideLook.referenceAssetIds, ids[2].id];
+    expect(ids.length + wideLook.referenceAssetIds.length).toBe(MAX_LOCK_REFERENCES + 1);
+    const r = draftWide(data, wideLook);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.draft.references).toHaveLength(MAX_LOCK_REFERENCES);
+    const shared = r.draft.references.filter((x) => x.assetId === ids[2].id);
+    expect(shared).toHaveLength(1);
+    expect(shared[0].role).toBe("identity");
+  });
+
+  it(`D. more than ${MAX_LOCK_REFERENCES} source entries but ≤ ${MAX_LOCK_REFERENCES} usable: accepted; the unusable ones are reported as skipped`, () => {
+    const { data, wideLook } = wide(0, 60);
+    for (let i = 0; i < 10; i++) {
+      const broken = uploadLookRef(data, wideLook, `cap-unusable-${i}`);
+      broken.objectPath = null; // no stored file: not image evidence
+    }
+    expect(wideLook.referenceAssetIds.length).toBe(70);
+    const r = draftWide(data, wideLook);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.draft.references).toHaveLength(60);
+    expect(r.skipped.filter((s) => s.role === "look")).toHaveLength(10);
+  });
+
+  it("E. overflow is never reported as skipped and never yields a truncated Lock", () => {
+    // placeholders exist too (the seed's), yet the refusal counts only the usable images and drafts nothing
+    const { data, wideLook } = wide(10, 60);
+    const r = draftWide(data, wideLook);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.message).toContain("70 usable reference images");
+    expect(r.message).toContain("at most 64");
+    expect(r.message).not.toMatch(/not frozen|unusable|skipped/i);
+    expect(r).not.toHaveProperty("skipped");
+    expect(r).not.toHaveProperty("draft");
   });
 });
 

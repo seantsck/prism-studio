@@ -209,6 +209,8 @@ export interface SkippedReference {
  * profile, full body, additional; ties in the library's own order), then the Look's images in the Look's own order.
  * Only REAL stored images of the project: a placeholder IdentityRef (no Asset, or an Asset without a stored file) stays
  * in the editable library but is skipped here. The same Asset is frozen once (identity outranks Look).
+ * EVERY usable unique image is returned, never capped: a set above MAX_LOCK_REFERENCES is refused whole by
+ * draftCharacterContinuityLock (valid evidence is never silently dropped, and never reported as "skipped").
  */
 export function collectLockReferences(input: {
   projectId: string;
@@ -264,7 +266,7 @@ export function collectLockReferences(input: {
     .sort((a, b) => slotIndex(a.r.slot) - slotIndex(b.r.slot) || a.i - b.i);
   for (const { r } of own) add("identity", r.slot, r.assetId, r.label.trim() || IDENTITY_SLOT_LABEL[r.slot]);
   for (const assetId of input.look?.referenceAssetIds ?? []) add("look", null, assetId, "");
-  return { references: references.slice(0, MAX_LOCK_REFERENCES), skipped };
+  return { references, skipped };
 }
 
 /**
@@ -325,6 +327,11 @@ export function draftCharacterContinuityLock(
     look: i.look,
     assets: i.assets,
   });
+  if (references.length > MAX_LOCK_REFERENCES)
+    return {
+      ok: false,
+      message: `This appearance has ${references.length} usable reference images. A Continuity Lock supports at most ${MAX_LOCK_REFERENCES}. Remove some Identity or Look references before creating the Lock.`,
+    };
   const sourceLookId = i.look?.id ?? null;
   const parsed = characterContinuityLockSchema.safeParse({
     id: i.id,

@@ -60,7 +60,15 @@ and never re-reads the Look row.
 
 **Only real image evidence.** An IdentityRef with no Asset, or whose Asset has no stored file (the seed's placeholders),
 stays in the editable library but never enters a Lock. Neither does a non-image or an Asset of another project. No
-identity slot is required. The Character page and Shot Prep show coverage truthfully:
+identity slot is required.
+
+**At most 64 images, never truncated.** A Lock freezes every usable unique image: placeholders and unusable images
+are excluded first, and the same Asset in both identity and Look counts once. If more than 64 remain, creating the Lock
+is refused, from the Character page and from Shot Prep. The message names both counts, and nothing is saved: no Lock,
+no Lock images, no selection change. Remove some Identity or Look references first. Prism never freezes the first 64
+and silently drops the rest.
+
+The Character page and Shot Prep show coverage truthfully: The Character page and Shot Prep show coverage truthfully:
 
 - identity slots present and Look image count;
 - `rich`: front, plus another angle, plus a Look image when the Lock has a Look;
