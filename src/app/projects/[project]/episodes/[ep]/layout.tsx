@@ -9,6 +9,7 @@ const TABS = [
   ["perform", "Perform"],
   ["breakdown", "Breakdown"],
   ["storyboard", "Storyboard"],
+  ["sequence", "Sequence"],
   ["animatic", "Animatic"],
   ["assets", "Assets"],
   ["generations", "Generations"],
