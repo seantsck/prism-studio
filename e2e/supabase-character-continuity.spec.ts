@@ -146,6 +146,17 @@ test.afterAll(async () => {
   });
   // mock attempts and the frame chosen from them; then this test's own uploads (and their private Storage objects)
   scopedCleanup();
+  // the snapshot's own values came back (not an assumed seed value): asset and locked flag, these rows only
+  const restored = await db(
+    async (c) =>
+      (
+        await c.query("select id, asset_id, locked from character_identity_refs where id = any($1::uuid[])", [
+          snapshot.refs.map((r) => r.id),
+        ])
+      ).rows as typeof snapshot.refs,
+  );
+  const byId = (rows: typeof snapshot.refs) => [...rows].sort((a, b) => a.id.localeCompare(b.id));
+  if (restored) expect(byId(restored)).toEqual(byId(snapshot.refs));
 });
 
 async function signIn(page: Page) {
@@ -195,6 +206,21 @@ test("hosted: Lock → Shot selects it → worker generates from the LOCKED imag
       timeout: 30_000,
     });
   }
+  // the uploads unlocked those slots (the temporary change the cleanup must undo from the snapshot)
+  const uploaded = await db(
+    async (c) =>
+      (
+        await c.query(
+          "select r.slot, r.locked from character_identity_refs r where r.id = any($1::uuid[]) and r.slot in ('front', 'profile') order by r.slot",
+          [snapshot.refs.map((r) => r.id)],
+        )
+      ).rows as Array<{ slot: string; locked: boolean }>,
+  );
+  if (uploaded)
+    expect(uploaded).toEqual([
+      { slot: "front", locked: false },
+      { slot: "profile", locked: false },
+    ]);
   await lookDetails.locator("summary").click();
   await lookDetails.getByTestId("look-ref-file").setInputFiles({
     name: `${PREFIX}-ivory.png`,
