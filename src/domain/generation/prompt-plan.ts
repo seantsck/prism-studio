@@ -1,3 +1,4 @@
+import { describeLockFacts, IDENTITY_SLOT_LABEL } from "../character-continuity";
 import type { GenerationPackage } from "../generation-package";
 import { describeLocationView } from "../location-view";
 import { PROMPT_SECTIONS, type PromptPlan, type PromptSectionKey } from "./schemas";
@@ -39,6 +40,9 @@ export function buildPromptPlan(
 ): PromptPlan {
   const names = pkg.characters.map((c) => c.name);
   const cam = pkg.camera;
+  // v5: a locked assignment is described from its Continuity Lock's frozen facts (never the live library)
+  const lockOf = (characterId: string) =>
+    pkg.references.characterContinuity?.find((l) => l.characterId === characterId);
   const blk = pkg.blocking;
 
   const bySection: Record<PromptSectionKey, string[]> = {
@@ -49,13 +53,39 @@ export function buildPromptPlan(
       names.length ? `Characters in frame: ${names.join(", ")}` : "No named characters in frame",
     ]),
     identity: clean(
-      pkg.characters.map((c) =>
-        c.physicalDescription ? `${c.name}: ${c.physicalDescription}` : `${c.name}: see identity references`,
-      ),
+      pkg.characters.flatMap((c) => {
+        const lock = lockOf(c.characterId);
+        if (!lock)
+          return [
+            c.physicalDescription
+              ? `${c.name}: ${c.physicalDescription}`
+              : `${c.name}: see identity references`,
+          ];
+        const slots = lock.references
+          .filter((r) => r.role === "identity")
+          .map((r) => (r.identitySlot ? IDENTITY_SLOT_LABEL[r.identitySlot] : "reference"));
+        // role context travels with the images: the model is told whose identity each image shows
+        return [
+          `${c.name} — Character Continuity Lock "${lock.name}"`,
+          lock.facts.physicalDescription && `${c.name} physical identity: ${lock.facts.physicalDescription}`,
+          slots.length > 0
+            ? `${c.name} identity reference images: ${slots.join(", ")}`
+            : `${c.name}: no identity reference images in the Lock (described in words only)`,
+          ...lock.facts.continuityRules.map((r) => r.trim() && `${c.name} rule: ${r.trim()}`),
+        ];
+      }),
     ),
     wardrobe: clean(
-      pkg.characters.flatMap((c) =>
-        c.look
+      pkg.characters.flatMap((c) => {
+        const lock = lockOf(c.characterId);
+        if (lock)
+          return lock.facts.look
+            ? [
+                `${c.name} — Look "${lock.facts.look.name}" (Character Continuity Lock "${lock.name}")`,
+                ...describeLockFacts({ ...lock.facts, physicalDescription: "", continuityRules: [] }),
+              ]
+            : [`${c.name}: no Look (Character Continuity Lock "${lock.name}")`];
+        return c.look
           ? [
               `${c.name} — Look "${c.look.name}"${c.look.locked ? " (locked)" : ""}`,
               c.look.wardrobe && `wardrobe: ${c.look.wardrobe}`,
@@ -65,8 +95,8 @@ export function buildPromptPlan(
               c.look.jewelry && `jewelry: ${c.look.jewelry}`,
               c.look.accessories && `accessories: ${c.look.accessories}`,
             ]
-          : [`${c.name}: no Look assigned`],
-      ),
+          : [`${c.name}: no Look assigned`];
+      }),
     ),
     environment: clean([
       pkg.set &&

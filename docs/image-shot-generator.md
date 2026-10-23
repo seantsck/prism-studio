@@ -100,6 +100,14 @@ Each image is sent once, under its most specific role: a Production Frame that i
 as `production_frame`; a generic Location reference that is also the view is sent as `location_view`. A model that takes no
 images gets the view's words in the PromptPlan and the disclosure "Location View image not supplied to this model".
 
+Phase 2G.4 changes only **where the Character references come from**, not their priority. For an assignment with a
+selected **Character Continuity Lock**, the images are the Lock's frozen identity images (slot order) and Look images
+(frozen order), labelled `Yumeko identity — front (Continuity Lock "…")` / `Yumeko Look "Ivory Suit" (Continuity Lock "…")`.
+For an assignment without one, they are the live IdentityRefs and Look images, as before; locked and live images are
+never both sent. Characters follow the Shot's assignment order. A model that takes no images still gets the Lock's facts
+in the PromptPlan, plus the disclosure "Character reference images not supplied to this model". See
+[character-continuity-locks](character-continuity-locks.md).
+
 If the Shot needs more references than a model accepts, Prism does **not** drop any silently: the candidate is **blocked** with
 "N references selected; X accepts at most M". The request modality is `image_to_image` when references exist and the model takes
 them, otherwise `text_to_image` (no 3D, no storyboard, no Production Frame needed).

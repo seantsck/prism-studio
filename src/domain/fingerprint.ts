@@ -1,4 +1,5 @@
-import type { ShotContext } from "./context";
+import { lockIdentityBasis, lockLookBasis } from "./character-continuity";
+import type { ShotCharacterContext, ShotContext } from "./context";
 import { fingerprint } from "./hash";
 import { locationViewPartIdentity } from "./location-view";
 import { timelineFromContext } from "./timeline";
@@ -66,6 +67,16 @@ export const PART_LABELS: Record<FreshnessPart, string> = {
   timing: "Derived timing",
 };
 
+/** A stored selection of a Character no longer assigned (data-integrity problem) is named, never ignored. */
+function withOrphans(ctx: ShotContext, entries: unknown[]): unknown[] {
+  const orphans = ctx.continuityLockOrphans ?? [];
+  if (orphans.length === 0) return entries;
+  return [
+    ...entries,
+    { invalidContinuityLocks: orphans.map((o) => [o.characterId, o.continuityLockId]).sort() },
+  ];
+}
+
 function locationPart(ctx: ShotContext): Record<string, unknown> | null {
   const view = locationViewPartIdentity(ctx);
   if (!ctx.location) return view ? { view } : null;
@@ -82,6 +93,47 @@ function locationPart(ctx: ShotContext): Record<string, unknown> | null {
   };
 }
 
+/**
+ * Phase 2G.4: one assignment's CHARACTERS-part entry. With a selected Character Continuity Lock the identity basis is
+ * the Lock's frozen one (editing the live Character / IdentityRefs then changes nothing); with an invalid stored
+ * selection the entry names it (and preflight blocks); with neither it is EXACTLY the pre-2G.4 entry.
+ */
+function characterEntry(c: ShotCharacterContext): Record<string, unknown> {
+  if (c.continuityLock)
+    return { assignment: c.assignment, continuityLock: lockIdentityBasis(c.continuityLock) };
+  const live = {
+    assignment: c.assignment,
+    physicalDescription: c.character?.physicalDescription ?? null,
+    identityRefs: c.identityRefs.map((r) => [r.slot, r.assetId, r.locked]).sort(),
+  };
+  return c.continuityLockIssue
+    ? { ...live, invalidContinuityLock: c.continuityLockIssue.continuityLockId }
+    : live;
+}
+
+/** One assignment's LOOKS-part entry: the Lock's frozen Look basis when locked, else EXACTLY the pre-2G.4 entry. */
+function lookEntry(c: ShotCharacterContext): Record<string, unknown> | null {
+  if (c.continuityLock) return { continuityLock: lockLookBasis(c.continuityLock) };
+  const live = c.look
+    ? {
+        id: c.look.id,
+        wardrobe: c.look.wardrobe,
+        shoes: c.look.shoes,
+        jewelry: c.look.jewelry,
+        hair: c.look.hair,
+        makeup: c.look.makeup,
+        grooming: c.look.grooming,
+        bodyNotes: c.look.bodyNotes,
+        accessories: c.look.accessories,
+        referenceAssetIds: c.look.referenceAssetIds,
+        locked: c.look.locked,
+      }
+    : null;
+  return c.continuityLockIssue
+    ? { look: live, invalidContinuityLock: c.continuityLockIssue.continuityLockId }
+    : live;
+}
+
 export function computeShotParts(ctx: ShotContext): ShotParts {
   const { shot } = ctx;
   const timeline = timelineFromContext(ctx);
@@ -93,32 +145,10 @@ export function computeShotParts(ctx: ShotContext): ShotParts {
     }),
     camera: fingerprint(shot.composition),
     blocking: fingerprint(shot.spatial),
-    characters: fingerprint(
-      ctx.characters.map((c) => ({
-        assignment: c.assignment,
-        physicalDescription: c.character?.physicalDescription ?? null,
-        identityRefs: c.identityRefs.map((r) => [r.slot, r.assetId, r.locked]).sort(),
-      })),
-    ),
-    looks: fingerprint(
-      ctx.characters.map((c) =>
-        c.look
-          ? {
-              id: c.look.id,
-              wardrobe: c.look.wardrobe,
-              shoes: c.look.shoes,
-              jewelry: c.look.jewelry,
-              hair: c.look.hair,
-              makeup: c.look.makeup,
-              grooming: c.look.grooming,
-              bodyNotes: c.look.bodyNotes,
-              accessories: c.look.accessories,
-              referenceAssetIds: c.look.referenceAssetIds,
-              locked: c.look.locked,
-            }
-          : null,
-      ),
-    ),
+    // Phase 2G.4: a selected Character Continuity Lock is the assignment's identity / Look basis (see characterEntry);
+    // without one each entry is exactly what it was before 2G.4, so an unlocked Shot hashes as it always did.
+    characters: fingerprint(withOrphans(ctx, ctx.characters.map(characterEntry))),
+    looks: fingerprint(ctx.characters.map(lookEntry)),
     // Phase 2G.3: the Shot's SELECTED Location View is part of its location intent. `view` is present only while one is
     // selected (or a stored selection is invalid), so a Shot without one hashes exactly as it did before 2G.3.
     location: fingerprint(locationPart(ctx)),

@@ -310,6 +310,33 @@ async function uploadIdentityRef_impl(form: FormData) {
   refresh(slug);
 }
 
+/** Adds one uploaded image to a Look's reference images (the editable source library; a Lock freezes it later). */
+async function uploadLookReference_impl(form: FormData) {
+  const { data, repo, slug } = await load(form);
+  const look = data.looks.find((l) => l.id === str(form, "lookId"));
+  if (!look) throw new UserFacingError("Look not found.");
+  if (look.locked) throw new UserFacingError("Look is locked; unlock it before editing.");
+  const file = hasFile(form, "file");
+  if (!file) throw new UserFacingError("Choose an image to upload.");
+  const { asset } = await ingestUpload(data, repo.currentUserId(), file, {
+    allowed: ["image"],
+    purpose: "look_ref",
+    source: "upload",
+    tags: ["look"],
+  });
+  try {
+    await repo.upsert(data.project.id, "assets", asset);
+  } catch (err) {
+    await discardUpload(asset);
+    throw err;
+  }
+  await repo.upsert(data.project.id, "looks", {
+    ...look,
+    referenceAssetIds: [...look.referenceAssetIds, asset.id],
+  });
+  refresh(slug);
+}
+
 async function setIdentityLocked_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const characterId = str(form, "characterId");
@@ -1350,6 +1377,9 @@ export async function updateAsset(form: FormData): Promise<ActionResult> {
   return runAction(() => updateAsset_impl(form), { name: "updateAsset" });
 }
 
+export async function uploadLookReference(form: FormData): Promise<ActionResult> {
+  return runAction(() => uploadLookReference_impl(form), { name: "uploadLookReference" });
+}
 export async function deleteAsset(form: FormData): Promise<ActionResult> {
   return runAction(() => deleteAsset_impl(form), { name: "deleteAsset" });
 }

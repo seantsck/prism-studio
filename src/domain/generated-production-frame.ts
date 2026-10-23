@@ -103,6 +103,19 @@ export interface CandidateInputBasis {
    * `location` part, so choosing another view stales the candidate through `namedParts`.
    */
   locationViewReference: { assetId: string; viewId: string | null } | null;
+  /**
+   * Phase 2G.4: per Character, the Character Continuity Lock this candidate was generated under (from the frozen
+   * package snapshot) and which of the Lock's images were actually SENT (from the frozen request; an image that went
+   * under a more specific role, or a model that took no images, sends none). Empty when no Lock was selected. Each
+   * Lock's identity is also inside the frozen `characters` / `looks` parts, so choosing another Lock stales the
+   * candidate through `namedParts`, while editing the live library under the SAME Lock does not.
+   */
+  characterContinuityReferences: Array<{
+    characterId: string;
+    lockId: string;
+    lockFingerprint: string;
+    sentAssetIds: string[];
+  }>;
 }
 
 /** Reconstructs a candidate's input basis from its frozen request and package snapshot alone. */
@@ -114,6 +127,12 @@ export function candidateInputBasis(
     references?: {
       productionFrame?: { frameId?: string; assetId?: string; version?: number };
       locationView?: { viewId?: string; assetId?: string };
+      characterContinuity?: Array<{
+        characterId?: string;
+        lockId?: string;
+        lockFingerprint?: string;
+        references?: Array<{ assetId?: string }>;
+      }>;
     };
   } | null;
   const parts = snap?.provenance?.parts;
@@ -129,6 +148,25 @@ export function candidateInputBasis(
   const viewAssetId = refs?.find((r) => r.role === "location_view")?.assetId ?? null;
   const lv = snap?.references?.locationView;
   const pf = snap?.references?.productionFrame;
+  const sentCharacterImages = new Set(
+    (refs ?? [])
+      .filter((r) => r.role === "identity" || r.role === "character_look")
+      .flatMap((r) => (r.assetId ? [r.assetId] : [])),
+  );
+  const characterContinuityReferences = (snap?.references?.characterContinuity ?? []).flatMap((l) =>
+    l.characterId && l.lockId && l.lockFingerprint
+      ? [
+          {
+            characterId: l.characterId,
+            lockId: l.lockId,
+            lockFingerprint: l.lockFingerprint,
+            sentAssetIds: (l.references ?? []).flatMap((r) =>
+              r.assetId && sentCharacterImages.has(r.assetId) ? [r.assetId] : [],
+            ),
+          },
+        ]
+      : [],
+  );
   return {
     namedParts: namedParts && Object.keys(namedParts).length > 0 ? namedParts : null,
     productionFrameReference: usedAssetId
@@ -141,6 +179,7 @@ export function candidateInputBasis(
     locationViewReference: viewAssetId
       ? { assetId: viewAssetId, viewId: lv && lv.assetId === viewAssetId ? (lv.viewId ?? null) : null }
       : null,
+    characterContinuityReferences,
   };
 }
 

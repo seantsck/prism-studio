@@ -377,16 +377,18 @@ abstract class PostgresRepositoryBase implements Repository {
       const rows = shotToRows(item as Shot);
       await upsertRow(c, "shots", { ...rows.shot, project_id: projectId });
       const id = (item as Shot).id;
-      for (const t of [
-        "shot_characters",
-        "shot_props",
-        "shot_dialogue_lines",
-        "shot_reference_assets",
-        "shot_script_sources",
-      ]) {
+      // Assignments are kept, not re-created (Phase 2G.4): removed Characters are deleted (cascading their Continuity
+      // Lock selection), the others are updated in place, so a Look change is an UPDATE the 0041 trigger sees and an
+      // unrelated Shot edit never drops a selection.
+      await c.query(
+        "delete from shot_characters where shot_id = $1 and not (character_id = any($2::uuid[]))",
+        [id, rows.characters.map((r) => r.character_id)],
+      );
+      for (const row of rows.characters)
+        await upsertRow(c, "shot_characters", row, ["shot_id", "character_id"]);
+      for (const t of ["shot_props", "shot_dialogue_lines", "shot_reference_assets", "shot_script_sources"]) {
         await c.query(`delete from ${q(t)} where shot_id = $1`, [id]);
       }
-      await insertRows(c, "shot_characters", rows.characters);
       await insertRows(c, "shot_props", rows.props);
       await insertRows(c, "shot_dialogue_lines", rows.lines);
       await insertRows(c, "shot_reference_assets", rows.assets);

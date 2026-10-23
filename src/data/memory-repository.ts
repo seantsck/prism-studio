@@ -1,5 +1,6 @@
 import { LOCAL_USER_ID, buildSeedProject } from "./seed";
 import { MemoryCandidateService } from "./candidates-memory";
+import { MemoryCharacterContinuityService } from "./character-continuity-memory";
 import { MemoryGenerationService } from "./generation-memory";
 import { MemoryLocationViewService } from "./location-view-memory";
 import { MemoryMediaQaService } from "./media-qa-memory";
@@ -28,6 +29,7 @@ export class MemoryRepository implements Repository {
   private previsService: MemoryPrevisService | undefined;
   private productionFrameService: MemoryProductionFrameService | undefined;
   private locationViewService: MemoryLocationViewService | undefined;
+  private characterContinuityService: MemoryCharacterContinuityService | undefined;
 
   /** Derived-media lineage, delivery masters and continuity QA runs (same semantics as Postgres). */
   get mediaQa(): MemoryMediaQaService {
@@ -81,6 +83,15 @@ export class MemoryRepository implements Repository {
       ownerUserId: () => LOCAL_USER_ID,
     });
     return this.locationViewService;
+  }
+
+  /** Character Continuity Locks and the assignments' Lock selections (Phase 2G.4; same semantics as Postgres). */
+  get characterContinuity(): MemoryCharacterContinuityService {
+    this.characterContinuityService ??= new MemoryCharacterContinuityService({
+      all: () => [...this.projects.values()],
+      ownerUserId: () => LOCAL_USER_ID,
+    });
+    return this.characterContinuityService;
   }
 
   constructor(seed: ProjectData[] = [buildSeedProject()]) {
@@ -161,6 +172,9 @@ export class MemoryRepository implements Repository {
     // the memory twin of migration 0040's trigger on shots.location_id: a Shot that moves to another Location loses
     // a Location View selection of its previous Location in the same write
     if (name === "shots") this.locationViewService?.onShotSaved(next as unknown as Shot);
+    // …and of migration 0041's cascade / trigger on shot_characters: an assignment that leaves the Shot or changes Look
+    // loses an incompatible Character Continuity selection in the same write
+    if (name === "shots") this.characterContinuityService?.onShotSaved(next as unknown as Shot);
   }
 
   async upsertMany<K extends CollectionName>(

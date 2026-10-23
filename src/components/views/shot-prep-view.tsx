@@ -15,6 +15,7 @@ import {
 import { GenerateWorkspace } from "@/components/generation/generate-workspace";
 import { ProductionFrameCandidates } from "@/components/generation/production-frame-candidates";
 import { isProductionFrameAttempt } from "@/domain/generation/schemas";
+import { CharacterContinuitySection } from "@/components/views/character-continuity-section";
 import { LocationViewSection } from "@/components/views/location-view-section";
 import { ProductionFrameSection, type MasterFrameChoice } from "@/components/views/production-frame-section";
 import {
@@ -756,12 +757,14 @@ export function ShotPrepView({
                       Edit Looks →
                     </Link>
                   ) : null}
+                  <CharacterContinuitySection ctx={ctx} c={c} slug={slug} />
                 </div>
               ))
             )}
             <p className="text-[11px] text-faint">
-              Wardrobe text is read from the Look when the generation package is built — it is never copied
-              into the shot, so it cannot drift.
+              Without a Continuity Lock, wardrobe text is read from the Look when the generation package is
+              built — it is never copied into the shot. With one, the Lock&apos;s frozen appearance is used
+              and later Look edits do not change this Shot.
             </p>
           </SectionChrome>
 

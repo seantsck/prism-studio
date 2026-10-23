@@ -182,7 +182,8 @@ export const PREFLIGHT_RULES: PreflightRule[] = [
     evaluate: (c) => {
       const withLooks = c.characters.filter((x) => x.look);
       if (withLooks.length === 0) return na();
-      const open = withLooks.filter((x) => !x.look?.locked);
+      // a selected Character Continuity Lock IS a locked appearance (Phase 2G.4)
+      const open = withLooks.filter((x) => !x.look?.locked && !x.continuityLock);
       return open.length === 0 ? pass() : fail(`Unlocked: ${open.map((x) => x.look?.name).join(", ")}`);
     },
   },
@@ -193,10 +194,31 @@ export const PREFLIGHT_RULES: PreflightRule[] = [
     label: "Identity references available",
     evaluate: (c) => {
       if (!hasCharacters(c)) return na();
-      const bad = c.characters.filter((x) => !x.identityRefs.some((r) => r.assetId));
+      // the AUTHORITATIVE identity images: a selected Continuity Lock's frozen ones, else the live library's
+      const bad = c.characters.filter((x) => x.appearance.identityReferenceAssetIds.length === 0);
       return bad.length === 0
         ? pass()
         : warn(`No identity images for ${bad.map((x) => x.character?.name).join(", ")}`);
+    },
+  },
+  // Character Continuity Lock (Phase 2G.4). Not applicable until one is selected: no Lock is never a blocker. A stored
+  // selection that does not match its assignment's Character / Look (or whose Character is no longer assigned) is a
+  // data-integrity problem: generation is blocked rather than silently using another appearance.
+  {
+    id: "character.continuity_lock",
+    section: "character",
+    severity: "required",
+    label: "Selected Character Continuity Locks match their assignments",
+    evaluate: (c) => {
+      const issues = [
+        ...c.characters.flatMap((x) => (x.continuityLockIssue ? [x.continuityLockIssue] : [])),
+        ...(c.continuityLockOrphans ?? []),
+      ];
+      if (issues.length > 0) return fail(issues[0]!.message);
+      const locked = c.characters.filter((x) => x.continuityLock);
+      return locked.length > 0
+        ? pass(locked.map((x) => `${x.appearance.name}: ${x.continuityLock!.name}`).join(" · "))
+        : na("No Character Continuity Lock selected");
     },
   },
   // Set

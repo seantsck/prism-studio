@@ -115,6 +115,26 @@ Storyboard and Character references, before generic Location references); a fres
 as a new view ("Save as Location View", same Asset). A selection of another Location's view never resolves (preflight
 `set.location_view` blocks). See [location-views](location-views.md).
 
+### Character Continuity Locks (Phase 2G.4, migrations 0041 + 0042)
+
+A Character owns immutable **Continuity Locks**: an approved appearance (identity facts + one exact Look, or
+intentionally none) and the exact stored reference images it was approved with. Creating one generates nothing and
+copies no bytes.
+
+- **Selecting:** Shot Prep → 5 · Look → **Character continuity** lets each assigned Character rely on a Lock made for
+  the assignment's CURRENT Look; a Lock of another Look is never offered and is refused in the database. A selection
+  is optional: no Lock is never a blocker.
+- **Locked Shot:** the Lock is the authoritative identity / Look truth for generation, the package (v5), Production
+  Frame / Storyboard / candidate freshness and continuity QA references. Later edits to the Look or IdentityRefs do
+  not change it.
+- **Unlocked Shot:** reads the live library, exactly as before.
+- **Changes that clear or stale it:**
+  - changing the assignment's Look clears the selection;
+  - removing the Character from the Shot removes it;
+  - switching Locks stales the frame and the candidates.
+
+See [character-continuity-locks](character-continuity-locks.md).
+
 ### Generation attempts
 
 - `generation_attempts.package_fingerprint` stores the package fingerprint at logging time. The trigger

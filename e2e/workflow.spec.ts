@@ -69,7 +69,7 @@ test("3A: generation brief renders and exports (text + JSON package)", async ({ 
   expect(text).toContain("READY TO GENERATE");
 
   const json = await (await request.get(href!.replace("format=brief", "format=json"))).json();
-  expect(json.packageSchemaVersion).toBe(4); // the current package shape (Phase 2G.3)
+  expect(json.packageSchemaVersion).toBe(5); // the current package shape (Phase 2G.4)
   expect(json.timing.durationMs).toBe(4500);
   expect(json.provenance.fingerprint).toMatch(/^[0-9a-f]{64}$/);
 });

@@ -15,7 +15,7 @@ import { PostgresLocationViewData } from "../src/data/location-view-postgres";
 import { LocationViewError } from "../src/data/location-view-repository";
 import { AdminRepository, rlsPreamble } from "../src/data/postgres-repository";
 import { buildShotContext } from "../src/domain/context";
-import { assembleGenerationPackage } from "../src/domain/generation-package";
+import { assembleGenerationPackage, PACKAGE_SCHEMA_VERSION } from "../src/domain/generation-package";
 import { deriveProductionFrameReferenceCandidates } from "../src/domain/generation/compatibility";
 import { draftLocationView, type LocationViewSpecInput } from "../src/domain/location-view";
 import { assetSchema, type Asset, type Location, type ProjectData } from "../src/domain/schemas";
@@ -627,8 +627,10 @@ try {
   );
   const pkg = assembleGenerationPackage(ctx, new Date("2026-10-22T00:00:00Z"));
   check(
-    "a package built from the database state is v4 and names the view by value",
-    pkg.version === 4 && pkg.references.locationView?.viewId === r1.view.id && Boolean(pkg.assets[up1.id]),
+    "a package built from the database state is the current version and names the view by value",
+    pkg.version === PACKAGE_SCHEMA_VERSION &&
+      pkg.references.locationView?.viewId === r1.view.id &&
+      Boolean(pkg.assets[up1.id]),
   );
   check(
     "…and a Production Frame candidate would send it as location_view",

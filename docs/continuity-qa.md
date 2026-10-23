@@ -20,6 +20,12 @@ shot. Three facts about an attempt stay separate everywhere (chips, cards, compa
 - **Reference set** (`buildReferenceSet`): exactly which identity refs, Look refs, approved storyboard, location
   refs, previous approved shot output, next shot storyboard, performance takes, production constraints and
   delivery framing were used, with checksums. Frozen on the run.
+- **Character Continuity Locks** (Phase 2G.4, [character-continuity-locks](character-continuity-locks.md)): for an
+  assignment with a selected Lock, the identity, wardrobe, hair, makeup and jewelry criteria use the Lock's frozen
+  facts. The identity and Look references are the Lock's frozen images, never newer library images. The source names
+  the Lock, e.g. `Look "Ivory Suit" (locked) · Character Continuity Lock "Yumeko — Ivory Suit v1"`. Without a Lock, the
+  IdentityRefs and Look references work as before. This changes reference preparation only: selecting a Lock never
+  runs an analyzer, and Gemini / OpenAI analysis stays human-triggered and separately gated.
 - **Deterministic checks** (`checks.ts`, no AI): output present, duration (±1.5 frames), aspect ratio, resolution
   (only when the bible sets an explicit size), fps, container/codec playability, audio stream, conformed delivery
   master present. Anything needing understanding of the picture stays `unchecked`; nothing is faked.

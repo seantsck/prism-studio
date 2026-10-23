@@ -23,6 +23,7 @@ export type AssetUsageKind =
   | "storyboard_frame"
   | "production_frame"
   | "location_view"
+  | "character_continuity_lock"
   | "attempt_input"
   | "attempt_output"
   | "set3d_model";
@@ -144,6 +145,18 @@ export function findAssetUsage(data: ProjectData, assetId: string): AssetUsageRe
     direct.push({ kind: "location_view", label: `${place} · Location View "${v.name}"`, entityId: v.id });
     for (const sel of data.shotLocationViewSelections ?? [])
       if (sel.locationViewId === v.id) affected.add(sel.shotId);
+  }
+  // an immutable Character Continuity Lock pins every image it froze (it references the Asset; nothing was copied)
+  for (const l of data.characterContinuityLocks ?? []) {
+    const ref = l.references.find((r) => r.assetId === assetId);
+    if (!ref) continue;
+    direct.push({
+      kind: "character_continuity_lock",
+      label: `${charName(l.characterId)} · Continuity Lock "${l.name}" ${ref.role === "identity" ? "identity" : "Look"} image`,
+      entityId: l.id,
+    });
+    for (const sel of data.shotCharacterContinuitySelections ?? [])
+      if (sel.continuityLockId === l.id) affected.add(sel.shotId);
   }
   for (const a of data.attempts) {
     if (a.inputAssetIds.includes(assetId))

@@ -80,7 +80,22 @@ grant ([production-frames](production-frames.md)). **0040** (Phase 2G.3) adds th
 FKs to the Location and the Asset, an Asset-facts trigger, an update guard) and the one-per-Shot
 `shot_location_view_selections` pointer (composite FK carrying the view's Location, a same-Location trigger, and a trigger
 on `shots.location_id` that clears a selection of the old Location's view); owner-only RLS, no worker grant, no new
-asset purpose ([location-views](location-views.md)).
+asset purpose ([location-views](location-views.md)). **0041** (Phase 2G.4) adds:
+
+- the immutable `character_continuity_locks` (facts by value, composite FK to the Character, a Look-of-this-Character
+  trigger, an update guard, `unique (character_id, lock_fingerprint)`);
+- their frozen `character_continuity_lock_assets` (an Asset-facts trigger, an update guard, deferred membership
+  triggers: complete at commit, never grows);
+- the one-per-assignment `shot_character_continuity_selections` pointer (composite FK carrying the Lock's Character,
+  FK to the `shot_characters` row with cascade, a same-Look trigger, and a trigger on `shot_characters.look_id` that
+  clears an incompatible selection);
+- owner-only RLS and no worker grant.
+
+The Postgres Shot write now updates `shot_characters` rows in place instead of re-creating them, so an unrelated Shot
+save keeps those selections. **0042** is a fix-forward for 0041 (applied, therefore immutable): the Lock image → Asset
+FK becomes `DEFERRABLE INITIALLY DEFERRED`, as 0005 did for `shot_characters`. A Project cascade can then pass through
+Lock images, while a direct delete of an Asset a Lock froze is still refused at commit
+([character-continuity-locks](character-continuity-locks.md)).
 
 `npm run db:migrate -- --dry-run` rehearses the pending files: they are applied for real inside the transaction, which
 is then **always rolled back** (nothing persists). Use it before applying a migration to the hosted project.
