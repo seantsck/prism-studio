@@ -135,6 +135,29 @@ copies no bytes.
 
 See [character-continuity-locks](character-continuity-locks.md).
 
+### Shot Sequence Board (Phase 2G.5, no migration)
+
+Episode → **Sequence** (between Storyboard and Animatic) reviews the episode as a sequence of canonical stills, in the
+actual order (Scene order, then Shot order). Each card shows ONE labelled image:
+
+1. the selected Production Frame (current or ⚠ stale, still shown);
+2. otherwise the approved Storyboard as a **fallback**;
+3. otherwise a **draft** Storyboard (not canonical);
+4. otherwise NO PRODUCTION IMAGE.
+
+Each card also shows the Location and View, each Character's Continuity Lock or live appearance, and integrity
+blockers. Every cut lists what changes across it (Location / View, Characters entering or leaving, Lock or Look, screen
+direction, weather, time of day) as review notes, not failures. **Compare** opens the two stills side by side.
+
+- **Reorder:** drag reorders within a Scene, the same rules as the Storyboard. It never changes a Shot's stored previous
+  Shot, so the board then shows **link mismatches**.
+- **Sync continuity links:** previews exactly which links change and warns that dependent Storyboards / Production Frames
+  / generations may become stale. Only an explicit confirmation writes, and only to the differing Shots.
+- **Refusals:** the sync is refused whole if it would touch a locked Shot, and refused if the sequence changed since the
+  preview.
+
+Nothing is stored for the board and the package stays v5. See [shot-sequence-board](shot-sequence-board.md).
+
 ### Generation attempts
 
 - `generation_attempts.package_fingerprint` stores the package fingerprint at logging time. The trigger

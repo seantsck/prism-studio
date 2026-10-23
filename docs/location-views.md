@@ -169,6 +169,13 @@ Images are shown only through the private asset route; no public bucket, no pers
 project-safe foreign key (it cannot be deleted from under the view, and Asset usage lists it). Cross-project Assets,
 Locations and views and cross-Location selections are refused by the database as well as the server.
 
+## Shot Sequence Board (Phase 2G.5)
+
+Each Sequence Board card shows the Shot's Location and its selected View (or "none"; no View is never a warning). Across a
+cut, the same Location with different selected Views is a **view change**, and a different Location is a **location
+change**. Both are review notes, not failures. Nothing is inferred when either Shot has no View. An invalid stored
+selection is shown as the Shot's integrity blocker. See [shot-sequence-board](shot-sequence-board.md).
+
 ## Tests
 
 - `src/domain/__tests__/location-view.test.ts` — record, dedupe, spec, context, package v4, PromptPlan, freshness,

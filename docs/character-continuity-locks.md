@@ -233,6 +233,20 @@ OpenAI analysis stays human-triggered and separately gated. No other image analy
     Look."
   - Copy: "A Continuity Lock freezes the exact identity, wardrobe and appearance references this Shot should preserve."
 
+## Shot Sequence Board (Phase 2G.5)
+
+Each Sequence Board card shows every assigned Character as either `Yumeko 🔒 Ivory Suit v1` (the selected Lock) or
+`Yumeko · Live appearance · Ivory Suit`. `CharacterLook.locked` is never shown as a Continuity Lock.
+
+Across a cut, a Character in both Shots is compared by its RESOLVED appearance, never by today's library:
+
+- the same Lock is **stable**;
+- Lock A → B is a **Lock change**;
+- locked ↔ live is an **appearance-authority change**;
+- two live assignments with different Looks are a **Look change**.
+
+All of these are review notes, not failures. An invalid selection is the Shot's integrity blocker. See [shot-sequence-board](shot-sequence-board.md).
+
 ## No-Lock compatibility, no GPU, no 3D
 
 Existing projects keep working with zero Locks: there is no backfill and no Lock requirement, and a Shot without a Lock
