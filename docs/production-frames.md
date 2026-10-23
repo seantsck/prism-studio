@@ -213,6 +213,14 @@ parts:
 
 See [character-continuity-locks](character-continuity-locks.md).
 
+## Shot Sequence Board (Phase 2G.5)
+
+The Sequence Board shows each Shot's selected Production Frame as its canonical still, in its production shape, with
+version, source and `productionFrameFreshness` (current / stale / missing). A stale frame stays shown with a ⚠ Stale
+overlay and its changed parts; it is never replaced by the Storyboard. Without a frame, an approved Storyboard is shown
+as a labelled **fallback**, never called a Production Frame. Syncing previous-Shot links changes the `continuity` part,
+so frames made under the old link become stale through the normal rules. See [shot-sequence-board](shot-sequence-board.md).
+
 ## Tests
 
 | What                                                                                                           | Where                                                |

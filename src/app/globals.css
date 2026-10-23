@@ -107,3 +107,10 @@ details > summary::-webkit-details-marker {
 .btn-primary {
   @apply border-accent bg-accent text-accentfg hover:bg-accent;
 }
+
+/* Phase 2G.5: Sequence Board filters (client-local). A filtered-out card's sortable cell is hidden; nothing is stored. */
+[data-seq-filter="needs_pf"] [data-sortable-item]:not(:has([data-needs-pf="true"])),
+[data-seq-filter="stale"] [data-sortable-item]:not(:has([data-stale="true"])),
+[data-seq-filter="issues"] [data-sortable-item]:not(:has([data-issue="true"])) {
+  display: none;
+}

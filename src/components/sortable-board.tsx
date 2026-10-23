@@ -28,6 +28,7 @@ function SortableItem({ id, locked, children }: { id: string; locked: boolean; c
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.6 : 1 }}
       className="relative"
+      data-sortable-item=""
     >
       <button
         type="button"

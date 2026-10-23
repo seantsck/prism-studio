@@ -191,6 +191,14 @@ entry exposes `continuityLocks`, the selected `continuityLock`, `continuityLockI
 parts and of GenerationPackage v5 (`references.characterContinuity`). Needs no generation, 3D set or GPU. See
 [character-continuity-locks](character-continuity-locks.md).
 
+## Shot Sequence Board (Phase 2G.5)
+
+No entity and no table. `buildShotSequence(data, episodeId)` (`src/domain/shot-sequence.ts`) is a pure projection of
+the episode's Shots in `shotOrder`. It covers each Shot's display visual and health, every adjacent transition, and the
+totals (runtime from the Animatic timeline). The one write, the explicit link sync, changes only
+`shots.previous_shot_id` of the Shots whose stored link differs from the actual order, through the normal Shot save
+(`upsertMany`). Its preview key is an optimistic-concurrency check, never stored. See [shot-sequence-board](shot-sequence-board.md).
+
 ## Reconstruction jobs (Phase 2F M2D.2)
 
 | Entity                   | Table / column                                                                                                                                                                                                    | Nature                                                                                                                                                                                                                                                                                                                |
