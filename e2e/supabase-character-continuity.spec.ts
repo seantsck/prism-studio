@@ -81,7 +81,7 @@ async function db<T>(fn: (c: pg.Client) => Promise<T>): Promise<T | null> {
 
 // what this test changes in the demo project, exactly as it was
 const snapshot: {
-  refs: Array<{ id: string; asset_id: string | null }>;
+  refs: Array<{ id: string; asset_id: string | null; locked: boolean }>;
   assignment: { shot_id: string; character_id: string; look_id: string | null } | null;
 } = { refs: [], assignment: null };
 
@@ -107,7 +107,9 @@ test.beforeAll(async () => {
       )
     ).rows[0].id as string;
     snapshot.refs = (
-      await c.query("select id, asset_id from character_identity_refs where character_id = $1", [yumeko])
+      await c.query("select id, asset_id, locked from character_identity_refs where character_id = $1", [
+        yumeko,
+      ])
     ).rows;
     snapshot.assignment =
       (
@@ -131,7 +133,12 @@ test.afterAll(async () => {
         snapshot.assignment.look_id,
       ]);
     for (const r of snapshot.refs)
-      await c.query("update character_identity_refs set asset_id = $2 where id = $1", [r.id, r.asset_id]);
+      // an identity upload also unlocks the slot: restore the flag too (it is part of the `characters` part)
+      await c.query("update character_identity_refs set asset_id = $2, locked = $3 where id = $1", [
+        r.id,
+        r.asset_id,
+        r.locked,
+      ]);
     // this test's Locks (their images and selections cascade) and its Look; Locks are append-only for users, so this
     // runs as the database owner, scoped by this run's unique prefix
     await c.query("delete from character_continuity_locks where name like $1", [`${PREFIX}%`]);
