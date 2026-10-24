@@ -19,7 +19,12 @@ import type { InputMode } from "@/domain/generation/compatibility";
 import type { ProjectData } from "@/domain/schemas";
 import type { ModelRegistry } from "./registry";
 import { buildSharedEvaluation } from "./submission";
-import { variantKey, type ModelRow, type VariantView } from "./model-comparison-types";
+import {
+  variantKey,
+  type AnimationVariantFacts,
+  type ModelRow,
+  type VariantView,
+} from "./model-comparison-types";
 
 export { variantKey, type ModelRow, type VariantView } from "./model-comparison-types";
 
@@ -40,11 +45,34 @@ export interface ModelComparison {
 /** "1920:1088" → "1920×1088". */
 const canvasText = (px: string | undefined): string | null => (px ? px.replace(":", "×") : null);
 
+/** What an Animate Production Frame candidate would receive and produce, from the same compatibility result. */
+function animationFacts(fit: ModelFit): AnimationVariantFacts {
+  const c = fit.compatibility;
+  const plan = c.adaptation;
+  return {
+    exactFirstFrame: c.modality === "image_to_video" && Boolean(c.used.startFrameAssetId),
+    productionMs: c.duration?.productionMs ?? plan?.duration.productionMs ?? null,
+    providerMs: c.used.durationMs,
+    deliveryMs: plan?.conform.trimToMs ?? c.duration?.productionMs ?? null,
+    productionFraming: plan?.framing.productionLabel ?? null,
+    providerCanvas: plan?.framing.providerLabel ?? c.used.aspectRatio,
+    audioConditioning:
+      c.used.audioAssetIds.length > 0
+        ? "Performance supplied as conditioning (not the final dialogue)"
+        : c.inputs.some((i) => i.kind === "audio")
+          ? "Performance not used"
+          : "No performance audio",
+    nativeAudio: fit.nativeAudio,
+    referencesOmittedKeyframe: fit.packaging.filter((p) => p.state === "not_used_mode").length,
+  };
+}
+
 const toView = (
   fit: ModelFit,
   requirements: ShotGenerationRequirements,
   canvas: string | null,
 ): VariantView => ({
+  animation: fit.purpose === "animate_production_frame" ? animationFacts(fit) : null,
   status: fit.status,
   statusLabel: FIT_LABELS[fit.status],
   blockers: fit.blockers,
@@ -111,11 +139,14 @@ export function buildModelComparison(args: {
   const built: Built[] = models.map((model) => {
     const cat = catalogModel(model.provider, model.modelId);
     const availability = args.registry.availabilityOf(model);
-    const modes: InputMode[] = model.capabilities.references.keyframesExcludeReferences
-      ? ["keyframes", "references"]
-      : [];
+    // an animation of the Production Frame is always keyframe mode: no "references" choice that would demote it
+    const modes: InputMode[] =
+      model.capabilities.references.keyframesExcludeReferences && purpose === "shot_output"
+        ? ["keyframes", "references"]
+        : [];
     const tiers = cat && cat.tiers.length > 1 ? cat.tiers.map((t) => t.id) : [];
-    const nativeAudio = purpose === "shot_output" && cat?.audio.nativeGeneration === "supported";
+    // provider audio stays an explicit, default-OFF choice for every video purpose
+    const nativeAudio = purpose !== "production_frame" && cat?.audio.nativeGeneration === "supported";
     const qualities = purpose === "production_frame" ? (cat?.image?.qualities ?? []) : [];
     const qualityList: Array<string | null> = qualities.length ? qualities.map((q) => q.id) : [null];
     const modeList: Array<InputMode | undefined> = modes.length ? modes : [undefined];

@@ -27,13 +27,23 @@ import type {
 export class GenerationSubmitError extends Error {
   constructor(
     readonly code:
-      "duplicate_active" | "project_busy" | "throttled" | "stale_shot" | "stale_package" | "not_found",
+      | "duplicate_active"
+      | "project_busy"
+      | "throttled"
+      | "stale_shot"
+      | "stale_package"
+      | "stale_animation_source"
+      | "not_found",
     message: string,
   ) {
     super(message);
     this.name = "GenerationSubmitError";
   }
 }
+
+/** `stale_animation_source`: the Shot's selected Production Frame is not the one the animation was prepared from. */
+export const STALE_ANIMATION_SOURCE_MESSAGE =
+  "The Production Frame changed while this animation was being submitted. Review the current Production Frame and animate again.";
 
 export class LeaseLostError extends Error {
   constructor(jobId: string) {
@@ -101,10 +111,18 @@ export interface CreateAttemptInput {
   expectedShotUpdatedAt: string;
   /**
    * `projectRevision()` read BEFORE the project data the package was built from. Submission is refused when
-   * any package dependency (looks, takes, locations, assets, other shots...) changed since. `null` opts out of
-   * the check (tests/scripts only; the server action always supplies it).
+   * a revision-covered package input (looks, takes, locations, assets, other shots...) changed since. The
+   * Production Frame, Location View and Character Continuity selection tables are NOT revision-covered (see
+   * docs/roadmap.md). `null` opts out of the check (tests/scripts only; the server action always supplies it).
    */
   expectedProjectRevision: string | null;
+  /**
+   * Phase 2H (`animate_production_frame` only; set by `prepareSubmission`, never by hand): the Production Frame
+   * the frozen package animates. A NEW attempt is accepted only if the Shot has exactly this frame selected at the
+   * insertion boundary, checked atomically with the insert (`stale_animation_source` otherwise). An idempotent
+   * replay of an already accepted attempt is unaffected. Absent / null: no extra check (every other purpose).
+   */
+  expectedAnimationProductionFrameId?: string | null;
   limits: {
     maxActivePerProject: number;
     maxSubmitsPerMinutePerUser: number;
@@ -127,8 +145,9 @@ export interface ReviewInput {
 
 export interface GenerationRepository {
   /**
-   * Opaque revision of every row a generation package can depend on (generation history excluded). Read it
-   * BEFORE loading the project, then pass it as `expectedProjectRevision`: any change committed in between
+   * Opaque revision of the revision-covered package inputs (generation history excluded; the later Production
+   * Frame, Location View and Character Continuity selection tables are not yet covered). Read it BEFORE loading
+   * the project, then pass it as `expectedProjectRevision`: a change to a covered input committed in between
    * makes the submission fail with `stale_package` instead of freezing a package nobody validated.
    */
   projectRevision(slug: string): Promise<{ projectId: string; revision: string } | null>;

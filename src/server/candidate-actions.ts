@@ -16,6 +16,7 @@ import { PREFERENCES, type RecommendationPreference } from "@/domain/generation/
 import { candidateSetPurpose } from "@/domain/generation/candidates";
 import {
   isProductionFrameAttempt,
+  parseGenerationPurpose,
   purposeOfRequest,
   type GenerationPurpose,
 } from "@/domain/generation/schemas";
@@ -24,6 +25,7 @@ import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { requireUser } from "./auth";
 import { getCandidateRepo } from "./candidates";
 import { getGenerationConfig, getGenerationRepo, getRegistry } from "./generation";
+import { getProductionFrameRepo } from "./production-frames";
 import { requireProjectFresh } from "./repo";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
@@ -77,8 +79,17 @@ async function createCandidateSet_impl(form: FormData) {
     ? (prefRaw as RecommendationPreference)
     : undefined;
   // the purpose is a closed set: anything else is a normal Shot-output set
-  const generationPurpose: GenerationPurpose =
-    str(form, "generationPurpose") === "production_frame" ? "production_frame" : "shot_output";
+  const generationPurpose: GenerationPurpose = parseGenerationPurpose(str(form, "generationPurpose"));
+  // 2H: an animation set re-reads the Shot's selected Production Frame from storage before it starts and before every
+  // candidate, so a selection made in another tab can never produce a mixed-source set
+  const projectId = data.project.id;
+  const currentProductionFrameId =
+    generationPurpose === "animate_production_frame"
+      ? async () =>
+          (await (await getProductionFrameRepo()).listForProject(projectId)).selections.find(
+            (s) => s.shotId === shotId,
+          )?.productionFrameId ?? null
+      : undefined;
   const confirmedRaw = str(form, "confirmedTotalUsd");
   const confirmedTotalUsd = confirmedRaw === "" ? null : Number(confirmedRaw);
 
@@ -108,6 +119,7 @@ async function createCandidateSet_impl(form: FormData) {
       projectRevision: revision.revision,
       preference,
       generationPurpose,
+      currentProductionFrameId,
     });
     setId = out.view.set.id;
   } catch (err) {

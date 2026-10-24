@@ -38,12 +38,14 @@ export const VIDEO_MODALITIES: readonly GenerationModality[] = [
 ];
 
 /**
- * WHY a generation is requested (Phase 2G.2). Independent of the Shot's final generation modality:
- *   shot_output       the Shot's final output (every generation before 2G.2)
- *   production_frame  an exploratory still that a human may promote to the Shot's Production Frame
+ * WHY a generation is requested (Phase 2G.2, extended in 2H). Independent of the Shot's final generation modality:
+ *   shot_output               the Shot's final output (every generation before 2G.2)
+ *   production_frame          an exploratory still that a human may promote to the Shot's Production Frame
+ *   animate_production_frame  a Shot-output VIDEO whose exact first frame IS the Shot's selected, current Production
+ *                             Frame (Phase 2H): image-to-video only, never a Storyboard, override or text-to-video
  * Frozen on the attempt's request; it never changes `shot.generation.modality`.
  */
-export const GENERATION_PURPOSES = ["shot_output", "production_frame"] as const;
+export const GENERATION_PURPOSES = ["shot_output", "production_frame", "animate_production_frame"] as const;
 export type GenerationPurpose = (typeof GENERATION_PURPOSES)[number];
 
 /** The purpose of a frozen request; requests frozen before Phase 2G.2 carry none and are `shot_output`. */
@@ -51,11 +53,28 @@ export const purposeOfRequest = (r: { purpose?: GenerationPurpose | null }): Gen
   r.purpose ?? "shot_output";
 
 /**
+ * A purpose read from untrusted JSON (a frozen request, a set's recommendation, a form field). Absent or unknown values
+ * are `shot_output` (history before 2G.2), so an unexpected record never crashes and never gains a stricter meaning.
+ */
+export const parseGenerationPurpose = (raw: unknown): GenerationPurpose =>
+  (GENERATION_PURPOSES as readonly unknown[]).includes(raw) ? (raw as GenerationPurpose) : "shot_output";
+
+/** Whether attempts of this purpose are the Shot's OUTPUT (its video lifecycle, pipeline, final approval). */
+export const isShotOutputPurpose = (p: GenerationPurpose): boolean => p !== "production_frame";
+
+/**
  * A Production Frame candidate (an exploratory still), as opposed to an attempt at the Shot's own output. The Shot's
  * video lifecycle, pipeline status and "the shot changed since attempt N" notice are about OUTPUT attempts only.
  */
 export const isProductionFrameAttempt = (a: { request?: Record<string, unknown> | null }): boolean =>
-  purposeOfRequest((a.request ?? {}) as { purpose?: GenerationPurpose | null }) === "production_frame";
+  parseGenerationPurpose(a.request?.purpose) === "production_frame";
+
+/**
+ * An attempt that animates the Shot's canonical Production Frame (Phase 2H). It IS a Shot-output attempt (pipeline,
+ * review, Best, final approval all apply), never a Production Frame candidate.
+ */
+export const isAnimationAttempt = (a: { request?: Record<string, unknown> | null }): boolean =>
+  parseGenerationPurpose(a.request?.purpose) === "animate_production_frame";
 
 /** What a reference asset is FOR. Adapters receive explicit roles; they never guess from file names. */
 export const REFERENCE_ROLES = [
@@ -69,7 +88,10 @@ export const REFERENCE_ROLES = [
   "location_view",
   "style",
   "storyboard",
-  /** The Shot's selected Production Frame, used as an image reference when generating Production Frame candidates. */
+  /**
+   * The Shot's selected Production Frame, used as an image reference when generating Production Frame candidates.
+   * Never sent by `animate_production_frame`: there the frame is the request's `startFrameAssetId` (one input slot).
+   */
   "production_frame",
   "start_frame",
   "end_frame",

@@ -91,6 +91,12 @@ drop):
 The compatibility engine (`evaluateCompatibility`) implements this behind the optional capability flag
 `keyframesExcludeReferences`; models without it are unaffected.
 
+**Animate Production Frame (Phase 2H)** reuses the same six video models with no second catalog, but judges them as
+image-to-video from the canonical Production Frame: a model without `image_to_video` is incompatible (never a
+text-to-video fallback), and a keyframe-exclusive model always runs in keyframe mode (reference mode is not offered); the
+references it cannot take are disclosed as represented by the Production Frame. The free `mock-video-t2v` (text-to-video
+only) exists to exercise that rule. See [image-to-video](image-to-video.md).
+
 ## Audio
 
 Native audio (`audio: true` on Veo/Seedance) is advertised but **OFF by default** and priced when on. It never replaces

@@ -31,6 +31,10 @@ candidate set, in the set's frozen recommendation JSON (`generationPurpose`) and
 before 2G.2 has no purpose and is `shot_output`; a `shot_output` request is byte-identical to what it was. There is no
 schema change: the columns that hold this were already immutable JSON.
 
+Phase 2H adds a third purpose, `animate_production_frame`: a Shot-OUTPUT video whose exact first frame is the selected,
+current Production Frame (image-to-video only). It is not a Production Frame candidate (`isProductionFrameAttempt` is
+false) and never changes the selection. See [image-to-video](image-to-video.md).
+
 Generating candidates does **not** change `shot.generation.modality`, `shot.generation.startFrameAssetId`, the Production
 Frame selection, the Storyboard approval or any 3D state. Candidate generation is exploratory until a human chooses.
 

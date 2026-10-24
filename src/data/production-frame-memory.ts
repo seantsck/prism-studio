@@ -93,6 +93,12 @@ export class MemoryProductionFrameService implements ProductionFrameRepository {
     return { frame: clone(frame), created: true, selection: selection ? clone(selection) : null };
   }
 
+  /** Synchronous: the Shot's selected frame id (the memory generation service's atomic Animate source check). */
+  selectedFrameId(projectId: string, shotId: string): string | null {
+    const s = this.selections.get(shotId);
+    return s && s.projectId === projectId ? s.productionFrameId : null;
+  }
+
   private selectionOf(shotId: string): ProductionFrameSelection | null {
     return this.selections.get(shotId) ?? null;
   }

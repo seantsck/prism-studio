@@ -388,7 +388,13 @@ export function buildReferenceSet(
     for (const i of images.identity) asset("identity", i.label, i.assetId);
     for (const i of images.look) asset("look", i.label, i.assetId);
   }
+  // Phase 2H: the canonical still the Shot's video must hold to (the selected Production Frame, when one exists) and the
+  // Shot's canonical Location View, each as its own role so a reviewer never mistakes either for a Storyboard sketch
+  const pf = pkg.references.productionFrame;
+  if (pf) asset("production_frame", `Production Frame v${pf.version}`, pf.assetId);
   asset("storyboard", "Approved storyboard frame", pkg.references.approvedStoryboardFrame?.assetId);
+  const view = pkg.references.locationView;
+  if (view) asset("location_view", `Location View "${view.name}"`, view.assetId);
   for (const id of pkg.set?.referenceAssetIds ?? [])
     asset("location", `${pkg.set?.name ?? "Set"} reference`, id);
   asset("lighting", "Lighting reference", pkg.lighting.referenceAssetId);

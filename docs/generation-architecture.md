@@ -73,9 +73,16 @@ state machines (`domain/generation/lifecycle.ts`):
 6. in one transaction: lock the project row, replay-by-idempotency-key, refuse a second active generation for
    the shot, enforce the project's active cap and per-user submit rate, assign the attempt number, insert
    attempt + job + estimated cost + first event;
-7. a shot that changed after the package was built (`shots.updated_at`) is refused (`stale_shot`), and so is ANY
-   change to another package input (Look, take, location, asset, neighbouring shot...): the action reads
-   `projectRevision()` before loading the project and the transaction compares it again (`stale_package`).
+7. a shot that changed after the package was built (`shots.updated_at`) is refused (`stale_shot`), and so is a
+   change to another package input of the original revision set (Look, take, location, asset, neighbouring
+   shot...): the action reads `projectRevision()` before loading the project and the transaction compares it
+   again (`stale_package`). Core `projectRevision` protection covers the original package-input revision set.
+   Canonical selection tables added later — Production Frame, Location View and Character Continuity selections
+   — are not yet included in that generic digest, so a selection moved between package build and submit is not
+   caught by `stale_package` on generic Generate. Animate Production Frame independently revalidates its
+   canonical Production Frame source (before the set is created, before every candidate, and in the worker
+   against the frozen request / package; see [image-to-video](image-to-video.md)). Extending generic revision
+   coverage is a separate hardening task.
 
 No job is created if any step fails. Double clicks replay (same key) or are refused (shot already active).
 
@@ -129,3 +136,11 @@ creates a derived delivery master; **continuity QA** judges it. None of this tou
 - Candidate sets and reviews are **user-domain** tables: the generation and continuity workers have no grant on them.
 - Nothing here assumes Runway: `CandidateSet`, reviews, performance and recommendation are provider-independent and a
   later direct provider adds a catalog entry and an adapter.
+
+## Image-to-video from the Production Frame (Phase 2H)
+
+The `animate_production_frame` purpose runs through the same package → compatibility → gate → request → attempt + job →
+worker path. The domain adds hard source rules (a selected, fresh Production Frame; no conflicting manual override),
+image-to-video only, motion-first PromptPlan wording, and one invariant checked twice (submission and the worker, before
+`adapter.submit`): the request's start frame is the frozen Production Frame Asset. No new table, job type or package
+version. See [image-to-video](image-to-video.md).

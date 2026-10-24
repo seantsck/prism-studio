@@ -101,15 +101,41 @@ export const PRODUCTION_FRAME_EXEMPT_RULES: ReadonlySet<string> = new Set([
   "generation.model",
 ]);
 
+/**
+ * Preflight rules that an animation of the canonical Production Frame (Phase 2H) does not use. The Production Frame
+ * SUPERSEDES the Storyboard as the visual source, so Storyboard presence / approval / freshness do not gate it; the
+ * frame's own freshness is a HARD source rule enforced by the compatibility engine (never a warning); the model is
+ * chosen in the comparison. Every Shot-output readiness rule (duration, performance, approvals...) still applies.
+ */
+export const ANIMATION_EXEMPT_RULES: ReadonlySet<string> = new Set([
+  "storyboard.frame",
+  "storyboard.approved",
+  "storyboard.fresh",
+  "production_frame.fresh",
+  "generation.model",
+]);
+
+const exemptRulesFor = (purpose: GenerationPurpose | undefined): ReadonlySet<string> | null =>
+  purpose === "production_frame"
+    ? PRODUCTION_FRAME_EXEMPT_RULES
+    : purpose === "animate_production_frame"
+      ? ANIMATION_EXEMPT_RULES
+      : null;
+
 /** The preflight a generation of this purpose is judged by (the report itself is never mutated). */
 export function preflightForPurpose(
   report: PreflightReport,
   purpose: GenerationPurpose | undefined,
 ): PreflightReport {
-  if (purpose !== "production_frame") return report;
+  const exempt = exemptRulesFor(purpose);
+  if (!exempt) return report;
+  const detail =
+    purpose === "production_frame"
+      ? "Not needed to generate a Production Frame candidate."
+      : "Not used to animate the Production Frame (the selected frame is the visual source).";
   const items = report.items.map((i) =>
-    PRODUCTION_FRAME_EXEMPT_RULES.has(i.ruleId) && (i.status === "fail" || i.status === "warn")
-      ? { ...i, status: "na" as const, detail: "Not needed to generate a Production Frame candidate." }
+    exempt.has(i.ruleId) && (i.status === "fail" || i.status === "warn")
+      ? { ...i, status: "na" as const, detail }
       : i,
   );
   const blockers = items.filter((i) => i.status === "fail");
@@ -125,9 +151,11 @@ export function preflightForPurpose(
 export function evaluateGate(input: GateInput): GenerationGate {
   const blockers: GateBlocker[] = [];
   const pfPurpose = input.purpose === "production_frame";
+  const animPurpose = input.purpose === "animate_production_frame";
+  const exempt = exemptRulesFor(input.purpose);
 
   for (const b of input.preflight.blockers) {
-    if (pfPurpose && PRODUCTION_FRAME_EXEMPT_RULES.has(b.ruleId)) continue;
+    if (exempt?.has(b.ruleId)) continue;
     blockers.push({
       code: `preflight.${b.ruleId}`,
       source: "preflight",
@@ -138,7 +166,9 @@ export function evaluateGate(input: GateInput): GenerationGate {
   // A stale approved storyboard means the picture Prism would condition on no longer matches the shot.
   // A stale storyboard only blocks a video output. As an image reference for a Production Frame candidate it is
   // an edit basis the filmmaker chose; the stale/changed state is shown, not forbidden.
-  if (!pfPurpose && input.pkg.freshness.storyboard.status === "stale") {
+  // An animation never uses the Storyboard (the Production Frame supersedes it); its frame's freshness is a hard
+  // compatibility rule instead.
+  if (!pfPurpose && !animPurpose && input.pkg.freshness.storyboard.status === "stale") {
     blockers.push({
       code: "freshness.storyboard_stale",
       source: "freshness",
@@ -199,7 +229,7 @@ export function buildGenerationRequest(args: {
     schemaVersion: 1,
     modality: c.modality,
     // absent = shot_output, so every existing request is byte-identical to before Phase 2G.2
-    ...(c.purpose === "production_frame" ? { purpose: c.purpose } : {}),
+    ...(c.purpose !== "shot_output" ? { purpose: c.purpose } : {}),
     provider: args.model.provider,
     modelId: args.model.modelId,
     prompt: {

@@ -1,7 +1,7 @@
 import { describeLockFacts, IDENTITY_SLOT_LABEL } from "../character-continuity";
 import type { GenerationPackage } from "../generation-package";
 import { describeLocationView } from "../location-view";
-import { PROMPT_SECTIONS, type PromptPlan, type PromptSectionKey } from "./schemas";
+import { PROMPT_SECTIONS, type GenerationPurpose, type PromptPlan, type PromptSectionKey } from "./schemas";
 
 const TITLES: Record<PromptSectionKey, string> = {
   subject: "Subject",
@@ -25,6 +25,34 @@ const clean = (xs: Array<string | null | undefined | false>): string[] =>
 
 const seconds = (ms: number) => `${(ms / 1000).toFixed(2).replace(/\.?0+$/, "")}s`;
 
+/** Phase 2H: the lines that make an animation start from, and keep, what its first frame already establishes. */
+export const ANIMATION_BEGIN_LINE = "Begin exactly from the supplied Production Frame.";
+export const ANIMATION_PRESERVE_LINE =
+  "Preserve the subjects, wardrobe, set, composition and lighting established by the first frame.";
+const ANIMATION_COMPOSITION_LINE = "As established by the first frame; do not recompose.";
+
+/**
+ * Motion-first reading order for `animate_production_frame`: the first frame already shows what the Shot LOOKS like, so
+ * movement, performance, camera and timing lead, and appearance follows as what must be preserved. Same sections, same
+ * schema (PromptPlan v1): only their order and three purpose lines differ.
+ */
+const ANIMATION_ORDER: readonly PromptSectionKey[] = [
+  "subject",
+  "camera",
+  "action",
+  "performance",
+  "timing",
+  "continuity",
+  "hard_constraints",
+  "composition",
+  "identity",
+  "wardrobe",
+  "environment",
+  "lighting",
+  "negative_constraints",
+  "provider_adaptation",
+];
+
 /**
  * Normalises the package into sectioned production intent. This is NOT a prompt string: each adapter
  * decides how to render sections for its model (one paragraph, tagged fields, multiple inputs...).
@@ -37,7 +65,10 @@ export function buildPromptPlan(
    * composition lines are never rewritten and the Prompt Inspector can show the two separately.
    */
   adaptation?: { provider: string[] } | null,
+  /** Default `shot_output`. `animate_production_frame` (2H): motion-first wording and order. */
+  opts: { purpose?: GenerationPurpose } = {},
 ): PromptPlan {
+  const animate = opts.purpose === "animate_production_frame";
   const names = pkg.characters.map((c) => c.name);
   const cam = pkg.camera;
   // v5: a locked assignment is described from its Continuity Lock's frozen facts (never the live library)
@@ -187,11 +218,21 @@ export function buildPromptPlan(
     provider_adaptation: clean(adaptation?.provider ?? []),
   };
 
+  if (animate) {
+    const pf = pkg.references.productionFrame;
+    bySection.subject = [
+      pf ? `${ANIMATION_BEGIN_LINE.slice(0, -1)} (v${pf.version}).` : ANIMATION_BEGIN_LINE,
+      ...bySection.subject,
+    ];
+    bySection.composition = [ANIMATION_COMPOSITION_LINE, ...bySection.composition];
+    bySection.hard_constraints = [ANIMATION_PRESERVE_LINE, ...bySection.hard_constraints];
+  }
+  const order = animate ? ANIMATION_ORDER : PROMPT_SECTIONS;
   return {
     version: 1,
-    sections: PROMPT_SECTIONS.map((key) => ({ key, title: TITLES[key], lines: bySection[key] })).filter(
-      (s) => s.lines.length > 0,
-    ),
+    sections: order
+      .map((key) => ({ key, title: TITLES[key], lines: bySection[key] }))
+      .filter((s) => s.lines.length > 0),
   };
 }
 

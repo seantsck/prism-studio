@@ -146,12 +146,20 @@ try {
   ).rows[0].n as number;
 
   // ── 1. a Production Frame candidate set through the real queue ──
+  // records what reaches the repository: a still candidate never carries the Animate-only atomic frame check
+  const expectedAnimationFrames: Array<string | null | undefined> = [];
+  const recordingGen: typeof ownerGen = Object.assign(Object.create(ownerGen) as typeof ownerGen, {
+    createAttemptWithJob: (input: Parameters<typeof ownerGen.createAttemptWithJob>[0]) => {
+      expectedAnimationFrames.push(input.expectedAnimationProductionFrameId);
+      return ownerGen.createAttemptWithJob(input);
+    },
+  });
   const out = await submitCandidateSet({
     data: (await admin.loadProject("ojousama"))!,
     shotId,
     registry,
     config,
-    generation: ownerGen,
+    generation: recordingGen,
     candidates: ownerCand,
     selections: [mock("mock-image-1"), mock("mock-image-lite"), mock("mock-image-wide")],
     acknowledgeAll: true,
@@ -168,6 +176,11 @@ try {
     "three still-image candidates were submitted, none failed",
     out.submitted === 3 && out.failed.length === 0,
     JSON.stringify(out.failed),
+  );
+  check(
+    "E. Production Frame purpose: no expected animation frame on any candidate (submission unchanged)",
+    expectedAnimationFrames.length === 3 && expectedAnimationFrames.every((v) => v === null),
+    JSON.stringify(expectedAnimationFrames),
   );
   const frozen = await pool.query(
     `select request->>'purpose' purpose, request_modality, modality, (model_settings->>'purpose') ms_purpose, approved

@@ -15,6 +15,11 @@ import { createCandidateSet } from "@/server/candidate-actions";
  * Phase 2G.2: with `purpose="production_frame"` the same panel compares the STILL-IMAGE models for a Production
  * Frame candidate set. There is no duration or audio, each model shows the provider canvas it would use and the
  * explicit quality (and so the price) it would request, and one candidate is one image.
+ *
+ * Phase 2H: with `purpose="animate_production_frame"` it compares the VIDEO models as image-to-video from the Shot's
+ * canonical Production Frame: per model, eligible or blocked and why, exact first frame, production / provider /
+ * delivery duration, provider canvas, audio conditioning, native audio (default OFF), cost, and the references a
+ * keyframe-only model will not receive. No model is pre-selected.
  */
 type SortKey = "recommended" | "cost" | "history" | "fit";
 
@@ -50,6 +55,7 @@ const PACK_TONE: Record<string, "pass" | "warn" | "fail" | "neutral" | "info"> =
 };
 
 const money = (n: number | null) => (n == null ? "unknown" : `$${n.toFixed(n < 1 ? 3 : 2)}`);
+const msText = (ms: number | null | undefined) => (ms == null ? "—" : `${Number((ms / 1000).toFixed(2))} s`);
 
 interface Choice {
   mode: "keyframes" | "references" | null;
@@ -75,8 +81,11 @@ export function ModelComparePanel({
 }: {
   projectSlug: string;
   shotId: string;
-  /** `production_frame`: still-image candidates for the Shot's Production Frame. */
-  purpose?: "shot_output" | "production_frame";
+  /**
+   * `production_frame`: still-image candidates for the Shot's Production Frame. `animate_production_frame`: video
+   * candidates starting from that frame (Phase 2H).
+   */
+  purpose?: "shot_output" | "production_frame" | "animate_production_frame";
   rows: ModelRow[];
   historyNote: string;
   profileLabel: string;
@@ -94,7 +103,8 @@ export function ModelComparePanel({
   const [ack, setAck] = useState(false);
   const [confirmTotal, setConfirmTotal] = useState(false);
   const still = purpose === "production_frame";
-  const noun = still ? "image" : "candidate";
+  const animate = purpose === "animate_production_frame";
+  const noun = still ? "image" : animate ? "clip" : "candidate";
 
   const choiceOf = (r: ModelRow): Choice => {
     const dv = r.variants[r.defaultVariant]!;
@@ -180,6 +190,14 @@ export function ModelComparePanel({
           it. Image-to-video later uses whichever frame you make canonical.
         </p>
       ) : null}
+      {animate ? (
+        <p className="text-[12px] text-muted" data-testid="animate-compare-intro">
+          Compare video models for animating this Production Frame. Every candidate starts from the SAME frame
+          as its exact first frame (image-to-video); a model that cannot do that is incompatible, never a
+          text-to-video fallback. Provider audio stays off unless you turn it on. Nothing is generated until
+          you create the set.
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted">
         <span>
           Shot profile: <span className="text-fg">{profileLabel}</span>
@@ -212,16 +230,29 @@ export function ModelComparePanel({
             <tr className="border-b border-line bg-panel2 text-left text-[10.5px] uppercase tracking-wide text-muted">
               <th className="px-2 py-1.5">Compare</th>
               <th className="px-2 py-1.5">Model</th>
-              <th className="px-2 py-1.5">Fit</th>
-              <th className="px-2 py-1.5">References used</th>
-              {still ? (
-                <th className="px-2 py-1.5">Provider canvas</th>
+              <th className="px-2 py-1.5">{animate ? "Eligible" : "Fit"}</th>
+              {animate ? (
+                <>
+                  <th className="px-2 py-1.5">Exact first frame</th>
+                  <th className="px-2 py-1.5">Duration (production → provider → delivery)</th>
+                  <th className="px-2 py-1.5">Provider canvas</th>
+                  <th className="px-2 py-1.5">Audio conditioning</th>
+                  <th className="px-2 py-1.5">Native audio</th>
+                </>
               ) : (
-                <th className="px-2 py-1.5">Duration</th>
+                <>
+                  <th className="px-2 py-1.5">References used</th>
+                  {still ? (
+                    <th className="px-2 py-1.5">Provider canvas</th>
+                  ) : (
+                    <th className="px-2 py-1.5">Duration</th>
+                  )}
+                  <th className="px-2 py-1.5">Framing</th>
+                  {still ? null : <th className="px-2 py-1.5">Audio</th>}
+                </>
               )}
-              <th className="px-2 py-1.5">Framing</th>
-              {still ? null : <th className="px-2 py-1.5">Audio</th>}
               <th className="px-2 py-1.5 text-right">Est. cost</th>
+              {animate ? <th className="px-2 py-1.5">References omitted (keyframe mode)</th> : null}
               <th className="px-2 py-1.5">Historical fit</th>
               <th className="px-2 py-1.5">Advice</th>
             </tr>
@@ -337,35 +368,85 @@ export function ModelComparePanel({
                         </div>
                       )}
                     </td>
-                    <td className="px-2 py-1.5">
-                      <Badge tone={TONE[v.status]}>{v.statusLabel}</Badge>
+                    <td className="px-2 py-1.5" data-testid="model-eligibility">
+                      {animate ? (
+                        <Badge tone={v.status === "unsupported" ? "fail" : "pass"}>
+                          {v.status === "unsupported" ? "Incompatible" : "Eligible"}
+                        </Badge>
+                      ) : (
+                        <Badge tone={TONE[v.status]}>{v.statusLabel}</Badge>
+                      )}
                       {v.adaptations.length > 0 ? (
                         <div className="mt-1 text-[10.5px] text-muted">{v.adaptations.join(" · ")}</div>
                       ) : null}
                       {v.blockers.length > 0 ? (
-                        <div className="mt-1 text-[10.5px] text-fail">{v.blockers[0]}</div>
+                        <div className="mt-1 text-[10.5px] text-fail" data-testid="model-why">
+                          {v.blockers[0]}
+                        </div>
                       ) : null}
                     </td>
-                    <td className="px-2 py-1.5 tabular-nums" data-testid="refs-used">
-                      {v.referencesUsed.used}/{v.referencesUsed.total}
-                    </td>
-                    {still ? (
-                      <td className="px-2 py-1.5 tabular-nums text-muted" data-testid="model-canvas">
-                        {v.canvas ?? "—"}
-                      </td>
+                    {animate ? (
+                      <>
+                        <td className="px-2 py-1.5" data-testid="model-first-frame">
+                          {v.animation?.exactFirstFrame ? "YES" : "NO"}
+                        </td>
+                        <td
+                          className="px-2 py-1.5 font-mono text-[11px] text-muted"
+                          data-testid="model-durations"
+                        >
+                          {msText(v.animation?.productionMs)} → {msText(v.animation?.providerMs)} →{" "}
+                          {msText(v.animation?.deliveryMs)}
+                          {v.durationUnverified ? (
+                            <span className="text-warn"> · bounds unverified</span>
+                          ) : null}
+                        </td>
+                        <td className="px-2 py-1.5 text-muted" data-testid="model-canvas">
+                          {v.animation?.providerCanvas ?? "—"}
+                          {v.animation?.productionFraming &&
+                          v.animation.providerCanvas &&
+                          v.animation.providerCanvas !== v.animation.productionFraming ? (
+                            <span className="block text-[10.5px] text-faint">
+                              Production Frame {v.animation.productionFraming} → provider{" "}
+                              {v.animation.providerCanvas} → delivery back to {v.animation.productionFraming}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td className="px-2 py-1.5 text-muted">{v.animation?.audioConditioning ?? "—"}</td>
+                        <td className="px-2 py-1.5 text-muted" data-testid="model-native-audio">
+                          {v.animation?.nativeAudio ? "on" : "off"}
+                        </td>
+                      </>
                     ) : (
-                      <td className="px-2 py-1.5 text-muted">
-                        {v.duration}
-                        {v.durationUnverified ? (
-                          <span className="text-warn"> · bounds unverified</span>
-                        ) : null}
-                      </td>
+                      <>
+                        <td className="px-2 py-1.5 tabular-nums" data-testid="refs-used">
+                          {v.referencesUsed.used}/{v.referencesUsed.total}
+                        </td>
+                        {still ? (
+                          <td className="px-2 py-1.5 tabular-nums text-muted" data-testid="model-canvas">
+                            {v.canvas ?? "—"}
+                          </td>
+                        ) : (
+                          <td className="px-2 py-1.5 text-muted">
+                            {v.duration}
+                            {v.durationUnverified ? (
+                              <span className="text-warn"> · bounds unverified</span>
+                            ) : null}
+                          </td>
+                        )}
+                        <td className="px-2 py-1.5 text-muted">{v.framing}</td>
+                        {still ? null : <td className="px-2 py-1.5 text-muted">{v.audio}</td>}
+                      </>
                     )}
-                    <td className="px-2 py-1.5 text-muted">{v.framing}</td>
-                    {still ? null : <td className="px-2 py-1.5 text-muted">{v.audio}</td>}
                     <td className="px-2 py-1.5 text-right tabular-nums" data-testid="model-cost">
                       {r.kind === "mock" ? "free" : money(v.estimateUsd)}
                     </td>
+                    {animate ? (
+                      <td className="px-2 py-1.5 text-muted" data-testid="model-refs-omitted">
+                        {v.animation?.referencesOmittedKeyframe
+                          ? `${v.animation.referencesOmittedKeyframe} (represented by the Production Frame)`
+                          : "none"}
+                      </td>
+                    ) : null}
                     <td className="px-2 py-1.5 text-muted" data-testid="model-history">
                       {r.history && r.history.reviewed > 0 ? (
                         <>
@@ -391,7 +472,7 @@ export function ModelComparePanel({
                   {open ? (
                     <tr className="border-b border-line bg-bg" data-testid="model-detail">
                       <td />
-                      <td colSpan={still ? 8 : 9} className="px-2 py-2">
+                      <td colSpan={animate ? 11 : still ? 8 : 9} className="px-2 py-2">
                         <div className="grid gap-3 md:grid-cols-3">
                           <div>
                             <div className="mb-1 text-[10.5px] uppercase tracking-wide text-muted">
@@ -470,7 +551,7 @@ export function ModelComparePanel({
 
         <div className="flex flex-wrap items-center gap-3">
           <span className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-            {still ? "Production Frame candidates" : "Candidate set"}
+            {still ? "Production Frame candidates" : animate ? "Animation candidates" : "Candidate set"}
           </span>
           <span data-testid="selected-count" className="text-[12px]">
             {selected.length} selected
@@ -563,7 +644,7 @@ export function ModelComparePanel({
           <Button type="submit" variant="primary" disabled={!canSubmit} data-testid="create-candidate-set">
             {paid.length > 0
               ? `Generate ${selected.length} ${noun}${selected.length === 1 ? "" : "s"}`
-              : still
+              : still || animate
                 ? `Generate ${selected.length} free ${noun}${selected.length === 1 ? "" : "s"}`
                 : `Create set (${selected.length})`}
           </Button>

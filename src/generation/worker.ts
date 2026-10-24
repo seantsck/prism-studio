@@ -13,6 +13,7 @@ import {
   USER_ERROR_MESSAGES,
   type RetryPolicy,
 } from "@/domain/generation/errors";
+import { animationRequestViolations } from "@/domain/generation/animation";
 import { spendBlockers } from "@/domain/generation/gate";
 import { IllegalTransitionError } from "@/domain/generation/job-state";
 import {
@@ -299,6 +300,13 @@ export class GenerationWorker {
         "missing_prompt_plan",
         "Attempt has no prompt plan.",
       );
+
+    // Phase 2H: an animation of the canonical Production Frame reaches the provider ONLY as image-to-video starting
+    // from exactly the frame frozen in its own package. Checked again here, provider-independently, before any call.
+    const violations = animationRequestViolations(request, attempt.packageSnapshot);
+    if (violations.length > 0) {
+      throw new GenerationProviderError("permanent", "animation_source_invalid", violations.join(" "));
+    }
 
     // A second remote submission is only safe when the provider de-duplicates on our idempotency key, or when
     // the previous try was definitely refused (rate limit, quota, invalid). An interrupted or ambiguous try

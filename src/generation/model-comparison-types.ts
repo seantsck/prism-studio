@@ -27,6 +27,25 @@ export interface VariantView {
   quality: string | null;
   /** The provider canvas the request would use, "1920×1088" (still images; null otherwise). */
   canvas: string | null;
+  /** Animate Production Frame (Phase 2H) facts, shown before any spend; null for other purposes. */
+  animation?: AnimationVariantFacts | null;
+}
+
+export interface AnimationVariantFacts {
+  /** The request would start from the selected Production Frame as image-to-video (never a fallback). */
+  exactFirstFrame: boolean;
+  productionMs: number | null;
+  /** What the provider is asked for (longer than production only with an explicit generate-longer-then-trim plan). */
+  providerMs: number | null;
+  /** What the delivery master is conformed back to. */
+  deliveryMs: number | null;
+  productionFraming: string | null;
+  /** The provider canvas ratio the frame enters (the canonical Production Frame Asset is never modified). */
+  providerCanvas: string | null;
+  audioConditioning: string;
+  nativeAudio: boolean;
+  /** Reference images not separately supplied because the model's exact first-frame mode excludes them. */
+  referencesOmittedKeyframe: number;
 }
 
 export interface ModelRow {
@@ -40,7 +59,10 @@ export interface ModelRow {
   role: string | null;
   available: boolean;
   unavailableReason: string | null;
-  /** Why the comparison is made: `production_frame` rows are still-image models. */
+  /**
+   * Why the comparison is made: `production_frame` rows are still-image models; `animate_production_frame` rows are
+   * the video models judged as image-to-video from the canonical Production Frame.
+   */
   purpose: GenerationPurpose;
   /** Still-image quality options (empty = none). The default is explicit and shown before spend. */
   qualities: Array<{ id: string; label: string; note: string }>;

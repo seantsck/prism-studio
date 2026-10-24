@@ -1,7 +1,7 @@
 import type { CompatibilityReport } from "./compatibility";
 import type { ModelFit } from "./models/matrix";
 import type { GenerationPackage } from "../generation-package";
-import type { GenerationPurpose } from "./schemas";
+import { parseGenerationPurpose, type GenerationPurpose } from "./schemas";
 
 /**
  * Candidate sets (Phase 2E): an intentional comparison experiment. One shared production package, several
@@ -12,13 +12,14 @@ export type CandidateSetStatus = (typeof CANDIDATE_SET_STATUSES)[number];
 
 /**
  * The generation PURPOSE of a candidate set (Phase 2G.2), machine-readable in the set's frozen recommendation JSON
- * (`generationPurpose`). No schema change: a set without it is a `shot_output` set (every set before 2G.2).
+ * (`generationPurpose`). No schema change: a set without it (or with an unknown value) is a `shot_output` set (every
+ * set before 2G.2). `animate_production_frame` (2H): video candidates animating the Shot's canonical Production Frame.
  * Distinct from the free-text `purpose` column, which is the filmmaker's own note about the experiment.
  */
 export function candidateSetPurpose(set: {
   recommendation: Record<string, unknown> | null;
 }): GenerationPurpose {
-  return set.recommendation?.generationPurpose === "production_frame" ? "production_frame" : "shot_output";
+  return parseGenerationPurpose(set.recommendation?.generationPurpose);
 }
 
 export const MAX_CANDIDATES_DEFAULT = 6;
@@ -234,6 +235,7 @@ export function describeComparison(
   purpose: GenerationPurpose = "shot_output",
 ): ComparisonDisclosure {
   const still = purpose === "production_frame";
+  const animate = purpose === "animate_production_frame";
   const same: string[] = [];
   if (pkg.characters.length > 0)
     same.push(
@@ -242,8 +244,14 @@ export function describeComparison(
   const looks = pkg.characters.flatMap((c) => (c.look ? [c.look.name] : []));
   if (looks.length) same.push(`Look: ${[...new Set(looks)].join(", ")}`);
   if (pkg.set) same.push(`Location: ${pkg.set.name}`);
-  if (pkg.references.approvedStoryboardFrame) same.push("Approved storyboard frame");
-  if (pkg.references.productionFrame) same.push("Current Production Frame");
+  // an animation starts from the Production Frame and never sends the Storyboard it supersedes
+  if (pkg.references.approvedStoryboardFrame && !animate) same.push("Approved storyboard frame");
+  if (pkg.references.productionFrame)
+    same.push(
+      animate
+        ? `Exact first frame: Production Frame v${pkg.references.productionFrame.version}`
+        : "Current Production Frame",
+    );
   const takes = pkg.performance.filter((p) => p.selectedTake).length;
   if (takes > 0 && !still) same.push(`Performance: ${takes} selected take(s)`);
   const move = pkg.camera.movement.trim();
