@@ -103,6 +103,14 @@ View Continuity, 2G.4 Character Continuity Locks and 2G.5 Shot Sequence Board ar
 frame of the Shot's video ([image-to-video](image-to-video.md)); no migration, GenerationPackage stays v5. Next:
 **2I Timeline & Performance Assembly**. 3D augments the image-first path; 3D does not gate it.
 
+**Known gap (found in 2H, not fixed in 2H): generic selection revision coverage.** Core `projectRevision`
+protection covers the original package-input revision set. Canonical selection tables added later — Production
+Frame, Location View and Character Continuity selections — are not yet included in that generic digest
+(`REVISION_SOURCES` in `src/data/generation-postgres.ts`), so generic **Generate** has a TOCTOU window for those
+mutable selection pointers. Animate Production Frame independently revalidates its canonical Production Frame source:
+before the candidate set is created, before every candidate is submitted, and again in the worker against the frozen
+request / package provenance. Extending generic revision coverage is a separate hardening task.
+
 ### Known gaps (Phase 2A)
 
 - **No real provider adapter.** Only the Mock provider executes; nothing here has been exercised against a paid API.
@@ -110,8 +118,9 @@ frame of the Shot's video ([image-to-video](image-to-video.md)); no migration, G
   the dev test-credential path; production needs `PRISM_STUDIO_WORKER_SERVICE_KEY` on the worker host.
 - **Status updates poll** Prism's own endpoint (1.5 s while active); no push.
 - ~~`maxConcurrency` per model is advisory.~~ **Enforced for billing models in Phase 2B** (see known gaps).
-- ~~Submission TOCTOU window~~ **Closed (post-review).** `projectRevision()` (a digest of every package input row)
-  is read before the project is loaded and re-verified inside the submit transaction (`stale_package`).
+- ~~Submission TOCTOU window~~ **Closed (post-review) for the original package-input set.** `projectRevision()` (a
+  digest of the package input rows that existed in Phase 2A) is read before the project is loaded and re-verified
+  inside the submit transaction (`stale_package`). See the Phase 2H gap below: later selection tables are not in it.
 - ~~Worker DB role is broad.~~ **Closed in Phase 2B:** least-privilege role, see docs/generation-jobs.md.
 - ~~Ingestion not crash-idempotent.~~ **Closed in Phase 2B:** deterministic output ids/paths; a retry reuses the
   object already uploaded (see docs/providers/runway.md, `ingest-crash.test.ts`).
