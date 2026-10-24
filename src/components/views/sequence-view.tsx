@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ActionForm } from "@/components/action-form";
 import { SequenceFilters, type SequenceFilter } from "@/components/sequence/sequence-filters";
 import { SortableBoard } from "@/components/sortable-board";
+import { SHOT_ANIMATION_LABEL, type ShotAnimationState } from "@/domain/generation/animation";
 import { Badge, Button, PageHeader, STATUS_TONE } from "@/components/ui";
 import { formatDuration, formatSeconds } from "@/domain/duration";
 import { PRODUCTION_FRAME_SOURCE_LABEL } from "@/domain/production-frame";
@@ -294,6 +295,15 @@ function SequenceCard({
           <dd>
             <CharacterLines item={item} />
           </dd>
+          <dt className="text-muted">Animation</dt>
+          <dd data-testid="sequence-animation" data-state={item.animation.state}>
+            <Badge tone={ANIMATION_TONE[item.animation.state]}>{SHOT_ANIMATION_LABEL[item.animation.state]}</Badge>
+            {item.animation.attempts > 0 ? (
+              <span className="ml-1.5 text-[10.5px] text-muted">
+                {item.animation.succeeded} of {item.animation.attempts} ready
+              </span>
+            ) : null}
+          </dd>
         </dl>
         {mismatch ? (
           <p className="text-warn" data-testid="sequence-card-link">
@@ -330,11 +340,28 @@ function SequenceCard({
               {item.productionFrame ? "Production Frame" : "Make Production Frame"}
             </Link>
           ) : null}
+          {item.canAnimate ? (
+            // opens the dedicated 2H workflow for this Shot; nothing is generated from the board itself
+            <Link
+              href={shotPath(slug, episodeSlug, item.shotId, "animate")}
+              className="text-info hover:underline"
+              data-testid="sequence-animate-link"
+            >
+              Animate
+            </Link>
+          ) : null}
         </div>
       </div>
     </article>
   );
 }
+
+const ANIMATION_TONE: Record<ShotAnimationState, "pass" | "warn" | "neutral" | "info"> = {
+  not_animated: "neutral",
+  candidates: "info",
+  final_approved: "pass",
+  stale: "warn",
+};
 
 function SummaryBar({ seq }: { seq: ShotSequence }) {
   const s = seq.summary;
