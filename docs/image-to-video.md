@@ -60,6 +60,14 @@ For `animate_production_frame` the compatibility engine:
 The resulting request has `purpose: "animate_production_frame"`, `modality: "image_to_video"` and
 `startFrameAssetId === package.references.productionFrame.assetId`.
 
+### The approved Storyboard is not sent
+
+Animate Production Frame does **not** separately send the approved Storyboard (neither as start frame nor as a
+reference), even when one exists. This is intentional: the selected Production Frame supersedes the Storyboard as the
+visual source and is the exact first frame. Sending both would give the model two competing truths about composition
+and reference, and the Storyboard would win nothing the frame has not already fixed. The comparison disclosure says
+"Exact first frame: Production Frame vN" and does not list the Storyboard.
+
 ### The adapter invariant
 
 `animationRequestViolations(request, packageSnapshot)` is checked when the attempt is prepared AND again by the worker
@@ -166,6 +174,20 @@ canonical-STILL surface: the Production Frame visual is never replaced by video.
 - no automatic generation, retry beyond the existing worker policy, provider audio, end frame or approval;
 - no live provider call during implementation: MockProvider only. One tiny live image-to-video smoke can be approved
   separately after merge.
+- no change to the generic `projectRevision()` digest. That digest predates the Production Frame, Location View and
+  Character Continuity selection tables, so generic Generate does not catch a selection moved between package build
+  and submit. Animate does not rely on it: it re-reads the selected Production Frame before the set is created and
+  before every candidate, and the worker re-checks the frozen request against the frozen package. Extending generic
+  revision coverage is a separate hardening task (see [roadmap](roadmap.md)).
+
+## MockProvider limitation: duration
+
+The free mock video is **fixture media**: the same short clip whatever was asked for. It does **not** simulate a
+provider physically returning exactly the requested duration. Tests therefore assert what Prism decides and records —
+the request duration, the provider-duration plan (native vs generate-longer-then-trim), the cost estimate, the
+adaptation plan, the trim target and the delivery conform orchestration — and never claim the source mock clip itself
+has the requested provider duration. Whether a real provider returns the requested seconds is checked only by the live
+smoke.
 
 ## Tests
 
