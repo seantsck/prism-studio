@@ -223,8 +223,7 @@ export default async function CandidateSetPage({
         subtitle={
           <>
             {still ? "Production Frame candidates · " : animate ? "Animation candidates · " : ""}Shot{" "}
-            {shot?.shotCode ?? "?"} ·{" "}
-            {new Date(set.set.createdAt).toLocaleString()} ·{" "}
+            {shot?.shotCode ?? "?"} · {new Date(set.set.createdAt).toLocaleString()} ·{" "}
             <span data-testid="set-rollup">{rollup.label}</span>
           </>
         }

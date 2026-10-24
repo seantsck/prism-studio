@@ -350,7 +350,9 @@ export async function submitCandidateSet(args: {
     if (sourceMoved) {
       // never a mixed-source set: what was already submitted used the frozen frame; nothing else is sent
       failed.push({ label: it.label, model: it.fit.displayName, error: ANIMATION_SOURCE_CHANGED_MESSAGE });
-      await args.candidates.markSubmitFailed(member.id, ANIMATION_SOURCE_CHANGED_MESSAGE).catch(() => undefined);
+      await args.candidates
+        .markSubmitFailed(member.id, ANIMATION_SOURCE_CHANGED_MESSAGE)
+        .catch(() => undefined);
       continue;
     }
     try {

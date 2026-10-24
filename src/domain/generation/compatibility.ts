@@ -245,7 +245,8 @@ function chooseModality(
 ): GenerationModality | null {
   const supported = new Set(model.capabilities.modalities);
   // Phase 2H: the canonical Production Frame IS the first frame. Image-to-video or nothing: never a text-to-video fallback.
-  if (purpose === "animate_production_frame") return supported.has("image_to_video") ? "image_to_video" : null;
+  if (purpose === "animate_production_frame")
+    return supported.has("image_to_video") ? "image_to_video" : null;
   if (purpose === "production_frame") {
     // Independent of `shot.generation.modality`: reference inputs present → image_to_image, otherwise text_to_image.
     const hasRefs = deriveProductionFrameReferenceCandidates(pkg).length > 0;

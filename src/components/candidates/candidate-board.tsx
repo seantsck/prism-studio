@@ -331,8 +331,8 @@ export function CandidateBoard({
             <Badge tone="warn">no longer the selected frame</Badge>
           )}
           <span className="text-[11px] text-muted">
-            ⭐ Best is this experiment&apos;s preference; it never approves the Shot&apos;s output. &quot;Promote
-            to Shot&quot; is the separate, explicit approval.
+            ⭐ Best is this experiment&apos;s preference; it never approves the Shot&apos;s output.
+            &quot;Promote to Shot&quot; is the separate, explicit approval.
           </span>
         </div>
       ) : null}

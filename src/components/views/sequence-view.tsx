@@ -297,7 +297,9 @@ function SequenceCard({
           </dd>
           <dt className="text-muted">Animation</dt>
           <dd data-testid="sequence-animation" data-state={item.animation.state}>
-            <Badge tone={ANIMATION_TONE[item.animation.state]}>{SHOT_ANIMATION_LABEL[item.animation.state]}</Badge>
+            <Badge tone={ANIMATION_TONE[item.animation.state]}>
+              {SHOT_ANIMATION_LABEL[item.animation.state]}
+            </Badge>
             {item.animation.attempts > 0 ? (
               <span className="ml-1.5 text-[10.5px] text-muted">
                 {item.animation.succeeded} of {item.animation.attempts} ready

@@ -390,7 +390,10 @@ export function ModelComparePanel({
                         <td className="px-2 py-1.5" data-testid="model-first-frame">
                           {v.animation?.exactFirstFrame ? "YES" : "NO"}
                         </td>
-                        <td className="px-2 py-1.5 font-mono text-[11px] text-muted" data-testid="model-durations">
+                        <td
+                          className="px-2 py-1.5 font-mono text-[11px] text-muted"
+                          data-testid="model-durations"
+                        >
                           {msText(v.animation?.productionMs)} → {msText(v.animation?.providerMs)} →{" "}
                           {msText(v.animation?.deliveryMs)}
                           {v.durationUnverified ? (
