@@ -78,6 +78,10 @@ Final approval is the shot's creative approval; Best never makes it. The attempt
 belongs to a candidate set, links back to the board. A final approve/reject recorded by mistake is not reinterpreted:
 it stays what it is, and the candidate review is recorded separately on the board.
 
+Phase 2H animation sets (`animate_production_frame`) use the same video review: Good / Shortlist / Reject / ⭐ Best,
+and Best still never approves the Shot. The board adds the source truth (the Production Frame version each clip started
+from, the first-frame provenance check, freshness, and "Delivery conform required"). See [image-to-video](image-to-video.md).
+
 ## Picture size on a candidate card
 
 Five sizes are kept apart: the **production frame** (what the filmmaker designed), the **planning canvas** (the

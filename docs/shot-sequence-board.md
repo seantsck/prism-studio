@@ -9,6 +9,11 @@ Routes: `/projects/[project]/episodes/[ep]/sequence` and the project-level `/pro
 Default workflow: Shot Prep → Production Frame → **Sequence Board** → inspect neighbouring Shots → correct continuity /
 stale frames → Phase 2H image-to-video.
 
+**Animation state (Phase 2H).** Each card also shows a derived animation state (Not animated / Animation candidates /
+Final video approved / Animation stale) computed from the Shot's `animate_production_frame` attempts and their approval
+(no table, no cache), and an **Animate** link into Shot Prep's Animate workflow when the Shot has a selected, current
+Production Frame. The card's visual stays the canonical still; video is never auto-played here. See [image-to-video](image-to-video.md).
+
 ## Storyboard vs Sequence vs Animatic
 
 | Surface    | Owns                                                                                                                   |

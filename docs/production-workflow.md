@@ -93,6 +93,15 @@ Preflight `production_frame.fresh` blocks image-to-video on a stale selected fra
 Start frame precedence: explicit override > selected Production Frame > approved Storyboard. See
 [production-frames](production-frames.md).
 
+### Animate Production Frame (Phase 2H, no migration)
+
+Shot Prep → **16A · Animate Production Frame** animates the selected, CURRENT Production Frame: it is the exact first
+frame of an image-to-video candidate (no Storyboard, override or text-to-video fallback; a stale frame or a different
+manual override blocks). Compare the video models (exact first frame, production / provider / delivery duration,
+provider canvas, audio, cost), create a candidate set, review the clips, mark Best, conform the delivery master when a
+crop / trim is planned, and approve the final output with the existing human approval. Generic Generate stays for
+other experiments. See [image-to-video](image-to-video.md).
+
 ### Production Frame candidates (Phase 2G.2, no migration)
 
 From Shot Prep → Production Frame the filmmaker can **generate candidates**: several still images from image models (the

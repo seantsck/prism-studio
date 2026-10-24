@@ -129,3 +129,11 @@ creates a derived delivery master; **continuity QA** judges it. None of this tou
 - Candidate sets and reviews are **user-domain** tables: the generation and continuity workers have no grant on them.
 - Nothing here assumes Runway: `CandidateSet`, reviews, performance and recommendation are provider-independent and a
   later direct provider adds a catalog entry and an adapter.
+
+## Image-to-video from the Production Frame (Phase 2H)
+
+The `animate_production_frame` purpose runs through the same package → compatibility → gate → request → attempt + job →
+worker path. The domain adds hard source rules (a selected, fresh Production Frame; no conflicting manual override),
+image-to-video only, motion-first PromptPlan wording, and one invariant checked twice (submission and the worker, before
+`adapter.submit`): the request's start frame is the frozen Production Frame Asset. No new table, job type or package
+version. See [image-to-video](image-to-video.md).
