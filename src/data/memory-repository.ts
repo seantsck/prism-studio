@@ -45,6 +45,8 @@ export class MemoryRepository implements Repository {
     this.generationService ??= new MemoryGenerationService({
       all: () => [...this.projects.values()],
       ownerUserId: () => LOCAL_USER_ID,
+      selectedProductionFrameId: (projectId, shotId) =>
+        this.productionFrames.selectedFrameId(projectId, shotId),
     });
     return this.generationService;
   }

@@ -137,6 +137,15 @@ duration, one Production Frame); provider adaptation may differ per model. The s
 frame before the set is created and before every candidate: if the selection moved, the set is refused, or once
 started nothing more is submitted. A set never mixes source frames.
 
+The final authority is the repository. `prepareSubmission` derives `expectedAnimationProductionFrameId` from the
+frozen package for EVERY `animate_production_frame` submission (not only candidate sets), and `createAttemptWithJob`
+accepts a new attempt only if the Shot still has exactly that frame selected, checked in the insert transaction under
+a `FOR SHARE` row lock on `shot_production_frame_selections`, so the selection cannot move between the check and the
+commit. Otherwise it refuses with `stale_animation_source` and writes no attempt, job, cost or event; in a set, that
+candidate is marked failed and nothing more is submitted. An idempotent replay of an already accepted attempt still
+returns it. The worker's `animationRequestViolations` check stays: it guards the frozen request's internal
+consistency, the repository check guards acceptance against the live selection.
+
 The candidate board is the **video** surface plus source truth: "Animated from Production Frame · Start: Production
 Frame vN", whether that frame is still selected, per clip the deterministic **first-frame provenance** check (the frozen
 request's start frame equals the frozen frame Asset; this is integrity, not computer vision: it never claims the

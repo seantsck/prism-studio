@@ -8,7 +8,7 @@
 //   - the DB-level job state machine, compared pair-by-pair with the TypeScript one
 //   - structural invariants: one active job per attempt, same-project foreign keys, cost checks
 // Requires `npm run db:seed` first (uses the demo project's shot 3A). Never touches another project.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,8 +16,12 @@ import pg from "pg";
 import { GenerationSubmitError } from "../src/data/generation-repository";
 import { PostgresGenerationData } from "../src/data/generation-postgres";
 import { AdminRepository, rlsPreamble } from "../src/data/postgres-repository";
+import { PostgresProductionFrameData } from "../src/data/production-frame-postgres";
+import { buildShotContext } from "../src/domain/context";
 import { allowedTransitions, canTransition } from "../src/domain/generation/job-state";
 import { JOB_STATUSES } from "../src/domain/generation/schemas";
+import { draftProductionFrame } from "../src/domain/production-frame";
+import { assetSchema, type ProjectData } from "../src/domain/schemas";
 import { readGenerationConfig } from "../src/generation/config";
 import { silentLogger } from "../src/generation/log";
 import { createRegistry } from "../src/generation/registry";
@@ -53,6 +57,8 @@ const sinkRoot = mkdtempSync(path.join(tmpdir(), "prism-dbgen-"));
 const sink = new LocalDiskSink(sinkRoot);
 const createdAttemptIds: string[] = [];
 const createdAssetIds: string[] = [];
+const createdFrameIds: string[] = [];
+let originalSelection: Record<string, unknown> | null = null;
 
 async function raw(
   asUser: string | null,
@@ -565,10 +571,282 @@ try {
     await c.query("rollback");
     c.release();
   }
+
+  // ── 8. Animate Production Frame: the selection is confirmed atomically with the insert, under a row lock ──
+  // (the selection table is not in projectRevision and moving it does not touch shots.updated_at)
+  originalSelection =
+    (await pool.query("select * from shot_production_frame_selections where shot_id = $1", [shot.id]))
+      .rows[0] ?? null;
+  const pfOwner = new PostgresProductionFrameData(pool, rlsPreamble({ sub: dev.id }));
+  const attachedData = async (): Promise<ProjectData> => {
+    const d = (await admin.loadProject("ojousama"))!;
+    const pf = await pfOwner.listForProject(projectId);
+    return { ...d, productionFrames: pf.frames, productionFrameSelections: pf.selections };
+  };
+  const makeFrame = async (name: string) => {
+    const d = await attachedData();
+    const id = randomUUID();
+    const stamp = new Date().toISOString();
+    const asset = assetSchema.parse({
+      id,
+      projectId,
+      createdBy: dev.id,
+      type: "image",
+      purpose: "production_frame",
+      source: "upload",
+      name,
+      originalFilename: `${name}.png`,
+      storageProvider: "local",
+      bucket: null,
+      objectPath: `${projectId}/${id}/${name}.png`,
+      mime: "image/png",
+      byteSize: 1234,
+      checksum: createHash("sha256").update(`${name}-${id}`).digest("hex"),
+      width: 1912,
+      height: 800,
+      durationMs: null,
+      frameRate: null,
+      sampleRate: null,
+      channels: null,
+      tags: [],
+      notes: "",
+      metadata: {},
+      createdAt: stamp,
+      updatedAt: stamp,
+    });
+    createdAssetIds.push(asset.id);
+    const drafted = draftProductionFrame(buildShotContext(d, shot.id), {
+      id: randomUUID(),
+      now: stamp,
+      userId: dev.id,
+      source: "upload",
+      asset,
+    });
+    if (!drafted.ok) throw new Error(`draft refused: ${drafted.problem.message}`);
+    const r = await pfOwner.create({
+      draft: drafted.draft,
+      newAsset: asset,
+      select: true,
+      userId: dev.id,
+      now: stamp,
+    });
+    createdFrameIds.push(r.frame.id);
+    return r.frame;
+  };
+  const animateInput = (d: ProjectData, key: string) => {
+    const args = {
+      data: d,
+      shotId: shot.id,
+      registry,
+      provider: "mock",
+      modelId: "mock-video-1",
+      purpose: "animate_production_frame" as const,
+      userId: dev.id,
+      idempotencyKey: key,
+      config,
+      projectRevision: null,
+    };
+    const first = prepareSubmission({ ...args, acknowledged: [] });
+    const ack = first.evaluation.compatibility?.ignoredFeatures.map((f) => f.id) ?? [];
+    const p = prepareSubmission({ ...args, acknowledged: ack });
+    if (!p.input)
+      throw new Error(`animate blocked: ${p.evaluation.gate.blockers.map((b) => b.message).join(" | ")}`);
+    // other generations of this Shot from the sections above may still be active
+    return {
+      ...p.input,
+      allowConcurrentOnShot: true,
+      limits: { maxActivePerProject: 100, maxSubmitsPerMinutePerUser: 100 },
+    };
+  };
+  const tally = async () =>
+    JSON.stringify(
+      (
+        await pool.query(
+          `select (select count(*)::int from generation_attempts where project_id = $1) a,
+                  (select count(*)::int from generation_jobs where project_id = $1) j,
+                  (select count(*)::int from generation_costs where project_id = $1) c,
+                  (select count(*)::int from generation_job_events where project_id = $1) e`,
+          [projectId],
+        )
+      ).rows[0],
+    );
+  const codeOf = (e: unknown) => (e instanceof GenerationSubmitError ? e.code : String(e));
+  const selectionNow = async () =>
+    ((
+      await pool.query(
+        "select production_frame_id from shot_production_frame_selections where shot_id = $1",
+        [shot.id],
+      )
+    ).rows[0]?.production_frame_id as string | undefined) ?? null;
+
+  check(
+    "D. a generic Shot-output submission carries no expected animation frame",
+    p1.input!.expectedAnimationProductionFrameId === null,
+  );
+
+  const v1 = await makeFrame("db:gen animate pf v1");
+  const atV1 = await attachedData();
+  const inA = animateInput(atV1, `dbgen-anim-${randomUUID()}`);
+  const inB = animateInput(atV1, `dbgen-anim-${randomUUID()}`);
+  check(
+    "prepareSubmission derives the expected animation frame from the frozen package",
+    inA.expectedAnimationProductionFrameId === v1.id && inB.expectedAnimationProductionFrameId === v1.id,
+  );
+  const accepted = await ownerGen.createAttemptWithJob(inA);
+  createdAttemptIds.push(accepted.attempt.id);
+  check(
+    "A. expected frame = selected frame: attempt + job created",
+    !accepted.duplicate && accepted.job.attemptId === accepted.attempt.id,
+  );
+
+  const v2 = await makeFrame("db:gen animate pf v2");
+  check("the selection moved to v2 (no shots.updated_at involved)", (await selectionNow()) === v2.id);
+  const t0 = await tally();
+  const replayed = await ownerGen.createAttemptWithJob(inA);
+  check(
+    "F. idempotent replay after the frame changed returns the accepted attempt, nothing new",
+    replayed.duplicate && replayed.attempt.id === accepted.attempt.id && (await tally()) === t0,
+  );
+  let codeB = "";
+  try {
+    createdAttemptIds.push((await ownerGen.createAttemptWithJob(inB)).attempt.id);
+  } catch (e) {
+    codeB = codeOf(e);
+  }
+  check(
+    "B. prepared from v1, v2 selected before insert: refused (stale_animation_source)",
+    codeB === "stale_animation_source",
+    codeB,
+  );
+  check("B. no attempt, job, cost or event was written", (await tally()) === t0, `${t0} → ${await tally()}`);
+
+  // lock regression 1: the production SQL's FOR SHARE keeps the selection row from moving until commit
+  {
+    const a = await pool.connect();
+    const b = await pool.connect();
+    try {
+      await a.query("begin");
+      await a.query(
+        "select production_frame_id from shot_production_frame_selections where project_id = $1 and shot_id = $2 for share",
+        [projectId, shot.id],
+      );
+      await b.query("begin");
+      await b.query("set local lock_timeout = '400ms'");
+      const upd = await b
+        .query("update shot_production_frame_selections set production_frame_id = $1 where shot_id = $2", [
+          v1.id,
+          shot.id,
+        ])
+        .then(
+          () => "updated",
+          (e: Error) => e.message,
+        );
+      await b.query("rollback");
+      await b.query("begin");
+      await b.query("set local lock_timeout = '400ms'");
+      const del = await b
+        .query("delete from shot_production_frame_selections where shot_id = $1", [shot.id])
+        .then(
+          () => "deleted",
+          (e: Error) => e.message,
+        );
+      check(
+        "row lock: while the check holds the selection, another transaction can neither update nor delete it",
+        /lock timeout/i.test(upd) && /lock timeout/i.test(del),
+        `${upd} / ${del}`,
+      );
+    } finally {
+      await a.query("rollback").catch(() => undefined);
+      await b.query("rollback").catch(() => undefined);
+      a.release();
+      b.release();
+    }
+  }
+
+  // lock regression 2: createAttemptWithJob itself waits on the selection row, then sees the committed move
+  {
+    const atV2 = await attachedData();
+    const inV2 = animateInput(atV2, `dbgen-anim-${randomUUID()}`);
+    const holder = await pool.connect();
+    try {
+      await holder.query("begin");
+      await holder.query("select 1 from shot_production_frame_selections where shot_id = $1 for update", [
+        shot.id,
+      ]);
+      let settled = false;
+      const pending = ownerGen.createAttemptWithJob(inV2).then(
+        (r) => {
+          settled = true;
+          createdAttemptIds.push(r.attempt.id);
+          return "created";
+        },
+        (e: unknown) => {
+          settled = true;
+          return codeOf(e);
+        },
+      );
+      await new Promise((r) => setTimeout(r, 1500));
+      check("row lock: the animation insert waits while another transaction holds the selection", !settled);
+      await holder.query(
+        "update shot_production_frame_selections set production_frame_id = $1 where shot_id = $2",
+        [v1.id, shot.id],
+      );
+      await holder.query("commit");
+      const outcome = await pending;
+      check(
+        "row lock: a selection moved by the concurrent transaction is seen at the insert boundary: refused",
+        outcome === "stale_animation_source",
+        outcome,
+      );
+    } finally {
+      await holder.query("rollback").catch(() => undefined);
+      holder.release();
+    }
+    check(
+      "row lock: no attempt, job, cost or event was written",
+      (await tally()) === t0,
+      `${t0} → ${await tally()}`,
+    );
+  }
+
+  // C. selection cleared before insert
+  await pool.query("delete from shot_production_frame_selections where shot_id = $1", [shot.id]);
+  let codeC = "";
+  try {
+    createdAttemptIds.push(
+      (await ownerGen.createAttemptWithJob(animateInput(atV1, `dbgen-anim-${randomUUID()}`))).attempt.id,
+    );
+  } catch (e) {
+    codeC = codeOf(e);
+  }
+  check(
+    "C. selection cleared before insert: refused (stale_animation_source)",
+    codeC === "stale_animation_source",
+    codeC,
+  );
+  check("C. no attempt, job, cost or event was written", (await tally()) === t0, `${t0} → ${await tally()}`);
 } finally {
   // Remove everything this run created: attempts cascade to jobs/events/outputs/costs, then the assets.
   if (createdAttemptIds.length) {
     await pool.query("delete from generation_attempts where id = any($1::uuid[])", [createdAttemptIds]);
+  }
+  // section 8: frames are append-only for users, so this runs as the database owner; the Shot's own selection
+  // (if it had one) is restored exactly
+  if (createdFrameIds.length) {
+    const shot3a = (await admin.loadProject("ojousama"))!.shots.find((s) => s.shotCode === "3A")!.id;
+    await pool.query(
+      "delete from shot_production_frame_selections where shot_id = $1 and production_frame_id = any($2::uuid[])",
+      [shot3a, createdFrameIds],
+    );
+    if (originalSelection) {
+      const cols = Object.keys(originalSelection);
+      await pool.query(
+        `insert into shot_production_frame_selections (${cols.join(", ")}) values (${cols.map((_, i) => `$${i + 1}`).join(", ")})
+         on conflict (shot_id) do nothing`,
+        cols.map((k) => originalSelection![k]),
+      );
+    }
+    await pool.query("delete from shot_production_frames where id = any($1::uuid[])", [createdFrameIds]);
   }
   if (createdAssetIds.length) {
     await pool.query("delete from assets where id = any($1::uuid[])", [createdAssetIds]);

@@ -94,8 +94,16 @@ describe("Production Frame candidates: the purpose is frozen, the Shot is untouc
   it("three candidates = three attempts, three jobs, three still images; the Shot's own modality never changes", async () => {
     const { h, shotId } = await setup();
     const before = (await h.data()).shots.find((s) => s.id === shotId)!;
+    const create = vi.spyOn(h.repo.generation, "createAttemptWithJob");
     const result = await generate(h, shotId, [...THREE_NATIVE, mock("mock-image-1")]);
     expect(result.submitted).toBe(3);
+    // a still candidate never carries the Animate-only atomic Production Frame check
+    expect(create.mock.calls.map(([input]) => input.expectedAnimationProductionFrameId)).toEqual([
+      null,
+      null,
+      null,
+    ]);
+    create.mockRestore();
     expect(candidateSetPurpose(result.view.set)).toBe("production_frame");
     await drain(h);
 

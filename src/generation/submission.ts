@@ -309,6 +309,11 @@ export function prepareSubmission(args: {
       estimate: priced,
       expectedShotUpdatedAt: ctx.shot.updatedAt,
       expectedProjectRevision: args.projectRevision ?? null,
+      // follows the purpose, not the caller: every animation is accepted only while its frame is still selected
+      expectedAnimationProductionFrameId:
+        request.purpose === "animate_production_frame"
+          ? (pkg.references.productionFrame?.frameId ?? null)
+          : null,
       limits: {
         maxActivePerProject: args.config.limits.maxActivePerProject,
         maxSubmitsPerMinutePerUser: args.config.limits.maxSubmitsPerMinutePerUser,

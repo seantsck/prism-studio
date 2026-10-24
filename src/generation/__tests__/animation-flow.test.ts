@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { GenerationSubmitError, STALE_ANIMATION_SOURCE_MESSAGE } from "@/data/generation-repository";
 import { newUploadAsset } from "@/domain/__tests__/production-frame-fixtures";
 import { draftCharacterContinuityLock } from "@/domain/character-continuity";
 import { buildShotContext } from "@/domain/context";
@@ -278,6 +279,140 @@ describe("Animate Production Frame (memory, free mock video models)", () => {
     const sent = await attemptsOf(h, shotId);
     expect(sent).toHaveLength(1);
     expect(reqOf(sent[0]!).startFrameAssetId).toBe(v1.assetId);
+  });
+
+  it("the repository is the final authority: an animation whose frame moved before insertion is refused", async () => {
+    const { h, shotId } = await setup();
+    const v1 = await makeFrame(h, shotId, "pf-v1");
+    const prepare = (data: ProjectData, key: string) =>
+      prepareSubmission({
+        data,
+        shotId,
+        registry: h.registry,
+        provider: "mock",
+        modelId: "mock-video-1",
+        acknowledged: [],
+        purpose: ANIM,
+        userId: null,
+        idempotencyKey: key,
+        config: h.config,
+        now: h.clock.now,
+      }).input!;
+    const before = await attached(h);
+    // the expected source follows the purpose automatically: no caller sets it
+    const input = prepare(before, "atomic-key-0001");
+    expect(input.expectedAnimationProductionFrameId).toBe(v1.id);
+    const replayed = prepare(before, "atomic-key-0002");
+
+    const store = h.repo.generation as unknown as {
+      jobs: Map<string, unknown>;
+      costs: unknown[];
+      events: unknown[];
+    };
+    const counts = async () => ({
+      attempts: (await attemptsOf(h, shotId)).length,
+      jobs: store.jobs.size,
+      costs: store.costs.length,
+      events: store.events.length,
+    });
+
+    // replay: accepted from v1, then v2 becomes canonical; the same key returns the accepted attempt, nothing new
+    const accepted = await h.repo.generation.createAttemptWithJob(replayed);
+    const v2 = await makeFrame(h, shotId, "pf-v2");
+    const empty = await counts();
+    expect(empty.attempts).toBe(1);
+    const again = await h.repo.generation.createAttemptWithJob(replayed);
+    expect(again).toMatchObject({ duplicate: true, attempt: { id: accepted.attempt.id } });
+    expect(await counts()).toEqual(empty);
+
+    // prepared from v1, v2 selected before insertion: refused, nothing persisted
+    const refused = h.repo.generation.createAttemptWithJob(input);
+    await expect(refused).rejects.toBeInstanceOf(GenerationSubmitError);
+    await expect(h.repo.generation.createAttemptWithJob(input)).rejects.toMatchObject({
+      code: "stale_animation_source",
+      message: STALE_ANIMATION_SOURCE_MESSAGE,
+    });
+    expect(await counts()).toEqual(empty);
+
+    // selection cleared before insertion: refused too
+    (h.repo.productionFrames as unknown as { selections: Map<string, unknown> }).selections.delete(shotId);
+    const fromV2 = { ...input, expectedAnimationProductionFrameId: v2.id };
+    await expect(h.repo.generation.createAttemptWithJob(fromV2)).rejects.toMatchObject({
+      code: "stale_animation_source",
+    });
+    expect(await counts()).toEqual(empty);
+  });
+
+  it("generic Shot output carries no expected animation frame (its submission is unchanged)", async () => {
+    // the untouched seed Shot (its Storyboard is current, so generic Generate is allowed)
+    const h = makeHarness();
+    const shotId = await h.shotId("3A");
+    const data = await attached(h);
+    for (const [purpose, modelId] of [["shot_output", "mock-video-1"]] as const) {
+      const prepared = prepareSubmission({
+        data,
+        shotId,
+        registry: h.registry,
+        provider: "mock",
+        modelId,
+        acknowledged: [],
+        purpose,
+        userId: null,
+        idempotencyKey: `other-${purpose}-0001`,
+        config: h.config,
+        now: h.clock.now,
+      });
+      const acks = prepared.evaluation.compatibility?.ignoredFeatures.map((f) => f.id) ?? [];
+      const input =
+        prepared.input ??
+        prepareSubmission({
+          data,
+          shotId,
+          registry: h.registry,
+          provider: "mock",
+          modelId,
+          acknowledged: acks,
+          purpose,
+          userId: null,
+          idempotencyKey: `other-${purpose}-0001`,
+          config: h.config,
+          now: h.clock.now,
+        }).input;
+      expect(input, purpose).not.toBeNull();
+      expect(input!.expectedAnimationProductionFrameId).toBeNull();
+    }
+  });
+
+  it("a frame moved between the outer re-read and insertion: that candidate is refused, later ones stop", async () => {
+    const { h, shotId } = await setup();
+    const v1 = await makeFrame(h, shotId, "pf-v1");
+    const create = h.repo.generation.createAttemptWithJob.bind(h.repo.generation);
+    let calls = 0;
+    const spy = vi.spyOn(h.repo.generation, "createAttemptWithJob").mockImplementation(async (input) => {
+      // candidate B: the outer re-read already saw v1; v2 is selected right before B's insertion
+      if (++calls === 2) await makeFrame(h, shotId, "pf-v2");
+      return create(input);
+    });
+    // no outer accessor: the repository refusal alone must stop candidate C
+    const out = await animate(h, shotId, [
+      mock("mock-video-1"),
+      mock("mock-video-169"),
+      mock("mock-video-lite"),
+    ]);
+    spy.mockRestore();
+    expect(calls).toBe(2);
+    expect(out.submitted).toBe(1);
+    expect(out.failed.map((f) => f.error)).toEqual([
+      STALE_ANIMATION_SOURCE_MESSAGE,
+      ANIMATION_SOURCE_CHANGED_MESSAGE,
+    ]);
+    const sent = await attemptsOf(h, shotId);
+    expect(sent).toHaveLength(1);
+    expect(reqOf(sent[0]!).startFrameAssetId).toBe(v1.assetId);
+    // the set is truthful: one accepted member, two failed ones
+    const members = out.view.members;
+    expect(members.filter((m) => m.attemptId)).toHaveLength(1);
+    expect(members.filter((m) => !m.attemptId)).toHaveLength(2);
   });
 
   it("the worker refuses a tampered animation request BEFORE any provider call", async () => {

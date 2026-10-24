@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { CandidateRepository, CandidateSetView } from "@/data/candidates-repository";
 import { animationSource, type AnimationSourceFrame } from "@/domain/generation/animation";
-import type { GenerationRepository } from "@/data/generation-repository";
+import { GenerationSubmitError, type GenerationRepository } from "@/data/generation-repository";
 import {
   CANDIDATE_LABELS,
   describeComparison,
@@ -398,6 +398,8 @@ export async function submitCandidateSet(args: {
       submitted += 1;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // the repository's atomic check is the final authority: once it refused the source, nothing more is sent
+      if (err instanceof GenerationSubmitError && err.code === "stale_animation_source") sourceMoved = true;
       failed.push({ label: it.label, model: it.fit.displayName, error: message });
       await args.candidates.markSubmitFailed(member.id, message).catch(() => undefined);
     }

@@ -21,6 +21,7 @@ import {
 } from "@/domain/generation/schemas";
 import {
   GenerationSubmitError,
+  STALE_ANIMATION_SOURCE_MESSAGE,
   LeaseLostError,
   type AttemptView,
   type ClaimedJob,
@@ -82,9 +83,12 @@ const PATCH_COLUMNS: Record<string, string> = {
 };
 
 /**
- * Everything `loadProject` feeds into a generation package (see buildShotContext). Generation history
- * (attempts, jobs, costs, outputs) and continuity checks are deliberately absent: they are not package inputs,
- * and including them would make concurrent generations invalidate each other.
+ * The revision-covered package inputs: what `loadProject` fed into a generation package when this digest was built
+ * (see buildShotContext). NOT every package input: the later Production Frame, Location View and Character
+ * Continuity selection tables are not covered yet (a separate hardening task, docs/roadmap.md); Animate checks its
+ * Production Frame selection atomically in createAttemptWithJob instead. Generation history (attempts, jobs, costs,
+ * outputs) and continuity checks are deliberately absent: they are not package inputs, and including them would
+ * make concurrent generations invalidate each other.
  */
 const REVISION_SOURCES: Array<{ name: string; sql: string }> = [
   { name: "projects", sql: "select * from projects where id = $1" },
@@ -202,10 +206,25 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
         );
       }
 
+      if (input.expectedAnimationProductionFrameId) {
+        // Phase 2H: an animation is accepted only while its Production Frame is STILL the Shot's selection. The
+        // selection table is not revision-covered and moving it does not touch shots.updated_at, so a plain read
+        // could pass and then lose a race with a concurrent re-selection before COMMIT. FOR SHARE locks the
+        // selection row until this transaction ends: it cannot be updated or deleted between "matches" and the
+        // attempt/job commit (a concurrent select/clear waits, then applies after this attempt exists).
+        const sel = await c.query(
+          `select production_frame_id from shot_production_frame_selections
+            where project_id = $1 and shot_id = $2 for share`,
+          [a.projectId, a.shotId],
+        );
+        if (String(sel.rows[0]?.production_frame_id ?? "") !== input.expectedAnimationProductionFrameId)
+          throw new GenerationSubmitError("stale_animation_source", STALE_ANIMATION_SOURCE_MESSAGE);
+      }
+
       if (input.expectedProjectRevision !== null) {
-        // Optimistic concurrency over EVERY package input (looks, takes, locations, assets, neighbours...).
-        // The revision was read before the data the package was built from, so equality proves the frozen
-        // package is exactly what is committed now.
+        // Optimistic concurrency over the revision-covered package inputs (looks, takes, locations, assets,
+        // neighbours...; not the later selection tables). The revision was read before the data the package was
+        // built from, so equality proves those inputs of the frozen package are exactly what is committed now.
         const current = await readProjectRevision(c, a.projectId);
         if (current !== input.expectedProjectRevision) {
           throw new GenerationSubmitError(
