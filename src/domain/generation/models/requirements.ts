@@ -59,6 +59,7 @@ export function deriveShotRequirements(
   opts: { protectedComposition?: string[]; purpose?: GenerationPurpose } = {},
 ): ShotGenerationRequirements {
   const still = opts.purpose === "production_frame";
+  const animate = opts.purpose === "animate_production_frame";
   const identity = new Set<string>();
   const looks = new Set<string>();
   for (const c of pkg.characters) {
@@ -74,14 +75,17 @@ export function deriveShotRequirements(
   const aspect = pkg.style.aspectRatio || null;
   const duration = pkg.timing.durationMs > 0 ? pkg.timing.durationMs : null;
   const characterCount = pkg.characters.length;
-  const hasStart = Boolean(pkg.references.startFrameAssetId);
+  // an animation's first frame is the selected Production Frame (never the generic precedence's override/Storyboard)
+  const hasStart = animate
+    ? Boolean(pkg.references.productionFrame)
+    : Boolean(pkg.references.startFrameAssetId);
   const hasEnd = Boolean(pkg.references.endFrameAssetId);
   const hasVideo = Boolean(pkg.references.referenceVideoAssetId);
   const nonStandard = aspect != null && !STANDARD_RATIOS.includes(aspect);
 
   const STILL_NA = "Not applicable to a still-image Production Frame candidate.";
   return {
-    ...(still ? { purpose: "production_frame" as const } : {}),
+    ...(still || animate ? { purpose: opts.purpose } : {}),
     production: {
       aspectRatio: aspect,
       durationMs: duration,
@@ -108,11 +112,17 @@ export function deriveShotRequirements(
             "",
             "References, not a first frame: the Production Frame / Storyboard are image references.",
           )
-        : need(
-            hasStart,
-            "An approved storyboard/start frame exists and should condition the first frame.",
-            "No start frame: text-to-video is acceptable.",
-          ),
+        : animate
+          ? need(
+              true,
+              "Animate Production Frame: the selected Production Frame must be the exact first frame (image-to-video only).",
+              "",
+            )
+          : need(
+              hasStart,
+              "An approved storyboard/start frame exists and should condition the first frame.",
+              "No start frame: text-to-video is acceptable.",
+            ),
       multipleImageReferences: need(
         identity.size + looks.size >= 2,
         `${identity.size} identity and ${looks.size} Look reference image(s) carry the character; a model that takes only a start frame will not use them.`,

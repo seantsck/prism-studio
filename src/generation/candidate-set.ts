@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { CandidateRepository, CandidateSetView } from "@/data/candidates-repository";
+import { animationSource, type AnimationSourceFrame } from "@/domain/generation/animation";
 import type { GenerationRepository } from "@/data/generation-repository";
 import {
   CANDIDATE_LABELS,
@@ -70,6 +71,10 @@ export interface CandidateSetPlan {
   allowed: boolean;
   packageFingerprint: string;
 }
+
+/** Phase 2H: the Shot's Production Frame selection moved while an animation set was being created. */
+export const ANIMATION_SOURCE_CHANGED_MESSAGE =
+  "The Production Frame selection changed while this animation set was being created. Review the current Production Frame and animate again.";
 
 export class CandidateSetBlockedError extends Error {
   constructor(
@@ -230,6 +235,12 @@ export async function submitCandidateSet(args: {
   preference?: RecommendationPreference;
   /** Default `shot_output`. `production_frame`: one STILL image per candidate; the Shot is never changed. */
   generationPurpose?: GenerationPurpose;
+  /**
+   * Phase 2H (`animate_production_frame` only): reads the Shot's CURRENTLY selected Production Frame id from storage.
+   * Checked before the set is created and before every candidate, so a set can never mix two source frames: if the
+   * selection moves mid-way, the set is refused (or, once started, nothing more is submitted).
+   */
+  currentProductionFrameId?: () => Promise<string | null>;
   now?: Date;
 }): Promise<CandidateSubmitResult> {
   const now = args.now ?? new Date();
@@ -247,6 +258,16 @@ export async function submitCandidateSet(args: {
   });
   if (!plan.allowed)
     throw new CandidateSetBlockedError(plan.blockers[0] ?? "Candidate set is blocked.", plan);
+  // Every candidate of one set shares ONE package (one Shot, one duration, one Production Frame): the source of an
+  // animation set is that package's frame, frozen on the set as evidence.
+  let animatedFrom: AnimationSourceFrame | null = null;
+  if (plan.purpose === "animate_production_frame") {
+    const source = animationSource(plan.items[0]!.evaluation.pkg);
+    if (!source.ok) throw new CandidateSetBlockedError(source.issues[0]!.message, plan);
+    animatedFrom = source.frame;
+    if (args.currentProductionFrameId && (await args.currentProductionFrameId()) !== animatedFrom.frameId)
+      throw new CandidateSetBlockedError(ANIMATION_SOURCE_CHANGED_MESSAGE, plan);
+  }
   const needsAck = plan.items.some((i) => i.ignored.length > 0);
   if (needsAck && !args.acknowledgeAll) {
     throw new CandidateSetBlockedError(
@@ -281,6 +302,8 @@ export async function submitCandidateSet(args: {
       ...freezeRecommendation(plan.recommendation),
       // machine-readable purpose of the set (no schema: it lives in the frozen recommendation JSON)
       generationPurpose: plan.purpose,
+      // 2H: the one Production Frame every candidate starts from (id, version, image, checksum, intent fingerprint)
+      ...(animatedFrom ? { animationSource: animatedFrom } : {}),
       // recommended vs chosen is itself product data: recorded, never nagged about
       chosen: plan.items.map((i) => ({
         provider: i.selection.provider,
@@ -319,8 +342,17 @@ export async function submitCandidateSet(args: {
   const failed: CandidateSubmitResult["failed"] = [];
   let submitted = 0;
   const cap = Math.max(args.config.limits.maxActivePerProject, plan.items.length);
+  let sourceMoved = false;
   for (const [i, it] of plan.items.entries()) {
     const member = view.members[i]!;
+    if (!sourceMoved && animatedFrom && args.currentProductionFrameId)
+      sourceMoved = (await args.currentProductionFrameId()) !== animatedFrom.frameId;
+    if (sourceMoved) {
+      // never a mixed-source set: what was already submitted used the frozen frame; nothing else is sent
+      failed.push({ label: it.label, model: it.fit.displayName, error: ANIMATION_SOURCE_CHANGED_MESSAGE });
+      await args.candidates.markSubmitFailed(member.id, ANIMATION_SOURCE_CHANGED_MESSAGE).catch(() => undefined);
+      continue;
+    }
     try {
       const key = candidateKey(
         setId,

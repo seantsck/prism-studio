@@ -1,5 +1,5 @@
 import type { GenerationPackage } from "../generation-package";
-import type { GenerationPurpose } from "./schemas";
+import { parseGenerationPurpose, type GenerationPurpose } from "./schemas";
 import { deriveShotFeatureProfile, type ShotFeatureProfile } from "./models/requirements";
 import type { OutcomeRecord } from "./performance";
 import { latestReviews, type GenerationReview } from "./reviews";
@@ -30,12 +30,12 @@ export interface RawAttemptOutcome {
 }
 
 /**
- * The purpose frozen on an attempt's request JSON. Only `production_frame` is ever recorded; absence (every
- * attempt before Phase 2G.2, and every Shot output) means `shot_output`.
+ * The purpose frozen on an attempt's request JSON. Absence (every attempt before Phase 2G.2, and every generic Shot
+ * output) means `shot_output` and is returned as undefined; unknown values are treated the same way.
  */
 export function purposeOfRequestJson(request: unknown): GenerationPurpose | undefined {
-  const p = (request as { purpose?: unknown } | null)?.purpose;
-  return p === "production_frame" ? "production_frame" : undefined;
+  const p = parseGenerationPurpose((request as { purpose?: unknown } | null)?.purpose);
+  return p === "shot_output" ? undefined : p;
 }
 
 /** Defensive: attempts frozen under older package shapes yield no profile instead of throwing. */

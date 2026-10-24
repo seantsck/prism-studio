@@ -17,6 +17,7 @@ import {
   type GenerationGate,
   type SpendGateInput,
 } from "@/domain/generation/gate";
+import { animationRequestViolations } from "@/domain/generation/animation";
 import { buildPromptPlan } from "@/domain/generation/prompt-plan";
 import type {
   CostEstimate,
@@ -97,7 +98,7 @@ export function evaluateShotForModel(args: {
   const adapterBlockers: GateBlocker[] = [];
   if (model && adapter && compatibility?.compatible && compatibility.modality) {
     try {
-      const plan = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation);
+      const plan = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation, { purpose });
       const req = buildGenerationRequest({
         pkg,
         model,
@@ -112,6 +113,9 @@ export function evaluateShotForModel(args: {
       if (extra.length > 0) {
         compatibility = { ...compatibility, ignoredFeatures: [...compatibility.ignoredFeatures, ...extra] };
       }
+      animationRequestViolations(req, pkg).forEach((message, i) =>
+        adapterBlockers.push({ code: `animate.invariant.${i}`, source: "submission", message }),
+      );
       const check = adapter.validateRequest(req, model);
       if (!check.ok) {
         check.errors.forEach((message, i) =>
@@ -194,7 +198,7 @@ export function prepareSubmission(args: {
     return { evaluation, input: null };
 
   const adapter = args.registry.adapter(model.provider)!;
-  const plan = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation);
+  const plan = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation, { purpose: args.purpose });
   const request = buildGenerationRequest({
     pkg,
     model,
@@ -204,6 +208,25 @@ export function prepareSubmission(args: {
     seed: args.seed ?? null,
     providerOptions: args.providerOptions,
   });
+  // Phase 2H: an animation is created only when its request starts from exactly the frozen Production Frame
+  const violations = animationRequestViolations(request, pkg);
+  if (violations.length > 0) {
+    return {
+      evaluation: {
+        ...evaluation,
+        gate: {
+          allowed: false,
+          unacknowledged: [],
+          blockers: violations.map((message, i) => ({
+            code: `animate.invariant.${i}`,
+            source: "submission" as const,
+            message,
+          })),
+        },
+      },
+      input: null,
+    };
+  }
   const check = adapter.validateRequest(request, model);
   if (!check.ok) {
     return {

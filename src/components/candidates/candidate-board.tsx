@@ -27,6 +27,10 @@ import { chooseGeneratedFrameAsProductionFrame } from "@/server/production-frame
  * stills, no playback controls, the same Good / Shortlist / Best / Reject review, and "Use as Production Frame"
  * instead of "Promote to Shot". Best (this experiment's preference) and CURRENT PRODUCTION FRAME (the Shot's
  * canonical visual) are separate on purpose.
+ *
+ * Phase 2H: an animation set (`purpose="animate_production_frame"`) is the VIDEO surface plus its source truth: the
+ * Production Frame every clip started from, whether each clip is still current, the deterministic first-frame
+ * provenance check, and whether a delivery conform is still required. Best never approves the Shot's output.
  */
 
 /** What "Use as Production Frame" can do for one candidate right now (computed on the server). */
@@ -43,6 +47,26 @@ export interface BoardProductionFrame {
   /** Which stored image would become the frame. */
   image: "delivery_conform" | "provider_original" | null;
 }
+/** Phase 2H: what one animation candidate was animated from, from its own frozen records. */
+export interface BoardAnimation {
+  /** Production Frame version frozen in the attempt's package (null = not recorded). */
+  frameVersion: number | null;
+  /** The frozen request's start frame IS the frozen Production Frame Asset (provenance, not pixel comparison). */
+  firstFrameMatches: boolean;
+  freshness: "fresh" | "stale" | "unknown";
+  /** Why it is stale (plain language), empty when fresh. */
+  staleReasons: string[];
+  /** The adaptation plan needs a crop/pad/trim conform and none exists yet: the provider original is not production-shaped. */
+  conformRequired: boolean;
+}
+
+/** Phase 2H: the set-level source of an animation set (frozen on the set at creation). */
+export interface BoardAnimationSource {
+  frameVersion: number | null;
+  /** That frame is still the Shot's selected Production Frame. */
+  stillSelected: boolean;
+}
+
 export interface BoardCandidate {
   attemptId: string;
   label: string;
@@ -60,6 +84,8 @@ export interface BoardCandidate {
   quality?: string | null;
   /** Still-image candidates only. */
   productionFrame?: BoardProductionFrame | null;
+  /** Animation candidates only (Phase 2H). */
+  animation?: BoardAnimation | null;
   posterUrl: string | null;
   frames: Array<{ atMs: number; url: string }>;
   durationMs: number | null;
@@ -171,16 +197,22 @@ export function CandidateBoard({
   canPromote,
   purpose = "shot_output",
   shotId = "",
+  animationSource = null,
 }: {
   projectSlug: string;
   setId: string;
   candidates: BoardCandidate[];
   canPromote: boolean;
-  /** `production_frame`: still images for the Shot's Production Frame (an image review surface). */
-  purpose?: "shot_output" | "production_frame";
+  /**
+   * `production_frame`: still images for the Shot's Production Frame (an image review surface).
+   * `animate_production_frame`: video clips animated from the Shot's canonical Production Frame (Phase 2H).
+   */
+  purpose?: "shot_output" | "production_frame" | "animate_production_frame";
   shotId?: string;
+  animationSource?: BoardAnimationSource | null;
 }) {
   const still = purpose === "production_frame";
+  const animate = purpose === "animate_production_frame";
   const [layout, setLayout] = useState<Layout>(candidates.length >= 3 ? "3" : "2");
   const videos = useRef<Map<string, HTMLVideoElement>>(new Map());
   const [loop, setLoop] = useState(true);
@@ -283,7 +315,27 @@ export function CandidateBoard({
   }
 
   return (
-    <div className="space-y-3" data-testid="candidate-board">
+    <div className="space-y-3" data-testid="candidate-board" data-purpose={purpose}>
+      {animate ? (
+        <div
+          className="flex flex-wrap items-center gap-2 border border-accent/50 bg-panel px-3 py-2 text-[12px]"
+          data-testid="animation-source"
+          data-version={animationSource?.frameVersion ?? ""}
+          data-selected={animationSource?.stillSelected ? "1" : "0"}
+        >
+          <span className="font-semibold uppercase tracking-wide">Animated from Production Frame</span>
+          <span className="font-mono">Start: Production Frame v{animationSource?.frameVersion ?? "?"}</span>
+          {animationSource?.stillSelected ? (
+            <Badge tone="pass">still the selected frame</Badge>
+          ) : (
+            <Badge tone="warn">no longer the selected frame</Badge>
+          )}
+          <span className="text-[11px] text-muted">
+            ⭐ Best is this experiment&apos;s preference; it never approves the Shot&apos;s output. &quot;Promote
+            to Shot&quot; is the separate, explicit approval.
+          </span>
+        </div>
+      ) : null}
       <div
         className="flex flex-wrap items-center gap-2 border border-line bg-panel px-3 py-2"
         data-testid="sync-controls"
@@ -527,7 +579,7 @@ function CandidateCard({
       data-preferred={c.preferred ? "1" : "0"}
       data-promoted={c.promoted ? "1" : "0"}
       data-current-frame={pf?.current ? "1" : "0"}
-      data-stale={pf?.stale ? "1" : "0"}
+      data-stale={pf?.stale || c.animation?.freshness === "stale" ? "1" : "0"}
     >
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="rounded-[3px] bg-panel2 px-1.5 text-[12px] font-semibold">{c.label}</span>
@@ -551,9 +603,9 @@ function CandidateCard({
             <Badge tone="pass">CURRENT PRODUCTION FRAME</Badge>
           </span>
         ) : null}
-        {still && reviewable && pf?.stale ? (
+        {(still && reviewable && pf?.stale) || (c.animation && c.animation.freshness !== "fresh") ? (
           <span data-testid="candidate-stale">
-            <Badge tone="warn">STALE</Badge>
+            <Badge tone="warn">{c.animation?.freshness === "unknown" ? "UNVERIFIED" : "STALE"}</Badge>
           </span>
         ) : null}
         {reviewable ? <Badge tone={DECISION_TONE[decision]}>{DECISION_TEXT[decision]}</Badge> : null}
@@ -595,6 +647,37 @@ function CandidateCard({
               : "Generating…"}
         </div>
       )}
+
+      {c.animation ? (
+        <div
+          className="space-y-0.5 border border-line bg-bg p-1.5 text-[11px]"
+          data-testid="candidate-animation"
+          data-first-frame={c.animation.firstFrameMatches ? "match" : "mismatch"}
+          data-freshness={c.animation.freshness}
+          data-conform-required={c.animation.conformRequired ? "1" : "0"}
+        >
+          <div>
+            <span className="font-semibold">Start: Production Frame v{c.animation.frameVersion ?? "?"}</span>
+            <span className="text-muted">
+              {" "}
+              · first frame{" "}
+              {c.animation.firstFrameMatches
+                ? "supplied exactly (request matches the frozen frame)"
+                : "NOT the frozen frame"}
+            </span>
+          </div>
+          {c.animation.staleReasons.length > 0 ? (
+            <div className="text-warn" data-testid="candidate-stale-reasons">
+              {c.animation.staleReasons.join(" · ")}. Kept as history; animate again from the current frame.
+            </div>
+          ) : null}
+          {c.animation.conformRequired ? (
+            <div className="text-warn" data-testid="conform-required">
+              Delivery conform required: the provider original is not production-shaped yet.
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <dl className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]" data-testid="candidate-meta">
         <dt className="text-muted">Cost</dt>

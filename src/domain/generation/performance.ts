@@ -50,9 +50,14 @@ export interface OutcomeRecord {
 export const outcomePurpose = (r: Pick<OutcomeRecord, "purpose">): GenerationPurpose =>
   r.purpose ?? "shot_output";
 
-/** Outcomes of one generation purpose only. */
+/**
+ * The outcomes that inform a generation of this purpose. Still-image (Production Frame) history and Shot-output VIDEO
+ * history never mix; the two video purposes (generic Shot output and Phase 2H animations of the Production Frame) are
+ * both human verdicts on the Shot's moving output, so they inform each other.
+ */
 export function ofPurpose(records: readonly OutcomeRecord[], purpose: GenerationPurpose): OutcomeRecord[] {
-  return records.filter((r) => outcomePurpose(r) === purpose);
+  const still = purpose === "production_frame";
+  return records.filter((r) => (outcomePurpose(r) === "production_frame") === still);
 }
 
 export type DataScope = "production" | "benchmark";

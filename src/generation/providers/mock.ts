@@ -185,6 +185,19 @@ const defs: MockModelDef[] = [
     },
   },
   {
+    scenario: "success",
+    model: {
+      provider: MOCK_PROVIDER_ID,
+      modelId: "mock-video-t2v",
+      displayName: "Mock Video (text only)",
+      description:
+        "Text-to-video only: takes no start frame. Exercises the Animate Production Frame rule that a model without image-to-video is incompatible. Free.",
+      kind: "mock",
+      lifecycle: "active",
+      capabilities: baseCaps({ modalities: ["text_to_video"] }),
+    },
+  },
+  {
     scenario: "transient_poll",
     model: {
       provider: MOCK_PROVIDER_ID,
