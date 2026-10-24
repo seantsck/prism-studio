@@ -13,14 +13,18 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from "@
  *   provenance, a required delivery conform → Best ≠ final approval → conform → Sequence shows the animation state
  *   PF v2 → v1 clips stale, new Animate starts from v2
  *   Location View B → PF stale → Animate blocked, clips stale; the Sequence still shows the canonical STILL
- * Shot 4C (after the Character Continuity spec: Locks v1 / v2 exist): Lock v1 → fresh PF → animate → master Look edit
- * keeps the clip fresh → switch to Lock v2 → clip stale, Animate blocked.
+ * Shot 4C, self-contained (no other spec needed): this spec's own Look "2H Linen Suit" and facts-only Lock v1 → an
+ * uploaded fresh PF → animate → master Look edit keeps the clip fresh → Lock v2 from the edited Look → switch → clip
+ * stale, Animate blocked. Afterwards 4C's Look assignment, Lock selection, selected Production Frame and continuity
+ * approval are restored (see afterAll).
  */
 
 const EP = "/projects/ojousama/episodes/ep-1";
 const PLACE = "Grand Celeste Hotel Canopy";
-const LOCK_V1 = "Yumeko — Ivory Suit v1";
-const LOCK_V2 = "Yumeko — Ivory Suit v2";
+// Shot 4C's Look and Locks are this spec's own (never the 2G.4 spec's "Ivory Suit"): it runs alone or after it
+const LOOK = "2H Linen Suit";
+const LOCK_V1 = "Yumeko — 2H Linen Suit v1";
+const LOCK_V2 = "Yumeko — 2H Linen Suit v2";
 test.describe.configure({ mode: "serial" });
 
 /** A valid RGB PNG of the given size (a single flat colour). */
@@ -327,21 +331,104 @@ test("Location View B: the PF goes stale, so Animate is blocked and the clips ar
   await expect(c.getByTestId("sequence-visual")).toHaveAttribute("data-freshness", "stale");
 });
 
+/** What the 4C test changes on Shot 4C, read before it starts and put back afterwards (see `afterAll`). */
+interface Shot4CState {
+  lookValue: string;
+  lockId: string | null;
+  pfVersion: string | null;
+  continuityApproved: boolean;
+}
+let original4C: Shot4CState | null = null;
+let url4C = "";
+
+// 4C has one character (Yumeko): her Look assignment is the Shot's only Look select
+const yumekoLook = (page: Page) => page.locator('select[name^="look:"]').first();
+const continuityGate = (page: Page) => page.locator("form").filter({ hasText: "Continuity approved" });
+
+async function read4C(page: Page, url: string): Promise<Shot4CState> {
+  await page.goto(`${url}?section=character`);
+  const lookValue = await yumekoLook(page).inputValue();
+  await page.goto(`${url}?section=look`);
+  const sel = page.getByTestId("character-continuity").getByTestId("cc-selected");
+  const lockId = (await sel.count()) ? await sel.getAttribute("data-lock-id") : null;
+  await page.goto(`${url}?section=production_frame`);
+  const pf = page.getByTestId("pf-selected");
+  const pfVersion = (await pf.count()) ? await pf.getAttribute("data-version") : null;
+  await page.goto(`${url}?section=continuity`);
+  const continuityApproved =
+    (await continuityGate(page)
+      .getByRole("button", { name: /Approved/ })
+      .count()) > 0;
+  return { lookValue, lockId, pfVersion, continuityApproved };
+}
+
+/** Clears the 4C Yumeko Lock selection (a valid one, or one a Look change made invalid). */
+async function clear4CLock(page: Page, url: string) {
+  await page.goto(`${url}?section=look`);
+  const cc = page.getByTestId("character-continuity");
+  for (const id of ["cc-clear", "cc-clear-invalid"]) {
+    if (await cc.getByTestId(id).count()) {
+      await cc.getByTestId(id).click();
+      await expect(cc.getByTestId("cc-empty")).toBeVisible({ timeout: 15_000 });
+    }
+  }
+}
+
+async function assign4CLook(page: Page, url: string, value: { value: string } | { label: string }) {
+  await page.goto(`${url}?section=character`);
+  await yumekoLook(page).selectOption(value);
+  await page.getByRole("button", { name: "Save characters" }).click();
+  await expect(page.getByText("Saved").first()).toBeVisible({ timeout: 15_000 });
+}
+
+async function openYumeko(page: Page) {
+  await page.goto("/projects/ojousama/characters");
+  await page.getByRole("link", { name: "Yumeko" }).first().click();
+}
+
+/** A facts-only Continuity Lock of the spec-owned Look, from the Character page (the 2G.4 spec's own path). */
+async function createLock(page: Page, name: string) {
+  await openYumeko(page);
+  await page.getByTestId("cl-look").selectOption({ label: LOOK });
+  await page.getByTestId("cl-name").fill(name);
+  await page.getByTestId("cl-create").click();
+  await expect(page.getByTestId("continuity-lock-card").filter({ hasText: name })).toHaveCount(1, {
+    timeout: 15_000,
+  });
+}
+
 test("4C Character Lock: a master Look edit keeps the clip fresh; switching to Lock v2 stales it", async ({
   page,
 }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   const url = await openShot(page, "4C");
-  // back to Lock v1: the Production Frame made under v1 is current again
+  url4C = url;
+  original4C = await read4C(page, url);
+
+  // this spec's own minimal fixture (no other spec needed): a Look of Yumeko and a facts-only Lock v1 of it
+  await openYumeko(page);
+  const newLook = page.locator("details", { has: page.locator("summary", { hasText: "+ New look" }) });
+  await newLook.locator("summary").click();
+  await newLook.locator('input[name="name"]').fill(LOOK);
+  await newLook.locator('textarea[name="wardrobe"]').fill("linen travel suit");
+  await newLook.getByRole("button", { name: "Create look" }).click();
+  await expect(page.locator("summary", { hasText: LOOK })).toBeVisible({ timeout: 15_000 });
+  await createLock(page, LOCK_V1);
+
+  // Shot 4C: Yumeko wears that Look under Lock v1; a Production Frame uploaded under v1 is current
+  await clear4CLock(page, url);
+  await assign4CLook(page, url, { label: LOOK });
   await page.goto(`${url}?section=look`);
   const cc = page.getByTestId("character-continuity");
   await cc.getByTestId("continuity-lock-card").filter({ hasText: LOCK_V1 }).getByTestId("cc-choose").click();
   await expect(cc.getByTestId("cc-selected")).toContainText(LOCK_V1, { timeout: 15_000 });
-  await page.goto(`${url}?section=production_frame`);
-  await expect(page.getByTestId("pf-selected")).toHaveAttribute("data-freshness", "fresh");
+  await uploadFrame(page, url, "e2e-2h-4c-v1.png", [150, 110, 90]);
+  await expect(page.getByTestId("pf-selected")).toHaveAttribute("data-freshness", "fresh", {
+    timeout: 15_000,
+  });
   // the Shot's own output readiness still applies (an existing human approval)
   await page.goto(`${url}?section=continuity`);
-  const gate = page.locator("form").filter({ hasText: "Continuity approved" });
+  const gate = continuityGate(page);
   if (await gate.getByRole("button", { name: "Approve" }).count()) {
     await gate.getByRole("button", { name: "Approve" }).click();
     await expect(gate.getByRole("button", { name: /Approved/ })).toBeVisible({ timeout: 15_000 });
@@ -354,20 +441,21 @@ test("4C Character Lock: a master Look edit keeps the clip fresh; switching to L
   await expect(clip).toHaveAttribute("data-freshness", "fresh");
 
   // edit the MASTER Look (the editable library): the locked Shot's truth is unchanged
-  await page.goto("/projects/ojousama/characters");
-  await page.getByRole("link", { name: "Yumeko" }).first().click();
-  const ivory = page.locator("details", { has: page.locator("summary", { hasText: "Ivory Suit" }) });
-  await ivory.locator("summary").click();
-  await ivory.locator('textarea[name="wardrobe"]').fill("midnight blue gown");
-  await ivory.getByRole("button", { name: "Save look" }).click();
-  await expect(ivory.locator('textarea[name="wardrobe"]')).toHaveValue("midnight blue gown");
+  await openYumeko(page);
+  const look = page.locator("details", { has: page.locator("summary", { hasText: LOOK }) });
+  await look.locator("summary").click();
+  await look.locator('textarea[name="wardrobe"]').fill("midnight blue gown");
+  await look.getByRole("button", { name: "Save look" }).click();
+  await expect(look.locator('textarea[name="wardrobe"]')).toHaveValue("midnight blue gown");
   await page.goto(lockedSet);
   await expect(card(page, "mock-video-169").getByTestId("candidate-animation")).toHaveAttribute(
     "data-freshness",
     "fresh",
   );
 
-  // switch the Shot to Lock v2: the clip is stale and a new animation is blocked (the PF is stale too)
+  // Lock v2 from the edited Look; switching the Shot to it: the clip is stale and a new animation is blocked (the PF
+  // is stale too)
+  await createLock(page, LOCK_V2);
   await page.goto(`${url}?section=look`);
   await cc.getByTestId("continuity-lock-card").filter({ hasText: LOCK_V2 }).getByTestId("cc-choose").click();
   await expect(cc.getByTestId("cc-selected")).toContainText(LOCK_V2, { timeout: 15_000 });
@@ -379,4 +467,54 @@ test("4C Character Lock: a master Look edit keeps the clip fresh; switching to L
   await page.goto(`${url}?section=animate`);
   await expect(panel(page)).toHaveAttribute("data-ready", "0");
   await expect(panel(page).locator('[data-code="production_frame_stale"]')).toBeVisible();
+});
+
+/**
+ * Puts Shot 4C's mutable state back exactly as the 4C test found it: Yumeko's Look assignment, the Lock selection,
+ * the selected Production Frame and the continuity approval. The spec-owned Look, its Locks, the uploaded frame and
+ * the mock clips stay as history: the product has no delete for any of them (append-only by design).
+ */
+test.afterAll(async ({ browser }) => {
+  if (!original4C) return;
+  const o = original4C;
+  const page = await browser.newPage();
+  try {
+    await clear4CLock(page, url4C);
+    await assign4CLook(page, url4C, { value: o.lookValue });
+    if (o.lockId) {
+      await page.goto(`${url4C}?section=look`);
+      await page
+        .getByTestId("character-continuity")
+        .locator(`form:has(input[name="continuityLockId"][value="${o.lockId}"])`)
+        .getByTestId("cc-choose")
+        .click();
+      await expect(page.getByTestId("cc-selected")).toHaveAttribute("data-lock-id", o.lockId, {
+        timeout: 15_000,
+      });
+    }
+    if (o.pfVersion) {
+      await page.goto(`${url4C}?section=production_frame`);
+      await page.getByTestId(`pf-select-${o.pfVersion}`).click();
+      await expect(page.getByTestId("pf-selected")).toHaveAttribute("data-version", o.pfVersion, {
+        timeout: 15_000,
+      });
+    }
+    await page.goto(`${url4C}?section=continuity`);
+    const approved =
+      (await continuityGate(page)
+        .getByRole("button", { name: /Approved/ })
+        .count()) > 0;
+    if (approved !== o.continuityApproved) {
+      await continuityGate(page).getByRole("button").click();
+      await expect(
+        continuityGate(page).getByRole("button", { name: o.continuityApproved ? /Approved/ : "Approve" }),
+      ).toBeVisible({ timeout: 15_000 });
+    }
+    // the restore is itself verified. One pointer has no undo in the product: a Production Frame selection cannot be
+    // cleared (frames are append-only and only re-selectable), so when 4C had none it keeps the uploaded frame.
+    const now4C = await read4C(page, url4C);
+    expect(o.pfVersion === null ? { ...now4C, pfVersion: null } : now4C).toEqual(o);
+  } finally {
+    await page.close();
+  }
 });
