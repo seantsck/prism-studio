@@ -16,6 +16,7 @@ import type {
 } from "@/domain/generation/schemas";
 import {
   GenerationSubmitError,
+  STALE_ANIMATION_SOURCE_MESSAGE,
   LeaseLostError,
   type AttemptView,
   type ClaimedJob,
@@ -33,6 +34,11 @@ import {
 export interface MemoryProjectsAccess {
   all(): ProjectData[];
   ownerUserId(): string;
+  /**
+   * Phase 2H: the Shot's currently selected Production Frame id (memory keeps selections in the Production Frame
+   * service, outside ProjectData). Missing accessor = no selection, so an animation is refused, never accepted.
+   */
+  selectedProductionFrameId?(projectId: string, shotId: string): string | null;
 }
 
 const clone = <T>(v: T): T => structuredClone(v);
@@ -113,6 +119,15 @@ export class MemoryGenerationService implements GenerationRepository, Generation
         "stale_shot",
         "This shot changed while you were preparing the generation. Review it and try again.",
       );
+    }
+
+    // same acceptance rule as the Postgres row-locked check (memory methods run without interleaving)
+    if (
+      input.expectedAnimationProductionFrameId &&
+      (this.access.selectedProductionFrameId?.(found.project.id, shot.id) ?? null) !==
+        input.expectedAnimationProductionFrameId
+    ) {
+      throw new GenerationSubmitError("stale_animation_source", STALE_ANIMATION_SOURCE_MESSAGE);
     }
 
     if (input.expectedProjectRevision !== null && this.revisionOf(found) !== input.expectedProjectRevision) {

@@ -221,6 +221,14 @@ overlay and its changed parts; it is never replaced by the Storyboard. Without a
 as a labelled **fallback**, never called a Production Frame. Syncing previous-Shot links changes the `continuity` part,
 so frames made under the old link become stale through the normal rules. See [shot-sequence-board](shot-sequence-board.md).
 
+## Animate Production Frame (Phase 2H)
+
+The dedicated **Animate Production Frame** workflow (Shot Prep → 16A) is stricter than the start-frame precedence above:
+the selected frame must exist and be **fresh**, and a manual start-frame override that differs from it **blocks** (it is
+never silently used or ignored). The request is image-to-video only, with `startFrameAssetId` equal to the frozen
+`references.productionFrame.assetId`; the frame is never also sent as a reference, and its Asset is never modified.
+Generic Generate keeps the precedence above. See [image-to-video](image-to-video.md).
+
 ## Tests
 
 | What                                                                                                           | Where                                                |

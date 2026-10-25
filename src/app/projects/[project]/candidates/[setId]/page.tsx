@@ -12,6 +12,7 @@ import {
   currentProductionFrameAttemptId,
   generatedFramePromotion,
 } from "@/domain/generated-production-frame";
+import { animationFreshness, animationProvenance } from "@/domain/generation/animation";
 import { candidateSetPurpose, rollupSet } from "@/domain/generation/candidates";
 import { generationSignature } from "@/domain/generation/signature";
 import { latestReviews } from "@/domain/generation/reviews";
@@ -49,7 +50,12 @@ export default async function CandidateSetPage({
   // Phase 2G.2: a Production Frame candidate set is an IMAGE review surface for the Shot's Production Frame
   const purpose = candidateSetPurpose(set.set);
   const still = purpose === "production_frame";
+  // Phase 2H: video clips animated from the Shot's canonical Production Frame (the video surface + source truth)
+  const animate = purpose === "animate_production_frame";
   const shotCtx = shot ? buildShotContext(data, shot.id) : null;
+  const frozenSource = (
+    set.set.recommendation as { animationSource?: { frameId?: string; version?: number } } | null
+  )?.animationSource;
   const episode = shot ? data.episodes.find((e) => e.id === shot.episodeId) : null;
   const views = new Map<string, AttemptView>();
   for (const m of set.members) {
@@ -95,7 +101,23 @@ export default async function CandidateSetPage({
             delivery: media?.delivery?.asset ?? null,
           })
         : null;
+    const provenance = animate && v ? animationProvenance(v.attempt) : null;
+    const fresh = animate && v && shotCtx ? animationFreshness(shotCtx, v.attempt) : null;
     board.push({
+      animation:
+        provenance && fresh
+          ? {
+              frameVersion: provenance.version,
+              firstFrameMatches: provenance.firstFrameMatches,
+              freshness: fresh.status,
+              staleReasons: fresh.messages,
+              // a crop/pad/trim is planned and not yet made: the provider original is never presented as production-shaped
+              conformRequired:
+                v?.attempt.status === "succeeded" &&
+                plan?.conform.required === true &&
+                !(media?.delivery && !media.delivery.isOriginal),
+            }
+          : null,
       imageUrl: still && shown && shown.type === "image" ? assetUrl(shown) : null,
       quality: still ? ((m.plan.quality as string | null | undefined) ?? null) : null,
       productionFrame:
@@ -200,8 +222,8 @@ export default async function CandidateSetPage({
         title={set.set.title || "Candidate set"}
         subtitle={
           <>
-            {still ? "Production Frame candidates · " : ""}Shot {shot?.shotCode ?? "?"} ·{" "}
-            {new Date(set.set.createdAt).toLocaleString()} ·{" "}
+            {still ? "Production Frame candidates · " : animate ? "Animation candidates · " : ""}Shot{" "}
+            {shot?.shotCode ?? "?"} · {new Date(set.set.createdAt).toLocaleString()} ·{" "}
             <span data-testid="set-rollup">{rollup.label}</span>
           </>
         }
@@ -214,9 +236,9 @@ export default async function CandidateSetPage({
             >
               {set.set.status}
             </Badge>
-            {still && shot && episode ? (
+            {(still || animate) && shot && episode ? (
               <Link
-                href={`/projects/${slug}/episodes/${episode.slug}/shots/${shot.id}?section=production_frame`}
+                href={`/projects/${slug}/episodes/${episode.slug}/shots/${shot.id}?section=${animate ? "animate" : "production_frame"}`}
                 className="text-[12px] text-muted underline"
                 data-testid="back-to-shot-prep"
               >
@@ -294,6 +316,16 @@ export default async function CandidateSetPage({
           canPromote={set.set.status !== "archived"}
           purpose={purpose}
           shotId={set.set.shotId}
+          animationSource={
+            animate
+              ? {
+                  frameVersion: frozenSource?.version ?? null,
+                  stillSelected: Boolean(
+                    frozenSource?.frameId && shotCtx?.selectedProductionFrame?.id === frozenSource.frameId,
+                  ),
+                }
+              : null
+          }
         />
 
         <Panel

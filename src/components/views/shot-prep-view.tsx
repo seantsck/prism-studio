@@ -12,6 +12,7 @@ import {
   renderGenerationBrief,
   shotChangedSinceAttempt,
 } from "@/domain/generation-package";
+import { AnimateProductionFrame } from "@/components/generation/animate-production-frame";
 import { GenerateWorkspace } from "@/components/generation/generate-workspace";
 import { ProductionFrameCandidates } from "@/components/generation/production-frame-candidates";
 import { isProductionFrameAttempt } from "@/domain/generation/schemas";
@@ -183,6 +184,8 @@ const SECTION_ORDER: Array<{ key: string; label: string; preflight: PreflightSec
   { key: "audio", label: "14 · Audio", preflight: ["audio"] },
   { key: "storyboard", label: "15 · Storyboard / keyframes", preflight: ["storyboard"] },
   { key: "production_frame", label: "16 · Production Frame", preflight: ["production_frame"] },
+  // Phase 2H: the canonical image-first workflow (never folded into generic Generate's modality settings)
+  { key: "animate", label: "16A · Animate Production Frame", preflight: [] },
   { key: "generation", label: "17 · Generation intent", preflight: ["generation"] },
   { key: "preflight", label: "18 · Preflight", preflight: [] },
   { key: "brief", label: "19 · Generation brief", preflight: [] },
@@ -1065,6 +1068,30 @@ export function ShotPrepView({
               }
               openHref={`${shotPath(slug, episode.slug, shotId)}?section=production_frame`}
             />
+          </SectionChrome>
+
+          {/* 16A Animate Production Frame (Phase 2H). Rendered only when open: it carries the model-compare
+              controls, and one page never holds two of them at once */}
+          <SectionChrome {...sectionProps("animate")}>
+            {openKey === "animate" ? (
+              <AnimateProductionFrame data={data} shotId={shotId} />
+            ) : (
+              <div className="flex items-center justify-between gap-3 border border-line px-2.5 py-1.5">
+                <span className="text-[12px]">
+                  Animate the selected Production Frame
+                  <span className="block text-[11px] text-faint">
+                    image-to-video from the exact canonical still; you choose the models
+                  </span>
+                </span>
+                <a
+                  data-testid="animate-open-link"
+                  href={shotPath(slug, episode.slug, shotId, "animate")}
+                  className="rounded-[3px] border border-line2 px-2 py-1 text-[12px] hover:border-accent"
+                >
+                  Animate Production Frame
+                </a>
+              </div>
+            )}
           </SectionChrome>
 
           {/* 17 Generation intent */}

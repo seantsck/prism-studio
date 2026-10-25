@@ -1,5 +1,6 @@
 import type { GenerationPackage } from "../../generation-package";
 import type { DurationStrategy, FramingStrategy } from "../../framing/adaptation";
+import { ANIMATE_KEYFRAME_DISCLOSURE } from "../animation";
 import { evaluateCompatibility, type CompatibilityReport, type InputMode } from "../compatibility";
 import type { GenerationModel, GenerationPurpose, ModelAvailability } from "../schemas";
 import { estimateCredits, estimateImageCredits, isImageCatalogModel, tierById } from "./catalog";
@@ -199,7 +200,9 @@ export function evaluateModelFit(args: {
         detail: i.used
           ? asReference
             ? "Supplied as a reference image (reference mode), not as the exact frame."
-            : "Conditions the generation."
+            : purpose === "animate_production_frame" && i.kind === "start_frame"
+              ? "Exact first frame: the selected Production Frame (image-to-video)."
+              : "Conditions the generation."
           : supported
             ? "The model supports it but this evaluation does not use it."
             : "This model has no such input; it will not influence the result.",
@@ -213,7 +216,9 @@ export function evaluateModelFit(args: {
         if (modeExclusive) {
           state = "not_used_mode";
           detail =
-            "Keyframe mode: this model cannot combine first/last frames with references. Switch to reference mode to use it.";
+            purpose === "animate_production_frame"
+              ? ANIMATE_KEYFRAME_DISCLOSURE
+              : "Keyframe mode: this model cannot combine first/last frames with references. Switch to reference mode to use it.";
         } else if (i.role === "location_view") {
           state = "unsupported";
           detail =

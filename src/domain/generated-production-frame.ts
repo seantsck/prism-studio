@@ -1,6 +1,6 @@
 import type { ShotContext } from "./context";
 import { computeShotParts, FRESHNESS_PARTS, PART_LABELS, type FreshnessPart } from "./fingerprint";
-import { purposeOfRequest, type GenerationPurpose } from "./generation/schemas";
+import { parseGenerationPurpose, purposeOfRequest, type GenerationPurpose } from "./generation/schemas";
 import {
   checkProductionImage,
   draftProductionFrame,
@@ -50,7 +50,7 @@ export type GeneratedFrameBlockCode =
 export const PRODUCTION_FRAME_REFERENCE = "productionFrameReference" as const;
 
 /** "lighting" → "Lighting changed"; the referenced frame reads as "Production Frame reference changed". */
-const changedPartText = (p: string): string =>
+export const changedPartText = (p: string): string =>
   p === PRODUCTION_FRAME_REFERENCE
     ? "Production Frame reference changed"
     : `${PART_LABELS[p as FreshnessPart] ?? p} changed`;
@@ -93,7 +93,8 @@ export interface CandidateInputBasis {
   namedParts: Partial<Record<FreshnessPart, string>> | null;
   /**
    * The Production Frame this candidate received as an image reference, or null when it used none. `assetId` comes from
-   * the frozen request (what was actually sent); the frame identity comes from the frozen package snapshot.
+   * the frozen request (what was actually sent); the frame identity comes from the frozen package snapshot. Phase 2H:
+   * for an `animate_production_frame` attempt it is the request's START FRAME (the frame is never also a reference).
    */
   productionFrameReference: { assetId: string; frameId: string | null; version: number | null } | null;
   /**
@@ -142,9 +143,19 @@ export function candidateInputBasis(
           FRESHNESS_PARTS.filter((p) => typeof parts[p] === "string").map((p) => [p, parts[p]!]),
         ) as Partial<Record<FreshnessPart, string>>)
       : null;
-  const refs = (attempt.request as { references?: Array<{ role?: string; assetId?: string }> } | null)
-    ?.references;
-  const usedAssetId = refs?.find((r) => r.role === "production_frame")?.assetId ?? null;
+  const request = attempt.request as {
+    purpose?: unknown;
+    startFrameAssetId?: unknown;
+    references?: Array<{ role?: string; assetId?: string }>;
+  } | null;
+  const refs = request?.references;
+  // an animation's Production Frame is its exact first frame (2H); a still candidate's is a reference image (2G.2)
+  const animatedFrom =
+    parseGenerationPurpose(request?.purpose) === "animate_production_frame" &&
+    typeof request?.startFrameAssetId === "string"
+      ? request.startFrameAssetId
+      : null;
+  const usedAssetId = animatedFrom ?? refs?.find((r) => r.role === "production_frame")?.assetId ?? null;
   const viewAssetId = refs?.find((r) => r.role === "location_view")?.assetId ?? null;
   const lv = snap?.references?.locationView;
   const pf = snap?.references?.productionFrame;

@@ -8,6 +8,13 @@ import {
 } from "../framing/adaptation";
 import { parseAspectRatio, sameRatio } from "../framing/ratio";
 import {
+  ANIMATE_KEYFRAME_DISCLOSURE,
+  ANIMATE_NO_REFERENCE_MODE,
+  ANIMATE_REQUIRES_EXACT_FIRST_FRAME,
+  ANIMATE_REQUIRES_IMAGE_TO_VIDEO,
+  animationSource,
+} from "./animation";
+import {
   GENERATION_MODALITIES,
   type GenerationModality,
   type GenerationModel,
@@ -237,6 +244,9 @@ function chooseModality(
   purpose: GenerationPurpose,
 ): GenerationModality | null {
   const supported = new Set(model.capabilities.modalities);
+  // Phase 2H: the canonical Production Frame IS the first frame. Image-to-video or nothing: never a text-to-video fallback.
+  if (purpose === "animate_production_frame")
+    return supported.has("image_to_video") ? "image_to_video" : null;
   if (purpose === "production_frame") {
     // Independent of `shot.generation.modality`: reference inputs present → image_to_image, otherwise text_to_image.
     const hasRefs = deriveProductionFrameReferenceCandidates(pkg).length > 0;
@@ -287,12 +297,17 @@ export function evaluateCompatibility(
      * approved storyboard frame stays the exact first frame and references are listed as not used.
      */
     inputMode?: InputMode;
-    /** Default `shot_output`. `production_frame` asks for a still image and ignores video-only inputs. */
+    /**
+     * Default `shot_output`. `production_frame` asks for a still image and ignores video-only inputs.
+     * `animate_production_frame` (2H): image-to-video whose exact first frame is the selected, current Production
+     * Frame; keyframe mode only; the frame is never also a reference.
+     */
     purpose?: GenerationPurpose;
   } = {},
 ): CompatibilityReport {
   const purpose: GenerationPurpose = opts.purpose ?? "shot_output";
   const pfPurpose = purpose === "production_frame";
+  const animPurpose = purpose === "animate_production_frame";
   const caps = model.capabilities;
   const errors: CompatibilityIssue[] = [];
   const warnings: CompatibilityIssue[] = [];
@@ -300,22 +315,38 @@ export function evaluateCompatibility(
   const inputs: CompatibilityInput[] = [];
 
   const exclusive = caps.references.keyframesExcludeReferences === true;
+  // reference mode would demote the Production Frame to a reference image: never for an animation of it
+  if (animPurpose && opts.inputMode === "references")
+    errors.push({ id: "animate.reference_mode", feature: "input_mode", message: ANIMATE_NO_REFERENCE_MODE });
   const referenceMode =
+    !animPurpose &&
     exclusive &&
     opts.inputMode === "references" &&
     caps.references.referenceImages &&
     pkg.generation.modality === "video" &&
     caps.modalities.includes("text_to_video");
   const modality = opts.modality ?? (referenceMode ? "text_to_video" : chooseModality(pkg, model, purpose));
-  if (!modality || !caps.modalities.includes(modality) || (pfPurpose && isVideoModality(modality))) {
+  if (
+    !modality ||
+    !caps.modalities.includes(modality) ||
+    (pfPurpose && isVideoModality(modality)) ||
+    (animPurpose && modality !== "image_to_video")
+  ) {
     errors.push({
-      id: "modality.unsupported",
+      id: animPurpose ? "animate.image_to_video_required" : "modality.unsupported",
       feature: "modality",
-      message: pfPurpose
-        ? `${model.displayName} cannot generate a still image for a Production Frame. It supports: ${caps.modalities.join(", ")}.`
-        : `${model.displayName} cannot do what this shot needs (${pkg.generation.modality}). It supports: ${caps.modalities.join(", ")}.`,
+      message: animPurpose
+        ? `${ANIMATE_REQUIRES_EXACT_FIRST_FRAME} ${ANIMATE_REQUIRES_IMAGE_TO_VIDEO} ${model.displayName} supports: ${caps.modalities.join(", ")}.`
+        : pfPurpose
+          ? `${model.displayName} cannot generate a still image for a Production Frame. It supports: ${caps.modalities.join(", ")}.`
+          : `${model.displayName} cannot do what this shot needs (${pkg.generation.modality}). It supports: ${caps.modalities.join(", ")}.`,
     });
   }
+  // the hard source rules (no frame / stale frame / a different manual override): never acknowledgeable
+  const source = animPurpose ? animationSource(pkg) : null;
+  if (source && !source.ok)
+    for (const i of source.issues)
+      errors.push({ id: `animate.${i.code}`, feature: "start_frame", message: i.message });
   const video = modality ? isVideoModality(modality) : false;
 
   // ── resolution (clamped, but loudly) — resolved first: the adaptation plan sizes the provider canvas from it ──
@@ -452,7 +483,11 @@ export function evaluateCompatibility(
   }
 
   // ── frames ──
-  const start = pkg.references.startFrameAssetId;
+  // An animation starts ONLY from the selected Production Frame's own Asset (never the generic precedence's override or
+  // Storyboard); every other purpose keeps the package's start frame.
+  const start = animPurpose
+    ? (pkg.references.productionFrame?.assetId ?? null)
+    : pkg.references.startFrameAssetId;
   const end = pkg.references.endFrameAssetId;
   let startUsed: string | null = null;
   let endUsed: string | null = null;
@@ -488,17 +523,21 @@ export function evaluateCompatibility(
     }
   } else if (modality === "image_to_video" || modality === "image_to_image") {
     if (!start) {
-      errors.push({
-        id: "start_frame.missing",
-        feature: "start_frame",
-        message:
-          "This modality needs a start frame, but the shot has no approved storyboard frame or start frame.",
-      });
+      // an animation without a Production Frame is already blocked by its own source rule (one message, not two)
+      if (!animPurpose)
+        errors.push({
+          id: "start_frame.missing",
+          feature: "start_frame",
+          message:
+            "This modality needs a start frame, but the shot has no approved storyboard frame or start frame.",
+        });
     } else if (!caps.references.startFrame) {
       errors.push({
         id: "start_frame.unsupported",
         feature: "start_frame",
-        message: `${model.displayName} cannot take a start frame.`,
+        message: animPurpose
+          ? `${model.displayName} cannot take a start frame. ${ANIMATE_REQUIRES_EXACT_FIRST_FRAME}`
+          : `${model.displayName} cannot take a start frame.`,
       });
     } else startUsed = start;
   } else if (start) {
@@ -524,7 +563,7 @@ export function evaluateCompatibility(
   if (start && !pfPurpose)
     inputs.push({
       kind: "start_frame",
-      label: "Start frame",
+      label: animPurpose ? "Production Frame (exact first frame)" : "Start frame",
       assetId: start,
       role: "start_frame",
       used: Boolean(startUsed) || frameRefs.some((f) => f.assetId === start),
@@ -541,7 +580,10 @@ export function evaluateCompatibility(
   // ── references ──
   const candidates = pfPurpose
     ? deriveProductionFrameReferenceCandidates(pkg)
-    : [...frameRefs, ...deriveReferenceCandidates(pkg)];
+    : animPurpose
+      ? // the frame is the start frame only (one Asset, one input slot); the Storyboard it supersedes is not sent
+        deriveReferenceCandidates(pkg).filter((c) => c.assetId !== start && c.role !== "storyboard")
+      : [...frameRefs, ...deriveReferenceCandidates(pkg)];
   const accepted: GenerationReference[] = [];
   const roleSupported = (role: ReferenceRole): boolean => {
     if (!caps.references.referenceImages) return false;
@@ -570,8 +612,9 @@ export function evaluateCompatibility(
       id: "references.mode_exclusive",
       feature: "references",
       label: `${accepted.length} reference image${accepted.length === 1 ? "" : "s"} (keyframe mode)`,
-      impact:
-        "This model cannot combine first/last frames with reference images. In keyframe mode the references are NOT used; choose reference mode to use them (the storyboard frame then becomes a reference, not the exact first frame).",
+      impact: animPurpose
+        ? ANIMATE_KEYFRAME_DISCLOSURE
+        : "This model cannot combine first/last frames with reference images. In keyframe mode the references are NOT used; choose reference mode to use them (the storyboard frame then becomes a reference, not the exact first frame).",
     });
     accepted.length = 0;
   }

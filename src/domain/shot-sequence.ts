@@ -1,5 +1,6 @@
 import { buildAnimaticTimeline } from "./animatic";
 import { shotOrder, type ShotContext } from "./context";
+import { shotAnimationSummary, type ShotAnimationSummary } from "./generation/animation";
 import { PART_LABELS, storyboardFreshness, type FreshnessPart } from "./fingerprint";
 import { fingerprint } from "./hash";
 import type { PreflightReport } from "./preflight";
@@ -138,6 +139,13 @@ export interface ShotSequenceItem {
   link: SequenceLink;
   integrityIssues: SequenceIntegrityIssue[];
   preflightBlockers: number;
+  /**
+   * Phase 2H: derived animation state (Not animated / Candidates / Final video approved / Animation stale) from the
+   * Shot's existing animation attempts and their approval. Status only: the board's visual stays the canonical still.
+   */
+  animation: ShotAnimationSummary;
+  /** A selected, CURRENT Production Frame exists, so the dedicated Animate workflow can be opened for this Shot. */
+  canAnimate: boolean;
 }
 
 // ───────────────────────── stored previous-Shot link ─────────────────────────
@@ -574,6 +582,8 @@ function itemOf(
     link: linkOf(shot.continuity.previousShotId, expectedPrevious),
     integrityIssues,
     preflightBlockers: report.blockers.length,
+    animation: shotAnimationSummary(ctx, data.attempts),
+    canAnimate: productionFrame?.status === "current",
   };
 }
 
