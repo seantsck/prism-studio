@@ -41,6 +41,13 @@ const memoryEnv = (port: number) => ({
  */
 const ISOLATED_2H = "zzzzzzzzzzzzzzzzzzzz-image-to-video.spec.ts";
 
+/**
+ * TEST SERVERS ONLY. Playwright's request client reuses keep-alive sockets; at Node's default idle-close boundary
+ * (5 s + 1 s buffer) the server could close a socket while `page.request` was reusing it, giving ECONNRESET before
+ * the request reached the app. Longer than the longest test (20 min), so each test's request context closes first.
+ */
+const KEEP_ALIVE = "--keepAliveTimeout 1500000";
+
 export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,
@@ -61,7 +68,7 @@ export default defineConfig({
   // Started in order: the first builds; the second serves the same build from a separate process (separate store).
   webServer: [
     {
-      command: "npm run build && npx next start -p 3102",
+      command: `npm run build && npx next start -p 3102 ${KEEP_ALIVE}`,
       url: "http://localhost:3102",
       // Always a fresh server in memory mode: e2e must never reach a real database, even if .env.local says otherwise.
       reuseExistingServer: false,
@@ -69,7 +76,7 @@ export default defineConfig({
       env: memoryEnv(3102),
     },
     {
-      command: "npx next start -p 3103",
+      command: `npx next start -p 3103 ${KEEP_ALIVE}`,
       url: "http://localhost:3103",
       reuseExistingServer: false,
       timeout: 120_000,
