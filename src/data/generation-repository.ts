@@ -45,6 +45,13 @@ export class GenerationSubmitError extends Error {
 export const STALE_ANIMATION_SOURCE_MESSAGE =
   "The Production Frame changed while this animation was being submitted. Review the current Production Frame and animate again.";
 
+/**
+ * Creative approval is the Shot's ONE approved output (one per Shot, any Shot-output purpose), so a Production Frame
+ * candidate must never take it: approving one would silently supersede the Shot's approved video.
+ */
+export const NOT_SHOT_OUTPUT_APPROVAL_MESSAGE =
+  "Only a Shot output can be approved. A Production Frame candidate becomes the Production Frame with “Use as Production Frame” instead.";
+
 export class LeaseLostError extends Error {
   constructor(jobId: string) {
     super(`Lease on generation job ${jobId} was lost`);
@@ -164,7 +171,10 @@ export interface GenerationRepository {
   listJobEvents(jobId: string): Promise<GenerationEvent[]>;
   /** queued → cancelled locally; otherwise cancel_requested (the worker asks the provider). */
   requestCancel(jobId: string, now: string): Promise<GenerationJob | null>;
-  /** Narrow review write (never rewrites the creative request). Approving unapproves siblings atomically. */
+  /**
+   * Narrow review write (never rewrites the creative request). Approving unapproves siblings atomically and is refused
+   * for an attempt that is not a Shot output (`NOT_SHOT_OUTPUT_APPROVAL_MESSAGE`).
+   */
   reviewAttempt(attemptId: string, review: ReviewInput): Promise<GenerationAttempt | null>;
 }
 

@@ -8,6 +8,7 @@ import {
   isTerminal,
 } from "@/domain/generation/job-state";
 import { attemptStatusForJob } from "@/domain/generation/job-state-mirror";
+import { isShotOutputAttempt } from "@/domain/generation/schemas";
 import type {
   GenerationCost,
   GenerationEvent,
@@ -17,6 +18,7 @@ import type {
 import {
   GenerationSubmitError,
   STALE_ANIMATION_SOURCE_MESSAGE,
+  NOT_SHOT_OUTPUT_APPROVAL_MESSAGE,
   LeaseLostError,
   type AttemptView,
   type ClaimedJob,
@@ -340,6 +342,7 @@ export class MemoryGenerationService implements GenerationRepository, Generation
       if (f.attempt.status !== "succeeded") {
         throw new Error("Only a completed generation can be approved.");
       }
+      if (!isShotOutputAttempt(f.attempt)) throw new Error(NOT_SHOT_OUTPUT_APPROVAL_MESSAGE);
       for (const sibling of f.project.attempts) {
         if (sibling.shotId === f.attempt.shotId && sibling.id !== f.attempt.id && sibling.approved) {
           sibling.approved = false;

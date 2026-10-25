@@ -1,14 +1,18 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { GenerationSubmitError } from "@/data/generation-repository";
+import { GenerationSubmitError, NOT_SHOT_OUTPUT_APPROVAL_MESSAGE } from "@/data/generation-repository";
 import {
   DURATION_STRATEGIES,
   FRAMING_STRATEGIES,
   type DurationStrategy,
   type FramingStrategy,
 } from "@/domain/framing/adaptation";
-import { REJECTION_CATEGORIES, type RejectionCategory } from "@/domain/generation/schemas";
+import {
+  isShotOutputAttempt,
+  REJECTION_CATEGORIES,
+  type RejectionCategory,
+} from "@/domain/generation/schemas";
 import { prepareSubmission, submissionKey } from "@/generation/submission";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { requireUser } from "./auth";
@@ -146,6 +150,10 @@ async function reviewGeneration_impl(form: FormData) {
     throw new UserFacingError("That attempt no longer exists.");
   if (decision === "approve" && view.attempt.status !== "succeeded") {
     throw new UserFacingError("Only a completed generation can be approved.");
+  }
+  // the repository enforces this too; checked here so a direct request gets the reason, not a generic error
+  if (decision === "approve" && !isShotOutputAttempt(view.attempt)) {
+    throw new UserFacingError(NOT_SHOT_OUTPUT_APPROVAL_MESSAGE);
   }
 
   const categories = form
