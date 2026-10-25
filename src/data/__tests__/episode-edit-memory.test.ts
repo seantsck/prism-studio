@@ -480,6 +480,25 @@ describe("Episode edit (memory): picture sources", () => {
     ).toBe("invalid");
   });
 
+  it("holds an existing placeholder longer or shorter (its frame is re-checked, not lost)", async () => {
+    const w = world();
+    const pf = w.productionFrame(w.shotB.id);
+    const e0 = await w.create([
+      w.item(w.shotA.id, { kind: "storyboard_frame", storyboardFrameId: w.frame.id, durationMs: 2000 }),
+      w.item(w.shotB.id, { kind: "production_frame", productionFrameId: pf.id, durationMs: 2000 }),
+    ]);
+    const [still, frame] = e0.items.map((i) => i.id);
+    const e1 = await w.apply(e0.id, 0, [
+      { op: "set_hold", itemId: still!, durationMs: 2600 },
+      { op: "set_hold", itemId: frame!, durationMs: 1800 },
+    ]);
+    expect(e1.revision).toBe(1);
+    expect(e1.items.map((i) => i.visual)).toEqual([
+      { kind: "storyboard_frame", storyboardFrameId: w.frame.id, durationMs: 2600 },
+      { kind: "production_frame", productionFrameId: pf.id, durationMs: 1800 },
+    ]);
+  });
+
   it("stores exactly the fields of the kind; an unknown or mixed picture is refused or reduced to its kind", async () => {
     const w = world();
     const e0 = await w.create();

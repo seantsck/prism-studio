@@ -126,17 +126,15 @@ export function editRefs(current: Pick<EpisodeEdit, "items">, ops: readonly Edit
       if (item) replacement.push(item.shotId);
     }
   }
-  // a changed picture of an existing item re-checks its Shot; a trim re-checks the pinned clip against its Asset
+  // a changed picture of an existing item re-checks its Shot; a trim / hold re-checks the picture it keeps (the pinned
+  // clip against its Asset, the placeholder frame against its Shot)
   for (const op of ops) {
     if (op.op !== "set_visual" && op.op !== "use_replacement" && op.op !== "trim" && op.op !== "set_hold")
       continue;
     const item = current.items.find((i) => i.id === op.itemId);
     if (!item) continue;
     shots.push(item.shotId);
-    if (op.op === "trim" && item.visual.kind === "video") {
-      attempts.push(item.visual.attemptId);
-      assets.push(item.visual.assetId);
-    }
+    if (op.op === "trim" || op.op === "set_hold") visual(item.visual);
   }
   return {
     shotIds: uniq(shots),

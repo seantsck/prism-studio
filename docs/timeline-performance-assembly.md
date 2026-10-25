@@ -2,11 +2,11 @@
 
 Status: **2I.1 architecture approved. 2I.1A (pure domain) complete** in `src/domain/edit/` (pushed `e5f5061`; full
 unit run 1638/1639 with one accepted, unrelated, non-reproducible timing flake in `character-continuity-actions.test.ts`,
-recorded as such, not as a clean pass). **2I.1B (persistence) implemented locally** (§3): migration
-`0043_episode_edits.sql` is **written and rehearsed with `db:migrate -- --dry-run` (rolled back), NOT applied** to the
-hosted database; the memory repository and its tests pass; `db:episode-edits` and the 0043 parts of `db:validate` /
-`db:behavior` need the hosted apply (explicit approval) before they can run. **Not implemented:** server actions, UI and
-playback (2I.1C onward). A prerequisite hardening change (§1, audit findings) shipped separately and is not part of the
+recorded as such, not as a clean pass). **2I.1B (persistence) complete** (§3): migration `0043_episode_edits.sql`
+is **applied to the hosted DEV database** (approved; ledger checksum
+`9e8e6d0a176aa6a9d7c23388df6a43f46fb362bd1b27e36c714d5c9d94128124`) and verified there (`db:episode-edits` 94/94,
+`db:validate`, `db:behavior` 49/49, `db:generation` 71/71); full unit 1661/1661. No production deployment. **Not
+implemented:** server actions, UI and playback (2I.1C onward). A prerequisite hardening change (§1, audit findings) shipped separately and is not part of the
 timeline data model; its Postgres regression is now in `db:generation` (section 9).
 
 The filmmaking path is script → performance → Shot Prep → storyboard → Production Frame → image-to-video →
@@ -319,7 +319,7 @@ Evolution: the Animatic view links to the Episode edit when one exists; Phase 5'
 cut" is realised by the edit (the Animatic becomes the edit's placeholder-only projection). No migration of Animatic
 data is needed because there is none.
 
-## 3. Persistence (migration `0043_episode_edits.sql` — written, dry-run only, NOT applied)
+## 3. Persistence (migration `0043_episode_edits.sql` — applied to hosted DEV)
 
 The block below was the approved plan; §3.1 records what 2I.1B implemented and where it went further.
 
@@ -495,13 +495,17 @@ checks (`assertEditValid`), write the difference (Postgres: removals first, then
 `MemoryRepository.remove` refuses a Shot, attempt, Asset, storyboard frame, take or line an edit references (`in_use`),
 and an Episode that goes takes its edit with it.
 
-Verification status (2I.1B, local): memory suite `src/data/__tests__/episode-edit-memory.test.ts` (21 tests: identity,
-one per Episode / Shot, order, every source rule, trims, placeholders, placements, explicit silence, replacement,
-revision, two concurrent writers, deletion semantics); the 0043 rehearsal (`db:migrate -- --dry-run`) applies cleanly
-and rolls back; the approval-purpose Postgres regression (`db:generation` section 9) passes against the hosted dev
-database (its own throwaway project, removed). **Pending the hosted apply of 0043 (approval):** `db:episode-edits`
-(structure, RLS, no worker privilege, memory/Postgres parity over one op script, every trigger / key, two-writer and
-held-lock concurrency, deletion, Project cascade) and the 0043 parts of `db:validate` / `db:behavior`.
+Verification (2I.1B): memory suite `src/data/__tests__/episode-edit-memory.test.ts` (22 tests: identity, one per
+Episode / Shot, order, every source rule, trims, placeholders and their holds, placements, explicit silence,
+replacement, revision, two concurrent writers, deletion semantics). On the hosted DEV database after the approved apply
+of 0043: `db:episode-edits` 94/94 (structure, owner-only RLS, no worker privilege, memory/Postgres parity over one
+27-step op script with identical outcomes and resulting edit, every trigger / key with raw SQL, two writers on two
+connections against one revision → exactly one wins and the loser writes nothing, a held `FOR UPDATE` blocking the
+second writer, direct Shot / attempt / frame deletes refused with the edit intact, the Shot deletable after its item is
+removed, Project cascade; its two throwaway projects removed), `db:validate` STRUCTURE OK, `db:behavior` 49/49 (rolled
+back), `db:generation` 71/71 (the approval-purpose regression, section 9). The first hosted run found one defect,
+fixed before the push: a hold change on an existing placeholder did not load that placeholder's frame for re-checking
+(`editRefs`), now covered by a memory test.
 
 ## 4. Actions (`src/server/episode-edit-actions.ts`)
 
@@ -548,14 +552,14 @@ action needed.
 
 ## 6. Proposed implementation sequence
 
-| slice     | scope                                                                                                                                                                                                                                                                                               |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **2I.1A** | **Complete.** Pure domain (`src/domain/edit/`): edit rate, model + shape checks, eligibility, `proposeEpisodeAssembly`, `buildEpisodeEditView` (timing, Scene runs, §I facts), `replacementFor`, `editItemLineage`; unit tests. No persistence.                                                     |
-| **2I.1B** | **Implemented locally** (§3.1): migration `0043_episode_edits.sql` written + `db:migrate -- --dry-run` (not applied; the hosted apply needs explicit approval), `EpisodeEditRepository` memory + Postgres, `db:episode-edits`, RLS, validate/behavior updates, `db:generation` approval regression. |
-| **2I.1C** | Actions + a read-only Episode Edit page: create assembly, the picture lane with truthful kind labels, durations, approval/freshness/replacement badges, performance lane, lineage inspector. Memory E2E.                                                                                            |
-| **2I.1D** | Editorial mutations in the UI: choose source, use replacement, trim, reorder, add/remove, re-pin performance, source audio; conflict handling.                                                                                                                                                      |
-| **2I.1E** | Playback of the rough sequence: video elements + take cues on the generalised audio-led clock; Animatic links to the edit.                                                                                                                                                                          |
-| **2I.1F** | Supabase E2E, hosted migration (approval), docs/roadmap close-out.                                                                                                                                                                                                                                  |
+| slice     | scope                                                                                                                                                                                                                                           |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **2I.1A** | **Complete.** Pure domain (`src/domain/edit/`): edit rate, model + shape checks, eligibility, `proposeEpisodeAssembly`, `buildEpisodeEditView` (timing, Scene runs, §I facts), `replacementFor`, `editItemLineage`; unit tests. No persistence. |
+| **2I.1B** | **Complete** (§3.1): migration `0043_episode_edits.sql` applied to hosted DEV (approved), `EpisodeEditRepository` memory + Postgres, `db:episode-edits`, RLS, validate/behavior updates, `db:generation` approval regression.                   |
+| **2I.1C** | Actions + a read-only Episode Edit page: create assembly, the picture lane with truthful kind labels, durations, approval/freshness/replacement badges, performance lane, lineage inspector. Memory E2E.                                        |
+| **2I.1D** | Editorial mutations in the UI: choose source, use replacement, trim, reorder, add/remove, re-pin performance, source audio; conflict handling.                                                                                                  |
+| **2I.1E** | Playback of the rough sequence: video elements + take cues on the generalised audio-led clock; Animatic links to the edit.                                                                                                                      |
+| **2I.1F** | Supabase E2E, hosted migration (approval), docs/roadmap close-out.                                                                                                                                                                              |
 
 ## 7. Generic revision gap — impact
 

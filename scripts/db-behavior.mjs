@@ -344,7 +344,7 @@ try {
       /does not exist in this project|completed generation/,
     );
     await client.query(
-      "insert into performance_takes (id, project_id, dialogue_line_id, source_type, duration_ms, take_number) values ($1,$2,$3,'temp_voice',2000,7)",
+      "insert into performance_takes (id, project_id, dialogue_line_id, source_type, duration_ms, take_number) values ($1,$2,$3,'temp_voice',2000,43)",
       [TK, P, L],
     );
     const placementInsert =

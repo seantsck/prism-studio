@@ -95,8 +95,8 @@ The Postgres Shot write now updates `shot_characters` rows in place instead of r
 save keeps those selections. **0042** is a fix-forward for 0041 (applied, therefore immutable): the Lock image → Asset
 FK becomes `DEFERRABLE INITIALLY DEFERRED`, as 0005 did for `shot_characters`. A Project cascade can then pass through
 Lock images, while a direct delete of an Asset a Lock froze is still refused at commit
-([character-continuity-locks](character-continuity-locks.md)). **0043** (Phase 2I.1B, **written and dry-run only;
-not applied** until explicitly approved) adds the persisted Episode edit: `episode_edits` (one per Episode via the
+([character-continuity-locks](character-continuity-locks.md)). **0043** (Phase 2I.1B, applied to hosted DEV after explicit
+approval) adds the persisted Episode edit: `episode_edits` (one per Episode via the
 removable `episode_edits_one_per_episode`, rational edit rate, revision counter), `episode_edit_items` (explicit
 deferred-unique order, picture by kind with a kind/column check and a source trigger, removable one item per Shot) and
 `episode_edit_audio_placements` (line + take references, inside the item in 2I.1); every source key is deferred NO

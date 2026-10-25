@@ -446,23 +446,23 @@ try {
     ],
     [
       "Production Frame purpose refused",
-      (e) => [{ op: "set_visual", itemId: at(e, A), visual: video(cAframe, 0, 1000) }],
+      (e) => [{ op: "set_visual", itemId: at(e, A), visual: video(cAframe, 0, 4000) }],
     ],
     [
       "not succeeded refused",
-      (e) => [{ op: "set_visual", itemId: at(e, A), visual: video(cArunning, 0, 1000) }],
+      (e) => [{ op: "set_visual", itemId: at(e, A), visual: video(cArunning, 0, 4000) }],
     ],
     [
       "unknown duration refused",
-      (e) => [{ op: "set_visual", itemId: at(e, A), visual: video(cAunprobed, 0, 1000) }],
+      (e) => [{ op: "set_visual", itemId: at(e, A), visual: video(cAunprobed, 0, 4000) }],
     ],
     [
       "attempt of another Shot refused",
-      (e) => [{ op: "set_visual", itemId: at(e, A), visual: video(cB, 0, 1000) }],
+      (e) => [{ op: "set_visual", itemId: at(e, A), visual: video(cB, 0, 4000) }],
     ],
     [
       "attempt of another project refused",
-      (e) => [{ op: "set_visual", itemId: at(e, A), visual: video(cZ, 0, 1000) }],
+      (e) => [{ op: "set_visual", itemId: at(e, A), visual: video(cZ, 0, 4000) }],
     ],
     [
       "Asset of another attempt refused",
@@ -470,7 +470,7 @@ try {
         {
           op: "set_visual",
           itemId: at(e, A),
-          visual: video({ attemptId: cA.attemptId, assetId: cB.assetId }, 0, 1000),
+          visual: video({ attemptId: cA.attemptId, assetId: cB.assetId }, 0, 4000),
         },
       ],
     ],
