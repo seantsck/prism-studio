@@ -1,6 +1,14 @@
 import { isShotOutputAttempt } from "@/domain/generation/schemas";
 import type { GenerationOutput } from "@/domain/generation/schemas";
-import type { Asset, GenerationAttempt, ProjectData } from "@/domain/schemas";
+import type { ProductionFrame } from "@/domain/production-frame";
+import type {
+  Asset,
+  GenerationAttempt,
+  PerformanceTake,
+  Project,
+  ProjectData,
+  StoryboardFrame,
+} from "@/domain/schemas";
 import type { AudioPlacement, EditItem, VisualSource } from "./model";
 
 /**
@@ -24,6 +32,16 @@ export interface EditMediaFacts {
 }
 
 export const NO_MEDIA_FACTS: EditMediaFacts = { attempts: new Map(), bestPointers: [] };
+
+/**
+ * The project facts a clip check reads: the project's id, its attempts and its Assets. A `ProjectData` is one; the
+ * repositories pass just the rows they loaded for the check (2I.1B).
+ */
+export interface ClipSourceData {
+  project: Pick<Project, "id">;
+  attempts: readonly GenerationAttempt[];
+  assets: readonly Asset[];
+}
 
 /** Output roles that are playable pictures of the attempt (not previews, thumbnails, audio or metadata). */
 const PICTURE_ROLES: ReadonlySet<string> = new Set(["primary", "variant"]);
@@ -74,7 +92,7 @@ export function attemptAssetRole(
  * playable pictures, a video, and a trim inside that Asset's probed duration. Empty = eligible.
  */
 export function videoSourceViolations(
-  data: Pick<ProjectData, "project" | "attempts" | "assets">,
+  data: ClipSourceData,
   shotId: string,
   source: Extract<VisualSource, { kind: "video" }>,
   media: EditMediaFacts,
@@ -140,7 +158,10 @@ export type PlaceholderViolation = "frame_not_found" | "frame_wrong_shot";
 
 /** A still placeholder must name a frame of THIS Shot. */
 export function placeholderViolations(
-  data: Pick<ProjectData, "frames" | "productionFrames">,
+  data: {
+    frames: ReadonlyArray<Pick<StoryboardFrame, "id" | "shotId">>;
+    productionFrames?: ReadonlyArray<Pick<ProductionFrame, "id" | "shotId">>;
+  },
   shotId: string,
   visual: Exclude<VisualSource, { kind: "video" }>,
 ): PlaceholderViolation[] {
@@ -157,7 +178,7 @@ export type PlacementViolation = "take_not_found" | "take_wrong_line" | "beyond_
 
 /** A placement must name an existing take OF its line and play inside that take. */
 export function placementViolations(
-  data: Pick<ProjectData, "takes">,
+  data: { takes: ReadonlyArray<Pick<PerformanceTake, "id" | "dialogueLineId" | "durationMs">> },
   p: AudioPlacement,
 ): PlacementViolation[] {
   const take = data.takes.find((t) => t.id === p.takeId);

@@ -4,7 +4,7 @@ import { computeShotParts } from "@/domain/fingerprint";
 import { isShotOutputAttempt } from "@/domain/generation/schemas";
 import type { Asset, GenerationAttempt, ProjectData } from "@/domain/schemas";
 import { editRateFromFps, type EditRate } from "./edit-rate";
-import { videoSourceViolations, type EditMediaFacts } from "./eligibility";
+import { videoSourceViolations, type ClipSourceData, type EditMediaFacts } from "./eligibility";
 import {
   itemDurationMs,
   type AudioPlacement,
@@ -77,7 +77,7 @@ export interface EditProposal {
 
 /** The Shot's approved Shot-output attempt (approval is one per Shot), if any. */
 export function approvedClipAttempt(
-  data: Pick<ProjectData, "attempts">,
+  data: { attempts: readonly GenerationAttempt[] },
   shotId: string,
 ): GenerationAttempt | null {
   return (
@@ -92,7 +92,7 @@ export function approvedClipAttempt(
  * primary output. Null when neither is placeable (the reason is the caller's note).
  */
 export function preferredClipAsset(
-  data: Pick<ProjectData, "project" | "attempts" | "assets">,
+  data: ClipSourceData,
   attempt: GenerationAttempt,
   media: EditMediaFacts,
 ): { asset: Asset; reason: "approved_clip_delivery_master" | "approved_clip_primary_output" } | null {

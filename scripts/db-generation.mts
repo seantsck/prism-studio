@@ -7,13 +7,15 @@
 //   - review (approve/reject/supersede), history immutability, cost records, ordered outputs
 //   - the DB-level job state machine, compared pair-by-pair with the TypeScript one
 //   - structural invariants: one active job per attempt, same-project foreign keys, cost checks
-// Requires `npm run db:seed` first (uses the demo project's shot 3A). Never touches another project.
+//   - the approval purpose guard: a Production Frame candidate can never take the Shot's approval (own project)
+// Requires `npm run db:seed` first (uses the demo project's shot 3A). Never touches another existing project (section 9
+// creates its own throwaway project and deletes it).
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import pg from "pg";
-import { GenerationSubmitError } from "../src/data/generation-repository";
+import { GenerationSubmitError, NOT_SHOT_OUTPUT_APPROVAL_MESSAGE } from "../src/data/generation-repository";
 import { PostgresGenerationData } from "../src/data/generation-postgres";
 import { AdminRepository, rlsPreamble } from "../src/data/postgres-repository";
 import { PostgresProductionFrameData } from "../src/data/production-frame-postgres";
@@ -59,6 +61,8 @@ const createdAttemptIds: string[] = [];
 const createdAssetIds: string[] = [];
 const createdFrameIds: string[] = [];
 let originalSelection: Record<string, unknown> | null = null;
+// section 9 runs in its own throwaway project (deleted in `finally`; its rows cascade)
+const approvalProjectId = randomUUID();
 
 async function raw(
   asUser: string | null,
@@ -825,6 +829,123 @@ try {
     codeC,
   );
   check("C. no attempt, job, cost or event was written", (await tally()) === t0, `${t0} → ${await tally()}`);
+  // ── 9. approval purpose guard (2I.1B regression of `fix: restrict generation approval to shot outputs`) ──
+  // Creative approval is one per Shot across purposes, so the repository write path (reviewAttempt, used by
+  // reviewGeneration and promoteCandidate) must refuse a Production Frame candidate. A throwaway project keeps the demo
+  // Shot's approval untouched; every row here cascades away with it.
+  {
+    const P9 = approvalProjectId;
+    const E9 = randomUUID(),
+      S9 = randomUUID(),
+      SH9 = randomUUID();
+    await pool.query("insert into projects (id, user_id, slug, title, purpose) values ($1,$2,$3,$4,'test')", [
+      P9,
+      dev.id,
+      `db-gen-approval-${P9.slice(0, 8)}`,
+      "db:generation approval guard",
+    ]);
+    await pool.query("insert into project_bibles (project_id) values ($1)", [P9]);
+    await pool.query(
+      "insert into episodes (id, project_id, number, slug, title) values ($1,$2,1,'ep-1','E')",
+      [E9, P9],
+    );
+    await pool.query(
+      "insert into scenes (id, project_id, episode_id, scene_number, slugline, int_ext) values ($1,$2,$3,'1','INT. X','INT')",
+      [S9, P9, E9],
+    );
+    await pool.query(
+      "insert into shots (id, project_id, episode_id, scene_id, shot_code, title) values ($1,$2,$3,$4,'1A','S')",
+      [SH9, P9, E9, S9],
+    );
+    let n9 = 0;
+    const attempt9 = async (purpose: string | null) => {
+      n9 += 1;
+      const attemptId = randomUUID();
+      await pool.query(
+        `insert into generation_attempts (id, project_id, shot_id, attempt_number, provider, model, modality,
+           package_snapshot, approved, status, review_status, request)
+         values ($1,$2,$3,$4,'mock','mock-video-1','video','{}'::jsonb,false,'succeeded','unreviewed',$5::jsonb)`,
+        [attemptId, P9, SH9, n9, purpose === null ? null : JSON.stringify({ purpose })],
+      );
+      return attemptId;
+    };
+    const shotOutput = await attempt9("shot_output");
+    const frameCandidate = await attempt9("production_frame");
+    const animation = await attempt9("animate_production_frame");
+    const legacy = await attempt9(null);
+    const reviewState = async () =>
+      JSON.stringify(
+        (
+          await pool.query(
+            `select id, approved, review_status, reviewed_at, notes from generation_attempts where shot_id = $1
+              order by attempt_number`,
+            [SH9],
+          )
+        ).rows,
+      );
+    const approve = (attemptId: string) =>
+      ownerGen.reviewAttempt(attemptId, {
+        status: "approved",
+        categories: [],
+        reason: "",
+        notes: "db:generation approval guard",
+        now: new Date().toISOString(),
+      });
+
+    const a1 = await approve(shotOutput);
+    check("9. a Shot-output attempt is approved through the real repository", a1?.approved === true);
+    const before = await reviewState();
+    let refusal = "";
+    try {
+      await approve(frameCandidate);
+    } catch (e) {
+      refusal = (e as Error).message;
+    }
+    check(
+      "9. approving a Production Frame candidate is refused with the guard's message",
+      refusal === NOT_SHOT_OUTPUT_APPROVAL_MESSAGE,
+      refusal,
+    );
+    check(
+      "9. …and writes no approval change: the Shot's approval and every review field are exactly as before",
+      (await reviewState()) === before,
+    );
+    const approvedNow = (
+      await pool.query("select id from generation_attempts where shot_id = $1 and approved", [SH9])
+    ).rows.map((r) => r.id);
+    check(
+      "9. the non-Shot-output attempt did not replace the Shot's approval",
+      approvedNow.length === 1 && approvedNow[0] === shotOutput,
+      JSON.stringify(approvedNow),
+    );
+    const rejected = await ownerGen.reviewAttempt(frameCandidate, {
+      status: "rejected",
+      categories: [],
+      reason: "not this one",
+      notes: "",
+      now: new Date().toISOString(),
+    });
+    check(
+      "9. rejecting a Production Frame candidate is unchanged (allowed; the approval stays)",
+      rejected?.reviewStatus === "rejected" &&
+        (await pool.query("select approved from generation_attempts where id = $1", [shotOutput])).rows[0]
+          .approved === true,
+    );
+    const a3 = await approve(animation);
+    check(
+      "9. an animation (Shot output) still approves and supersedes the previous approval",
+      a3?.approved === true &&
+        (await pool.query("select approved from generation_attempts where id = $1", [shotOutput])).rows[0]
+          .approved === false,
+    );
+    const a4 = await approve(legacy);
+    check("9. purpose-less history keeps approving as before (compatibility)", a4?.approved === true);
+    const del = await pool.query("delete from projects where id = $1", [P9]).then(
+      () => null,
+      (e: Error) => e.message,
+    );
+    check("9. the throwaway project is removed (cascade)", del === null, del ?? "");
+  }
 } finally {
   // Remove everything this run created: attempts cascade to jobs/events/outputs/costs, then the assets.
   if (createdAttemptIds.length) {
@@ -851,6 +972,7 @@ try {
   if (createdAssetIds.length) {
     await pool.query("delete from assets where id = any($1::uuid[])", [createdAssetIds]);
   }
+  await pool.query("delete from projects where id = $1", [approvalProjectId]).catch(() => undefined);
   rmSync(sinkRoot, { recursive: true, force: true });
 }
 

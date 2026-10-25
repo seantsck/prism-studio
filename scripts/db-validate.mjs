@@ -78,6 +78,10 @@ const expectedTables = [
   "character_continuity_locks",
   "character_continuity_lock_assets",
   "shot_character_continuity_selections",
+  // Phase 2I.1: the persisted Episode edit, its ordered items and the performance placed under them
+  "episode_edits",
+  "episode_edit_items",
+  "episode_edit_audio_placements",
 ];
 const tables = (await rows("select tablename, rowsecurity from pg_tables where schemaname='public'")).filter(
   (t) => t.tablename !== "prism_migrations",
@@ -127,6 +131,13 @@ const must = {
     "character_continuity_locks_character_idx",
     "character_continuity_lock_assets_asset_idx",
     "shot_character_continuity_selections_lock_idx",
+    "episode_edits_one_per_episode",
+    "episode_edit_items_one_per_shot",
+    "episode_edit_items_position_key",
+    "episode_edit_items_shot_idx",
+    "episode_edit_items_attempt_idx",
+    "episode_edit_items_asset_idx",
+    "episode_edit_audio_placements_take_idx",
   ],
   triggers: [
     "dialogue_locked_guard",
@@ -163,6 +174,10 @@ const must = {
     "character_continuity_lock_assets_membership",
     "shot_character_continuity_selections_check",
     "shot_characters_continuity_selection_clear",
+    "episode_edits_updated",
+    "episode_edit_items_updated",
+    "episode_edit_items_source_check",
+    "episode_edit_audio_placements_check",
   ],
 };
 const missingIdx = must.indexes.filter((i) => !idx.some((x) => x.indexname === i));

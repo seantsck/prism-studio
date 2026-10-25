@@ -305,6 +305,98 @@ try {
     /append-only/,
   );
 
+  // ── 0043: Episode edits (the full suite is db:episode-edits; these are the core barriers) ──
+  if (!(await client.query("select to_regclass('public.episode_edits') t")).rows[0].t) {
+    results.push(["migration 0043 (episode edits) is applied", false, "episode_edits does not exist"]);
+  } else {
+    const ED = id();
+    const IT = id();
+    const TK = id();
+    await client.query(
+      "insert into episode_edits (id, project_id, episode_id, edit_rate_num, edit_rate_den) values ($1,$2,$3,24000,1001)",
+      [ED, P, E],
+    );
+    await expectError(
+      "edit: a second edit of the same Episode is rejected (one per Episode)",
+      "insert into episode_edits (project_id, episode_id, edit_rate_num, edit_rate_den) values ($1,$2,24,1)",
+      [P, E],
+      /episode_edits_one_per_episode/,
+    );
+    const itemInsert =
+      "insert into episode_edit_items (id, project_id, edit_id, episode_id, shot_id, position, visual_kind, attempt_id, asset_id, source_in_ms, source_out_ms, duration_ms) values ($1,$2,$3,$4,$5,$6,$7,$8,null,$9,$10,$11)";
+    await client.query(itemInsert, [IT, P, ED, E, SH, 0, "none", null, null, null, 3000]);
+    await expectError(
+      "edit: a second item for the same Shot is rejected (one per Shot)",
+      itemInsert,
+      [id(), P, ED, E, SH, 1, "none", null, null, null, 1000],
+      /episode_edit_items_one_per_shot/,
+    );
+    await expectError(
+      "edit: an item with the columns of another kind is rejected",
+      itemInsert,
+      [id(), P, ED, E, SH, 1, "none", A1, null, null, 1000],
+      /kind_columns/,
+    );
+    await expectError(
+      "edit: a generation that has not completed cannot be placed",
+      itemInsert,
+      [id(), P, ED, E, SH, 1, "video", A1, 0, 1000, null],
+      /does not exist in this project|completed generation/,
+    );
+    await client.query(
+      "insert into performance_takes (id, project_id, dialogue_line_id, source_type, duration_ms, take_number) values ($1,$2,$3,'temp_voice',2000,7)",
+      [TK, P, L],
+    );
+    const placementInsert =
+      "insert into episode_edit_audio_placements (project_id, item_id, dialogue_line_id, take_id, start_ms, take_in_ms, take_out_ms) values ($1,$2,$3,$4,$5,0,$6)";
+    await expectOk("edit: a placement inside its item is accepted", async () => {
+      await client.query(placementInsert, [P, IT, L, TK, 500, 1500]);
+    });
+    await expectError(
+      "edit: a placement before the item start is rejected (2I.1 rule)",
+      placementInsert,
+      [P, IT, L, TK, -1, 1000],
+      /start_inside_item|unique/,
+    );
+    await expectError(
+      "edit: shrinking an item under a placed performance is rejected",
+      "update episode_edit_items set duration_ms = 1000 where id = $1",
+      [IT],
+      /cut a placed performance/,
+    );
+    await expectOk(
+      "edit: a Shot in the edit cannot be deleted directly (deferred key, checked here)",
+      async () => {
+        await client.query("savepoint d");
+        let refused = false;
+        try {
+          await client.query("delete from shots where id = $1", [SH]);
+          await client.query("set constraints all immediate");
+        } catch (err) {
+          refused = /foreign key/.test(err.message);
+        }
+        await client.query("rollback to savepoint d");
+        return { ok: refused };
+      },
+    );
+    await expectOk("edit: a Project delete cascades through its edit (deferred keys checked)", async () => {
+      await client.query("savepoint e");
+      try {
+        await client.query("delete from projects where id = $1", [P]);
+        await client.query("set constraints all immediate");
+        const n = (
+          await client.query(
+            "select (select count(*) from episode_edits where project_id = $1)::int + (select count(*) from episode_edit_items where project_id = $1)::int + (select count(*) from episode_edit_audio_placements where project_id = $1)::int as n",
+            [P],
+          )
+        ).rows[0].n;
+        return { ok: n === 0, msg: `left ${n}` };
+      } finally {
+        await client.query("rollback to savepoint e");
+      }
+    });
+  }
+
   await expectOk("deleting a project cascades to children (incl. shot Looks in use)", async () => {
     await client.query("savepoint c");
     await client.query("delete from projects where id=$1", [P]);
