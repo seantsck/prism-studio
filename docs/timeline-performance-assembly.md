@@ -6,8 +6,8 @@ recorded as such, not as a clean pass). **2I.1B (persistence) complete** (§3): 
 is **applied to the hosted DEV database** (approved; ledger checksum
 `9e8e6d0a176aa6a9d7c23388df6a43f46fb362bd1b27e36c714d5c9d94128124`) and verified there (`db:episode-edits` 94/94,
 `db:validate`, `db:behavior` 49/49, `db:generation` 71/71); full unit 1661/1661. No production deployment. **2I.1C (read-only
-Episode Edit page + explicit creation) implemented** (§4.1): `/projects/<slug>/episodes/<ep>/edit`. **Not
-implemented:** editing controls (2I.1D) and playback (2I.1E). A prerequisite hardening change (§1, audit findings) shipped separately and is not part of the
+Episode Edit page + explicit creation) implemented** (§4.1): `/projects/<slug>/episodes/<ep>/edit`. **2I.1D
+(explicit editing) implemented** (§4.2). **Not implemented:** rough-sequence playback (2I.1E). A prerequisite hardening change (§1, audit findings) shipped separately and is not part of the
 timeline data model; its Postgres regression is now in `db:generation` (section 9).
 
 The filmmaking path is script → performance → Shot Prep → storyboard → Production Frame → image-to-video →
@@ -577,7 +577,57 @@ Playwright project `memory-2i-isolated` against its own memory server (port 3104
 `npm run test:e2e` like the 2H isolated server; the shared `memory` project ignores it. No reset API was added; the test-only
 keep-alive setting applies to the new server too. No Supabase E2E in 2I.1C (2I.1F).
 
-The rest of this section is the planned 2I.1D action set.
+### 4.2 Implemented in 2I.1D: explicit editing
+
+The saved edit's page gains editing controls (an "Edit item" disclosure per item, ↑ / ↓ / Remove per item, and a "Shots
+not in the edit" panel). Every control is a plain server-action form (`src/server/episode-edit-actions.ts`) carrying
+the edit id, the item id and the revision the page showed; the server re-reads the user's project (ownership), refuses
+a stale revision before anything else, translates the request into the 2I.1B repository's `EditOp`s and applies them in
+ONE `apply` (lock, revision compare, every source re-validated, placements kept inside their item, revision +1 exactly
+once). The actions add no mutation logic of their own and no repository, domain-rule or schema change was needed
+(no migration 0044). Server-confirmed: no optimistic state; the page re-renders from the saved edit.
+
+| action                   | op(s)                         | behaviour                                                                                                                                                          |
+| ------------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `setEditItemSource`      | `set_visual`                  | pins any eligible clip (`video:<attempt>:<asset>`, at its FULL length), a Production Frame / Storyboard frame of the Shot (keeping the item's duration), or `none` |
+| `useEditItemReplacement` | `use_replacement`             | pins exactly the replacement the page showed (attempt + Asset); a different current replacement is refused ("replacement changed"), nothing is pinned silently     |
+| `trimEditItem`           | `trim`                        | source in / out (seconds → integer ms) inside the exact Asset; a trim that would cut a placed take is refused (J/L cuts are later)                                 |
+| `setEditItemHold`        | `set_hold`                    | a still / empty item's duration                                                                                                                                    |
+| `moveEditItem`           | `reorder`                     | ↑ / ↓: the complete new order (dense positions, deferred-unique)                                                                                                   |
+| `addShotToEdit`          | `add`                         | a Shot of the Episode not in the edit, as Prism proposes it (shown), at a chosen position; refused when the proposal changed (`proposedItemKey`) or already added  |
+| `removeEditItem`         | `remove`                      | (confirmed) removes the item and its placements; the Shot, clips, frames and takes are untouched and the Shot becomes deletable                                    |
+| `pinEditItemTake`        | `set_performance`             | pins one exact take for one line (other placements kept): starts where the line already starts, else where the Shot timeline lays it out; plays what fits          |
+| `repinSelectedTakes`     | `set_performance`             | an explicit "pin the selected takes" (laid out as the Shot timeline)                                                                                               |
+| `silenceEditItem`        | `clear_performance` / `set_…` | Silence for the item or one line: no placement (no "silence take" exists)                                                                                          |
+| `setEditItemClipAudio`   | `set_source_audio`            | Muted / Use clip audio; including is refused (and the option disabled) when Prism has no record of an audio track in the clip                                      |
+
+**Choices are facts, not requirements.** The source picker lists every eligible succeeded Shot-output clip of the Shot
+(each picture Asset: primary, variant, delivery version) with generation number, provider / model, review state,
+Approved / Best / Delivery master / Pinned badges, clip length and a preview through `/api/assets/<id>`, then the Shot's
+Production Frames (selected or not), Storyboard frames (approved or not) and "No picture". Best and approval are never
+required. Production Frame candidates are not offered and are refused by the repository and the database. The take picker
+lists the line's takes (archived ones only when pinned) with duration, source type, "selected now", archived and audio
+availability; an older or archived take may stay pinned, and pinning a take never changes the Shot's selected take.
+
+**Revision conflicts.** A change submitted from a page showing an older revision is refused with "This edit changed
+before your update was saved. Review the latest version and try again." Nothing is written, retried or merged; the page
+re-renders the latest edit while the message stays next to the control (the form is not remounted; after a success the
+forms reset to the re-rendered values). Two writers on one revision: exactly one wins (repository lock; unit-tested).
+
+**Currentness after a change** is the full re-read view (§4.1): e.g. Use replacement clears "Replacement available",
+a reorder raises "Order differs from Sequence" and re-derives Scene runs (a revisited Scene shows "run k of n"),
+pinning the selected take clears "Take superseded", Silence shows in the performance lane.
+
+**Tests.** `src/server/__tests__/episode-edit-editing.test.ts` (real free mock clips through the in-process worker: pin
+at full length, Production Frame candidate / foreign Asset refused, trims valid / outside / cutting a take / not a
+number, take pin with the project's selection untouched, foreign take refused, archived take kept and reported, Silence,
+clip audio refused without a track, replacement exactly-as-shown vs changed, reorder with two Scene runs, remove + add
+back with a proposal key, stale revision, two writers → one) plus the 2I.1C suites; the isolated memory E2E (§4.1) now
+continues with the 2I.1D browser flow (pin, refused and applied trims with later items moving, take, Silence, reorder,
+remove / add back, replacement, a two-tab conflict). Not in 2I.1D: playback (2I.1E), drag / ripple / slip / roll
+editing, frame-by-frame keys, transitions, multitrack, J/L cuts, undo.
+
+The rest of this section is the original action plan (now implemented as above).
 
 The browser sends ids, positions and integer ms only; the server re-reads the project, proposes and validates.
 
@@ -627,7 +677,7 @@ action needed.
 | **2I.1A** | **Complete.** Pure domain (`src/domain/edit/`): edit rate, model + shape checks, eligibility, `proposeEpisodeAssembly`, `buildEpisodeEditView` (timing, Scene runs, §I facts), `replacementFor`, `editItemLineage`; unit tests. No persistence. |
 | **2I.1B** | **Complete** (§3.1): migration `0043_episode_edits.sql` applied to hosted DEV (approved), `EpisodeEditRepository` memory + Postgres, `db:episode-edits`, RLS, validate/behavior updates, `db:generation` approval regression.                   |
 | **2I.1C** | **Implemented** (§4.1). Actions + a read-only Episode Edit page: create assembly, the picture lane with truthful kind labels, durations, approval/freshness/replacement badges, performance lane, lineage inspector. Memory E2E.                |
-| **2I.1D** | Editorial mutations in the UI: choose source, use replacement, trim, reorder, add/remove, re-pin performance, source audio; conflict handling.                                                                                                  |
+| **2I.1D** | **Implemented** (§4.2). Editorial mutations in the UI: choose source, use replacement, trim, reorder, add/remove, re-pin performance, source audio; conflict handling.                                                                          |
 | **2I.1E** | Playback of the rough sequence: video elements + take cues on the generalised audio-led clock; Animatic links to the edit.                                                                                                                      |
 | **2I.1F** | Supabase E2E, hosted migration (approval), docs/roadmap close-out.                                                                                                                                                                              |
 

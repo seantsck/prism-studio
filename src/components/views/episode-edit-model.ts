@@ -18,9 +18,10 @@ import {
 } from "@/domain/edit/view";
 import type { ProjectData } from "@/domain/schemas";
 import { assetUrl } from "@/lib/utils";
+import { addableShots, itemEditor, type AddableShotVM, type ItemEditorVM } from "./episode-edit-editor-model";
 
 /**
- * Display model of the Episode Edit page (Phase 2I.1C, read-only). Built from the pure 2I.1A domain (proposal, edit
+ * Display model of the Episode Edit page (Phase 2I.1C; the editing choices of 2I.1D are episode-edit-editor-model.ts). Built from the pure 2I.1A domain (proposal, edit
  * view, lineage) and the project's own records; it never writes, and it never follows Best, approval, a Production
  * Frame selection or a take selection: the persisted edit is the editorial truth and every upstream change is a badge.
  * Media is addressed only through the private `/api/assets/<id>` route (`assetUrl`), never a storage path.
@@ -87,6 +88,8 @@ export interface RowVM {
   problems: string[];
   notes: string[];
   lineage: { picture: LinkVM[]; audio: LinkVM[][] };
+  /** 2I.1D: the editing controls' choices (persisted edit only) */
+  editor?: ItemEditorVM;
 }
 
 export interface RunVM {
@@ -125,6 +128,8 @@ export interface EditPageVM {
   badges: BadgeVM[];
   /** every item whose source cannot be resolved, by Shot: shown, never omitted */
   problems: string[];
+  /** 2I.1D: Shots of the Episode not in the edit, with what adding each would create */
+  addable: AddableShotVM[];
 }
 
 const PLACEHOLDER_KINDS: ReadonlySet<VisualKind> = new Set(["production_frame", "storyboard_frame", "none"]);
@@ -515,7 +520,13 @@ export function editPage(data: ProjectData, edit: EpisodeEdit, media: EditMediaF
   const runs = runsOf(data, view);
   const rows = view.items.map<RowVM>((iv) => {
     const { badges, problems } = itemBadges(iv);
-    return { ...row(data, view, runs, iv, media, iv.item.id), badges, problems, notes: [] };
+    return {
+      ...row(data, view, runs, iv, media, iv.item.id),
+      badges,
+      problems,
+      notes: [],
+      editor: itemEditor(data, edit, iv, media),
+    };
   });
   const badges: BadgeVM[] = [];
   if (view.orderDiffersFromSequence) badges.push({ label: "Order differs from Sequence", tone: "warn" });
@@ -533,5 +544,6 @@ export function editPage(data: ProjectData, edit: EpisodeEdit, media: EditMediaF
     rows,
     badges,
     problems: rows.flatMap((r) => r.problems.map((p) => `${r.shotCode}: ${p}`)),
+    addable: addableShots(data, view.notInEditShotIds, media),
   };
 }

@@ -26,3 +26,20 @@ export function proposalKey(proposal: EditProposal): string {
     }),
   );
 }
+
+/**
+ * The identity of ONE proposed item as it would be persisted (Phase 2I.1D "Add Shot"): Shot, picture, clip audio,
+ * placements, basis. The page shows the proposed item with its key; the server re-proposes it and adds it only when the
+ * key is unchanged.
+ */
+export function proposedItemKey(item: EditProposal["items"][number]): string {
+  return sha256(
+    canonicalJson({
+      shotId: item.shotId,
+      visual: item.visual,
+      sourceAudio: item.sourceAudio,
+      performance: item.performance,
+      performanceBasis: item.performanceBasis,
+    }),
+  );
+}

@@ -4,12 +4,13 @@ import { Badge, Button, Empty, PageHeader } from "@/components/ui";
 import type { Episode, ProjectData } from "@/domain/schemas";
 import type { EpisodeEditPage } from "@/server/episode-edit-page";
 import { createEpisodeEdit } from "@/server/episode-edit-actions";
+import { AddShotPanel, ItemEditor, ItemOrderControls, type EditTarget } from "./episode-edit-controls";
 import type { BadgeVM, RowVM, RunVM, SummaryVM } from "./episode-edit-model";
 
 /**
- * Phase 2I.1C Episode Edit page: READ-ONLY. With no persisted edit it shows the proposed initial assembly (not an edit)
+ * Phase 2I.1C Episode Edit page (2I.1D adds the editing controls, episode-edit-controls.tsx). With no persisted edit it shows the proposed initial assembly (not an edit)
  * and one explicit "Create edit"; with an edit it shows the persisted editorial assembly, every pinned source labelled
- * truthfully and every upstream change as a badge. Editing controls are 2I.1D; playback is 2I.1E.
+ * truthfully and every upstream change as a badge, with explicit editing controls. Playback is 2I.1E.
  */
 export function EpisodeEditView({
   data,
@@ -90,6 +91,7 @@ export function EpisodeEditView({
     );
   }
 
+  const target: EditTarget = { projectSlug: data.project.slug, editId: page.editId, revision: page.revision };
   return (
     <div data-testid="episode-edit-persisted">
       <PageHeader
@@ -106,9 +108,9 @@ export function EpisodeEditView({
       />
       <div className="space-y-4 p-6">
         <p className="text-muted">
-          Saved edit <span className="font-mono text-faint">{page.editId.slice(0, 8)}</span>. Read-only in
-          this version: upstream changes (approval, Best, delivery masters, frames, takes, timing, order) are
-          shown as facts and never applied.
+          Saved edit <span className="font-mono text-faint">{page.editId.slice(0, 8)}</span>. Upstream changes
+          (approval, Best, delivery masters, frames, takes, timing, order) are shown as facts and never
+          applied: only an explicit change below edits it, each against the revision shown here.
         </p>
         {page.badges.length ? (
           <div className="flex flex-wrap gap-1.5" data-testid="edit-badges">
@@ -130,7 +132,8 @@ export function EpisodeEditView({
           </div>
         ) : null}
         <Runs runs={page.runs} />
-        <Rows rows={page.rows} />
+        <Rows rows={page.rows} target={target} />
+        <AddShotPanel target={target} addable={page.addable} items={page.rows.length} />
       </div>
     </div>
   );
@@ -182,18 +185,18 @@ function Runs({ runs }: { runs: RunVM[] }) {
   );
 }
 
-function Rows({ rows }: { rows: RowVM[] }) {
+function Rows({ rows, target }: { rows: RowVM[]; target?: EditTarget }) {
   if (rows.length === 0) return <Empty>No Shots in this Episode yet.</Empty>;
   return (
     <ol className="space-y-2">
       {rows.map((r) => (
-        <Row key={r.key} row={r} />
+        <Row key={r.key} row={r} target={target} />
       ))}
     </ol>
   );
 }
 
-function Row({ row }: { row: RowVM }) {
+function Row({ row, target }: { row: RowVM; target?: EditTarget }) {
   const p = row.picture;
   return (
     <li
@@ -236,6 +239,11 @@ function Row({ row }: { row: RowVM }) {
           <span className="font-mono font-medium">{row.shotCode}</span>
           <span className="truncate text-muted">{row.shotTitle}</span>
           <span className="text-[11px] text-faint">{row.run || row.scene}</span>
+          {target && row.editor ? (
+            <span className="ml-auto">
+              <ItemOrderControls target={target} editor={row.editor} shotCode={row.shotCode} />
+            </span>
+          ) : null}
         </div>
         <div className="flex flex-wrap gap-x-3 text-[11.5px] text-muted" data-testid="item-timing">
           <span>Starts {row.start}</span>
@@ -305,6 +313,7 @@ function Row({ row }: { row: RowVM }) {
             ))}
           </div>
         </details>
+        {target && row.editor ? <ItemEditor target={target} editor={row.editor} /> : null}
       </div>
     </li>
   );
