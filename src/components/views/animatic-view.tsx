@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { AnimaticPlayer, type ClipVM } from "@/components/animatic-player";
 import { Badge, PageHeader } from "@/components/ui";
 import { buildAnimaticTimeline } from "@/domain/animatic";
@@ -57,7 +58,19 @@ export function AnimaticView({ data, episode }: { data: ProjectData; episode: Ep
     <div>
       <PageHeader
         title={`Animatic — ${episode.title}`}
-        subtitle="Approved frames + planned durations + selected performances. Audio drives timing wherever a take is attached."
+        subtitle={
+          <>
+            Approved frames + planned durations + selected performances. Audio drives timing wherever a take
+            is attached. A planning projection, never saved: the persisted assembly is the{" "}
+            <Link
+              href={`/projects/${data.project.slug}/episodes/${episode.slug}/edit`}
+              className="text-accent hover:underline"
+            >
+              Episode Edit
+            </Link>
+            .
+          </>
+        }
         actions={
           <>
             <Badge tone="info">Runtime {formatDuration(timeline.totalMs)}</Badge>

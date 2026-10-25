@@ -5,8 +5,9 @@ unit run 1638/1639 with one accepted, unrelated, non-reproducible timing flake i
 recorded as such, not as a clean pass). **2I.1B (persistence) complete** (§3): migration `0043_episode_edits.sql`
 is **applied to the hosted DEV database** (approved; ledger checksum
 `9e8e6d0a176aa6a9d7c23388df6a43f46fb362bd1b27e36c714d5c9d94128124`) and verified there (`db:episode-edits` 94/94,
-`db:validate`, `db:behavior` 49/49, `db:generation` 71/71); full unit 1661/1661. No production deployment. **Not
-implemented:** server actions, UI and playback (2I.1C onward). A prerequisite hardening change (§1, audit findings) shipped separately and is not part of the
+`db:validate`, `db:behavior` 49/49, `db:generation` 71/71); full unit 1661/1661. No production deployment. **2I.1C (read-only
+Episode Edit page + explicit creation) implemented** (§4.1): `/projects/<slug>/episodes/<ep>/edit`. **Not
+implemented:** editing controls (2I.1D) and playback (2I.1E). A prerequisite hardening change (§1, audit findings) shipped separately and is not part of the
 timeline data model; its Postgres regression is now in `db:generation` (section 9).
 
 The filmmaking path is script → performance → Shot Prep → storyboard → Production Frame → image-to-video →
@@ -509,6 +510,75 @@ fixed before the push: a hold change on an existing placeholder did not load tha
 
 ## 4. Actions (`src/server/episode-edit-actions.ts`)
 
+### 4.1 Implemented in 2I.1C: the read-only page and explicit creation
+
+**Route:** `/projects/<slug>/episodes/<ep>/edit` (Episode tab "Edit", after "Animatic"). Server page
+`src/app/projects/[project]/episodes/[ep]/edit/page.tsx` → `loadEpisodeEditPage` (`src/server/episode-edit-page.ts`) →
+display model `src/components/views/episode-edit-model.ts` → `EpisodeEditView`. The project is the signed-in user's own
+(`requireProject`, RLS-bound in Supabase mode); media facts come from `loadEditMediaFacts`
+(`src/server/episode-edit-media.ts`: outputs, delivery versions, selected delivery master, Best, read for the user);
+media is served only through the private `/api/assets/<id>` route (`assetUrl`), never a storage path.
+
+**The read is pure.** It loads the Episode's edit if one exists and builds its view; otherwise it builds the
+proposal. It never creates, completes, renumbers or re-pins anything and never follows Best, approval, a Production Frame
+or take selection (no hidden get-or-create). A failure to build the page is shown as an error with a reference, never as
+partial state; an item whose pinned source cannot be resolved stays in the list, flagged "Source unavailable", and is
+listed at the top of the page.
+
+Three states:
+
+- **Proposed initial assembly** (no edit): the proposal's order, Scene runs, each Shot's proposed picture by kind
+  ("Placeholder: Storyboard still", "No picture yet", … a still is never called video), durations, placed takes or
+  explicit "Silence", the proposal's reasons and notes (e.g. an approved clip without usable video), the total, and one
+  button, "Create edit from this proposal". Nothing is saved until it is pressed.
+- **The saved edit**: revision, edit rate, total, Shots, Scene runs; per item in order: Shot, Scene run, start,
+  duration (and the planned duration when it differs), the picture by kind with the exact source (generation, Asset,
+  trim, delivery-master relationship; or the frame), the performance lane (line, pinned take, offset / take in–out,
+  audio link, explicit Silence, clip audio muted / included), badges, and a "Lineage" disclosure (Shot → generation →
+  exact Asset → derived-from / delivery master; Shot → Production Frame / Storyboard frame; line → take → audio Asset).
+- **Error**: the message, nothing written.
+
+**Badges are facts, never actions** (no "Use replacement" button until 2I.1D): Pinned, Approved, Approved elsewhere,
+Best, Best elsewhere, Newer delivery master, Production Frame changed, Stale, Replacement available / Clip available,
+Dialogue changed, Planned timing changed, Take superseded (with the take selected now), Take archived, Dialogue removed,
+Take missing, Source unavailable, Not in this Episode; edit level: Order differs from Sequence, N Shots not in edit.
+Scene runs come from the 2I.1A `sceneRuns` (a revisited Scene shows "run 1 of 2", "run 2 of 2"); nothing is stored.
+
+**Stale-proposal contract (`proposalKey`, `src/domain/edit/proposal-key.ts`).** The page renders the proposal with its
+key: SHA-256 of the canonical JSON of exactly what would be persisted (Episode, edit rate; per item in order: Shot,
+picture kind + references + times, clip audio, placements, placement basis). Reasons and notes are excluded. "Create edit"
+sends only the project slug, the Episode id and that key. `createEpisodeEdit` re-reads the project as the user
+(ownership), recomputes the proposal from current facts and creates it only when the key is unchanged, so the persisted
+edit is exactly what the user reviewed and every source comes from server-side records (no client-supplied source id).
+Any change that would alter the persisted content (order, approval, delivery master, Production Frame, Storyboard,
+selected take, planned timing / performance parts) refuses with "The proposed assembly changed since this page was
+loaded…"; the reloaded page shows the new proposal. This does not touch the generic `projectRevision()` gap (§7).
+
+**Concurrent / repeated create.** If the Episode already has an edit, the action resolves to it ("already exists;
+showing it"). Two identical creates racing: one creates; the other's repository refusal (`conflict`, the one-per-Episode
+rule) is resolved to the edit that now exists. Never a second edit, never a raw database error, no duplicate items or
+placements (unit-tested with two concurrent calls).
+
+**Animatic relationship.** The Animatic is unchanged as the unsaved planning projection; its subtitle links to the
+Episode Edit, and the Edit page links to the Animatic and the Sequence Board. Nothing migrates between them and the
+Animatic does not read edit data. Rough-sequence playback is 2I.1E.
+
+**Tests.** `src/server/__tests__/episode-edit-actions.test.ts` (read is pure, honest proposal labels / silence / notes,
+private asset URLs only, create at revision 0, reads never bump it, stale-proposal refusal, forged key, concurrent
+creates → one edit, foreign Episode / unknown project refused, pinned take kept with "Take superseded", lineage, an
+unresolvable source flagged not omitted) and `src/domain/edit/__tests__/proposal-key.test.ts`. Memory E2E
+`e2e/zzzzzzzzzzzzzzzzzzzzz-episode-edit.spec.ts`: proposal → Create edit → reloads keep revision 0 and the pinned
+sources → a take selected on the Perform page is reported ("Take superseded"), not applied → lineage, timing, Scene
+runs, Animatic link.
+
+**E2E isolation.** Creating an edit is persistent for the life of a memory store (one per Episode, and its pins refuse
+deleting what they reference), and the spec asserts the proposal of the pristine seed. It therefore runs in its own
+Playwright project `memory-2i-isolated` against its own memory server (port 3104), started by the ordinary
+`npm run test:e2e` like the 2H isolated server; the shared `memory` project ignores it. No reset API was added; the test-only
+keep-alive setting applies to the new server too. No Supabase E2E in 2I.1C (2I.1F).
+
+The rest of this section is the planned 2I.1D action set.
+
 The browser sends ids, positions and integer ms only; the server re-reads the project, proposes and validates.
 
 | action                   | effect                                                                                                                                 |
@@ -556,7 +626,7 @@ action needed.
 | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **2I.1A** | **Complete.** Pure domain (`src/domain/edit/`): edit rate, model + shape checks, eligibility, `proposeEpisodeAssembly`, `buildEpisodeEditView` (timing, Scene runs, §I facts), `replacementFor`, `editItemLineage`; unit tests. No persistence. |
 | **2I.1B** | **Complete** (§3.1): migration `0043_episode_edits.sql` applied to hosted DEV (approved), `EpisodeEditRepository` memory + Postgres, `db:episode-edits`, RLS, validate/behavior updates, `db:generation` approval regression.                   |
-| **2I.1C** | Actions + a read-only Episode Edit page: create assembly, the picture lane with truthful kind labels, durations, approval/freshness/replacement badges, performance lane, lineage inspector. Memory E2E.                                        |
+| **2I.1C** | **Implemented** (§4.1). Actions + a read-only Episode Edit page: create assembly, the picture lane with truthful kind labels, durations, approval/freshness/replacement badges, performance lane, lineage inspector. Memory E2E.                |
 | **2I.1D** | Editorial mutations in the UI: choose source, use replacement, trim, reorder, add/remove, re-pin performance, source audio; conflict handling.                                                                                                  |
 | **2I.1E** | Playback of the rough sequence: video elements + take cues on the generalised audio-led clock; Animatic links to the edit.                                                                                                                      |
 | **2I.1F** | Supabase E2E, hosted migration (approval), docs/roadmap close-out.                                                                                                                                                                              |
