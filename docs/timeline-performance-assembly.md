@@ -1,14 +1,14 @@
 # Timeline & Performance Assembly (Phase 2I)
 
-Status: **2I.1 architecture approved. 2I.1A (pure domain) complete** in `src/domain/edit/` (pushed `e5f5061`; full
+Status: **Phase 2I.1 COMPLETE (2I.1A–F), accepted on the hosted DEV stack (§8).** **2I.1 architecture approved. 2I.1A (pure domain) complete** in `src/domain/edit/` (pushed `e5f5061`; full
 unit run 1638/1639 with one accepted, unrelated, non-reproducible timing flake in `character-continuity-actions.test.ts`,
 recorded as such, not as a clean pass). **2I.1B (persistence) complete** (§3): migration `0043_episode_edits.sql`
 is **applied to the hosted DEV database** (approved; ledger checksum
 `9e8e6d0a176aa6a9d7c23388df6a43f46fb362bd1b27e36c714d5c9d94128124`) and verified there (`db:episode-edits` 94/94,
 `db:validate`, `db:behavior` 49/49, `db:generation` 71/71); full unit 1661/1661. No production deployment. **2I.1C (read-only
 Episode Edit page + explicit creation) implemented** (§4.1): `/projects/<slug>/episodes/<ep>/edit`. **2I.1D
-(explicit editing) implemented** (§4.2). **2I.1E (rough-sequence playback) implemented** (§4.3). **Not
-implemented:** final rendering / export (out of 2I); 2I.1F is the Supabase browser close-out. A prerequisite hardening change (§1, audit findings) shipped separately and is not part of the
+(explicit editing) implemented** (§4.2). **2I.1E (rough-sequence playback) implemented** (§4.3). **2I.1F (hosted browser close-out and final acceptance)
+complete** (§8). **Not implemented (by design):** final rendering / export and every Phase 5 NLE feature (§8). A prerequisite hardening change (§1, audit findings) shipped separately and is not part of the
 timeline data model; its Postgres regression is now in `db:generation` (section 9).
 
 The filmmaking path is script → performance → Shot Prep → storyboard → Production Frame → image-to-video →
@@ -750,3 +750,58 @@ take selection) only drive **reported** facts, never what plays. Edit writes are
 no time-of-check/time-of-use window to close. The edit is not a generation package input, so it is not added to
 `REVISION_SOURCES`, and 2I does not attempt to fix the Production Frame / Location View / Character Continuity
 selection gap recorded in the roadmap.
+
+## 8. Phase 2I acceptance (2I.1F)
+
+**Hosted browser path** (`e2e/supabase-episode-edit.spec.ts`, run with
+`npx playwright test -c playwright.supabase.config.ts e2e/supabase-episode-edit.spec.ts`, 8/8). The signed-in dev user
+(Supabase Auth, the production build, hosted Postgres with RLS, private Storage) on a DISPOSABLE project built for the
+test (purpose `test`, two Scenes, four Shots: two succeeded Shot-output generations with real 5 s WebM outputs (#2
+approved), an approved Storyboard frame with a real PNG, an empty slot, a dialogue line with a take carrying a real WAV and
+a take without audio). Media is the repository's deterministic fixtures (`MOCK_VIDEO_WEBM_BASE64`, the PNG helper,
+`makeWav`), uploaded as the signed-in owner under the project's own private prefix. The browser proves: the Edit tab and
+the proposal; a **stale proposal refused** (the take selection changed in Postgres after the render; nothing created);
+Create edit; every editing step (pin #1, Use replacement, trim, reorder, take pin, Silence, re-pin, remove / add back) as
+exactly one revision **read back from Postgres** and surviving reloads; a **two-page revision conflict** (the stale page
+refused, the winner's rows unchanged); playback of the real `<video>` at the persisted trim position (metadata loaded,
+seek accepted), placements scheduled, play / pause / restart, no write; **real media delivery** through
+`/api/assets/<id>` (PNG decoded at 320 px, WebM metadata 5 s, WAV `audio/wav` loaded by a browser audio element);
+ownership (signed out: the asset route 401 and the page redirects to sign-in; an unknown Asset 404; an unknown project
+404); sign out / in shows the same edit. **No second test identity exists** (one dev user by design), so cross-user
+refusal is proven by the RLS suites (`db:episode-edits`: stranger / anon) rather than in the browser.
+
+**Cleanup** is a gate inside the spec: the project cascade and the Storage objects are removed and the hosted counts
+(projects, Episodes, Scenes, Shots, lines, takes, Assets, frames, attempts, outputs, Production Frames, the three edit
+tables, cost rows, Storage objects, the migration ledger) must equal the pre-test baseline exactly; they did, and an
+independent re-read matched the post-0043 baseline (projects 4, Assets 47, attempts 12, cost rows 17, edit rows 0).
+
+**Final regressions.** Full memory E2E (`npm run test:e2e`, all three memory projects): 158/158 (39.4 min). Full
+unit (serial): 1705 / 1705. Hosted DB: `db:episode-edits` 94/94, `db:generation` 71/71, `db:validate` STRUCTURE OK,
+`db:behavior` 49/49, migration checksums OK, head 0043 (no later migration). Typecheck, the `.mts` scripts, lint,
+format of committed content and the production build pass. Real provider calls 0, paid calls 0.
+
+**Generic `projectRevision()` gap: no impact.** An edit pins only immutable records (attempts' creative fields, Assets,
+frames, takes); every write is serialised by the edit's own revision under `FOR UPDATE` with sources re-validated
+inside that transaction; the mutable pointers (approval, Best, delivery master, Production Frame and take selections)
+only drive computed currentness and proposals. The two writes a pointer can influence are guarded: creation by the
+proposal key (the persisted content is exactly what was reviewed) and `use_replacement` (the approved clip re-derived
+in the transaction, locked `FOR SHARE`, refused unless it is exactly the one shown). Generic projectRevision gap does
+not compromise persisted Episode Edit correctness.
+
+**Phase 2I invariants (audited).** The Episode owns one edit in this phase (the removable
+`episode_edits_one_per_episode`); the edit and every item have their own stable ids; one item per Shot is the removable
+`episode_edit_items_one_per_shot`; video items pin the exact attempt AND Asset; time is integer ms with a rational edit
+rate (frames derived from absolute positions only); the edit order is persisted and independent of the Sequence Board;
+Scene runs are derived (a revisited Scene has several runs); performance is exact line + take placements and Silence is
+the absence of a placement; currentness / replacement facts are computed on read and never applied; every mutation is
+revision-checked; reads and playback never write; playback uses the persisted edit only; the Animatic stays the separate
+planning projection; no provider original is modified and no media bytes are duplicated; Best and approval are never
+followed. Deviations from the original plan, all deliberate and documented above: every source key is deferred
+(0042 lesson), the attempt is keyed to its Shot, placements carry their own row id, and playback uses one wall-clock master
+that media follow instead of the planned audio-led clock.
+
+**Known limitations (out of Phase 2I).** No J/L cuts (the stored shape allows them; validation keeps placements inside
+their item), no transitions or effects, no music / ambience / multitrack audio or mixing, no captions, no EDL / XML / NLE
+export, no final render, no professional frame-accurate playback guarantee (a browser preview), no alternate cuts or
+intercut reuse of a Shot (both are removals of one constraint), no undo. Phase 2I establishes the persistent editorial
+substrate that Phase 5 expands into the full post-production / NLE system; Phase 5 is not done.

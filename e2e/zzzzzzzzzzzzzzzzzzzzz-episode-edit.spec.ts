@@ -355,11 +355,17 @@ const seekTo = (page: Page, ms: number) =>
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }, Math.round(ms));
 let settledRevision = -1;
+/**
+ * Waits until the player is interactive: the server render has no controller (data-item-id ""); the hydrated player
+ * seeks to 0 and names the item under the playhead. A click before that would land on an unhydrated button.
+ */
+const playerReady = (page: Page) => expect(player(page)).not.toHaveAttribute("data-item-id", "");
 /** Opens the edit with the browser's clock FROZEN: only `page.clock.runFor` advances time (and the player's frames). */
 async function openFrozen(page: Page) {
   await page.clock.install();
   await page.goto(`${EP}/edit`);
   await expect(player(page)).toHaveAttribute("data-time-ms", "0");
+  await playerReady(page);
   await page.clock.pauseAt(new Date(Date.now() + 60_000));
 }
 
@@ -552,6 +558,7 @@ test.describe("2I.1E rough-sequence playback", () => {
     page,
   }) => {
     await page.goto(`${EP}/edit`);
+    await playerReady(page);
     await page.getByTestId("player-play").click();
     await expect(player(page)).toHaveAttribute("data-playing", "true");
     const editor = await openEditor(page, "1A");
