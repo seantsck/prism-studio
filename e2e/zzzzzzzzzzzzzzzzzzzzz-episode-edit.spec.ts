@@ -27,6 +27,25 @@ test.describe.configure({ mode: "serial" });
 const item = (page: Page, code: string): Locator =>
   page.locator(`[data-testid="edit-item"][data-shot-code="${code}"]`);
 
+/**
+ * Makes take `n` the canonical take of Shot 3A's line on the Perform page. The click is retried until the page shows
+ * it: a click that lands before the page has hydrated submits nothing.
+ */
+async function selectTake3A(page: Page, n: number) {
+  await page.goto(`${EP}/perform`);
+  const card = page.locator("article", { hasText: LINE_3A }).first();
+  const canonical = card.getByText(new RegExp(`canonical: take ${n}`));
+  await expect(async () => {
+    if (await canonical.count()) return;
+    await card
+      .locator("div", { hasText: new RegExp(`^#${n}`) })
+      .getByRole("button", { name: "Select" })
+      .first()
+      .click({ timeout: 2000 });
+    await expect(canonical).toBeVisible({ timeout: 3000 });
+  }).toPass({ timeout: 30_000 });
+}
+
 async function pinnedTakeLabel(page: Page) {
   return (await item(page, "3A").getByTestId("item-audio").innerText()).match(/Take (\d+) ·/)?.[1];
 }
@@ -84,14 +103,7 @@ test("an upstream take change is reported, never applied: the pinned take stays,
   const pinned = await pinnedTakeLabel(page);
   const other = pinned === "3" ? 2 : 3;
 
-  await page.goto(`${EP}/perform`);
-  const card = page.locator("article", { hasText: LINE_3A }).first();
-  await card
-    .locator("div", { hasText: new RegExp(`^#${other}`) })
-    .getByRole("button", { name: "Select" })
-    .first()
-    .click();
-  await expect(card.getByText(new RegExp(`canonical: take ${other}`))).toBeVisible();
+  await selectTake3A(page, other);
 
   await page.goto(`${EP}/edit`);
   await expect(page.getByTestId("edit-revision")).toHaveText("Revision 0");
@@ -155,11 +167,7 @@ test("two free mock clips exist for 3A (one rejected, one awaiting review): both
   test.setTimeout(150_000);
   // the 2I.1C test above selected another take for 3A's line, which changed the Shot's derived duration (4.5 s →
   // 4.1 s, not a duration the mock model accepts): restore the seed's canonical take 1 so 3A can be generated
-  await page.goto(`${EP}/perform`);
-  const card = page.locator("article", { hasText: LINE_3A }).first();
-  const take1 = card.locator("div", { hasText: /^#1/ }).getByRole("button", { name: "Select" }).first();
-  if (await take1.count()) await take1.click();
-  await expect(card.getByText(/canonical: take 1/)).toBeVisible();
+  await selectTake3A(page, 1);
 
   await openGenerate3A(page);
   const state = page.getByTestId("shot-generation-state");
@@ -310,4 +318,247 @@ test("a change from a stale page is refused with the conflict message and never 
   expect(await order(page)).toEqual(newerOrder);
   await expect(item(page, "1A").getByTestId("item-timing")).not.toContainText("Duration 2.0s");
   await other.close();
+});
+
+// ───────────────────────── Phase 2I.1E: rough-sequence playback ─────────────────────────
+//
+// Self-establishing: the first test below puts the edit into the exact state the playback tests need, whatever ran
+// before (it creates the edit when absent, makes two free mock clips for 3A when absent, approves #2, and explicitly
+// pins 3A to clip #1, Silence, trim 0.5 s → 2.0 s, and re-pins 5A's selected takes). Running only these tests (--grep
+// "2I.1E") on a fresh store works the same. Timing uses Playwright's fake clock: time advances by `runFor`, exactly.
+
+interface RowFacts {
+  itemId: string;
+  code: string;
+  kind: string;
+  startMs: number;
+  durationMs: number;
+}
+const rows = (page: Page): Promise<RowFacts[]> =>
+  page.locator('[data-testid="edit-item"]').evaluateAll((els) =>
+    els.map((e) => ({
+      itemId: e.getAttribute("data-item-id") ?? "",
+      code: e.getAttribute("data-shot-code") ?? "",
+      kind: e.querySelector('[data-testid="item-kind"]')?.textContent?.trim() ?? "",
+      startMs: Number(e.getAttribute("data-start-ms")),
+      durationMs: Number(e.getAttribute("data-duration-ms")),
+    })),
+  );
+const player = (page: Page) => page.getByTestId("edit-player");
+const attr = async (page: Page, name: string) => (await player(page).getAttribute(name)) ?? "";
+const playerTime = async (page: Page) => Number(await attr(page, "data-time-ms"));
+/** Moves the playhead slider like a user drag: the native value setter + an input event (what React listens to). */
+const seekTo = (page: Page, ms: number) =>
+  page.getByTestId("player-seek").evaluate((el, v) => {
+    const input = el as HTMLInputElement;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, String(v));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }, Math.round(ms));
+let settledRevision = -1;
+/** Opens the edit with the browser's clock FROZEN: only `page.clock.runFor` advances time (and the player's frames). */
+async function openFrozen(page: Page) {
+  await page.clock.install();
+  await page.goto(`${EP}/edit`);
+  await expect(player(page)).toHaveAttribute("data-time-ms", "0");
+  await page.clock.pauseAt(new Date(Date.now() + 60_000));
+}
+
+test.describe("2I.1E rough-sequence playback", () => {
+  test("2I.1E establish: the saved edit pins 3A to clip #1 (muted, Silence, 0.5 s → 2.0 s); #2 is approved elsewhere", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    await page.goto(`${EP}/edit`);
+    if (await page.getByTestId("create-episode-edit").count()) {
+      await page.getByTestId("create-episode-edit").click();
+      await expect(page.getByTestId("episode-edit-persisted")).toBeVisible();
+    }
+    // two free mock clips for 3A (#1 rejected, #2 approved); restore the seed take first so 3A's duration is generable
+    await selectTake3A(page, 1);
+    await openGenerate3A(page);
+    const state = page.getByTestId("shot-generation-state");
+    const cards = page.getByTestId("attempt-card");
+    if ((await cards.count()) === 0) {
+      await page.getByTestId("generate-button").click();
+      await expect(state).toHaveText("READY FOR REVIEW", { timeout: 60_000 });
+    }
+    const card1 = page.locator('[data-testid="attempt-card"][data-attempt="1"]');
+    if ((await cards.count()) === 1) {
+      await card1.getByTestId("reject-toggle").click();
+      await card1.getByLabel("Bad motion").check();
+      await card1.getByPlaceholder("What is wrong?").fill("pace");
+      await card1.getByTestId("reject-submit").click();
+      await expect(card1.getByTestId("review-status")).toContainText("rejected", { timeout: 15_000 });
+      await page.getByTestId("generate-button").click();
+      await expect(page.locator('[data-testid="attempt-card"][data-attempt="2"]')).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect(state).toHaveText("READY FOR REVIEW", { timeout: 60_000 });
+    }
+    const card2 = page.locator('[data-testid="attempt-card"][data-attempt="2"]');
+    if ((await card2.getAttribute("data-review")) !== "approved") {
+      await card2.getByTestId("approve-button").click();
+      await expect(card2.getByTestId("review-status")).toContainText("approved", { timeout: 15_000 });
+    }
+
+    await page.goto(`${EP}/edit`);
+    let rev = await revisionOf(page);
+    let editor = await openEditor(page, "3A");
+    await editor.getByTestId("source-option").filter({ hasText: "Generation #1" }).locator("input").check();
+    await editor.getByTestId("pin-source").click();
+    await expectRevision(page, ++rev);
+    editor = await openEditor(page, "3A");
+    await editor.getByTestId("silence-item").click();
+    await expectRevision(page, ++rev);
+    editor = await openEditor(page, "3A");
+    await editor.getByTestId("trim-in").fill("0.5");
+    await editor.getByTestId("trim-out").fill("2");
+    await editor.getByTestId("apply-trim").click();
+    await expectRevision(page, ++rev);
+    editor = await openEditor(page, "5A");
+    await editor.getByTestId("repin-selected").click();
+    await expectRevision(page, ++rev);
+    await expect(item(page, "3A").getByTestId("item-timing")).toContainText("Duration 1.5s");
+    await expect(item(page, "5A").getByTestId("item-audio")).not.toContainText("Silence");
+    settledRevision = rev;
+  });
+
+  test("2I.1E plays only after a click; the clock advances, pauses, restarts; the list follows the playhead", async ({
+    page,
+  }) => {
+    await openFrozen(page);
+    const [first] = await rows(page);
+    await expect(player(page)).toHaveAttribute("data-playing", "false");
+    await page.clock.runFor(2000);
+    expect(await playerTime(page)).toBe(0); // no autoplay
+    await page.getByTestId("player-play").click();
+    await expect(player(page)).toHaveAttribute("data-playing", "true");
+    await expect(player(page)).toHaveAttribute("data-item-id", first!.itemId);
+    await expect(item(page, first!.code)).toHaveAttribute("data-playing", "true");
+    await page.clock.runFor(1000);
+    const t = await playerTime(page);
+    expect(t).toBeGreaterThanOrEqual(950);
+    expect(t).toBeLessThanOrEqual(1050);
+    await page.getByTestId("player-play").click(); // pause
+    await expect(player(page)).toHaveAttribute("data-playing", "false");
+    const frozen = await playerTime(page);
+    await page.clock.runFor(1500);
+    expect(await playerTime(page)).toBe(frozen);
+    await page.getByTestId("player-restart").click();
+    await expect(player(page)).toHaveAttribute("data-time-ms", "0");
+    await expect(page.getByTestId("edit-revision")).toHaveText(`Revision ${settledRevision}`);
+  });
+
+  test("2I.1E a video item plays its persisted trim (muted, silent) and hands over at its out point; the pinned clip, not the approved one", async ({
+    page,
+  }) => {
+    await openFrozen(page);
+    const all = await rows(page);
+    const i3a = all.findIndex((r) => r.code === "3A");
+    const a3 = all[i3a]!;
+    const next = all[i3a + 1]!;
+    const pinnedUrl = await item(page, "3A").locator("video").first().getAttribute("src");
+    await seekTo(page, a3.startMs);
+    await expect(player(page)).toHaveAttribute("data-kind", "video");
+    await expect(player(page)).toHaveAttribute("data-video-src-ms", "500"); // persisted source in
+    await expect(player(page)).toHaveAttribute("data-video-url", pinnedUrl!); // pinned #1, though #2 is approved
+    await expect(player(page)).toHaveAttribute("data-video-muted", "true");
+    await expect(player(page)).toHaveAttribute("data-placements", ""); // explicit Silence
+    await page.getByTestId("player-play").click();
+    await page.clock.runFor(1400);
+    await expect(player(page)).toHaveAttribute("data-item-id", a3.itemId);
+    const src = Number(await attr(page, "data-video-src-ms"));
+    expect(src).toBeGreaterThanOrEqual(1850);
+    expect(src).toBeLessThanOrEqual(2000); // never past the persisted out point
+    await page.clock.runFor(200);
+    await expect(player(page)).toHaveAttribute("data-item-id", next.itemId);
+    await expect(item(page, next.code)).toHaveAttribute("data-playing", "true");
+    await expect(item(page, "3A")).toHaveAttribute("data-playing", "false");
+  });
+
+  test("2I.1E stills hold their duration (shown as unavailable when the image is missing), a no-picture item is not skipped", async ({
+    page,
+  }) => {
+    await openFrozen(page);
+    const all = await rows(page);
+    const still = all.find((r) => r.kind === "Placeholder: Storyboard still")!;
+    const none = all.find((r) => r.kind === "No picture yet")!;
+    await seekTo(page, still.startMs);
+    await expect(player(page)).toHaveAttribute("data-kind", "storyboard_frame");
+    await expect(page.getByTestId("player-kind")).toHaveText("Placeholder: Storyboard still");
+    // the seed's Storyboard images have no stored file: said so, and the interval still plays
+    await expect(page.getByTestId("player-slate")).toContainText("Source unavailable");
+    await page.getByTestId("player-play").click();
+    await page.clock.runFor(still.durationMs - 100);
+    await expect(player(page)).toHaveAttribute("data-item-id", still.itemId);
+    await page.clock.runFor(200);
+    await expect(player(page)).not.toHaveAttribute("data-item-id", still.itemId);
+    await page.getByTestId("player-play").click(); // pause
+
+    await seekTo(page, none.startMs + 10);
+    await expect(player(page)).toHaveAttribute("data-kind", "none");
+    await expect(page.getByTestId("player-slate")).toContainText("No picture");
+    await page.getByTestId("player-play").click();
+    await page.clock.runFor(none.durationMs - 200);
+    await expect(player(page)).toHaveAttribute("data-item-id", none.itemId);
+  });
+
+  test("2I.1E placed takes sound at their offsets, several per item independently; a seek lands mid-take", async ({
+    page,
+  }) => {
+    await openFrozen(page);
+    const fiveA = (await rows(page)).find((r) => r.code === "5A")!;
+    await seekTo(page, fiveA.startMs);
+    await page.getByTestId("player-play").click();
+    const seen = new Map<string, number>(); // placement key → timeline time it was first heard
+    for (let t = 0; t < fiveA.durationMs; t += 100) {
+      await page.clock.runFor(100);
+      const now = await playerTime(page);
+      for (const entry of (await attr(page, "data-placements")).split(",").filter(Boolean)) {
+        const [key, sourceMs] = entry.split("@");
+        if (!seen.has(key!)) {
+          seen.set(key!, now);
+          expect(Number(sourceMs)).toBeLessThanOrEqual(150); // starts at its take in (0) within one step
+        }
+      }
+    }
+    expect(seen.size).toBe(2);
+    await page.getByTestId("player-play").click(); // pause
+    const [key, heardAt] = [...seen.entries()][0]!;
+    await seekTo(page, heardAt + 400);
+    await expect(player(page)).toHaveAttribute("data-playing", "false");
+    const entry = (await attr(page, "data-placements")).split(",").find((e) => e.startsWith(`${key}@`))!;
+    expect(Number(entry.split("@")[1])).toBeGreaterThanOrEqual(400);
+    expect(Number(entry.split("@")[1])).toBeLessThanOrEqual(550);
+  });
+
+  test("2I.1E reaching the end stops playback; playing never changed the edit", async ({ page }) => {
+    await openFrozen(page);
+    const all = await rows(page);
+    const last = all.at(-1)!;
+    const total = last.startMs + last.durationMs;
+    await seekTo(page, total - 300);
+    await page.getByTestId("player-play").click();
+    await page.clock.runFor(600);
+    await expect(player(page)).toHaveAttribute("data-ended", "true");
+    await expect(player(page)).toHaveAttribute("data-playing", "false");
+    await expect(player(page)).toHaveAttribute("data-time-ms", String(total));
+    await expect(page.getByTestId("player-slate")).toContainText("End of edit");
+    await page.reload();
+    await expect(page.getByTestId("edit-revision")).toHaveText(`Revision ${settledRevision}`);
+  });
+
+  test("2I.1E a saved change during playback rebuilds the player from the new edit (paused at 0)", async ({
+    page,
+  }) => {
+    await page.goto(`${EP}/edit`);
+    await page.getByTestId("player-play").click();
+    await expect(player(page)).toHaveAttribute("data-playing", "true");
+    const editor = await openEditor(page, "1A");
+    await editor.getByTestId("hold-duration").fill("3.5");
+    await editor.getByTestId("apply-hold").click();
+    await expectRevision(page, settledRevision + 1);
+    await expect(player(page)).toHaveAttribute("data-playing", "false");
+    await expect(player(page)).toHaveAttribute("data-time-ms", "0");
+  });
 });

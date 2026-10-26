@@ -5,6 +5,7 @@ import type { Episode, ProjectData } from "@/domain/schemas";
 import type { EpisodeEditPage } from "@/server/episode-edit-page";
 import { createEpisodeEdit } from "@/server/episode-edit-actions";
 import { AddShotPanel, ItemEditor, ItemOrderControls, type EditTarget } from "./episode-edit-controls";
+import { EditPlayer } from "./episode-edit-player";
 import type { BadgeVM, RowVM, RunVM, SummaryVM } from "./episode-edit-model";
 
 /**
@@ -131,6 +132,8 @@ export function EpisodeEditView({
             </ul>
           </div>
         ) : null}
+        {/* keyed on the revision: a saved change rebuilds playback from the new edit (paused at 0) */}
+        <EditPlayer key={page.revision} playback={page.playback} />
         <Runs runs={page.runs} />
         <Rows rows={page.rows} target={target} />
         <AddShotPanel target={target} addable={page.addable} items={page.rows.length} />
@@ -202,7 +205,10 @@ function Row({ row, target }: { row: RowVM; target?: EditTarget }) {
     <li
       data-testid="edit-item"
       data-shot-code={row.shotCode}
-      className="grid grid-cols-[176px_1fr] gap-3 border border-line bg-panel p-2.5"
+      data-item-id={target ? row.key : undefined}
+      data-start-ms={row.startMs}
+      data-duration-ms={row.durationMs}
+      className="grid grid-cols-[176px_1fr] gap-3 border border-line bg-panel p-2.5 data-[playing=true]:border-accent data-[playing=true]:bg-accent/5"
     >
       <div>
         <div className="relative aspect-video overflow-hidden border border-line2 bg-black/40">

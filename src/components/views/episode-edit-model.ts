@@ -16,6 +16,7 @@ import {
   type ItemView,
   type LineageStep,
 } from "@/domain/edit/view";
+import { buildPlaybackPlan, type PlaybackPlan } from "@/domain/edit/playback";
 import type { ProjectData } from "@/domain/schemas";
 import { assetUrl } from "@/lib/utils";
 import { addableShots, itemEditor, type AddableShotVM, type ItemEditorVM } from "./episode-edit-editor-model";
@@ -79,6 +80,7 @@ export interface RowVM {
   run: string;
   start: string;
   duration: string;
+  startMs: number;
   durationMs: number;
   /** the Shot's planned duration, when it differs from the item */
   planned: string | null;
@@ -130,6 +132,15 @@ export interface EditPageVM {
   problems: string[];
   /** 2I.1D: Shots of the Episode not in the edit, with what adding each would create */
   addable: AddableShotVM[];
+  /** 2I.1E: the rough-sequence playback of exactly this saved edit */
+  playback: PlaybackVM;
+}
+
+/** What the rough-sequence player needs: the pure plan plus display labels (no other facts). */
+export interface PlaybackVM {
+  plan: PlaybackPlan;
+  items: Record<string, { shotCode: string; run: string; kindLabel: string; source: string }>;
+  placements: Record<string, string>;
 }
 
 const PLACEHOLDER_KINDS: ReadonlySet<VisualKind> = new Set(["production_frame", "storyboard_frame", "none"]);
@@ -381,6 +392,7 @@ function row(
     run: run?.label ?? "",
     start: formatDuration(iv.timing.startMs),
     duration: formatSeconds(iv.timing.durationMs),
+    startMs: iv.timing.startMs,
     durationMs: iv.timing.durationMs,
     planned: shot && iv.duration.deltaMs !== 0 ? formatSeconds(iv.duration.plannedMs) : null,
     picture: picture(data, iv.item, media),
@@ -545,5 +557,39 @@ export function editPage(data: ProjectData, edit: EpisodeEdit, media: EditMediaF
     badges,
     problems: rows.flatMap((r) => r.problems.map((p) => `${r.shotCode}: ${p}`)),
     addable: addableShots(data, view.notInEditShotIds, media),
+    playback: playbackOf(data, edit, rows),
   };
+}
+
+/**
+ * The playback plan of the SAVED edit: its own order, pinned pictures, trims, holds, placements and clip-audio policy,
+ * media through the private asset route. Items the read view already reports as "Source unavailable" play their
+ * interval as unavailable. Nothing current (Best, approval, master, selections) is consulted.
+ */
+function playbackOf(data: ProjectData, edit: EpisodeEdit, rows: RowVM[]): PlaybackVM {
+  const byItem = new Map(rows.map((r) => [r.key, r]));
+  const plan = buildPlaybackPlan(
+    edit,
+    {
+      pictureUrl: (item) => byItem.get(item.id)?.picture.mediaUrl ?? null,
+      takeUrl: (takeId) => {
+        const take = data.takes.find((t) => t.id === takeId);
+        return assetUrl(take?.audioAssetId ? data.assets.find((a) => a.id === take.audioAssetId) : undefined);
+      },
+    },
+    new Set(rows.filter((r) => r.badges.some((b) => b.label === "Source unavailable")).map((r) => r.key)),
+  );
+  const items: PlaybackVM["items"] = {};
+  for (const r of rows)
+    items[r.key] = {
+      shotCode: r.shotCode,
+      run: r.run || r.scene,
+      kindLabel: r.picture.kindLabel,
+      source: r.picture.source,
+    };
+  const placements: PlaybackVM["placements"] = {};
+  for (const r of rows)
+    for (const pl of r.audio.placements)
+      placements[`${r.key}:${pl.dialogueLineId}`] = `${pl.speaker}: “${pl.text}”`;
+  return { plan, items, placements };
 }

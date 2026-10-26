@@ -314,3 +314,30 @@ describe("2I.1D editing actions (memory, real mock clips)", () => {
     expect((await edit()).revision).toBe(e.revision + 1);
   });
 });
+
+describe("2I.1E playback plan of the saved edit", () => {
+  it("plays exactly the pinned clip and trim (not the current approval), with the persisted placements; reading writes nothing", async () => {
+    const d = await data();
+    const pinned = (await itemOf("3A")).visual;
+    if (pinned.kind !== "video") throw new Error("expected 3A to pin a clip");
+    const other = clips.find((c) => c.attemptId !== pinned.attemptId)!;
+    await approve(other.attemptId); // the approval moves elsewhere: playback must not follow it
+    const before = await edit();
+    const { plan } = editPage(await data(), before, await loadEditMediaFacts(d, d.episodes[0]!.id)).playback;
+    const shot3A = await shotId("3A");
+    const item = plan.items.find((i) => i.shotId === shot3A)!;
+    expect(item.kind).toBe("video");
+    expect(item.pictureUrl).toBe(`/api/assets/${pinned.assetId}`);
+    expect([item.sourceInMs, item.sourceOutMs]).toEqual([pinned.sourceInMs, pinned.sourceOutMs]);
+    expect(item.clipAudio).toBe(false);
+    expect(plan.totalMs).toBe(
+      before.items.reduce(
+        (n, i) =>
+          n + (i.visual.kind === "video" ? i.visual.sourceOutMs - i.visual.sourceInMs : i.visual.durationMs),
+        0,
+      ),
+    );
+    expect(plan.placements.length).toBe(before.items.reduce((n, i) => n + i.performance.length, 0));
+    expect(await edit()).toEqual(before);
+  });
+});

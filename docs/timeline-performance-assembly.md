@@ -7,7 +7,8 @@ is **applied to the hosted DEV database** (approved; ledger checksum
 `9e8e6d0a176aa6a9d7c23388df6a43f46fb362bd1b27e36c714d5c9d94128124`) and verified there (`db:episode-edits` 94/94,
 `db:validate`, `db:behavior` 49/49, `db:generation` 71/71); full unit 1661/1661. No production deployment. **2I.1C (read-only
 Episode Edit page + explicit creation) implemented** (§4.1): `/projects/<slug>/episodes/<ep>/edit`. **2I.1D
-(explicit editing) implemented** (§4.2). **Not implemented:** rough-sequence playback (2I.1E). A prerequisite hardening change (§1, audit findings) shipped separately and is not part of the
+(explicit editing) implemented** (§4.2). **2I.1E (rough-sequence playback) implemented** (§4.3). **Not
+implemented:** final rendering / export (out of 2I); 2I.1F is the Supabase browser close-out. A prerequisite hardening change (§1, audit findings) shipped separately and is not part of the
 timeline data model; its Postgres regression is now in `db:generation` (section 9).
 
 The filmmaking path is script → performance → Shot Prep → storyboard → Production Frame → image-to-video →
@@ -627,6 +628,65 @@ continues with the 2I.1D browser flow (pin, refused and applied trims with later
 remove / add back, replacement, a two-tab conflict). Not in 2I.1D: playback (2I.1E), drag / ripple / slip / roll
 editing, frame-by-frame keys, transitions, multitrack, J/L cuts, undo.
 
+### 4.3 Implemented in 2I.1E: rough-sequence playback
+
+"Watch this edit" (`EditPlayer`, `src/components/views/episode-edit-player.tsx`) plays the SAVED edit as one continuous
+rough sequence: a preview, not a render (no concatenation, no new Assets, no transitions, no mixing controls, no J/L
+cuts). Opening, playing, pausing and seeking write nothing (the revision never moves; tested).
+
+**Source of truth.** `buildPlaybackPlan` (`src/domain/edit/playback.ts`, pure) reads only the persisted edit: item
+order, picture kind, the exact pinned Asset and its source in / out, still holds, `none` durations, every placement
+(line, exact take, offset, take in / out) and the clip-audio policy. Media addresses are the private `/api/assets/<id>`
+route. Best, approval, the delivery master, the Production Frame selection and the selected takes are never consulted
+(tested: with another clip approved, playback plays the pinned one).
+
+**Timing.** Items are back to back from 0: `start = Σ previous durations` in exact integer ms (no rounding to
+accumulate); the current item is the one with `start ≤ t < end` (a boundary belongs to the next item; nothing at the
+end). Video: `source = source in + (t − item start)`, clamped to `[in, out]`. Placement: absolute
+`item start + placement start` for `take out − take in`; `take position = take in + (t − placement start)`. Frames and
+timecode are derived from the absolute position at the edit rate, never stored.
+
+**One master clock** (`RoughCutController`, `src/lib/edit-playback/controller.ts`, framework-free): the timeline time
+advances with the wall clock (`performance.now()` deltas, one `requestAnimationFrame` at a time) and is the only
+authority. Media elements follow it: the single picture `<video>` and one `Audio` element per sounding placement are
+pointed at the clock's position when they become active, after a seek, and whenever they drift more than 250 ms
+(`DRIFT_MS`); no element ever moves the clock, so a slow or failed file cannot stall or skip the edit. Play starts only
+from a click (no autoplay; a browser refusal is reported while the clock still runs); `play()` is called once per
+activation, never from render.
+
+**Per kind.** Video: plays its trim only; at its out point it is paused and the next item starts immediately (no
+crossfade). Production Frame / Storyboard placeholder: the pinned still is held for the item's duration, labelled as a
+placeholder. `none`: an honest "No picture" slate for its full duration (never skipped); its performance still plays.
+Several placements in one item sound independently; no placement is explicit Silence (no media is synthesised). Clip
+audio "muted": the video element is muted and only placed takes sound; "included": the clip's own audio is audible
+together with the placed takes (no gain / pan).
+
+**Seeking** (slider, Restart) rebuilds the whole state from the clock position: active item, video source position,
+still / slate, the sounding placements at their take positions; while paused everything stays paused, while playing it
+continues; seeking to the end shows "End of edit", stopped. Reaching the end stops playback.
+
+**Missing media.** An item the read view already reports as "Source unavailable", a still without a stored image, or a
+picture whose element reports an error plays its interval as "Source unavailable (…)" and the clock continues; a take
+whose audio fails is reported ("N takes could not be played") and the picture continues. Nothing is substituted and
+nothing is written.
+
+**Edits during playback.** The player is keyed on the edit's revision: a saved change disposes the old controller
+(all media stopped) and builds a new one from the new edit, paused at 0. A player never plays a stale structure. The
+edit list highlights the item under the playhead (`data-playing`).
+
+**Animatic.** Unchanged and independent: the Animatic keeps its own audio-led planning player. No playback code is
+shared and neither reads the other's data (its unit regression was re-run).
+
+**Tests.** `src/lib/edit-playback/__tests__/controller.test.ts` (18: plan timing, current item at boundaries, trim and
+take mapping, multiple placements, clip audio, and the controller with a deterministic clock and fake media: no
+autoplay, source in at start, handover at the out point, still hold, no-picture interval, placement start and end,
+seek while paused / playing, pause, restart, end, drift re-seek, unavailable picture / take, blocked media, dispose);
+`episode-edit-editing.test.ts` (the page's plan plays the pinned clip and trim, not the current approval; reading
+writes nothing). Isolated memory E2E (port 3104), self-establishing (`--grep "2I.1E"` alone passes on a fresh store):
+Playwright's fake clock, frozen after load, advances time only by `runFor`; the player exposes its state as data
+attributes (`data-time-ms`, `data-item-id`, `data-kind`, `data-video-src-ms`, `data-video-url`, `data-video-muted`,
+`data-placements`, `data-ended`), so the tests check timing semantics without depending on headless media decoding.
+
 The rest of this section is the original action plan (now implemented as above).
 
 The browser sends ids, positions and integer ms only; the server re-reads the project, proposes and validates.
@@ -678,7 +738,7 @@ action needed.
 | **2I.1B** | **Complete** (§3.1): migration `0043_episode_edits.sql` applied to hosted DEV (approved), `EpisodeEditRepository` memory + Postgres, `db:episode-edits`, RLS, validate/behavior updates, `db:generation` approval regression.                   |
 | **2I.1C** | **Implemented** (§4.1). Actions + a read-only Episode Edit page: create assembly, the picture lane with truthful kind labels, durations, approval/freshness/replacement badges, performance lane, lineage inspector. Memory E2E.                |
 | **2I.1D** | **Implemented** (§4.2). Editorial mutations in the UI: choose source, use replacement, trim, reorder, add/remove, re-pin performance, source audio; conflict handling.                                                                          |
-| **2I.1E** | Playback of the rough sequence: video elements + take cues on the generalised audio-led clock; Animatic links to the edit.                                                                                                                      |
+| **2I.1E** | **Implemented** (§4.3; one wall-clock master, media follow it, instead of the planned audio-led clock). Playback of the rough sequence: video elements + take cues on the generalised audio-led clock; Animatic links to the edit.              |
 | **2I.1F** | Supabase E2E, hosted migration (approval), docs/roadmap close-out.                                                                                                                                                                              |
 
 ## 7. Generic revision gap — impact
