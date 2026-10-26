@@ -42,6 +42,13 @@ const memoryEnv = (port: number) => ({
 const ISOLATED_2H = "zzzzzzzzzzzzzzzzzzzz-image-to-video.spec.ts";
 
 /**
+ * The Phase 2I Episode Edit spec gets its own memory server too: creating the Episode's edit is persistent for the life
+ * of a store (one edit per Episode, and its pins refuse deleting what they reference), so it must neither see another
+ * spec's writes (its proposal is asserted from the pristine seed) nor leave an edit behind for one.
+ */
+const ISOLATED_2I = "zzzzzzzzzzzzzzzzzzzzz-episode-edit.spec.ts";
+
+/**
  * TEST SERVERS ONLY. Playwright's request client reuses keep-alive sockets; at Node's default idle-close boundary
  * (5 s + 1 s buffer) the server could close a socket while `page.request` was reusing it, giving ECONNRESET before
  * the request reached the app. Longer than the longest test (20 min), so each test's request context closes first.
@@ -56,7 +63,7 @@ export default defineConfig({
   projects: [
     {
       name: "memory",
-      testIgnore: ["supabase-*.spec.ts", ISOLATED_2H],
+      testIgnore: ["supabase-*.spec.ts", ISOLATED_2H, ISOLATED_2I],
       use: { baseURL: "http://localhost:3102" },
     },
     {
@@ -64,8 +71,13 @@ export default defineConfig({
       testMatch: ISOLATED_2H,
       use: { baseURL: "http://localhost:3103" },
     },
+    {
+      name: "memory-2i-isolated",
+      testMatch: ISOLATED_2I,
+      use: { baseURL: "http://localhost:3104" },
+    },
   ],
-  // Started in order: the first builds; the second serves the same build from a separate process (separate store).
+  // Started in order: the first builds; the others serve the same build from separate processes (separate stores).
   webServer: [
     {
       command: `npm run build && npx next start -p 3102 ${KEEP_ALIVE}`,
@@ -81,6 +93,13 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 120_000,
       env: memoryEnv(3103),
+    },
+    {
+      command: `npx next start -p 3104 ${KEEP_ALIVE}`,
+      url: "http://localhost:3104",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: memoryEnv(3104),
     },
   ],
 });

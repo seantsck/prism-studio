@@ -14,6 +14,7 @@ import {
   generationEventSchema,
   generationJobSchema,
   generationOutputSchema,
+  isShotOutputAttempt,
   type GenerationCost,
   type GenerationEvent,
   type GenerationJob,
@@ -22,6 +23,7 @@ import {
 import {
   GenerationSubmitError,
   STALE_ANIMATION_SOURCE_MESSAGE,
+  NOT_SHOT_OUTPUT_APPROVAL_MESSAGE,
   LeaseLostError,
   type AttemptView,
   type ClaimedJob,
@@ -500,6 +502,7 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
       const attempt = parseAttempt(cur);
       if (review.status === "approved") {
         if (attempt.status !== "succeeded") throw new Error("Only a completed generation can be approved.");
+        if (!isShotOutputAttempt(attempt)) throw new Error(NOT_SHOT_OUTPUT_APPROVAL_MESSAGE);
         // Supersede the previously approved attempt of this shot (its history is untouched).
         await c.query(
           `update generation_attempts set approved = false, review_status = 'unreviewed', reviewed_at = null

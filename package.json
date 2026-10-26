@@ -55,6 +55,7 @@
     "db:image-shot-generator": "tsx --env-file=.env.local scripts/db-image-shot-generator.mts",
     "db:location-views": "tsx --env-file=.env.local scripts/db-location-views.mts",
     "db:character-continuity": "tsx --env-file=.env.local scripts/db-character-continuity.mts",
+    "db:episode-edits": "tsx --env-file=.env.local scripts/db-episode-edits.mts",
     "db:continuity-analysis": "tsx --env-file=.env.local scripts/db-continuity-analysis.mts",
     "continuity:worker": "tsx --env-file=.env.local scripts/continuity-worker.mts",
     "continuity:pre-paid:check": "tsx --env-file=.env.local scripts/continuity-pre-paid-check.mts",

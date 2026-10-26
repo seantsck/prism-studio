@@ -70,6 +70,13 @@ export const isProductionFrameAttempt = (a: { request?: Record<string, unknown> 
   parseGenerationPurpose(a.request?.purpose) === "production_frame";
 
 /**
+ * An attempt at the Shot's own OUTPUT (`shot_output` or `animate_production_frame`, including history with no purpose):
+ * the only kind that may hold the Shot's single creative approval. A Production Frame candidate never may.
+ */
+export const isShotOutputAttempt = (a: { request?: Record<string, unknown> | null }): boolean =>
+  isShotOutputPurpose(parseGenerationPurpose(a.request?.purpose));
+
+/**
  * An attempt that animates the Shot's canonical Production Frame (Phase 2H). It IS a Shot-output attempt (pipeline,
  * review, Best, final approval all apply), never a Production Frame candidate.
  */

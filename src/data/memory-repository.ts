@@ -1,6 +1,7 @@
 import { LOCAL_USER_ID, buildSeedProject } from "./seed";
 import { MemoryCandidateService } from "./candidates-memory";
 import { MemoryCharacterContinuityService } from "./character-continuity-memory";
+import { MemoryEpisodeEditService } from "./episode-edit-memory";
 import { MemoryGenerationService } from "./generation-memory";
 import { MemoryLocationViewService } from "./location-view-memory";
 import { MemoryMediaQaService } from "./media-qa-memory";
@@ -30,6 +31,7 @@ export class MemoryRepository implements Repository {
   private productionFrameService: MemoryProductionFrameService | undefined;
   private locationViewService: MemoryLocationViewService | undefined;
   private characterContinuityService: MemoryCharacterContinuityService | undefined;
+  private episodeEditService: MemoryEpisodeEditService | undefined;
 
   /** Derived-media lineage, delivery masters and continuity QA runs (same semantics as Postgres). */
   get mediaQa(): MemoryMediaQaService {
@@ -94,6 +96,17 @@ export class MemoryRepository implements Repository {
       ownerUserId: () => LOCAL_USER_ID,
     });
     return this.characterContinuityService;
+  }
+
+  /** Episode edits (Phase 2I.1; same semantics as Postgres and migration 0043). */
+  get episodeEdits(): MemoryEpisodeEditService {
+    this.episodeEditService ??= new MemoryEpisodeEditService({
+      all: () => [...this.projects.values()],
+      generation: () => this.generation,
+      mediaQa: () => this.mediaQa,
+      productionFrames: () => this.productionFrames,
+    });
+    return this.episodeEditService;
   }
 
   constructor(seed: ProjectData[] = [buildSeedProject()]) {
@@ -189,6 +202,8 @@ export class MemoryRepository implements Repository {
 
   async remove(projectId: string, name: CollectionName, id: string): Promise<void> {
     const p = this.get(projectId);
+    // the memory twin of migration 0043's NO ACTION keys: a row an Episode edit references is not removed
+    this.episodeEditService?.assertNotReferenced(projectId, name, id);
     const list = p[name] as unknown as Keyed[];
     const i = list.findIndex((x) => x.id === id);
     if (i >= 0) list.splice(i, 1);

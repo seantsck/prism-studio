@@ -11,6 +11,7 @@ const TABS = [
   ["storyboard", "Storyboard"],
   ["sequence", "Sequence"],
   ["animatic", "Animatic"],
+  ["edit", "Edit"],
   ["assets", "Assets"],
   ["generations", "Generations"],
 ] as const;
