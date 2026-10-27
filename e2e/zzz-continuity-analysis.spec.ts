@@ -274,22 +274,19 @@ test("Shot QA answers first; a reviewer FAIL makes a mismatch and a suggestion; 
 
   // the Attempt card: the QA answer, a link to the evidence, an offered (never filled-in) reason
   await openGenerate(page);
-  const card = page.getByTestId("attempt-card").first();
+  const card = page
+    .getByTestId("attempt-card")
+    .filter({ has: page.locator(`[data-testid="card-review-qa"][href="${continuityPath}"]`) });
   await expect(card.getByTestId("card-shot-qa-state")).toContainText("Critical mismatch");
-  await expect(card.getByTestId("card-review-qa")).toHaveAttribute("href", continuityPath);
   await expect(card.getByTestId("approval-advisory")).toContainText("Shot QA: Critical mismatch");
   await expect(card.getByTestId("chip-creative")).toContainText("unreviewed");
   await card.getByTestId("reject-toggle").click();
   await expect(card.getByTestId("reject-suggestions")).toContainText("Wrong earrings in the close-up.");
   await expect(card.getByTestId("reject-reason")).toHaveValue("");
-
-  // the human can still approve despite the AI FAIL, and clear it again: QA never decides
+  // the human decision stays available whatever QA says (clicking Approve despite a critical Shot QA mismatch is
+  // exercised in zz-framing-continuity; not repeated here: approving would supersede that spec's approved attempt)
   await expect(card.getByTestId("approve-button")).toBeEnabled();
-  await card.getByTestId("approve-button").click();
-  await expect(card.getByTestId("chip-creative")).toContainText("approved", { timeout: 20_000 });
-  await expect(card.getByTestId("card-shot-qa-state")).toContainText("Critical mismatch");
-  await card.getByRole("button", { name: "Clear review" }).click();
-  await expect(card.getByTestId("chip-creative")).toContainText("unreviewed", { timeout: 20_000 });
+  await expect(card.getByTestId("chip-creative")).toContainText("unreviewed");
 
   // a later PASS decision removes the issue and its suggestion; the system finding stays as recorded
   await page.goto(continuityPath);
@@ -308,12 +305,23 @@ test("Shot QA goes stale when the judged output changes, and is current again wh
 }) => {
   test.setTimeout(180_000);
   await openGenerate(page);
-  const card = page.getByTestId("attempt-card").first();
+  // an attempt that HAS a QA run and its own delivery versions (identical mock outputs can share one conform, so
+  // the switch is not on every card); pinned by its Review QA link once found
+  const candidate = page
+    .getByTestId("attempt-card")
+    .filter({ has: page.getByRole("button", { name: "Use original as delivery master" }) })
+    .filter({ has: page.locator('[data-testid="card-shot-qa"]:not([data-state="no_qa"])') })
+    .first();
+  const reviewHref = (await candidate.getByTestId("card-review-qa").getAttribute("href"))!;
+  const card = page
+    .getByTestId("attempt-card")
+    .filter({ has: page.locator(`[data-testid="card-review-qa"][href="${reviewHref}"]`) });
+  const creative = (await card.getByTestId("chip-creative").getAttribute("data-review"))!;
   await expect(card.getByTestId("card-shot-qa-state")).not.toContainText("QA stale");
   await card.getByRole("button", { name: "Use original as delivery master" }).click();
   await expect(card.getByTestId("card-shot-qa-state")).toContainText("QA stale", { timeout: 20_000 });
 
-  await page.goto(continuityPath);
+  await page.goto(reviewHref);
   const summary = page.getByTestId("shot-qa-summary");
   await expect(summary).toHaveAttribute("data-state", "qa_stale");
   await expect(page.getByTestId("shot-qa-stale-reasons")).toContainText("delivery conform changed");
@@ -321,8 +329,8 @@ test("Shot QA goes stale when the judged output changes, and is current again wh
 
   // restore the conformed delivery master: the same run describes the current output again
   await openGenerate(page);
-  const restored = page.getByTestId("attempt-card").first();
-  await restored.getByRole("button", { name: "Use as delivery master" }).first().click();
-  await expect(restored.getByTestId("card-shot-qa-state")).not.toContainText("QA stale", { timeout: 20_000 });
-  await expect(restored.getByTestId("chip-creative")).toContainText("unreviewed");
+  await card.getByRole("button", { name: "Use as delivery master" }).first().click();
+  await expect(card.getByTestId("card-shot-qa-state")).not.toContainText("QA stale", { timeout: 20_000 });
+  // creative review was never touched by any of it
+  await expect(card.getByTestId("chip-creative")).toHaveAttribute("data-review", creative);
 });
