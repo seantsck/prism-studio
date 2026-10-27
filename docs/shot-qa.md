@@ -53,8 +53,13 @@ contradictions, limitations and, for an unchecked one, the frozen plan's reason.
 
 Order (deterministic; ties by the criterion's frozen position, then key):
 
-1. critical FAIL · 2. major FAIL · 3. minor FAIL · 4. critical / major WARNING · 5. minor WARNING ·
-2. critical / major UNCHECKED · 7. minor UNCHECKED.
+1. critical FAIL
+2. major FAIL
+3. minor FAIL
+4. critical / major WARNING
+5. minor WARNING
+6. critical / major UNCHECKED
+7. minor UNCHECKED
 
 A Production Frame opening failure and a locked Character identity failure are critical, so they lead.
 
