@@ -8,13 +8,17 @@ import {
   buildCriteria,
   buildReferenceSet,
   criteriaFingerprint,
+  frozenShotTruth,
+  type FrozenShotTruth,
   type ReferenceExtras,
 } from "@/domain/continuity/criteria";
 import {
   CONTINUITY_RULES_VERSION,
   type ContinuityCriterion,
+  type ReferenceItem,
   type ReferenceSet,
 } from "@/domain/continuity/model";
+import { assessShotQa, type ShotQaAssessment } from "@/domain/continuity/shot-qa";
 import {
   effective,
   qaStatus,
@@ -57,6 +61,8 @@ export interface QaInputs {
   outputCount: number;
   /** Explicit production pixel size from the bible (null: only the aspect ratio is production truth). */
   deliverySize: { width: number; height: number } | null;
+  /** 3A.1: the Production Frame / Location View this attempt was generated from (by value, from its package). */
+  frozen: FrozenShotTruth;
 }
 
 export function computeQaInputs(args: {
@@ -83,11 +89,13 @@ export function computeQaInputs(args: {
     data.bible.deliveryWidth && data.bible.deliveryHeight
       ? { width: data.bible.deliveryWidth, height: data.bible.deliveryHeight }
       : null;
+  const frozen = frozenShotTruth(view.attempt);
   const criteria = buildCriteria({
     pkg,
     adaptation,
     protectedComposition: shot.generation.protectedComposition,
     deliverySize,
+    frozen,
   });
 
   const extras: ReferenceExtras = { previousShotOutput: null, nextShotStoryboard: null };
@@ -121,7 +129,7 @@ export function computeQaInputs(args: {
     adaptation,
     criteria,
     criteriaFingerprint: criteriaFingerprint(criteria),
-    references: buildReferenceSet(pkg, adaptation, extras),
+    references: buildReferenceSet(pkg, adaptation, extras, frozen),
     subject,
     original,
     subjectIsOriginal,
@@ -133,6 +141,7 @@ export function computeQaInputs(args: {
     packageFingerprint: pkg.provenance.fingerprint,
     outputCount: view.outputs.length,
     deliverySize,
+    frozen,
   };
 }
 
@@ -145,6 +154,8 @@ export interface RunProjection {
   status: QaStatus;
   analyzerKind: "mock" | "model" | "none";
   freshness: StaleReasons | null;
+  /** 3A.1: the advisory Shot QA decision projection of this run (derived on read, never stored). */
+  assessment: ShotQaAssessment;
 }
 
 export function projectRun(view: ContinuityRunView, current: QaInputs | null): RunProjection {
@@ -167,6 +178,27 @@ export function projectRun(view: ContinuityRunView, current: QaInputs | null): R
   );
   const summary = summarize(findings);
   const analysisDone = view.run.analysisStatus === "complete" || view.run.analysisStatus === "failed";
+  const frozenRefs = (view.run.referenceSet as { items?: unknown } | null)?.items;
+  const freshness = current
+    ? staleness(
+        {
+          subjectFingerprint: view.run.subjectFingerprint,
+          criteriaFingerprint: view.run.criteriaFingerprint,
+          referenceFingerprint: view.run.referenceFingerprint,
+          packageFingerprint: view.run.packageFingerprint,
+          rulesVersion: view.run.rulesVersion,
+          references: Array.isArray(frozenRefs) ? (frozenRefs as ReferenceItem[]) : undefined,
+        },
+        {
+          subjectFingerprint: current.subjectFingerprint,
+          criteriaFingerprint: current.criteriaFingerprint,
+          referenceFingerprint: current.references.fingerprint,
+          packageFingerprint: current.packageFingerprint,
+          rulesVersion: CONTINUITY_RULES_VERSION,
+          references: current.references.items,
+        },
+      )
+    : null;
   return {
     view,
     findings,
@@ -179,22 +211,18 @@ export function projectRun(view: ContinuityRunView, current: QaInputs | null): R
     }),
     analyzerKind:
       view.run.analyzerKind === "mock" ? "mock" : view.run.analyzerKind === "model" ? "model" : "none",
-    freshness: current
-      ? staleness(
-          {
-            subjectFingerprint: view.run.subjectFingerprint,
-            criteriaFingerprint: view.run.criteriaFingerprint,
-            referenceFingerprint: view.run.referenceFingerprint,
-            packageFingerprint: view.run.packageFingerprint,
-          },
-          {
-            subjectFingerprint: current.subjectFingerprint,
-            criteriaFingerprint: current.criteriaFingerprint,
-            referenceFingerprint: current.references.fingerprint,
-            packageFingerprint: current.packageFingerprint,
-          },
-        )
-      : null,
+    freshness,
+    assessment: assessShotQa({
+      run: {
+        id: view.run.id,
+        runNumber: view.run.runNumber,
+        analysisStatus: view.run.analysisStatus,
+        analyzerKind: view.run.analyzerKind,
+        planItems: view.run.analysisPlan?.items ?? [],
+      },
+      findings: view.findings.map(({ finding, overrides }) => ({ ...finding, overrides })),
+      freshness,
+    }),
   };
 }
 

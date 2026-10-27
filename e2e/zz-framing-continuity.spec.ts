@@ -192,10 +192,14 @@ test("creative approval stays separate; history persists after reload", async ({
   await expect(card.getByTestId("chip-continuity")).toContainText("failed");
   // advisory only: the human is still authoritative
   await expect(card.getByTestId("approval-advisory")).toContainText("critical continuity failure");
+  // Phase 3A.1: Shot QA names the critical mismatch, yet the person can still approve: QA never decides
+  await expect(card.getByTestId("card-shot-qa-state")).toContainText("Critical mismatch");
+  await expect(card.getByTestId("approval-advisory")).toContainText("Shot QA: Critical mismatch");
   await expect(card.getByTestId("approve-button")).toBeEnabled();
   await card.getByTestId("approve-button").click();
   await expect(card.getByTestId("chip-creative")).toContainText("approved", { timeout: 20_000 });
   await expect(card.getByTestId("chip-continuity")).toContainText("failed");
+  await expect(card.getByTestId("card-shot-qa-state")).toContainText("Critical mismatch");
 
   await page.goto(`${base}?section=generate`);
   const reloaded = page.getByTestId("attempt-card").first();

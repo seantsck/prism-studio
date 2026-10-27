@@ -7,6 +7,8 @@ import {
   type AnalyzerPreview,
 } from "@/components/continuity/analysis-launcher";
 import { SeekButton } from "@/components/continuity/seek-button";
+import { ShotQaSummary, type IssueMedia } from "@/components/continuity/shot-qa-summary";
+import { NO_SHOT_QA } from "@/domain/continuity/shot-qa";
 import { StageChips } from "@/components/generation/attempt-media-panel";
 import { OutputPreview } from "@/components/generation/parts";
 import { Badge, Button, PageHeader } from "@/components/ui";
@@ -260,6 +262,49 @@ export default async function ContinuityPage({
     };
   })();
   const overrideCount = rows.filter((r) => r.f.overrides.length > 0).length;
+
+  // ── Shot QA (3A.1): expected reference vs output evidence per issue, from what the run froze (no new media) ──
+  const assessment = selected?.assessment ?? NO_SHOT_QA;
+  const isImage = (id: string | null | undefined): id is string =>
+    Boolean(id && assetById.get(id)?.type === "image");
+  const FIDELITY_ROLES: Record<string, string[]> = {
+    production_frame: ["production_frame"],
+    location_view: ["location_view"],
+    identity: ["identity"],
+    wardrobe: ["look", "identity"],
+    hair: ["look", "identity"],
+    makeup: ["look", "identity"],
+    jewelry: ["look", "identity"],
+  };
+  const issueMedia: Record<string, IssueMedia> = {};
+  for (const issue of assessment.issues.slice(0, 6)) {
+    const sent = refsFor(issue.criterionKey).filter((r) => isImage(r.assetId));
+    const roles = FIDELITY_ROLES[issue.criterionKey.split(":")[0]!] ?? [];
+    const frozen = references.filter((r) => roles.includes(r.role) && isImage(r.assetId));
+    const refs =
+      sent.length > 0
+        ? sent.map((r) => ({ assetId: r.assetId, label: r.role.replace(/_/g, " ") }))
+        : frozen.map((r) => ({ assetId: r.assetId!, label: r.label }));
+    const evidenceFrames = issue.evidence
+      .filter((e) => isImage(e.assetId))
+      .map((e) => ({
+        assetId: e.assetId!,
+        label: e.atMs != null ? `output ${(e.atMs / 1000).toFixed(2)}s` : e.input,
+      }));
+    const outputs =
+      evidenceFrames.length > 0
+        ? evidenceFrames
+        : refs.length > 0 && media.frames[0]
+          ? [
+              {
+                assetId: media.frames[0].asset.id,
+                label: `output ${(media.frames[0].atMs / 1000).toFixed(2)}s`,
+              },
+            ]
+          : [];
+    if (refs.length > 0 || outputs.length > 0)
+      issueMedia[issue.findingId] = { references: refs.slice(0, 2), outputs: outputs.slice(0, 2) };
+  }
   const signature = jobs.map((j) => `${j.id}:${j.status}:${j.batchesDone}`).join("|");
 
   return (
@@ -302,6 +347,9 @@ export default async function ContinuityPage({
             active={activeJobs.length > 0}
           />
         </div>
+
+        {/* the answer first: did Prism find a mismatch? (advisory; the full workspace stays below) */}
+        <ShotQaSummary assessment={assessment} media={issueMedia} />
 
         {/* three separate statuses: never one overloaded check */}
         <div className="grid gap-3 md:grid-cols-3" data-testid="qa-status-strip">

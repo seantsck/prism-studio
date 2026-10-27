@@ -64,11 +64,9 @@ export const REFERENCE_PRIORITY: Record<string, readonly string[]> = {
   other: ["reference", "production_frame", "storyboard"],
 };
 
-const roleRank = (category: string, role: string): number => {
-  const list = REFERENCE_PRIORITY[category] ?? REFERENCE_PRIORITY.other!;
-  const i = list.indexOf(role);
-  return i === -1 ? -1 : i;
-};
+/** A criterion's reference routing: its own explicit roles (3A.1 fidelity criteria), else its category's. */
+export const referenceRolesFor = (c: Pick<ContinuityCriterion, "category" | "referenceRoles">) =>
+  c.referenceRoles ?? REFERENCE_PRIORITY[c.category] ?? REFERENCE_PRIORITY.other!;
 
 export interface PlanInput {
   analyzer: PlannerAnalyzer;
@@ -92,12 +90,11 @@ export const toAnalysisCriterion = (c: ContinuityCriterion): AnalysisCriterion |
     : null;
 
 /** Deterministic order: explicit role rank, then input id (stable). */
-function rankedReferences(category: string, media: AnalysisMedia[]): AnalysisMedia[] {
+function rankedReferences(roles: readonly string[], media: AnalysisMedia[]): AnalysisMedia[] {
+  const rank = (role: string) => roles.indexOf(role);
   return media
-    .filter((m) => m.kind === "reference" && roleRank(category, m.role) >= 0)
-    .sort(
-      (a, b) => roleRank(category, a.role) - roleRank(category, b.role) || a.inputId.localeCompare(b.inputId),
-    );
+    .filter((m) => m.kind === "reference" && rank(m.role) >= 0)
+    .sort((a, b) => rank(a.role) - rank(b.role) || a.inputId.localeCompare(b.inputId));
 }
 
 export function buildAnalysisPlan(input: PlanInput): ContinuityAnalysisPlan {
@@ -200,9 +197,13 @@ export function buildAnalysisPlan(input: PlanInput): ContinuityAnalysisPlan {
       });
       continue;
     }
-    const ranked = rankedReferences(c.category, input.media);
-    const wantsRefs = (REFERENCE_PRIORITY[c.category] ?? []).length > 0;
-    if (wantsRefs && ranked.length === 0 && c.category !== "composition" && c.category !== "camera") {
+    const roles = referenceRolesFor(c);
+    const ranked = rankedReferences(roles, input.media);
+    const wantsRefs = roles.length > 0;
+    // composition / camera framing can be judged against production text alone, unless a criterion names its one
+    // canonical reference (a fidelity check without its reference image stays unchecked)
+    const textJudgeable = !c.referenceRoles && (c.category === "composition" || c.category === "camera");
+    if (wantsRefs && ranked.length === 0 && !textJudgeable) {
       items.push({
         ...base,
         status: "no_media",

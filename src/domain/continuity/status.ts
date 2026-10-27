@@ -1,4 +1,5 @@
 import {
+  type ReferenceItem,
   type ContinuityCategory,
   type ContinuityResult,
   type ContinuitySeverity,
@@ -126,28 +127,75 @@ export interface StaleReasons {
   reasons: string[];
 }
 
+interface FreshnessSide {
+  subjectFingerprint: string;
+  criteriaFingerprint: string;
+  referenceFingerprint: string;
+  packageFingerprint: string;
+  /** 3A.1 (optional): the rules version and frozen reference items, used only to say WHY a run went stale. */
+  rulesVersion?: string;
+  references?: ReferenceItem[];
+}
+
+const REFERENCE_ROLE_LABELS: Record<string, string> = {
+  production_frame: "The Production Frame",
+  location_view: "The Location View",
+  identity: "A Character identity reference",
+  look: "A Look / Character Continuity Lock image",
+  storyboard: "The approved storyboard frame",
+  location: "A Location reference image",
+  lighting: "The lighting reference",
+  reference: "A Shot reference image",
+  previous_shot: "The previous Shot's approved output",
+  next_shot: "The next Shot's storyboard frame",
+  performance: "A selected performance take",
+  constraint: "The production constraints",
+  framing: "The delivery framing",
+};
+
+/** Which reference roles differ between two frozen reference sets (stable order: first seen). */
+function changedReferenceRoles(before: ReferenceItem[], after: ReferenceItem[]): string[] {
+  const key = (i: ReferenceItem) => `${i.assetId ?? ""}|${i.checksum ?? ""}|${i.text ?? ""}`;
+  const byRole = (xs: ReferenceItem[]) => {
+    const m = new Map<string, string[]>();
+    for (const i of xs) m.set(i.role, [...(m.get(i.role) ?? []), key(i)].sort());
+    return m;
+  };
+  const a = byRole(before);
+  const b = byRole(after);
+  const roles = [...new Set([...a.keys(), ...b.keys()])];
+  return roles.filter((r) => JSON.stringify(a.get(r) ?? []) !== JSON.stringify(b.get(r) ?? []));
+}
+
 /** A run never changes. It is merely compared with what is true NOW. */
-export function staleness(
-  run: {
-    subjectFingerprint: string;
-    criteriaFingerprint: string;
-    referenceFingerprint: string;
-    packageFingerprint: string;
-  },
-  current: {
-    subjectFingerprint: string;
-    criteriaFingerprint: string;
-    referenceFingerprint: string;
-    packageFingerprint: string;
-  },
-): StaleReasons {
+export function staleness(run: FreshnessSide, current: FreshnessSide): StaleReasons {
   const reasons: string[] = [];
   if (run.subjectFingerprint !== current.subjectFingerprint)
     reasons.push("The output or its delivery conform changed after this run.");
-  if (run.criteriaFingerprint !== current.criteriaFingerprint)
-    reasons.push("Production truth (what is expected) changed after this run.");
-  if (run.referenceFingerprint !== current.referenceFingerprint)
-    reasons.push("A reference (identity, Look, storyboard, location...) changed after this run.");
+  if (run.criteriaFingerprint !== current.criteriaFingerprint) {
+    reasons.push(
+      run.rulesVersion && current.rulesVersion && run.rulesVersion !== current.rulesVersion
+        ? `Prism's QA criteria changed after this run (rules ${run.rulesVersion} → ${current.rulesVersion}), or production truth (what is expected) changed.`
+        : "Production truth (what is expected) changed after this run.",
+    );
+  }
+  if (run.referenceFingerprint !== current.referenceFingerprint) {
+    const roles =
+      run.references && current.references ? changedReferenceRoles(run.references, current.references) : [];
+    // the Shot moved on from the frozen Production Frame / Location View: say exactly how
+    const moved = roles.includes("selection_change")
+      ? (current.references ?? [])
+          .filter((i) => i.role === "selection_change")
+          .flatMap((i) => (i.text ?? "").split("\n").filter(Boolean))
+      : [];
+    const named = roles
+      .filter((r) => r !== "selection_change")
+      .map((r) => REFERENCE_ROLE_LABELS[r] ?? `A ${r} reference`);
+    for (const n of named) reasons.push(`${n} changed after this run.`);
+    reasons.push(...moved);
+    if (named.length === 0 && moved.length === 0)
+      reasons.push("A reference (identity, Look, storyboard, location...) changed after this run.");
+  }
   return { stale: reasons.length > 0, reasons };
 }
 

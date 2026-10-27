@@ -208,10 +208,21 @@ request / package provenance. Extending generic revision coverage is a separate 
 - **Mock outputs/frames are fixtures**, so semantic results in demo mode only demonstrate flow, not pictures.
 - **Conform is still synchronous**; the analysis queue shape could carry media jobs later.
 
-## Phase 3 — vision QA at scale (after 2D.1)
+## Phase 3 — Automated Shot QA / AI Continuity Supervisor
 
-- Real analyzers (Gemini / OpenAI / Claude vision, face-identity, embedding models) behind the 2C contract.
-- Preflight gains post-generation rules; rejection reasons auto-suggested from findings.
+Built on the Phase 2C/2D continuity infrastructure (runs, findings, overrides, analysis jobs, costs); no parallel QA
+persistence. QA always advises; a person approves or rejects. Details: [shot-qa](shot-qa.md).
+
+| Slice    | Scope                                                                                                                                                                                                                                                                                                                           | Status                |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| **3A.1** | **Shot QA Decision Layer**: pure assessment projection (states, priority issues, deterministic rejection-reason suggestions, freshness reasons); Production Frame / Location View fidelity from frozen truth; camera framing vs movement; honest constraint routing; Shot QA summary + Attempt card; rules `3a.1`; no migration | **complete** (PR #27) |
+| 3A.2     | Automatic QA orchestration: create / run free deterministic QA after output and conform; semantic auto-run only under explicit project policy, budget and provider gates                                                                                                                                                        | next                  |
+| 3A.3     | Temporal Video QA: direct-video camera movement, action beats, screen direction, eyelines and lip-sync calibration                                                                                                                                                                                                              | planned               |
+| 3A.4     | Sequence Continuity Supervisor: adjacent-Shot / cut-level continuity across the Episode, batch review and dashboard                                                                                                                                                                                                             | planned               |
+| (later)  | Specialised analyzers (face identity / embeddings, Claude vision) behind the same normalized contract                                                                                                                                                                                                                           | —                     |
+
+Not in 3A.1: automatic regeneration, approval or rejection; automatic analyzer routing; Claude vision; face embeddings;
+production temporal direct-video QA; cross-Episode QA.
 
 ## Phase 4 — persistent 3D sets + virtual cameras + blocking
 
