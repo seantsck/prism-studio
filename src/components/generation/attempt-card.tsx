@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ActionForm } from "@/components/action-form";
+import { ShotQaCardSummary } from "@/components/continuity/shot-qa-summary";
 import { Badge, Button } from "@/components/ui";
 import type { AttemptView } from "@/data/generation-repository";
 import { isActive } from "@/domain/generation/job-state";
@@ -46,6 +47,14 @@ export function AttemptCard({
   const primary = outputs.find((o) => o.output.role === "primary") ?? outputs[0];
   const others = outputs.filter((o) => o !== primary);
   const canReview = attempt.status === "succeeded";
+  const shotQa = media?.shotQa ?? null;
+  const suggestions = shotQa?.suggestedRejectionReasons ?? [];
+  const qaHref = `/projects/${projectSlug}/generations/${attempt.id}/continuity`;
+  // 3A.1: a specific, still advisory line near Approve; it never blocks the human decision
+  const qaAdvice =
+    shotQa && (shotQa.state === "critical_mismatch" || shotQa.state === "needs_attention")
+      ? `Shot QA: ${shotQa.label}${shotQa.issues[0] ? ` — ${shotQa.issues[0].title}` : ""}.`
+      : null;
 
   return (
     <article
@@ -216,6 +225,12 @@ export function AttemptCard({
         </div>
       </div>
 
+      {shotQa && canReview ? (
+        <div className="border-t border-line px-3 py-2">
+          <ShotQaCardSummary assessment={shotQa} reviewHref={qaHref} />
+        </div>
+      ) : null}
+
       {media && canReview ? (
         <div className="border-t border-line p-3">
           <AttemptMediaPanel
@@ -238,9 +253,12 @@ export function AttemptCard({
           </ActionForm>
         ) : null}
 
-        {canReview && media && media.advisories.length > 0 && attempt.reviewStatus !== "approved" ? (
+        {canReview &&
+        media &&
+        (media.advisories.length > 0 || qaAdvice) &&
+        attempt.reviewStatus !== "approved" ? (
           <p className="basis-full text-[11px] text-warn" data-testid="approval-advisory">
-            Before approving: {media.advisories.join(" ")}
+            Before approving: {[qaAdvice, ...media.advisories].filter(Boolean).join(" ")}
           </p>
         ) : null}
         {canReview ? (
@@ -294,7 +312,36 @@ export function AttemptCard({
                       </label>
                     ))}
                   </div>
-                  <input name="reason" placeholder="What is wrong? (e.g. door opened on the wrong side)" />
+                  {/* 3A.1: QA suggestions are offered, never filled in or submitted for the reviewer */}
+                  {suggestions.length > 0 ? (
+                    <div className="text-[11.5px]" data-testid="reject-suggestions">
+                      <div className="text-[10.5px] uppercase tracking-wide text-muted">
+                        Suggested by Shot QA (pick one in the reason field, or write your own)
+                      </div>
+                      <ul className="space-y-0.5">
+                        {suggestions.map((sg) => (
+                          <li
+                            key={sg.findingId}
+                            className="select-all text-muted"
+                            data-testid="reject-suggestion"
+                          >
+                            {sg.text}
+                          </li>
+                        ))}
+                      </ul>
+                      <datalist id={`qa-reasons-${attempt.id}`}>
+                        {suggestions.map((sg) => (
+                          <option key={sg.findingId} value={sg.text} />
+                        ))}
+                      </datalist>
+                    </div>
+                  ) : null}
+                  <input
+                    name="reason"
+                    placeholder="What is wrong? (e.g. door opened on the wrong side)"
+                    list={suggestions.length > 0 ? `qa-reasons-${attempt.id}` : undefined}
+                    data-testid="reject-reason"
+                  />
                   <input name="notes" placeholder="Notes for the next attempt" defaultValue={attempt.notes} />
                   <Button size="sm" variant="danger" type="submit" data-testid="reject-submit">
                     Reject attempt

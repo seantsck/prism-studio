@@ -1,6 +1,7 @@
 import "server-only";
 import { computeQaInputs, projectRun, type QaInputs, type RunProjection } from "@/continuity/service";
 import { approvalAdvisories, type QaStatus } from "@/domain/continuity/status";
+import { NO_SHOT_QA, type ShotQaAssessment } from "@/domain/continuity/shot-qa";
 import { parseAdaptationPlan, type GenerationAdaptationPlan } from "@/domain/framing/adaptation";
 import type { AttemptView } from "@/data/generation-repository";
 import type { AttemptDelivery, DerivedAsset } from "@/data/media-qa-repository";
@@ -23,6 +24,8 @@ export interface AttemptMedia {
   qaStatus: QaStatus;
   qaStale: boolean;
   advisories: string[];
+  /** 3A.1: the advisory Shot QA decision projection of the latest run (NO_SHOT_QA when none exists). */
+  shotQa: ShotQaAssessment;
 }
 
 export async function loadAttemptMedia(data: ProjectData, view: AttemptView): Promise<AttemptMedia> {
@@ -71,5 +74,6 @@ export async function loadAttemptMedia(data: ProjectData, view: AttemptView): Pr
       stale: qaStale,
       summary: latest?.summary ?? null,
     }),
+    shotQa: latest?.assessment ?? NO_SHOT_QA,
   };
 }
