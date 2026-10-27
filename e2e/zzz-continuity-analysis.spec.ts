@@ -168,7 +168,9 @@ test("OpenAI (gpt-6-luna, fake transport): preview, acknowledged paid submit, fi
   await page.getByTestId("ack-analysis-spend").check();
   await expect(page.getByTestId("run-analysis")).toBeEnabled();
   await page.getByTestId("run-analysis").click();
-  await expect(page.getByTestId("status-semantic")).toContainText(/complete/i, { timeout: 90_000 });
+  // wait for THIS run first: until the page refreshes, the previous Mock run's "complete" would satisfy the next check
+  await expect(page.locator('[data-testid="history-row"]')).toHaveCount(3, { timeout: 90_000 });
+  await expect(page.getByTestId("status-semantic")).toContainText(/openai.*complete/i, { timeout: 90_000 });
 
   // findings are labelled by provider; cost is the analysis ledger, separate from generation
   await expect(page.getByTestId("run-cost")).toContainText("actual $");
@@ -229,4 +231,98 @@ test("the attempt card shows the continuity chip separately from creative approv
   const card = page.getByTestId("attempt-card").first();
   await expect(card.getByTestId("chip-continuity")).not.toContainText("not started");
   await expect(card.getByTestId("chip-creative")).toContainText("unreviewed");
+});
+
+// ── Phase 3A.1: Shot QA decision layer (advisory; free Mock / fake analysis only) ──
+
+test("Shot QA answers first; a reviewer FAIL makes a mismatch and a suggestion; creative review stays the human's", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await page.goto(continuityPath);
+  const summary = page.getByTestId("shot-qa-summary");
+  await expect(summary).toBeVisible();
+  // the answer sits above the detailed criterion workspace
+  const summaryBox = (await summary.boundingBox())!;
+  const criteriaBox = (await page.getByTestId("criteria").boundingBox())!;
+  expect(summaryBox.y).toBeLessThan(criteriaBox.y);
+  await expect(page.getByTestId("shot-qa-counts")).toContainText("Critical mismatches");
+  await expect(page.getByTestId("shot-qa-authority")).toContainText("never approves or rejects");
+
+  // a person records a FAIL on a critical criterion the system did not fail
+  const candidate = page
+    .locator('[data-testid="criterion"][data-severity="critical"]:not([data-result="fail"])')
+    .first();
+  const key = (await candidate.getAttribute("data-key"))!;
+  // pinned by key: once overridden to FAIL the row no longer matches the selector above
+  const target = page.locator(`[data-testid="criterion"][data-key="${key}"]`);
+  const system = (await target.getByTestId("system-result").textContent())!.trim();
+  await target.getByRole("combobox").selectOption("fail");
+  await target.getByPlaceholder("Note").fill("Wrong earrings in the close-up.");
+  await target.getByTestId("override-submit").click();
+  await expect(target.getByTestId("override-note")).toContainText("Human: Fail", { timeout: 20_000 });
+
+  await expect(summary).toHaveAttribute("data-state", "critical_mismatch");
+  await expect(page.getByTestId("shot-qa-state")).toContainText("Critical mismatch");
+  const issue = summary.locator(`[data-testid="shot-qa-issue"][data-key="${key}"]`);
+  await expect(issue).toHaveAttribute("data-kind", "fail");
+  await expect(issue.getByTestId("shot-qa-issue-override")).toContainText("reviewer: fail");
+  const suggestion = summary.locator(`[data-testid="shot-qa-suggestion"][data-key="${key}"]`);
+  await expect(suggestion).toContainText("Reviewer: Wrong earrings in the close-up.");
+  // the system's own finding is unchanged
+  await expect(target.getByTestId("system-result")).toHaveText(system);
+
+  // the Attempt card: the QA answer, a link to the evidence, an offered (never filled-in) reason
+  await openGenerate(page);
+  const card = page.getByTestId("attempt-card").first();
+  await expect(card.getByTestId("card-shot-qa-state")).toContainText("Critical mismatch");
+  await expect(card.getByTestId("card-review-qa")).toHaveAttribute("href", continuityPath);
+  await expect(card.getByTestId("approval-advisory")).toContainText("Shot QA: Critical mismatch");
+  await expect(card.getByTestId("chip-creative")).toContainText("unreviewed");
+  await card.getByTestId("reject-toggle").click();
+  await expect(card.getByTestId("reject-suggestions")).toContainText("Wrong earrings in the close-up.");
+  await expect(card.getByTestId("reject-reason")).toHaveValue("");
+
+  // the human can still approve despite the AI FAIL, and clear it again: QA never decides
+  await expect(card.getByTestId("approve-button")).toBeEnabled();
+  await card.getByTestId("approve-button").click();
+  await expect(card.getByTestId("chip-creative")).toContainText("approved", { timeout: 20_000 });
+  await expect(card.getByTestId("card-shot-qa-state")).toContainText("Critical mismatch");
+  await card.getByRole("button", { name: "Clear review" }).click();
+  await expect(card.getByTestId("chip-creative")).toContainText("unreviewed", { timeout: 20_000 });
+
+  // a later PASS decision removes the issue and its suggestion; the system finding stays as recorded
+  await page.goto(continuityPath);
+  const again = page.locator(`[data-testid="criterion"][data-key="${key}"]`);
+  await again.getByRole("combobox").selectOption("pass");
+  await again.getByPlaceholder("Note").fill("Checked against the Lock: correct earrings.");
+  await again.getByTestId("override-submit").click();
+  await expect(again.getByTestId("override-note")).toContainText("Human: Pass", { timeout: 20_000 });
+  await expect(summary.locator(`[data-testid="shot-qa-issue"][data-key="${key}"]`)).toHaveCount(0);
+  await expect(summary.locator(`[data-testid="shot-qa-suggestion"][data-key="${key}"]`)).toHaveCount(0);
+  await expect(again.getByTestId("system-result")).toHaveText(system);
+});
+
+test("Shot QA goes stale when the judged output changes, and is current again when it is restored", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await openGenerate(page);
+  const card = page.getByTestId("attempt-card").first();
+  await expect(card.getByTestId("card-shot-qa-state")).not.toContainText("QA stale");
+  await card.getByRole("button", { name: "Use original as delivery master" }).click();
+  await expect(card.getByTestId("card-shot-qa-state")).toContainText("QA stale", { timeout: 20_000 });
+
+  await page.goto(continuityPath);
+  const summary = page.getByTestId("shot-qa-summary");
+  await expect(summary).toHaveAttribute("data-state", "qa_stale");
+  await expect(page.getByTestId("shot-qa-stale-reasons")).toContainText("delivery conform changed");
+  await expect(page.getByTestId("shot-qa-suggestions")).toHaveCount(0);
+
+  // restore the conformed delivery master: the same run describes the current output again
+  await openGenerate(page);
+  const restored = page.getByTestId("attempt-card").first();
+  await restored.getByRole("button", { name: "Use as delivery master" }).first().click();
+  await expect(restored.getByTestId("card-shot-qa-state")).not.toContainText("QA stale", { timeout: 20_000 });
+  await expect(restored.getByTestId("chip-creative")).toContainText("unreviewed");
 });

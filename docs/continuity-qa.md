@@ -9,6 +9,12 @@ shot. Three facts about an attempt stay separate everywhere (chips, cards, compa
 | Continuity QA     | latest continuity run          | not started · in review · passed · passed with warnings · failed |
 | Creative approval | `attempt.reviewStatus` (human) | unreviewed · approved · rejected                                 |
 
+**Phase 3A.1:** this infrastructure now feeds the advisory **Shot QA** decision layer ([shot-qa](shot-qa.md)): a pure
+projection of the latest run (no new persistence) that answers “did Prism find a mismatch?”, orders the issues and
+offers deterministic rejection-reason suggestions. Rules `3a.1` add Production Frame / Location View fidelity criteria
+from the attempt's frozen package, split camera framing from camera movement, and route forbidden objects / actions to
+the analyzer capabilities that can actually judge them.
+
 ## Domain (`src/domain/continuity/`, pure)
 
 - **Criteria** (`criteria.ts`): derived only from production truth. Each has a stable key, category, severity
@@ -17,6 +23,10 @@ shot. Three facts about an attempt stay separate everywhere (chips, cards, compa
   props, location/set, lighting, weather, time of day, character count, screen direction, eyelines, geography,
   camera, composition, action continuity, duration, audio, lip sync, other.
   Locked Looks/sets raise severity to critical; protected-composition notes become manual composition criteria.
+  Rules `3a.1` ([shot-qa](shot-qa.md#shot-fidelity-criteria-rules-3a1)): `production_frame` and `location_view`
+  fidelity criteria (only when the attempt's frozen package carries that frame / view), `camera_framing` (stills) and
+  `camera_movement` (temporal) instead of one `camera`, `forbiddenObjects` → object presence, `forbiddenActions` →
+  temporal. A criterion may name its only reference roles (`referenceRoles`); the analysis plan then sends just those.
 - **Reference set** (`buildReferenceSet`): exactly which identity refs, Look refs, approved storyboard, location
   refs, previous approved shot output, next shot storyboard, performance takes, production constraints and
   delivery framing were used, with checksums. Frozen on the run.
@@ -50,11 +60,14 @@ the generation worker has no access. Distinct from the legacy manual `continuity
 
 A run is compared with what is true **now** (`staleness`): the subject (output / delivery master / plan),
 the criteria (production truth) and the reference set fingerprints. A change marks the run **stale** in the UI;
-the stored run is never mutated. Re-running creates `run N+1`; history stays.
+the stored run is never mutated. Re-running creates `run N+1`; history stays. Since 3A.1 the reasons are specific:
+which reference role changed, a moved Production Frame / Location View selection (the `selection_change` reference
+item), or a rules-version change.
 
 ## Approval advisories
 
-Shown beside Approve, never blocking: QA not run · QA stale · critical failure recorded · review not closed.
+Shown beside Approve, never blocking: QA not run · QA stale · critical failure recorded · review not closed. Since
+3A.1 the Shot QA state and its first issue lead the advisory when it is a critical mismatch or needs attention.
 
 ## Review workspace
 
