@@ -103,6 +103,12 @@ export interface ContinuityCriterion {
   handler: CriterionHandler;
   /** Analyzer capability that could judge it (null: only a person or a deterministic check can). */
   capability: AnalyzerCapability | null;
+  /**
+   * Phase 3A.1: the ONLY reference roles an analyzer may compare this criterion against (best first). Absent: the
+   * category's default routing (`REFERENCE_PRIORITY`). Fidelity criteria name exactly one canonical reference so a
+   * Production Frame check is never judged against a Storyboard sketch.
+   */
+  referenceRoles?: readonly string[];
   position: number;
 }
 
@@ -134,7 +140,14 @@ export interface FindingResult {
   evidence: { frames?: number[]; timeRangeMs?: [number, number] };
 }
 
-/** Bump when criteria construction or check semantics change: stored on every run. */
-export const CONTINUITY_RULES_VERSION = "2c.1";
+/**
+ * Bump when criteria construction or check semantics change: stored on every run.
+ *   2c.1  Phase 2C criteria.
+ *   3a.1  Phase 3A.1 Shot fidelity: Production Frame and Location View fidelity criteria from the attempt's FROZEN
+ *         package; `camera` split into `camera_framing` (stills) and `camera_movement` (temporal); forbidden objects
+ *         routed to object-presence analysis and forbidden actions to temporal analysis (unchecked until enabled).
+ *         Runs recorded under 2c.1 stay readable exactly as frozen; they are never rewritten.
+ */
+export const CONTINUITY_RULES_VERSION = "3a.1";
 
 export const SEVERITY_ORDER: Record<ContinuitySeverity, number> = { critical: 0, major: 1, minor: 2 };
