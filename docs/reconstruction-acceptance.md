@@ -468,7 +468,7 @@ platform cannot do either, record it as an accepted residual (the id grants noth
 
 ### Deployment target
 
-**NOT DEFINED.** The repository has no platform configuration (no `vercel.json`, Dockerfile, proxy or edge config).
+**NOT DEFINED** (an open decision item; see [deployment](deployment.md)). The repository has no platform configuration (no `vercel.json`, Dockerfile, proxy or edge config).
 The only hint is that `src/lib/auth/site-url.ts` accepts `VERCEL_URL` as a fallback origin. The intended production
 origin is `https://studio.prismsuite.io` ([auth.md](auth.md)). Prism does not infer a platform from that fallback and
 adds no vendor configuration. The infrastructure must support: incoming result bodies of at least 55 MB, source
