@@ -5,6 +5,12 @@ import {
   assertAnalysisTransition,
   isAnalysisTerminal,
 } from "@/domain/continuity/analysis/job-state";
+import {
+  defaultQaPolicy,
+  qaPolicyErrors,
+  type ProjectQaPolicy,
+  type QaPolicyInput,
+} from "@/domain/continuity/automation";
 import type { MemoryProjectsAccess } from "./generation-memory";
 import {
   AnalysisLeaseLostError,
@@ -49,6 +55,7 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
   private runs: ContinuityRun[] = [];
   private findings: ContinuityFinding[] = [];
   private overrides: ContinuityOverride[] = [];
+  private qaPolicies = new Map<string, ProjectQaPolicy>();
 
   constructor(private readonly access: MemoryProjectsAccess) {}
 
@@ -191,6 +198,19 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
   }
 
   async createRun(input: NewRun, findings: NewFinding[]) {
+    return this.insertRun(input, findings, null);
+  }
+
+  async ensureAutomaticRun(input: NewRun, findings: NewFinding[], automationKey: string) {
+    // check-and-insert with no await in between: as atomic in this store as the unique index is in Postgres
+    const existing = this.runs.find(
+      (r) => r.projectId === input.projectId && r.automationKey === automationKey,
+    );
+    if (existing) return { run: this.view(existing), created: false };
+    return { run: this.insertRun(input, findings, automationKey), created: true };
+  }
+
+  private insertRun(input: NewRun, findings: NewFinding[], automationKey: string | null): ContinuityRunView {
     const { now, ...withPhase2d } = input;
     const rest: Omit<
       typeof withPhase2d,
@@ -205,6 +225,7 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
       promptVersion: input.promptVersion ?? null,
       rubricVersion: input.rubricVersion ?? null,
       model: input.model ?? null,
+      automationKey,
       id: randomUUID(),
       runNumber,
       analysisError: "",
@@ -446,6 +467,30 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
     return clone(job);
   }
 
+  async getQaPolicy(projectId: string) {
+    return clone(this.qaPolicies.get(projectId) ?? defaultQaPolicy(projectId));
+  }
+
+  async saveQaPolicy(input: Parameters<MediaQaRepository["saveQaPolicy"]>[0]) {
+    const errors = qaPolicyErrors(input.policy);
+    if (errors.length > 0) throw new MediaQaError("invalid", errors.join(" "));
+    const current = this.qaPolicies.get(input.projectId)?.revision ?? 0;
+    if (current !== input.expectedRevision)
+      throw new MediaQaError(
+        "conflict",
+        "The Shot QA policy was changed elsewhere since this page loaded. Reload to see it, then try again.",
+      );
+    const next: ProjectQaPolicy = {
+      projectId: input.projectId,
+      ...normalisePolicy(input.policy),
+      revision: current + 1,
+      updatedBy: input.by,
+      updatedAt: input.now,
+    };
+    this.qaPolicies.set(input.projectId, next);
+    return clone(next);
+  }
+
   async analysisSpentSince(projectId: string | null, sinceIso: string) {
     const jobs = [...this.jobs.values()].filter((j) => projectId == null || j.projectId === projectId);
     let total = 0;
@@ -659,4 +704,15 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
   async spentSince(sinceIso: string) {
     return this.analysisSpentSince(null, sinceIso);
   }
+}
+
+/** Stores exactly what the owner entered (an empty analyzer becomes null); nothing is inferred or promoted. */
+function normalisePolicy(p: QaPolicyInput): QaPolicyInput {
+  return {
+    semanticMode: p.semanticMode,
+    analyzer: p.analyzer || null,
+    externalMediaAllowed: p.externalMediaAllowed,
+    maxCostPerRunUsd: p.maxCostPerRunUsd,
+    maxCostPerDayUsd: p.maxCostPerDayUsd,
+  };
 }

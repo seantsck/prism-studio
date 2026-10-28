@@ -9,6 +9,7 @@ import type {
   ExternalMediaManifest,
   NormalizedFinding,
 } from "@/domain/continuity/analysis/types";
+import type { ProjectQaPolicy, QaPolicyInput } from "@/domain/continuity/automation";
 import type { ContinuityCategory, ContinuityResult, ContinuitySeverity } from "@/domain/continuity/model";
 
 /**
@@ -103,6 +104,8 @@ export interface ContinuityRun {
   promptVersion: string | null;
   rubricVersion: string | null;
   model: string | null;
+  /** Phase 3A.2: identity of an AUTOMATIC run (unique per Project when set); null for manual and historical runs. */
+  automationKey: string | null;
   createdBy: string | null;
   createdAt: string;
   completedAt: string | null;
@@ -162,6 +165,7 @@ export type NewRun = Omit<
   | "rubricVersion"
   | "model"
   | "analysisError"
+  | "automationKey"
 > & {
   now: string;
   analysisPlan?: ContinuityAnalysisPlan | null;
@@ -371,7 +375,7 @@ export class AnalysisLeaseLostError extends Error {
 
 export class MediaQaError extends Error {
   constructor(
-    readonly code: "not_found" | "run_closed" | "run_in_progress" | "invalid",
+    readonly code: "not_found" | "run_closed" | "run_in_progress" | "invalid" | "conflict" | "not_migrated",
     message: string,
   ) {
     super(message);
@@ -412,6 +416,15 @@ export interface MediaQaRepository {
   // ── continuity QA ──
   /** Creates the run (number assigned atomically) with its criteria/findings in one transaction. */
   createRun(run: NewRun, findings: NewFinding[]): Promise<ContinuityRunView>;
+  /**
+   * Phase 3A.2: the ONE automatic run for `automationKey` in this Project. Atomic: concurrent callers with the same key
+   * get the same run (`created` is true for exactly one of them). Manual runs never carry a key, so people can re-run.
+   */
+  ensureAutomaticRun(
+    run: NewRun,
+    findings: NewFinding[],
+    automationKey: string,
+  ): Promise<{ run: ContinuityRunView; created: boolean }>;
   getRun(runId: string): Promise<ContinuityRunView | null>;
   listAttemptRuns(attemptId: string): Promise<ContinuityRunView[]>;
   /** The most recent run per attempt for a project (QA dashboard / shot list). */
@@ -465,4 +478,19 @@ export interface MediaQaRepository {
   requestAnalysisCancel(jobId: string, now: string): Promise<AnalysisJob | null>;
   /** Analysis spend since a time: actual where known, otherwise the estimate ceiling (never under-counted). */
   analysisSpentSince(projectId: string | null, sinceIso: string): Promise<number>;
+
+  // ── Project QA policy (Phase 3A.2, owner only) ──
+  /** The Project's policy; the default (semantic automation off, revision 0) when none was ever saved. */
+  getQaPolicy(projectId: string): Promise<ProjectQaPolicy>;
+  /**
+   * Saves the policy when `expectedRevision` is still current (0 = none saved yet); the revision goes up by exactly one.
+   * A stale page gets `conflict` and overwrites nothing.
+   */
+  saveQaPolicy(input: {
+    projectId: string;
+    policy: QaPolicyInput;
+    expectedRevision: number;
+    by: string | null;
+    now: string;
+  }): Promise<ProjectQaPolicy>;
 }

@@ -8,12 +8,14 @@ import { ensureReviewArtifacts, readVerified, type DeliveryDeps } from "@/media/
 import { deterministicFindings, type QaInputs } from "@/continuity/service";
 import type { AnalysisSpendPolicy } from "@/domain/continuity/analysis/cost";
 import { analysisSpendBlockers } from "@/domain/continuity/analysis/cost";
+import { projectBudgetBlockers, type ProjectQaPolicy } from "@/domain/continuity/automation";
 import { buildAnalysisInput, buildAnalysisMedia, inputAssetIdsOf, type OutputMediaSet } from "./prepare";
 import type { ContinuityAnalysisProvider } from "./provider";
 
 export class AnalysisSubmitError extends Error {
   constructor(
-    readonly code: "spend_blocked" | "needs_ack" | "no_output" | "nothing_to_analyse" | "limit",
+    readonly code:
+      "spend_blocked" | "project_budget_blocked" | "needs_ack" | "no_output" | "nothing_to_analyse" | "limit",
     message: string,
   ) {
     super(message);
@@ -60,6 +62,11 @@ export async function submitAnalysis(args: {
   acknowledged: boolean;
   nonce: string;
   limits: { maxActivePerProject: number; maxJobAttempts: number };
+  /**
+   * Phase 3A.2 automatic submission: the Project's own ceilings, applied IN ADDITION to the server's global gate
+   * below (they can only be stricter). Absent for a manual analysis.
+   */
+  projectPolicy?: ProjectQaPolicy;
   now?: Date;
 }): Promise<{ run: ContinuityRunView; job: AnalysisJob; duplicate: boolean }> {
   const { inputs, view, provider, deps } = args;
@@ -93,6 +100,16 @@ export async function submitAnalysis(args: {
 
   const estimate = provider.estimate(input, now);
   const maxUsd = Number.isFinite(estimate.maxUsd) ? estimate.maxUsd : null;
+  if (args.projectPolicy) {
+    const since = new Date(now.getTime() - 24 * 3600_000).toISOString();
+    const blockers = projectBudgetBlockers({
+      policy: args.projectPolicy,
+      maxEstimateUsd: maxUsd,
+      projectSpentLast24hUsd: await deps.qa.analysisSpentSince(view.attempt.projectId, since),
+    });
+    if (blockers.length > 0)
+      throw new AnalysisSubmitError("project_budget_blocked", blockers.map((b) => b.message).join(" "));
+  }
   if (provider.kind === "model") {
     const since = new Date(now.getTime() - 24 * 3600_000).toISOString();
     const spent = await deps.qa.analysisSpentSince(null, since);

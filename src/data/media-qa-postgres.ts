@@ -4,6 +4,12 @@ import { COLLECTIONS, flatFromRow, flatToRow, type Row } from "./postgres-mappin
 import { upsertRow } from "./postgres-repository";
 import { ANALYSIS_ACTIVE, assertAnalysisTransition } from "@/domain/continuity/analysis/job-state";
 import {
+  defaultQaPolicy,
+  qaPolicyErrors,
+  type ProjectQaPolicy,
+  type SemanticMode,
+} from "@/domain/continuity/automation";
+import {
   MediaQaError,
   type AnalysisCost,
   type AnalysisEvent,
@@ -22,6 +28,22 @@ import {
   type NewFinding,
   type NewRun,
 } from "./media-qa-repository";
+
+const NOT_MIGRATED =
+  "Automatic Shot QA needs database migration 0044, which is not applied to this database yet.";
+
+const mapQaPolicy = (r: Row): ProjectQaPolicy => ({
+  projectId: String(r.project_id),
+  semanticMode: r.semantic_mode as SemanticMode,
+  analyzer: r.analyzer ? String(r.analyzer) : null,
+  externalMediaAllowed: Boolean(r.external_media_allowed),
+  maxCostPerRunUsd: r.max_cost_per_run_usd == null ? null : Number(r.max_cost_per_run_usd),
+  maxCostPerDayUsd: r.max_cost_per_day_usd == null ? null : Number(r.max_cost_per_day_usd),
+  revision: Number(r.revision),
+  updatedBy: r.updated_by ? String(r.updated_by) : null,
+  updatedAt:
+    r.updated_at instanceof Date ? r.updated_at.toISOString() : r.updated_at ? String(r.updated_at) : null,
+});
 
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : v == null ? null : String(v));
 const num = (v: unknown) => (v == null ? null : Number(v));
@@ -78,6 +100,8 @@ const mapRun = (r: Row): ContinuityRun => ({
   promptVersion: r.prompt_version ? String(r.prompt_version) : null,
   rubricVersion: r.rubric_version ? String(r.rubric_version) : null,
   model: r.model ? String(r.model) : null,
+  // absent before migration 0044 is applied: every such run is manual
+  automationKey: r.automation_key ? String(r.automation_key) : null,
   createdBy: r.created_by ? String(r.created_by) : null,
   createdAt: iso(r.created_at)!,
   completedAt: iso(r.completed_at),
@@ -392,79 +416,121 @@ export class PostgresMediaQaData implements MediaQaRepository {
   }
 
   async createRun(input: NewRun, findings: NewFinding[]) {
-    return this.tx(async (c) => {
-      // Serialises run numbering for the attempt.
-      const lock = await c.query("select id from generation_attempts where id = $1 for update", [
-        input.attemptId,
-      ]);
-      if (lock.rowCount === 0) throw new MediaQaError("not_found", "That attempt no longer exists.");
-      const n = await c.query(
-        "select coalesce(max(run_number), 0) + 1 as n from continuity_runs where attempt_id = $1",
-        [input.attemptId],
-      );
-      const r = await c.query(
-        `insert into continuity_runs
+    return this.tx((c) => this.insertRun(c, input, findings, null));
+  }
+
+  async ensureAutomaticRun(input: NewRun, findings: NewFinding[], automationKey: string) {
+    try {
+      return await this.tx(async (c) => {
+        // the attempt row lock (taken in insertRun) serialises same-attempt callers; the partial unique index
+        // continuity_runs_automation_key is the authority across every process
+        const lock = await c.query("select id from generation_attempts where id = $1 for update", [
+          input.attemptId,
+        ]);
+        if (lock.rowCount === 0) throw new MediaQaError("not_found", "That attempt no longer exists.");
+        const existing = await c.query(
+          "select * from continuity_runs where project_id = $1 and automation_key = $2",
+          [input.projectId, automationKey],
+        );
+        if (existing.rows[0]) return { run: (await this.views(c, existing.rows))[0]!, created: false };
+        return { run: await this.insertRun(c, input, findings, automationKey), created: true };
+      });
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "23505") {
+        // a concurrent caller committed the same automatic run first: return it
+        const again = await this.tx(async (c) => {
+          const r = await c.query(
+            "select * from continuity_runs where project_id = $1 and automation_key = $2",
+            [input.projectId, automationKey],
+          );
+          return (await this.views(c, r.rows))[0] ?? null;
+        });
+        if (again) return { run: again, created: false };
+      }
+      if (code === "42703") throw new MediaQaError("not_migrated", NOT_MIGRATED);
+      throw err;
+    }
+  }
+
+  private async insertRun(
+    c: PoolClient,
+    input: NewRun,
+    findings: NewFinding[],
+    automationKey: string | null,
+  ): Promise<ContinuityRunView> {
+    // Serialises run numbering for the attempt.
+    const lock = await c.query("select id from generation_attempts where id = $1 for update", [
+      input.attemptId,
+    ]);
+    if (lock.rowCount === 0) throw new MediaQaError("not_found", "That attempt no longer exists.");
+    const n = await c.query(
+      "select coalesce(max(run_number), 0) + 1 as n from continuity_runs where attempt_id = $1",
+      [input.attemptId],
+    );
+    const r = await c.query(
+      `insert into continuity_runs
            (project_id, attempt_id, run_number, subject_asset_id, original_asset_id, analyzer, analyzer_version,
             analyzer_kind, rules_version, analysis_status, package_fingerprint, subject_fingerprint,
             criteria_fingerprint, reference_fingerprint, reference_set, created_by, created_at,
-            analysis_plan, external_manifest, prompt_version, rubric_version, model)
+            analysis_plan, external_manifest, prompt_version, rubric_version, model${automationKey ? ", automation_key" : ""})
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17,
-                 $18::jsonb, $19::jsonb, $20, $21, $22)
+                 $18::jsonb, $19::jsonb, $20, $21, $22${automationKey ? ", $23" : ""})
          returning *`,
-        [
-          input.projectId,
-          input.attemptId,
-          Number(n.rows[0].n),
-          input.subjectAssetId,
-          input.originalAssetId,
-          input.analyzer,
-          input.analyzerVersion,
-          input.analyzerKind,
-          input.rulesVersion,
-          input.analysisStatus,
-          input.packageFingerprint,
-          input.subjectFingerprint,
-          input.criteriaFingerprint,
-          input.referenceFingerprint,
-          JSON.stringify(input.referenceSet),
-          input.createdBy,
-          input.now,
-          input.analysisPlan ? JSON.stringify(input.analysisPlan) : null,
-          input.externalManifest ? JSON.stringify(input.externalManifest) : null,
-          input.promptVersion ?? null,
-          input.rubricVersion ?? null,
-          input.model ?? null,
-        ],
-      );
-      const run = r.rows[0] as Row;
-      for (const f of findings) {
-        await c.query(
-          `insert into continuity_findings
+      [
+        input.projectId,
+        input.attemptId,
+        Number(n.rows[0].n),
+        input.subjectAssetId,
+        input.originalAssetId,
+        input.analyzer,
+        input.analyzerVersion,
+        input.analyzerKind,
+        input.rulesVersion,
+        input.analysisStatus,
+        input.packageFingerprint,
+        input.subjectFingerprint,
+        input.criteriaFingerprint,
+        input.referenceFingerprint,
+        JSON.stringify(input.referenceSet),
+        input.createdBy,
+        input.now,
+        input.analysisPlan ? JSON.stringify(input.analysisPlan) : null,
+        input.externalManifest ? JSON.stringify(input.externalManifest) : null,
+        input.promptVersion ?? null,
+        input.rubricVersion ?? null,
+        input.model ?? null,
+        ...(automationKey ? [automationKey] : []),
+      ],
+    );
+    const run = r.rows[0] as Row;
+    for (const f of findings) {
+      await c.query(
+        `insert into continuity_findings
              (project_id, run_id, criterion_key, category, severity, title, source_ref, expected, actual, result,
               result_source, confidence, notes, evidence, position, created_at)
            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16)`,
-          [
-            input.projectId,
-            run.id,
-            f.criterionKey,
-            f.category,
-            f.severity,
-            f.title,
-            f.sourceRef,
-            f.expected,
-            f.actual,
-            f.result,
-            f.resultSource,
-            f.confidence,
-            f.notes,
-            JSON.stringify(f.evidence),
-            f.position,
-            input.now,
-          ],
-        );
-      }
-      return (await this.views(c, [run]))[0]!;
-    });
+        [
+          input.projectId,
+          run.id,
+          f.criterionKey,
+          f.category,
+          f.severity,
+          f.title,
+          f.sourceRef,
+          f.expected,
+          f.actual,
+          f.result,
+          f.resultSource,
+          f.confidence,
+          f.notes,
+          JSON.stringify(f.evidence),
+          f.position,
+          input.now,
+        ],
+      );
+    }
+    return (await this.views(c, [run]))[0]!;
   }
 
   async getRun(runId: string) {
@@ -817,6 +883,70 @@ export class PostgresMediaQaData implements MediaQaRepository {
       );
       return mapAnalysisJob(r.rows[0]);
     });
+  }
+
+  // ───────────────────────── Project QA policy ─────────────────────────
+
+  async getQaPolicy(projectId: string) {
+    try {
+      return await this.tx(async (c) => {
+        const r = await c.query("select * from project_qa_policies where project_id = $1", [projectId]);
+        return r.rows[0] ? mapQaPolicy(r.rows[0]) : defaultQaPolicy(projectId);
+      });
+    } catch (err) {
+      // before migration 0044 is applied there is no policy table: semantic automation is simply off
+      if ((err as { code?: string }).code === "42P01") return defaultQaPolicy(projectId);
+      throw err;
+    }
+  }
+
+  async saveQaPolicy(input: Parameters<MediaQaRepository["saveQaPolicy"]>[0]) {
+    const errors = qaPolicyErrors(input.policy);
+    if (errors.length > 0) throw new MediaQaError("invalid", errors.join(" "));
+    const p = input.policy;
+    const values = [
+      input.projectId,
+      p.semanticMode,
+      p.analyzer || null,
+      p.externalMediaAllowed,
+      p.maxCostPerRunUsd,
+      p.maxCostPerDayUsd,
+      input.by,
+      input.now,
+    ];
+    try {
+      const saved = await this.tx(async (c) => {
+        const r =
+          input.expectedRevision === 0
+            ? await c.query(
+                `insert into project_qa_policies
+                   (project_id, semantic_mode, analyzer, external_media_allowed, max_cost_per_run_usd,
+                    max_cost_per_day_usd, revision, updated_by, updated_at)
+                 values ($1, $2, $3, $4, $5, $6, 1, $7, $8)
+                 on conflict (project_id) do nothing
+                 returning *`,
+                values,
+              )
+            : await c.query(
+                `update project_qa_policies set
+                   semantic_mode = $2, analyzer = $3, external_media_allowed = $4, max_cost_per_run_usd = $5,
+                   max_cost_per_day_usd = $6, revision = revision + 1, updated_by = $7, updated_at = $8
+                 where project_id = $1 and revision = $9
+                 returning *`,
+                [...values, input.expectedRevision],
+              );
+        return r.rows[0] ? mapQaPolicy(r.rows[0]) : null;
+      });
+      if (!saved)
+        throw new MediaQaError(
+          "conflict",
+          "The Shot QA policy was changed elsewhere since this page loaded. Reload to see it, then try again.",
+        );
+      return saved;
+    } catch (err) {
+      if ((err as { code?: string }).code === "42P01") throw new MediaQaError("not_migrated", NOT_MIGRATED);
+      throw err;
+    }
   }
 
   async analysisSpentSince(projectId: string | null, sinceIso: string) {
