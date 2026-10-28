@@ -43,8 +43,7 @@ export default async function ShotQaSettingsPage({ params }: { params: Promise<{
           <p className="mt-1 text-muted">
             When a generated Shot becomes reviewable, or its delivery master changes, Prism checks duration,
             aspect ratio, resolution, frame rate, container, audio and the delivery master on this server. No
-            external model, no AI fee, nothing leaves Prism. It runs whenever you next have
-            Prism open.
+            external model, no AI fee, nothing leaves Prism. It runs whenever you next have Prism open.
           </p>
         </section>
         <section className="border border-line bg-panel p-3" data-testid="qa-policy">
