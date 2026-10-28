@@ -11,7 +11,8 @@ Frame or Location View, changes a Character Continuity Lock or touches an Episod
 authority.
 
 **Status:** implemented with fake transports and a calibration harness. **No live Gemini calibration has run.**
-Migration 0045 is **built, not applied** to hosted DEV. Lip sync stays **unchecked**.
+Migration 0045 is **applied to hosted DEV and verified** (2026-10-28; see
+[migration-policy](migration-policy.md)). Lip sync stays **unchecked**.
 
 ## One system, not a second one
 
@@ -236,12 +237,19 @@ npm run continuity:temporal:calibrate -- --live --model gemini-3.8-flash \
 - the paid-analysis gate blocks it;
 - zero outbound requests.
 
-## Migration 0045 (built, not applied)
+## Migration 0045 (applied to hosted DEV)
 
 `alter table project_qa_policies add column direct_video_allowed boolean not null default false`. No new table, no
 grant or revoke, no policy change (owner-only RLS on the table is unchanged; `anon` and both worker roles still have no
-privilege). Forward-only; the applied 0044 is unchanged. Before 0045 is applied, the policy reads full-video
-permission as `false`; saving `true` reports that 0045 is needed, and saving `false` works.
+privilege). Forward-only and now immutable; the applied 0044 is unchanged. On a database without 0045 the policy reads
+full-video permission as `false`; saving `true` reports that 0045 is needed, and saving `false` works.
+
+Hosted gate (2026-10-28): rehearsed with `--dry-run` (rolled back), applied with checksum
+`44cc9360b867cc1d30b5fa8d758eca311f56b01d3485bb100d235c87d265d325`; every existing policy reads `false`; on a
+disposable Project the owner can set and clear the permission (revisioned, stale revision refused) while a stranger and
+`anon` can neither read nor change it; the generation and continuity workers cannot read the policy; hosted browser E2E
+40/40. The permission is **off** on every real Project, and the server direct-video gate stays unset. **Live Gemini
+calibration: NOT RUN.**
 
 ## Versions
 
@@ -252,4 +260,4 @@ permission as `false`; saving `true` reports that 0045 is needed, and saving `fa
 | Direct-video prompt        | `continuity-gemini-video-v1` | `continuity-gemini-video-v2` | New temporal instruction and evidence contract                |
 | `RUBRIC_VERSION`           | `continuity-rubric-1`        | `continuity-rubric-1`        | Result meanings unchanged                                     |
 | `ANALYSIS_SCHEMA_VERSION`  | `1`                          | `2`                          | Interval evidence (`endMs`) and duration-bounded timestamps   |
-| Migration head             | `0044`                       | `0045` (built, not applied)  | Explicit full-video consent                                   |
+| Migration head             | `0044`                       | `0045` (hosted DEV)          | Explicit full-video consent                                   |
