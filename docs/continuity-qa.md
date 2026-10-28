@@ -47,6 +47,11 @@ the analyzer capabilities that can actually judge them.
   `passed_with_warnings` (any other fail/warn/unchecked), or `passed`. A critical fail prevents "passed" but does
   not reject or delete the output.
 
+**Phase 3A.2:** runs can now be created automatically ([automatic-shot-qa](automatic-shot-qa.md)). An automatic
+deterministic run has `analyzer_kind = deterministic`, no analysis plan and a non-null `automation_key` (0044, unique
+per Project); manual runs keep a null key. Automatic semantic runs go through the same `submitAnalysis`, job, worker,
+manifest and cost ledger as manual ones, with a stable nonce.
+
 ## Persistence (migration 0021)
 
 `continuity_runs` (frozen snapshot: subject asset, original, analyzer + version + kind, rules version, package /

@@ -196,7 +196,7 @@ const seekTo = (page: Page, ms: number) =>
 test.beforeAll(async () => {
   test.skip(!DB_URL || !DEV_ID, "hosted credentials missing");
   baseline = await counts();
-  expect(baseline.head).toBe("0043_episode_edits.sql");
+  expect(baseline.head).toBe("0044_shot_qa_automation.sql");
   storage = await signedInStorage();
 
   const video = Buffer.from(MOCK_VIDEO_WEBM_BASE64, "base64");

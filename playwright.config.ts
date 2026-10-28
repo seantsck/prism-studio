@@ -49,6 +49,12 @@ const ISOLATED_2H = "zzzzzzzzzzzzzzzzzzzz-image-to-video.spec.ts";
 const ISOLATED_2I = "zzzzzzzzzzzzzzzzzzzzz-episode-edit.spec.ts";
 
 /**
+ * The Phase 3A.2 automatic-QA spec gets its own memory server: it changes the Project's Shot QA policy (Suggest, then
+ * Automatic), which would otherwise make every later spec's generations queue semantic analysis automatically.
+ */
+const ISOLATED_3A2 = "zzzzzzzzzzzzzzzzzzzzzz-automatic-qa.spec.ts";
+
+/**
  * TEST SERVERS ONLY. Playwright's request client reuses keep-alive sockets; at Node's default idle-close boundary
  * (5 s + 1 s buffer) the server could close a socket while `page.request` was reusing it, giving ECONNRESET before
  * the request reached the app. Longer than the longest test (20 min), so each test's request context closes first.
@@ -63,7 +69,7 @@ export default defineConfig({
   projects: [
     {
       name: "memory",
-      testIgnore: ["supabase-*.spec.ts", ISOLATED_2H, ISOLATED_2I],
+      testIgnore: ["supabase-*.spec.ts", ISOLATED_2H, ISOLATED_2I, ISOLATED_3A2],
       use: { baseURL: "http://localhost:3102" },
     },
     {
@@ -75,6 +81,11 @@ export default defineConfig({
       name: "memory-2i-isolated",
       testMatch: ISOLATED_2I,
       use: { baseURL: "http://localhost:3104" },
+    },
+    {
+      name: "memory-3a2-isolated",
+      testMatch: ISOLATED_3A2,
+      use: { baseURL: "http://localhost:3105" },
     },
   ],
   // Started in order: the first builds; the others serve the same build from separate processes (separate stores).
@@ -100,6 +111,13 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 120_000,
       env: memoryEnv(3104),
+    },
+    {
+      command: `npx next start -p 3105 ${KEEP_ALIVE}`,
+      url: "http://localhost:3105",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: memoryEnv(3105),
     },
   ],
 });

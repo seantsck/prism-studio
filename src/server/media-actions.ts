@@ -2,7 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { AnalysisSubmitError, submitAnalysis } from "@/continuity/analysis/submit";
+import { reconcileAttemptQa } from "@/continuity/automation";
 import { computeQaInputs, runContinuityReview } from "@/continuity/service";
+import {
+  qaPolicyErrors,
+  SEMANTIC_MODES,
+  type ReconcileResult,
+  type SemanticMode,
+} from "@/domain/continuity/automation";
 import { CONTINUITY_RESULTS, type ContinuityResult } from "@/domain/continuity/model";
 import { parseAdaptationPlan } from "@/domain/framing/adaptation";
 import { MediaError } from "@/media/types";
@@ -14,6 +21,7 @@ import { getGenerationRepo } from "./generation";
 import {
   getAnalysisConfig,
   getAnalysisProviders,
+  getAutoQaDeps,
   getContinuityAnalyzer,
   getDeliveryDeps,
   getMediaQaRepo,
@@ -56,13 +64,40 @@ async function loadAttempt(form: FormData) {
   return { slug, data, view, userId: user.kind === "supabase" ? user.id : null };
 }
 
+/**
+ * Phase 3A.2: automatic QA for the attempt's CURRENT truth, after a media operation succeeded. Never throws: a QA
+ * failure must not undo or obscure the conform / selection that already happened; it comes back as a warning.
+ */
+async function reconcileAfter(loaded: Awaited<ReturnType<typeof loadAttempt>>): Promise<string | null> {
+  try {
+    const qa = await getMediaQaRepo();
+    const data = await requireProjectFresh(loaded.slug);
+    const view = (await (await getGenerationRepo()).getAttemptView(loaded.view.attempt.id)) ?? loaded.view;
+    const r = await reconcileAttemptQa({
+      data,
+      view,
+      policy: await qa.getQaPolicy(data.project.id),
+      deps: await getAutoQaDeps(loaded.userId),
+    });
+    return r.outcomes.includes("failed") ? r.reasons.at(-1)! : null;
+  } catch (err) {
+    return `Automatic QA could not run: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+const withQaWarning = (message: string, warning: string | null): ActionResult => ({
+  ok: true,
+  message: warning ? `${message}. ${warning}` : message,
+});
+
 const shotLabel = (data: Awaited<ReturnType<typeof requireProjectFresh>>, shotId: string, n: number) =>
   `${data.shots.find((s) => s.id === shotId)?.shotCode ?? "shot"}-a${n}`;
 
 // ───────────────────────── delivery conform ─────────────────────────
 
-async function createDeliveryConform_impl(form: FormData) {
-  const { slug, data, view, userId } = await loadAttempt(form);
+async function createDeliveryConform_impl(form: FormData): Promise<ActionResult> {
+  const loaded = await loadAttempt(form);
+  const { slug, data, view, userId } = loaded;
   if (view.attempt.status !== "succeeded")
     throw new UserFacingError("Only a completed generation can be conformed.");
   const plan = parseAdaptationPlan(view.attempt.adaptationPlan);
@@ -83,7 +118,10 @@ async function createDeliveryConform_impl(form: FormData) {
       deps,
     });
   });
+  // the conform is selected as the delivery master: QA the new subject (after the media write succeeded)
+  const warning = await reconcileAfter(loaded);
   refresh(slug);
+  return withQaWarning("Delivery conform created", warning);
 }
 
 export async function createDeliveryConform(form: FormData): Promise<ActionResult> {
@@ -91,8 +129,9 @@ export async function createDeliveryConform(form: FormData): Promise<ActionResul
 }
 
 /** Choose which stored version (the provider original, or any derived conform) is the delivery master. */
-async function selectDeliveryMaster_impl(form: FormData) {
-  const { slug, view, userId } = await loadAttempt(form);
+async function selectDeliveryMaster_impl(form: FormData): Promise<ActionResult> {
+  const loaded = await loadAttempt(form);
+  const { slug, view, userId } = loaded;
   const qa = await getMediaQaRepo();
   const assetId = str(form, "assetId");
   const original = view.outputs.find((o) => o.output.role === "primary")?.asset ?? view.outputs[0]?.asset;
@@ -120,11 +159,91 @@ async function selectDeliveryMaster_impl(form: FormData) {
     selectedBy: userId,
     now: new Date().toISOString(),
   });
+  const warning = await reconcileAfter(loaded);
   refresh(slug);
+  return withQaWarning("Delivery master selected", warning);
 }
 
 export async function selectDeliveryMaster(form: FormData): Promise<ActionResult> {
   return runAction(() => selectDeliveryMaster_impl(form), { name: "selectDeliveryMaster" });
+}
+
+// ───────────────────────── automatic Shot QA (Phase 3A.2) ─────────────────────────
+
+/**
+ * The page found automatic QA due for this attempt's current truth and asks for it. Idempotent: a repeated or
+ * concurrent call for the same truth changes nothing. Returns every outcome and reason (nothing is hidden).
+ */
+export async function reconcileAttemptQaAction(form: FormData): Promise<ReconcileResult> {
+  let loaded: Awaited<ReturnType<typeof loadAttempt>>;
+  try {
+    loaded = await loadAttempt(form);
+  } catch (err) {
+    return {
+      outcomes: ["not_eligible"],
+      reasons: [err instanceof UserFacingError ? err.message : "That attempt is not available."],
+      runId: null,
+      jobId: null,
+    };
+  }
+  const qa = await getMediaQaRepo();
+  const result = await reconcileAttemptQa({
+    data: loaded.data,
+    view: loaded.view,
+    policy: await qa.getQaPolicy(loaded.data.project.id),
+    deps: await getAutoQaDeps(loaded.userId),
+  });
+  if (result.outcomes.some((o) => o === "deterministic_created" || o === "semantic_queued"))
+    refresh(loaded.slug);
+  return result;
+}
+
+const money = (f: FormData, k: string): number | null => {
+  const v = str(f, k);
+  if (v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : Number.NaN;
+};
+
+/** Owner-only Project Shot QA policy. `automatic` is a standing authorisation and needs explicit confirmation. */
+async function saveQaPolicy_impl(form: FormData): Promise<ActionResult> {
+  const slug = str(form, "projectSlug");
+  const data = await requireProjectFresh(slug);
+  const user = await requireUser();
+  const mode = str(form, "semanticMode") as SemanticMode;
+  if (!(SEMANTIC_MODES as readonly string[]).includes(mode))
+    throw new UserFacingError("Choose a semantic QA mode.");
+  const policy = {
+    semanticMode: mode,
+    analyzer: str(form, "analyzer") || null,
+    externalMediaAllowed: str(form, "externalMediaAllowed") === "1",
+    maxCostPerRunUsd: money(form, "maxCostPerRunUsd"),
+    maxCostPerDayUsd: money(form, "maxCostPerDayUsd"),
+  };
+  const errors = qaPolicyErrors(policy);
+  if (errors.length > 0) throw new UserFacingError(errors.join(" "));
+  if (mode === "automatic" && str(form, "confirmAutomatic") !== "1")
+    throw new UserFacingError(
+      "Confirm the standing authorisation to turn on automatic semantic QA (it sends media and may cost money without asking each time).",
+    );
+  if (policy.analyzer && !getAnalysisProviders().has(policy.analyzer) && mode === "automatic")
+    throw new UserFacingError(`The analyzer "${policy.analyzer}" is not available on this server.`);
+  const qa = await getMediaQaRepo();
+  await guard(() =>
+    qa.saveQaPolicy({
+      projectId: data.project.id,
+      policy,
+      expectedRevision: Number(str(form, "revision") || "0"),
+      by: user.kind === "supabase" ? user.id : null,
+      now: new Date().toISOString(),
+    }),
+  );
+  refresh(slug);
+  return { ok: true, message: "Shot QA policy saved" };
+}
+
+export async function saveQaPolicy(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveQaPolicy_impl(form), { name: "saveQaPolicy" });
 }
 
 // ───────────────────────── continuity review ─────────────────────────

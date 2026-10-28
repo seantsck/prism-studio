@@ -20,6 +20,7 @@ const NAV = [
   ["/sequence", "Sequence"],
   ["/animatic", "Animatic"],
   ["/generations", "Generations"],
+  ["/qa", "Shot QA"],
   ["/candidates", "Experiments"],
   ["/models", "Models"],
   ["/assets", "Assets"],

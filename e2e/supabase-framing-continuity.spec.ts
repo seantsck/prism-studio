@@ -99,7 +99,9 @@ test.describe("framing adaptation + delivery conform + continuity QA (signed in,
 
     // continuity QA
     await card.getByTestId("start-continuity").click();
-    await expect(card.getByTestId("open-continuity")).toBeVisible({ timeout: 120_000 });
+    // since 3A.2 an automatic deterministic run already exists, so wait for THIS manual Mock run, not just any run
+    await expect(card.getByTestId("qa-summary")).toContainText("MOCK ANALYSIS", { timeout: 120_000 });
+    await expect(card.getByTestId("open-continuity")).toBeVisible();
     await card.getByTestId("open-continuity").click();
     const row = (key: string) => page.locator(`[data-testid="criterion"][data-key="${key}"]`);
     await expect(row("aspect_ratio")).toHaveAttribute("data-result", "pass");

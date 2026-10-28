@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ActionForm } from "@/components/action-form";
-import { ShotQaCardSummary } from "@/components/continuity/shot-qa-summary";
+import { AutoQaReconciler } from "@/components/continuity/auto-qa-reconciler";
+import { AutoQaLine, ShotQaCardSummary } from "@/components/continuity/shot-qa-summary";
 import { Badge, Button } from "@/components/ui";
 import type { AttemptView } from "@/data/generation-repository";
 import { isActive } from "@/domain/generation/job-state";
@@ -228,6 +229,16 @@ export function AttemptCard({
       {shotQa && canReview ? (
         <div className="border-t border-line px-3 py-2">
           <ShotQaCardSummary assessment={shotQa} reviewHref={qaHref} />
+          {media ? (
+            <>
+              <AutoQaLine autoQa={media.autoQa} reviewHref={qaHref} />
+              <AutoQaReconciler
+                projectSlug={projectSlug}
+                attemptId={attempt.id}
+                dueKey={media.autoQa.dueKey}
+              />
+            </>
+          ) : null}
         </div>
       ) : null}
 

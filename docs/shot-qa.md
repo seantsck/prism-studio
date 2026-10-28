@@ -160,6 +160,13 @@ the reason field. The field is never pre-filled and nothing is submitted for the
 - **Attempt card**: “Shot QA: <state>” with counts, the top issues and **Review QA →**; the advisory beside Approve names
   the Shot QA state and first issue. Approve stays enabled whatever QA says.
 
+## Automatic QA (Phase 3A.2)
+
+Since 3A.2 nobody has to press "Run QA": free deterministic QA is established automatically for each succeeded output
+and each new delivery subject, and semantic QA can be automatic under an explicit Project policy
+([automatic-shot-qa](automatic-shot-qa.md)). Automation facts are shown next to the Shot QA state, never merged into it;
+the assessment above reads automatic and manual runs the same way.
+
 ## Freshness, privacy and cost
 
 Freshness is the existing comparison of the run's frozen subject / criteria / reference fingerprints with current truth;

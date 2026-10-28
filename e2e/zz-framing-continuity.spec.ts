@@ -93,7 +93,11 @@ test("provider original, production target and conform are shown side by side; c
   await openGenerate(page);
   const card = page.getByTestId("attempt-card").first();
   await expect(card.getByTestId("stage-chips")).toContainText("Generated");
-  await expect(card.getByTestId("chip-continuity")).toContainText("not started");
+  // Phase 3A.2: nobody pressed Run QA, yet free deterministic QA exists for the reviewable output
+  await expect(card.getByTestId("auto-qa-deterministic")).toHaveAttribute("data-state", "current", {
+    timeout: 30_000,
+  });
+  await expect(card.getByTestId("chip-continuity")).toContainText("in review");
   await expect(card.getByTestId("chip-creative")).toContainText("unreviewed");
 
   await expect(card.getByTestId("provider-original-card")).toContainText("16:9");
@@ -140,9 +144,10 @@ test("continuity review: deterministic checks, mock analysis, human override, cl
   await openGenerate(page);
   const card = page.getByTestId("attempt-card").first();
   await card.getByTestId("start-continuity").click();
-  await expect(card.getByTestId("open-continuity")).toBeVisible({ timeout: 60_000 });
+  // since 3A.2 an automatic deterministic run already exists, so wait for THIS manual Mock run, not just any run
+  await expect(card.getByTestId("qa-summary")).toContainText("MOCK ANALYSIS", { timeout: 60_000 });
+  await expect(card.getByTestId("open-continuity")).toBeVisible();
   await expect(card.getByTestId("chip-continuity")).toContainText("in review");
-  await expect(card.getByTestId("qa-summary")).toContainText("MOCK ANALYSIS");
   await expect(card.getByTestId("contact-sheet")).toBeVisible();
 
   await card.getByTestId("open-continuity").click();

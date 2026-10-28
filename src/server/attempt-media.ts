@@ -1,4 +1,5 @@
 import "server-only";
+import { autoQaState, autoQaView, type AutoQaView } from "@/continuity/automation";
 import { computeQaInputs, projectRun, type QaInputs, type RunProjection } from "@/continuity/service";
 import { approvalAdvisories, type QaStatus } from "@/domain/continuity/status";
 import { NO_SHOT_QA, type ShotQaAssessment } from "@/domain/continuity/shot-qa";
@@ -6,7 +7,7 @@ import { parseAdaptationPlan, type GenerationAdaptationPlan } from "@/domain/fra
 import type { AttemptView } from "@/data/generation-repository";
 import type { AttemptDelivery, DerivedAsset } from "@/data/media-qa-repository";
 import type { Asset, ProjectData } from "@/domain/schemas";
-import { getMediaQaRepo } from "./media-qa";
+import { getAnalysisProviders, getAnalyzerAvailability, getMediaQaRepo } from "./media-qa";
 
 /** Everything the review UI needs about one attempt's media + QA, from narrow queries. */
 export interface AttemptMedia {
@@ -26,14 +27,19 @@ export interface AttemptMedia {
   advisories: string[];
   /** 3A.1: the advisory Shot QA decision projection of the latest run (NO_SHOT_QA when none exists). */
   shotQa: ShotQaAssessment;
+  /** 3A.2: automation facts (separate from the assessment). Computed from reads only: this function never writes. */
+  autoQa: AutoQaView;
 }
 
 export async function loadAttemptMedia(data: ProjectData, view: AttemptView): Promise<AttemptMedia> {
   const qa = await getMediaQaRepo();
-  const [selection, derivations, runs] = await Promise.all([
+  const [selection, derivations, runs, jobs, policy, automationReady] = await Promise.all([
     qa.getDelivery(view.attempt.id),
     qa.listAttemptDerivations(view.attempt.id),
     qa.listAttemptRuns(view.attempt.id),
+    qa.listAttemptAnalysisJobs(view.attempt.id),
+    qa.getQaPolicy(data.project.id),
+    qa.automationReady(),
   ]);
   const inputs = computeQaInputs({ data, view, delivery: selection });
   const original = inputs?.original ?? null;
@@ -75,5 +81,19 @@ export async function loadAttemptMedia(data: ProjectData, view: AttemptView): Pr
       summary: latest?.summary ?? null,
     }),
     shotQa: latest?.assessment ?? NO_SHOT_QA,
+    autoQa: autoQaView(
+      autoQaState({
+        data,
+        view,
+        delivery: selection,
+        runs,
+        jobs,
+        policy,
+        providers: getAnalysisProviders(),
+        availability: getAnalyzerAvailability(),
+        automationReady,
+      }),
+      policy,
+    ),
   };
 }
