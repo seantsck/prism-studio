@@ -302,20 +302,45 @@ describe("camera semantics: stills judge framing, only temporal analysis judges 
     const item = (k: string) => plan.items.find((i) => i.criterionKey === k)!;
     expect(item("camera_framing").status).toBe("planned");
     expect(item("camera_movement")).toMatchObject({ status: "unsupported", mode: "direct_video" });
-    expect(item("camera_movement").reason).toMatch(/direct-video analysis, which is not enabled/);
+    expect(item("camera_movement").reason).toMatch(
+      /direct-video analysis, which this analyzer does not offer/,
+    );
   });
 
-  it("only an analyzer with direct-video enabled and video_temporal declared may plan movement", () => {
+  it("only an analyzer with direct-video enabled and video_temporal declared may plan movement, and only with the Project's full-video consent", () => {
     const criteria = buildCriteria(ctx(withCamera()));
-    const video = media({ inputId: "video", kind: "video", role: "output", mime: "video/mp4" });
+    const video = media({
+      inputId: "video",
+      kind: "video",
+      role: "output",
+      mime: "video/mp4",
+      durationMs: 4500,
+      byteSize: 2_000_000,
+    });
+    const analyzer = {
+      ...mock(),
+      modes: ["image_set", "direct_video"] as const,
+      videoCapabilities: ["video_temporal"] as const,
+    };
     const plan = buildAnalysisPlan({
-      analyzer: { ...mock(), modes: ["image_set", "direct_video"], videoCapabilities: ["video_temporal"] },
+      analyzer,
       criteria,
       media: [...OUTPUT_FRAMES, video],
+      directVideoAllowed: true,
     });
     expect(plan.items.find((i) => i.criterionKey === "camera_movement")).toMatchObject({
       status: "planned",
       mode: "direct_video",
+    });
+    // 3A.3: a capable server/analyzer is not consent: without it movement stays unchecked and no video is sent
+    const noConsent = buildAnalysisPlan({ analyzer, criteria, media: [...OUTPUT_FRAMES, video] });
+    expect(noConsent.items.find((i) => i.criterionKey === "camera_movement")).toMatchObject({
+      status: "not_allowed",
+      mode: "direct_video",
+    });
+    expect(noConsent.manifest.entries.find((e) => e.kind === "video")).toMatchObject({
+      sent: false,
+      omissionReason: "direct_video_not_allowed",
     });
   });
 });

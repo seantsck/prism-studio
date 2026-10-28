@@ -14,10 +14,14 @@ import type { AnalyzerCapability, ContinuityCategory, ContinuitySeverity } from 
 export const ANALYSIS_MODES = ["image_set", "direct_video"] as const;
 export type AnalysisMode = (typeof ANALYSIS_MODES)[number];
 
-/** Versioned prompt/rubric identity: stored on every run so history stays interpretable. */
+/**
+ * Versioned prompt/rubric identity: stored on every run so history stays interpretable. `video-v2` (Phase 3A.3) is the
+ * production temporal prompt (whole-clip inspection, timestamp/interval evidence, sampling precision); `video-v1` was
+ * the dormant architecture-era prompt and only ever appears on historical runs.
+ */
 export const PROMPT_VERSIONS: Record<AnalysisMode, string> = {
   image_set: "continuity-gemini-image-v1",
-  direct_video: "continuity-gemini-video-v1",
+  direct_video: "continuity-gemini-video-v2",
 };
 /** OpenAI-adapter prompt identity (same rubric and schema; its own system instruction text). */
 export const OPENAI_PROMPT_VERSIONS: Record<AnalysisMode, string> = {
@@ -30,7 +34,11 @@ export function promptVersionFor(analyzerId: string, mode: AnalysisMode): string
   return analyzerId === "openai" ? OPENAI_PROMPT_VERSIONS[mode] : PROMPT_VERSIONS[mode];
 }
 export const RUBRIC_VERSION = "continuity-rubric-1";
-export const ANALYSIS_SCHEMA_VERSION = 1;
+/**
+ * 2 (Phase 3A.3): direct-video evidence may carry an interval end (`endMs`) and is bounded by the clip duration.
+ * Schema-1 snapshots/findings (no `endMs`) stay readable as they are; nothing historical is rewritten.
+ */
+export const ANALYSIS_SCHEMA_VERSION = 2;
 
 export type MediaKind = "reference" | "output_frame" | "contact_sheet" | "video";
 
@@ -73,7 +81,9 @@ export type PlanItemStatus =
   /** Answered by deterministic metadata checks (no AI). */
   | "deterministic"
   /** Only a person can answer it. */
-  | "manual";
+  | "manual"
+  /** The analyzer could judge it, but the Project has not allowed the media it needs (full video): unchecked. */
+  | "not_allowed";
 
 export interface PlanItem {
   criterionKey: string;
@@ -95,6 +105,8 @@ export interface AnalysisBatch {
   outputInputIds: string[];
   /** References that ranked but did NOT fit the input budget. */
   omittedReferenceInputIds: string[];
+  /** Direct-video batches only: the frozen temporal sampling policy (see temporal.ts). */
+  sampling?: { policy: string; fps: number };
 }
 
 export interface ManifestEntry {
@@ -107,7 +119,15 @@ export interface ManifestEntry {
   sent: boolean;
   /** Bounded derivative of the asset that was actually sent (never stored as an asset). */
   derivative: { width: number | null; height: number | null; mime: string | null } | null;
-  omissionReason: "input_budget" | "no_matching_criterion" | "direct_video_disabled" | null;
+  omissionReason:
+    | "input_budget"
+    | "no_matching_criterion"
+    | "direct_video_disabled"
+    /** 3A.3: the Project has not allowed full-video analysis. */
+    | "direct_video_not_allowed"
+    /** 3A.3: the video is outside Prism's temporal bounds (duration / size / format / unknown duration). */
+    | "video_not_eligible"
+    | null;
 }
 
 /** What left Prism infrastructure for this run. No signed URLs, ever. */
@@ -188,7 +208,10 @@ export type EvidenceSource = "reference_image" | "output_frame" | "contact_sheet
 export interface FindingEvidence {
   input: string;
   assetId: string | null;
+  /** Approximate time in the output (direct video: within the clip; a frame: its own position). */
   atMs: number | null;
+  /** Direct video only (schema 2): end of the observed interval; absent/null = a single moment. */
+  endMs?: number | null;
   observation: string;
   source: EvidenceSource;
 }
