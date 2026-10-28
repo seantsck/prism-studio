@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui";
+import type { AutoQaView } from "@/continuity/automation";
 import { SEVERITY_LABELS } from "@/domain/continuity/status";
 import {
   SHOT_QA_AUTHORITY_NOTE,
@@ -257,6 +258,44 @@ export function ShotQaCardSummary({
           ))}
         </ul>
       ) : null}
+    </div>
+  );
+}
+
+const DETERMINISTIC_LABEL: Record<AutoQaView["deterministic"], string> = {
+  current: "Automatic deterministic QA · current",
+  covered_by_semantic: "Automatic QA · included in the automatic semantic run",
+  due: "Automatic deterministic QA · pending",
+  not_eligible: "",
+};
+
+/** Automation facts, kept separate from the Shot QA assessment state (no combined badge). */
+export function AutoQaLine({ autoQa, reviewHref }: { autoQa: AutoQaView; reviewHref: string }) {
+  if (!autoQa.eligible) return null;
+  const s = autoQa.semantic;
+  const analyzer = s.analyzer ? ` (${s.analyzer})` : "";
+  return (
+    <div
+      className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted"
+      data-testid="auto-qa"
+    >
+      <span data-testid="auto-qa-deterministic" data-state={autoQa.deterministic}>
+        {DETERMINISTIC_LABEL[autoQa.deterministic]}
+      </span>
+      <span data-testid="auto-qa-semantic" data-state={s.state}>
+        {s.state === "off" ? "Semantic automation off" : null}
+        {s.state === "suggested" ? (
+          <>
+            Semantic QA suggested{analyzer} — nothing was sent;{" "}
+            <Link className="text-accent hover:underline" href={reviewHref}>
+              run it from Review QA
+            </Link>
+          </>
+        ) : null}
+        {s.state === "queued" ? `Semantic QA queued automatically${analyzer}` : null}
+        {s.state === "due" ? `Semantic QA will be queued automatically${analyzer}` : null}
+        {s.state === "blocked" ? `Semantic auto-analysis blocked — ${s.reasons.join(" ")}` : null}
+      </span>
     </div>
   );
 }

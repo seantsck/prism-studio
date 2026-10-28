@@ -7,7 +7,8 @@ import {
   type AnalyzerPreview,
 } from "@/components/continuity/analysis-launcher";
 import { SeekButton } from "@/components/continuity/seek-button";
-import { ShotQaSummary, type IssueMedia } from "@/components/continuity/shot-qa-summary";
+import { AutoQaReconciler } from "@/components/continuity/auto-qa-reconciler";
+import { AutoQaLine, ShotQaSummary, type IssueMedia } from "@/components/continuity/shot-qa-summary";
 import { NO_SHOT_QA } from "@/domain/continuity/shot-qa";
 import { StageChips } from "@/components/generation/attempt-media-panel";
 import { OutputPreview } from "@/components/generation/parts";
@@ -350,6 +351,11 @@ export default async function ContinuityPage({
 
         {/* the answer first: did Prism find a mismatch? (advisory; the full workspace stays below) */}
         <ShotQaSummary assessment={assessment} media={issueMedia} />
+        <AutoQaLine
+          autoQa={media.autoQa}
+          reviewHref={`/projects/${slug}/generations/${attemptId}/continuity`}
+        />
+        <AutoQaReconciler projectSlug={slug} attemptId={attemptId} dueKey={media.autoQa.dueKey} />
 
         {/* three separate statuses: never one overloaded check */}
         <div className="grid gap-3 md:grid-cols-3" data-testid="qa-status-strip">

@@ -14,6 +14,8 @@ import {
   type AnalyzerStatus,
 } from "@/continuity/analysis/registry";
 import type { ContinuityAnalysisProvider } from "@/continuity/analysis/provider";
+import type { AutoQaDeps } from "@/continuity/automation";
+import type { AnalyzerAvailability } from "@/domain/continuity/automation";
 import { ContinuityAnalysisWorker } from "@/continuity/analysis/worker";
 import {
   FakeGeminiTransport,
@@ -123,6 +125,31 @@ export function getMediaProcessor(): MediaProcessor {
  */
 export function getContinuityAnalyzer(): ContinuityAnalyzer | null {
   return process.env.PRISM_STUDIO_CONTINUITY_ANALYZER === "none" ? null : new MockContinuityAnalyzer();
+}
+
+/** Safe availability facts for the Shot QA automation gates (no credentials). */
+export function getAnalyzerAvailability(): AnalyzerAvailability[] {
+  return getAnalyzerStatuses().map((s) => ({
+    id: s.id,
+    usable: s.usable || s.kind === "mock",
+    kind: s.kind,
+    missingConfig: s.missingConfig,
+  }));
+}
+
+/**
+ * Phase 3A.2: everything an automatic reconciliation needs, under the CURRENT user's session (owner RLS). The global
+ * spend policy and limits come from the server's own configuration, never from a client or a Project.
+ */
+export async function getAutoQaDeps(userId: string | null): Promise<AutoQaDeps> {
+  const config = getAnalysisConfig();
+  return {
+    ...(await getDeliveryDeps(userId)),
+    providers: getAnalysisProviders(),
+    availability: getAnalyzerAvailability(),
+    paid: config.paid,
+    limits: config.limits,
+  };
 }
 
 /** Media processing runs in the app server under the user's own session: no extra worker privileges. */
