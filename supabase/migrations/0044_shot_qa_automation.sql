@@ -57,7 +57,7 @@ $$;
 create table project_qa_policies (
   project_id             uuid primary key references projects (id) on delete cascade,
   semantic_mode          text not null default 'off' check (semantic_mode in ('off', 'suggest', 'automatic')),
-  -- preferred / authorised analyzer id ("openai", "gemini", "mock-continuity"); optional for off / suggest
+  -- preferred / authorised analyzer id from the server's analyzer registry; optional for off / suggest
   analyzer               text check (analyzer is null or char_length(analyzer) between 1 and 64),
   -- standing consent to send the frozen references / output media named by each run's external-media manifest
   external_media_allowed boolean not null default false,
