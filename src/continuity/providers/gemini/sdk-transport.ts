@@ -77,9 +77,13 @@ export class SdkGeminiTransport implements GeminiTransport {
           parts: t.parts.map((p) =>
             p.type === "text"
               ? { text: p.text }
-              : p.type === "inline"
-                ? { inlineData: { mimeType: p.mimeType, data: p.dataBase64 } }
-                : { fileData: { mimeType: p.mimeType, fileUri: p.fileUri } },
+              : {
+                  ...(p.type === "inline"
+                    ? { inlineData: { mimeType: p.mimeType, data: p.dataBase64 } }
+                    : { fileData: { mimeType: p.mimeType, fileUri: p.fileUri } }),
+                  // static sampling at the batch's frozen rate (documented range (0, 24]; default would be 1 fps)
+                  ...(p.videoFps ? { videoMetadata: { fps: p.videoFps } } : {}),
+                },
           ),
         })),
         config: {

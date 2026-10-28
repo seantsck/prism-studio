@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { analysisSpendBlockers, type AnalysisSpendPolicy } from "@/domain/continuity/analysis/cost";
 import { boundedDerivative } from "@/domain/continuity/analysis/plan";
 import {
@@ -367,7 +367,7 @@ export class ContinuityAnalysisWorker {
       const analysed = new Set(findings.map((f) => f.criterionKey));
       for (const item of input.plan.items) {
         if (analysed.has(item.criterionKey)) continue;
-        if (item.status === "unsupported" || item.status === "no_media") {
+        if (item.status === "unsupported" || item.status === "no_media" || item.status === "not_allowed") {
           findings.push(uncheckedFinding(item.criterionKey, item.status, item.reason));
         }
       }
@@ -525,6 +525,9 @@ export class ContinuityAnalysisWorker {
         throw new Error(`Input ${m.inputId} is not a supported video.`);
       if (bytes.length > MAX_VIDEO_BYTES)
         throw new Error(`Input ${m.inputId} exceeds the video analysis size limit.`);
+      // 3A.3: the FULL video leaves Prism, so it must be exactly the frozen subject (infrastructure failure otherwise)
+      if (m.checksum && createHash("sha256").update(bytes).digest("hex") !== m.checksum)
+        throw new Error(`Input ${m.inputId} does not match its recorded checksum; nothing was sent.`);
       return { inputId: m.inputId, mime: format === "mp4" ? "video/mp4" : "video/webm", bytes };
     }
     if (format !== "png" && format !== "jpeg" && format !== "webp") {

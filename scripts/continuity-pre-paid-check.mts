@@ -35,6 +35,14 @@ import { silentLogger } from "../src/generation/log";
 import { LocalDiskSink } from "../src/generation/sink";
 import { FfmpegMediaProcessor } from "../src/media/ffmpeg";
 import { buildSyntheticFixture } from "./lib/continuity-fixture.mts";
+import {
+  TEMPORAL_FIXTURES,
+  fixtureInput,
+  renderFixture,
+} from "../src/continuity/calibration/temporal-calibration";
+import { GEMINI_MODELS } from "../src/continuity/providers/gemini/config";
+import { TEMPORAL_SAMPLING_V1, videoInputTokens } from "../src/domain/continuity/analysis/temporal";
+import { buildAnalysisPlan } from "../src/domain/continuity/analysis/plan";
 
 const failures: string[] = [];
 const ok = (name: string, pass: boolean, detail = "") => {
@@ -297,6 +305,95 @@ try {
   ok("still no outbound network request", outbound.length === 0, outbound.join(","));
 } finally {
   rmSync(root, { recursive: true, force: true });
+}
+
+// 3b ── direct (full) video for temporal QA (Phase 3A.3): configured state, consent, plan, estimate, gates
+{
+  const flag = env.PRISM_STUDIO_GEMINI_DIRECT_VIDEO === "1";
+  note(
+    "server direct-video gate PRISM_STUDIO_GEMINI_DIRECT_VIDEO",
+    flag,
+    "off (temporal criteria stay unchecked)",
+  );
+  const withGate = createAnalysisProviders(
+    {
+      ...env,
+      PRISM_STUDIO_CONTINUITY_ANALYZERS: `mock,${P.id}`,
+      PRISM_STUDIO_GEMINI_DIRECT_VIDEO: "1",
+      ...(TARGET === "openai"
+        ? { OPENAI_API_KEY: key || "key_missing_placeholder_for_check" }
+        : { GEMINI_API_KEY: key || "key_missing_placeholder_for_check" }),
+    },
+    { fetchImpl: trap },
+  ).get(P.id)!;
+  if (TARGET === "openai") {
+    ok(
+      "OpenAI never offers direct video (video input unsupported), even with the gate set",
+      !withGate.modes().includes("direct_video") && withGate.videoCapabilities().length === 0,
+    );
+  } else {
+    ok(
+      "the configured model's verified record accepts video input",
+      Boolean(GEMINI_MODELS.find((m) => m.id === P.model)?.inputs.includes("video")),
+      P.model,
+    );
+    ok(
+      "with the gate on, Gemini offers direct video for video_temporal only (lip sync not calibrated)",
+      withGate.videoCapabilities().join(",") === "video_temporal",
+    );
+    ok(
+      "with the gate off (this environment unless set), no video mode is offered",
+      flag || !provider.modes().includes("direct_video"),
+    );
+    const clip = TEMPORAL_FIXTURES.find((f) => f.id === "camera-pan-right")!;
+    const bytes = await renderFixture(clip);
+    const allowed = fixtureInput(clip, withGate, bytes);
+    ok(
+      "consent + gate: the video is in the frozen plan and marked sent in the manifest",
+      allowed.plan.batches.some(
+        (b) => b.mode === "direct_video" && b.sampling?.fps === TEMPORAL_SAMPLING_V1.fps,
+      ) && allowed.plan.manifest.entries.some((e) => e.kind === "video" && e.sent),
+    );
+    const noConsent = buildAnalysisPlan({
+      analyzer: withGate.plannerView(),
+      criteria: [
+        {
+          key: "camera_movement",
+          category: "camera",
+          severity: "minor",
+          title: "Camera movement",
+          sourceRef: "check",
+          expected: clip.expected,
+          handler: "analyzer",
+          capability: "video_temporal",
+          position: 0,
+        },
+      ],
+      media: allowed.media,
+    });
+    ok(
+      "WITHOUT the Project's full-video consent nothing video is planned or sent",
+      noConsent.batches.length === 0 && noConsent.manifest.entries.every((e) => !e.sent),
+    );
+    const est = withGate.estimate(allowed, new Date());
+    ok(
+      "the direct-video estimate is finite and at least the documented per-frame + audio cost",
+      Number.isFinite(est.maxUsd) &&
+        est.tokens.inputTokens >= Math.ceil((clip.durationMs / 1000) * TEMPORAL_SAMPLING_V1.fps) * 258,
+      `max=$${est.maxUsd} tokens=${est.tokens.inputTokens} (video ${videoInputTokens(clip.durationMs, TEMPORAL_SAMPLING_V1)})`,
+    );
+    ok(
+      "the paid-analysis gate blocks the direct-video estimate while paid analysis is off",
+      analysisSpendBlockers({ policy: real.paid, maxEstimateUsd: est.maxUsd, spentLast24hUsd: 0 }).some(
+        (b) => b.code === "analysis_spend.disabled",
+      ),
+    );
+    ok(
+      "no outbound request while planning/estimating direct video",
+      outbound.length === 0,
+      outbound.join(","),
+    );
+  }
 }
 
 // 4 ── security checklist (static)

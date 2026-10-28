@@ -15,7 +15,12 @@ import type { PricingTable } from "@/domain/continuity/analysis/cost";
  * capability record and price. A model that is not listed here is BLOCKED (never silently priced or sent).
  */
 export const GEMINI_ANALYZER_ID = "gemini";
-export const GEMINI_ANALYZER_VERSION = "1";
+/**
+ * "2" (Phase 3A.3): production temporal analysis (direct video under `shot-temporal-static-v1`, the
+ * `continuity-gemini-video-v2` prompt, schema-2 interval evidence). The version participates in the analysis job
+ * identity, so a v1 (image-only) run of the same truth does not suppress a v2 run that can add temporal coverage.
+ */
+export const GEMINI_ANALYZER_VERSION = "2";
 export const GEMINI_SDK = "@google/genai@2.29.0";
 export const GEMINI_DEFAULT_MODEL = "gemini-3.8-flash";
 
@@ -107,7 +112,10 @@ export interface GeminiConfig {
   /** Absolute ceiling on one response (also bounds thinking). */
   maxOutputTokensCap: number;
   timeoutMs: number;
-  /** Direct video analysis exists in the architecture but is OFF unless explicitly enabled. */
+  /**
+   * Server gate for direct (full) video analysis (`PRISM_STUDIO_GEMINI_DIRECT_VIDEO=1`). OFF unless explicitly
+   * enabled, and never sufficient alone: the Project must also allow full-video analysis (0045).
+   */
   directVideo: boolean;
   thinkingLevel: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
 }

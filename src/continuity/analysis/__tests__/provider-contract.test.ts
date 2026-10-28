@@ -187,3 +187,64 @@ describe.each(rows)("ContinuityAnalysisProvider contract: $name", (row) => {
     expect((err as AnalysisBatchError).category).toBe("invalid_input");
   });
 });
+
+/**
+ * 3A.3 direct-video contract: a provider either declares NO video at all (and the planner never gives it video), or
+ * answers a direct-video batch with the SAME normalized finding shape, whose evidence is timestamped inside the clip.
+ * There is no separate "temporal result" shape.
+ */
+describe.each([
+  ...rows,
+  {
+    name: "gemini (direct video enabled on the server)",
+    paid: true,
+    make: () =>
+      new GeminiAnalysisProvider({
+        config: readGeminiConfig({
+          PRISM_STUDIO_CONTINUITY_ANALYZERS: "gemini",
+          GEMINI_API_KEY: "k".repeat(12),
+          PRISM_STUDIO_GEMINI_DIRECT_VIDEO: "1",
+        }),
+        transport: new FakeGeminiTransport(answerAll("pass")),
+      }),
+  } satisfies Row,
+])("direct-video contract: $name", (row) => {
+  it("declares video honestly and, when it does, answers with ordinary timestamped findings", async () => {
+    const provider = row.make("pass");
+    const input = makeInput({}, provider.plannerView(), { directVideoAllowed: true });
+    const vb = input.plan.batches.find((b) => b.mode === "direct_video");
+    if (!provider.modes().includes("direct_video")) {
+      expect(provider.videoCapabilities()).toEqual([]);
+      expect(vb).toBeUndefined();
+      return;
+    }
+    expect(provider.videoCapabilities()).not.toContain("lip_sync"); // calibration-gated
+    expect(vb).toBeDefined();
+    const video = input.media.find((m) => m.kind === "video")!;
+    const bytes = mediaFor(input);
+    bytes.set(video.inputId, { inputId: video.inputId, mime: "video/mp4", bytes: new Uint8Array(2048) });
+    const out = await provider.analyzeBatch({ batch: vb!, input, media: bytes, ctx: ctx() });
+    expect(out.findings.map((f) => f.criterionKey).sort()).toEqual([...vb!.criterionKeys].sort());
+    for (const f of out.findings) {
+      expect(Object.keys(f).sort()).toEqual(
+        [
+          "confidence",
+          "contradictions",
+          "criterionKey",
+          "evidence",
+          "limitations",
+          "result",
+          "summary",
+        ].sort(),
+      );
+      for (const e of f.evidence) {
+        expect(e.input).toBe(video.inputId);
+        expect(e.source).toBe("video");
+        expect(e.atMs).not.toBeNull();
+        expect(e.atMs!).toBeGreaterThanOrEqual(0);
+        expect(e.atMs!).toBeLessThanOrEqual(video.durationMs!);
+        if (e.endMs != null) expect(e.endMs).toBeLessThanOrEqual(video.durationMs!);
+      }
+    }
+  });
+});

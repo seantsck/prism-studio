@@ -11,7 +11,7 @@ import {
 import type { PlannerAnalyzer } from "@/domain/continuity/analysis/plan";
 import { buildCorrectionText, buildPrompt } from "@/domain/continuity/analysis/prompt";
 import {
-  ANALYSIS_RESPONSE_JSON_SCHEMA,
+  responseJsonSchemaFor,
   uncheckedFinding,
   validateBatchResponse,
 } from "@/domain/continuity/analysis/schema";
@@ -30,7 +30,13 @@ import {
   type MediaBytes,
   type UsageCall,
 } from "@/continuity/analysis/provider";
-import { GEMINI_ANALYZER_ID, GEMINI_ANALYZER_VERSION, GEMINI_PRICING, type GeminiConfig } from "./config";
+import {
+  GEMINI_ANALYZER_ID,
+  GEMINI_ANALYZER_VERSION,
+  GEMINI_MODELS,
+  GEMINI_PRICING,
+  type GeminiConfig,
+} from "./config";
 import {
   GeminiTransportError,
   type GeminiPart,
@@ -50,7 +56,13 @@ const IMAGE_CAPABILITIES: readonly AnalyzerCapability[] = [
   "composition",
   "lighting",
 ];
+/**
+ * Temporal capabilities Prism has VALIDATED for Gemini direct video. `lip_sync` and `audio` are deliberately absent:
+ * lip sync is calibration-gated (docs/temporal-video-qa.md) and stays unchecked until a live calibration passes its
+ * pre-registered threshold; accepting video+audio input is not evidence of lip-sync judgement.
+ */
 const VIDEO_CAPABILITIES: readonly AnalyzerCapability[] = ["video_temporal"];
+export const GEMINI_LIP_SYNC_CALIBRATED = false;
 
 const REFUSAL_FINISH = new Set([
   "SAFETY",
@@ -92,11 +104,21 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
   capabilities() {
     return IMAGE_CAPABILITIES;
   }
+  /** The server gate AND a model whose verified record accepts video input. */
+  private directVideoAvailable(): boolean {
+    return (
+      this.cfg.directVideo &&
+      Boolean(GEMINI_MODELS.find((m) => m.id === this.model)?.inputs.includes("video"))
+    );
+  }
   modes(): readonly AnalysisMode[] {
-    return this.cfg.directVideo ? ["image_set", "direct_video"] : ["image_set"];
+    return this.directVideoAvailable() ? ["image_set", "direct_video"] : ["image_set"];
   }
   videoCapabilities() {
-    return this.cfg.directVideo ? VIDEO_CAPABILITIES : [];
+    return this.directVideoAvailable() ? VIDEO_CAPABILITIES : [];
+  }
+  videoTransfer(byteSize: number): "inline" | "provider_file" {
+    return byteSize > GeminiAnalysisProvider.INLINE_VIDEO_MAX_BYTES ? "provider_file" : "inline";
   }
   plannerView(): PlannerAnalyzer {
     return {
@@ -153,6 +175,7 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
         criteria: batch.criterionKeys.length,
         maxOutputTokens,
         budget: input.plan.budget ?? DEFAULT_ANALYSIS_BUDGET,
+        videoFps: batch.sampling?.fps,
       });
       inputTokens += tokens.inputTokens;
       maxOut += tokens.maxOutputTokens;
@@ -179,13 +202,17 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
     };
   }
 
-  /** Largest video sent inline (the request cap is 20 MB including prompt text); bigger goes via Files API. */
+  /**
+   * Largest video sent inline. Prism-owned and conservative (well under the documented inline request limit, prompt
+   * text included); anything bigger goes through a TEMPORARY Files-API copy that is deleted after the analysis.
+   */
   static readonly INLINE_VIDEO_MAX_BYTES = 12 * 1024 * 1024;
 
   private async toParts(
     spec: ReturnType<typeof buildPrompt>,
     media: Map<string, MediaBytes>,
     ctx: AnalysisContext,
+    batch: AnalysisBatch,
   ): Promise<GeminiPart[]> {
     const parts: GeminiPart[] = [];
     for (const p of spec.parts) {
@@ -197,7 +224,20 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
       if (!m)
         throw new AnalysisBatchError("invalid_input", "missing_media", `Input ${p.inputId} was not loaded.`);
       const isVideo = m.mime.startsWith("video/");
-      if (isVideo && m.bytes.length > GeminiAnalysisProvider.INLINE_VIDEO_MAX_BYTES) {
+      if (isVideo && batch.mode !== "direct_video")
+        throw new AnalysisBatchError(
+          "invalid_input",
+          "video_not_planned",
+          "A still-image batch cannot send video.",
+        );
+      const videoFps = isVideo ? batch.sampling?.fps : undefined;
+      if (isVideo && !videoFps)
+        throw new AnalysisBatchError(
+          "invalid_input",
+          "no_sampling_policy",
+          "A direct-video batch has no frozen sampling policy; nothing was sent.",
+        );
+      if (isVideo && this.videoTransfer(m.bytes.length) === "provider_file") {
         if (!this.transport.uploadFile) {
           throw new AnalysisBatchError(
             "invalid_input",
@@ -205,15 +245,36 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
             "The video is too large to send inline and Files API is unavailable.",
           );
         }
-        const f = await this.transport.uploadFile({
-          bytes: m.bytes,
-          mimeType: m.mime,
-          displayName: p.inputId ?? "video",
-        });
+        // the upload is an outbound request: it is counted (and may be refused) BEFORE it happens
+        await ctx.beforeTransportCall?.({ batch, kind: "upload" });
+        let f: { name: string; uri: string };
+        try {
+          f = await this.transport.uploadFile({
+            bytes: m.bytes,
+            mimeType: m.mime,
+            displayName: p.inputId ?? "video",
+          });
+        } catch (err) {
+          const e = err instanceof GeminiTransportError ? err : null;
+          throw new AnalysisBatchError(
+            e?.category === "rate_limit" || e?.category === "overloaded" ? e.category : "invalid_input",
+            "video_upload_failed",
+            "The video could not be uploaded to the analyzer; nothing was analysed.",
+            [],
+            false,
+            e?.retryAfterMs ?? undefined,
+            e?.httpStatus ?? undefined,
+          );
+        }
         ctx.onProviderFile?.(f.name);
-        parts.push({ type: "file", mimeType: m.mime, fileUri: f.uri });
+        parts.push({ type: "file", mimeType: m.mime, fileUri: f.uri, videoFps });
       } else {
-        parts.push({ type: "inline", mimeType: m.mime, dataBase64: Buffer.from(m.bytes).toString("base64") });
+        parts.push({
+          type: "inline",
+          mimeType: m.mime,
+          dataBase64: Buffer.from(m.bytes).toString("base64"),
+          ...(videoFps ? { videoFps } : {}),
+        });
       }
     }
     return parts;
@@ -238,12 +299,13 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
     turns: GeminiTurn[],
     criteria: number,
     ctx: AnalysisContext,
+    mode: AnalysisMode,
   ): GeminiRequest {
     return {
       model: this.model,
       systemInstruction: spec.systemInstruction,
       turns,
-      responseJsonSchema: ANALYSIS_RESPONSE_JSON_SCHEMA,
+      responseJsonSchema: responseJsonSchemaFor(mode),
       maxOutputTokens: maxOutputTokensFor(criteria, this.cfg.maxOutputTokensCap),
       temperature: 0,
       thinkingLevel: this.cfg.thinkingLevel,
@@ -319,11 +381,11 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
       media: input.media,
       framing: { productionAspectRatio: input.framing.productionAspectRatio },
     });
-    const userTurn: GeminiTurn = { role: "user", parts: await this.toParts(spec, args.media, ctx) };
+    const userTurn: GeminiTurn = { role: "user", parts: await this.toParts(spec, args.media, ctx, batch) };
     const calls: UsageCall[] = [];
 
     const first = await this.call(
-      this.request(spec, [userTurn], batch.criterionKeys.length, ctx),
+      this.request(spec, [userTurn], batch.criterionKeys.length, ctx, batch.mode),
       ctx,
       calls,
       "analysis",
@@ -373,7 +435,7 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
         },
       ];
       last = await this.call(
-        this.request(spec, correction, batch.criterionKeys.length, ctx),
+        this.request(spec, correction, batch.criterionKeys.length, ctx, batch.mode),
         ctx,
         calls,
         "correction",
