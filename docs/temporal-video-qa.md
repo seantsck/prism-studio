@@ -67,7 +67,8 @@ and checksum are frozen in the input and manifest. The worker re-verifies the ch
 mismatch, a missing object or an unsupported format is an **infrastructure** failure, never a creative mismatch.
 
 Prism-owned bounds, checked by the planner before any transport: MP4/WebM only, known duration, at most **30 s**
-and **100 MB**. Nothing is transcoded just to please a provider. An image output leaves temporal criteria unchecked
+and **100 MB** (one constant shared by the planner and the worker), and a **recorded checksum**. A video without one
+is never planned, and the worker refuses to send one (fail closed). Nothing is transcoded just to please a provider. An image output leaves temporal criteria unchecked
 ("The output is not a video").
 
 ## Sampling policy `shot-temporal-static-v1`
@@ -107,7 +108,10 @@ Identity, wardrobe, set, framing, lighting and Production Frame opening fidelity
 - Schema **2** (`ANALYSIS_SCHEMA_VERSION`): direct-video evidence is `{ input, timestampMs, endMs | null,
 observation }`. Validation is strict:
   - evidence must cite the video that was sent;
-  - integers only, `0 ≤ timestampMs ≤ duration`, `timestampMs ≤ endMs ≤ duration`;
+  - integers only, `0 ≤ timestampMs ≤ duration`, `timestampMs ≤ endMs ≤ duration`. Both ends are **closed** by
+    decision: the recorded duration is the clip's final instant, and provider timestamps are only as precise as the
+    sampling interval, so an event in the last sample may be reported at the duration itself. Anything past it is
+    rejected;
   - every pass/warn/fail answer needs at least one timestamped video evidence item.
 
   A still-image answer can never carry `endMs`, a timestamp on a reference or contact sheet, or a frame time other
@@ -134,11 +138,29 @@ the existing output player to the moment or interval start (`SeekButton`); no ne
 A video over the inline limit becomes a **temporary** Gemini Files-API copy:
 
 - The upload is an outbound request: it is counted against the run's transport ceiling **before** it happens, and a
-  refused count uploads nothing.
+  refused count uploads nothing. Events record `kind=upload` separately from `kind=analysis` and `kind=correction`.
+  The SDK's status polls while the file is PROCESSING (`files.get`) and the cleanup delete are free metadata calls;
+  they are not counted.
+- **Upload failure is classified honestly.**
+  - A confirmed 429/503 means the provider refused it: the job is requeued with backoff, and the retry uploads again
+    (counted again).
+  - A rejected upload (401/403/4xx) fails visibly.
+  - A **timeout, network failure or 5xx is ambiguous** (`outcome_unknown`, `video_upload_outcome_unknown`). The bytes
+    may have reached Gemini, and a temporary file may exist whose name Prism never received, so Prism cannot delete
+    it; Gemini deletes it automatically after 48 hours. It is never retried automatically and never reported as
+    "nothing was sent". No analysis request follows a failed upload, so it adds no analysis cost.
+  - If the file was created but never became ACTIVE (or polling failed), the transport deletes it best-effort before
+    reporting the failure.
+- **Upload succeeded, then generate got a confirmed 429/503:** the file is deleted before the job is requeued. The
+  retry uploads a fresh copy, both uploads count against the ceiling, and completed batches are never re-sent.
 - Only the provider file name is recorded (job `provider_files`); never the URI, bytes, a signed Prism URL or a
   credential. The copy is never canonical media.
 - It is deleted best-effort after the analysis. A failed delete is recorded as `cleanup_failed`, stays visible, and
-  never rewrites the result or triggers a re-upload. The provider also expires files after 48 h.
+  never rewrites the result or triggers a re-upload.
+- **Durability limit (accepted, documented):** the file name is held in the worker's memory and recorded only at
+  cleanup. If the worker dies between upload and cleanup, the reclaimed job finds `provider_state = sending` and fails
+  `outcome_unknown` (nothing is re-sent). That temporary copy is not deleted by Prism and remains until Gemini's
+  automatic 48-hour deletion. Prism does not claim crash-safe cleanup.
 
 ## Cost
 
@@ -162,36 +184,46 @@ full video, so every image-only key is exactly what it was in 3A.2. Consequences
 
 `src/continuity/calibration/temporal-calibration.ts` (`temporal-calibration-v1`) holds the calibration set:
 
-- **Fixtures.** 14 deterministic synthetic clips rendered by ffmpeg (no copyrighted footage, no real person):
+- **Fixtures.** 16 deterministic synthetic clips rendered by ffmpeg (no copyrighted footage, no real person):
   - camera pan right, plus a reverse control and a static control;
   - left→right direction plus a reverse;
+  - eyeline: a face proxy whose pupil faces the target, plus a control where it turns away at 2 s;
   - beats in order, reordered, omitted;
   - forbidden action occurring at 2–3 s, plus an absent control;
   - geography kept and swapped;
   - lip-sync readiness: an abstract mouth proxy with a pulsed tone, synchronised and offset by 400 ms.
 - **Pre-registered acceptance**, fixed before any live call: 3 trials per fixture. A criterion is usable only if every
   fixture is answered correctly 3/3, and event fixtures cite evidence inside their window ± (250 ms sampling precision
-  - 500 ms). `unchecked` and errors never count. "fail" accepts fail or warn.
+  - 500 ms). `unchecked` and errors never count.
+- **Strict grading** (tightened in the 3A.3 technical review, BEFORE any live call). Every conflict fixture is
+  deliberate and unambiguous, so only `fail` is correct for it; `warn` ("possible deviation") is not definitive enough
+  to claim a production capability. On a pass fixture, `warn` is also wrong, which catches a hallucinated "possible"
+  forbidden action.
+- **Unknown cost blocks.** Every fixture's estimate must be a finite, non-negative number before it is summed (no
+  `|| 0`), and the request and dollar ceilings must themselves be valid. Otherwise the run is refused before anything
+  is sent.
 - **Harness.** One request per fixture per trial, no corrections. The request count and worst-case dollars are
   checked against hard ceilings **before** anything is sent.
 
 CI runs it with the fake transport (`src/continuity/__tests__/temporal-calibration.test.ts`). The unit suite proves
-three things: a truthful oracle passes, an "always pass" analyzer is caught, and the ceilings refuse before sending.
+four things: a truthful oracle passes; an "always pass" analyzer is caught; `warn` on a conflict fixture is not
+correct; and the ceilings, or an unknown estimate, refuse before sending.
 
 ### Live calibration gate (NOT run; needs separate authorisation)
 
 ```
 PRISM_STUDIO_TEMPORAL_CALIBRATION_LIVE=1 PRISM_STUDIO_ALLOW_PAID_ANALYSIS=1 \
 npm run continuity:temporal:calibrate -- --live --model gemini-3.8-flash \
-  --max-calls 42 --max-usd 1.00 --i-understand-this-sends-synthetic-video-and-costs-money --out <report.json>
+  --max-calls 48 --max-usd 1.25 --i-understand-this-sends-synthetic-video-and-costs-money --out <report.json>
 ```
 
-- **Scope:** exactly the 14 fixtures × 3 trials = 42 generate requests (inline clips, no uploads).
-- **Ceilings:** at most 42 transport calls; worst-case estimate ≈ $0.90 at the current price table, refused above the
+- **Scope:** exactly the 16 fixtures × 3 trials = 48 generate requests (inline clips, no uploads).
+- **Ceilings:** at most 48 transport calls; worst-case estimate ≈ $1.02 at the current price table, refused above the
   ceiling. Only synthetic clips leave Prism.
 - **Checks:** provider files cleaned up (none are expected for inline clips). The report records results, transport
   calls, estimate and actual cost.
-- **Decision:** `video_temporal` stays declared only if the five video criteria are accepted. `lip_sync` is declared
+- **Decision:** `video_temporal` stays declared only if all six video criteria (camera movement, screen direction,
+  eyelines, action beats, forbidden actions, geography) are accepted. `lip_sync` is declared
   only if the lip-sync fixtures are accepted; until then `GEMINI_LIP_SYNC_CALIBRATED = false`.
 
 ## Pre-paid validation

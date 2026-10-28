@@ -3,7 +3,7 @@
 //   npm run continuity:temporal:calibrate                      FAKE transport (default): exercises fixtures, grading
 //                                                               and ceilings; spends nothing, sends nothing.
 //   npm run continuity:temporal:calibrate -- --live \
-//     --model gemini-3.8-flash --max-calls 42 --max-usd 0.50 \
+//     --model gemini-3.8-flash --max-calls 48 --max-usd 1.25 \
 //     --i-understand-this-sends-synthetic-video-and-costs-money  LIVE: only at the separately authorised gate.
 //
 // A live run needs ALL of: --live, the explicit acknowledgement flag, --model, --max-calls, --max-usd,
@@ -39,7 +39,7 @@ async function main() {
   };
   let provider: GeminiAnalysisProvider;
   let maxCalls = TEMPORAL_FIXTURES.length * CALIBRATION_ACCEPTANCE.trials;
-  let maxUsd = 1;
+  let maxUsd = 2; // fake transport: spends nothing; the ceiling still has to hold the worst-case estimate
   if (live) {
     if (!flag("--i-understand-this-sends-synthetic-video-and-costs-money"))
       fail("--live needs --i-understand-this-sends-synthetic-video-and-costs-money.");

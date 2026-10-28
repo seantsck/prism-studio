@@ -5,6 +5,7 @@ import {
   CALIBRATION_ACCEPTANCE,
   TEMPORAL_FIXTURES,
   acceptance,
+  gradeTrial,
   renderFixture,
   runTemporalCalibration,
   type CalibrationFixture,
@@ -36,6 +37,7 @@ describe("calibration design is pre-registered", () => {
       [
         "action_continuity",
         "camera_movement",
+        "eyelines",
         "forbidden_action",
         "geography",
         "lip_sync",
@@ -53,6 +55,29 @@ describe("calibration design is pre-registered", () => {
 
   it("an empty result set accepts nothing (unchecked/errors never count)", () => {
     expect(Object.values(acceptance([])).every((v) => v === false)).toBe(true);
+  });
+
+  it("grading is strict: a deliberate conflict must be `fail` (warn/unchecked are wrong); a pass fixture needs pass", () => {
+    const neg = TEMPORAL_FIXTURES.find((f) => f.id === "forbidden-occurs")!;
+    const pos = TEMPORAL_FIXTURES.find((f) => f.id === "forbidden-absent")!;
+    const finding = (result: "pass" | "warn" | "fail" | "unchecked", atMs: number | null = 2200) => ({
+      criterionKey: neg.criterion,
+      result,
+      confidence: 0.8,
+      summary: "s",
+      evidence:
+        atMs == null
+          ? []
+          : [{ input: "video", assetId: null, atMs, observation: "o", source: "video" as const }],
+      contradictions: [],
+      limitations: [],
+    });
+    expect(gradeTrial(neg, finding("fail")).correct).toBe(true);
+    expect(gradeTrial(neg, finding("warn")).correct).toBe(false);
+    expect(gradeTrial(neg, finding("unchecked", null)).correct).toBe(false);
+    expect(gradeTrial(neg, finding("fail", 300)).correct).toBe(false); // evidence outside the event window
+    expect(gradeTrial(pos, finding("pass")).correct).toBe(true);
+    expect(gradeTrial(pos, finding("warn")).correct).toBe(false); // hallucinated "possible" forbidden action
   });
 });
 
@@ -154,5 +179,33 @@ media("synthetic fixtures + harness (real ffmpeg, fake transport, no spend)", ()
       runTemporalCalibration({ provider, render, maxTransportCalls: 1000, maxUsd: 0.000001 }),
     ).rejects.toThrow(/exceeds the ceiling/);
     expect(transport.calls).toBe(0);
+  });
+
+  it("UNKNOWN cost (NaN / Infinity / negative / missing) or an invalid ceiling blocks BEFORE any request", async () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1, undefined]) {
+      const transport = new FakeGeminiTransport(oracle);
+      const provider = new GeminiAnalysisProvider({ config: cfg, transport });
+      const real = provider.estimate.bind(provider);
+      provider.estimate = (input, now) => ({ ...real(input, now), maxUsd: bad as number });
+      await expect(
+        runTemporalCalibration({ provider, render, maxTransportCalls: 1000, maxUsd: 1000 }),
+      ).rejects.toThrow(/unknown cost blocks the run/);
+      expect(transport.calls).toBe(0);
+    }
+    for (const [maxTransportCalls, maxUsd] of [
+      [Number.NaN, 5],
+      [1.5, 5],
+      [0, 5],
+      [1000, Number.NaN],
+      [1000, Number.POSITIVE_INFINITY],
+      [1000, 0],
+    ] as const) {
+      const transport = new FakeGeminiTransport(oracle);
+      const provider = new GeminiAnalysisProvider({ config: cfg, transport });
+      await expect(runTemporalCalibration({ provider, render, maxTransportCalls, maxUsd })).rejects.toThrow(
+        /nothing was sent/,
+      );
+      expect(transport.calls).toBe(0);
+    }
   });
 });

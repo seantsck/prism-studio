@@ -31,6 +31,7 @@ export const CALIBRATION_VERSION = "temporal-calibration-v1";
 export type CalibrationCriterion =
   | "camera_movement"
   | "screen_direction"
+  | "eyelines"
   | "action_continuity"
   | "forbidden_action"
   | "geography"
@@ -43,7 +44,10 @@ export interface CalibrationFixture {
   description: string;
   /** The production truth the analyzer is asked to judge (sent as DATA, like a real Shot's expected value). */
   expected: string;
-  /** Pre-registered correct answer. "fail" accepts fail OR warn (a clear conflict may be reported as a deviation). */
+  /**
+   * Pre-registered correct answer. Every "fail" fixture is a deliberate, unambiguous conflict, so ONLY `fail` is
+   * correct for it: `warn` ("possible deviation") is not definitive enough to claim a production capability.
+   */
   correct: "pass" | "fail";
   /** For event fixtures: the window (ms) in which the evidence must point, ± the sampling precision + slack. */
   eventWindowMs?: [number, number];
@@ -108,6 +112,28 @@ export const TEMPORAL_FIXTURES: readonly CalibrationFixture[] = [
     correct: "fail",
     durationMs: D * 1000,
     video: `${bg}[b];${box("red")}[s];[b][s]overlay=x='${W - 70}-t/${D}*${W - 70}':y=145`,
+  },
+  // ── eyelines: an abstract face proxy (white square, dark pupil) and a green target on screen-right ──
+  {
+    id: "eyeline-on-target",
+    criterion: "eyelines",
+    description: "The face proxy's pupil stays on the side facing the green target for the whole clip.",
+    expected:
+      "The white face proxy looks toward the green target on screen-right throughout (its dark pupil is on the side facing the target)",
+    correct: "pass",
+    durationMs: D * 1000,
+    video: `${bg},drawbox=x=100:y=130:w=100:h=100:color=white:t=fill,drawbox=x=170:y=170:w=20:h=20:color=black:t=fill,drawbox=x=470:y=145:w=70:h=70:color=green:t=fill`,
+  },
+  {
+    id: "eyeline-broken",
+    criterion: "eyelines",
+    description: "Negative control: at 2.0 s the pupil jumps to the side facing AWAY from the target.",
+    expected:
+      "The white face proxy looks toward the green target on screen-right throughout (its dark pupil is on the side facing the target)",
+    correct: "fail",
+    eventWindowMs: [2000, 2000],
+    durationMs: D * 1000,
+    video: `${bg},drawbox=x=100:y=130:w=100:h=100:color=white:t=fill,drawbox=x='if(lt(t,2),170,110)':y=170:w=20:h=20:color=black:t=fill,drawbox=x=470:y=145:w=70:h=70:color=green:t=fill`,
   },
   // ── action beats: shapes appearing at known times ──
   {
@@ -216,6 +242,7 @@ export const CALIBRATION_ACCEPTANCE = {
 const CAPABILITY: Record<CalibrationCriterion, AnalyzerCapability> = {
   camera_movement: "video_temporal",
   screen_direction: "video_temporal",
+  eyelines: "video_temporal",
   action_continuity: "video_temporal",
   forbidden_action: "video_temporal",
   geography: "video_temporal",
@@ -224,6 +251,7 @@ const CAPABILITY: Record<CalibrationCriterion, AnalyzerCapability> = {
 const CATEGORY: Record<CalibrationCriterion, ContinuityCategory> = {
   camera_movement: "camera",
   screen_direction: "screen_direction",
+  eyelines: "eyelines",
   action_continuity: "action_continuity",
   forbidden_action: "action_continuity",
   geography: "geography",
@@ -402,8 +430,8 @@ export function gradeTrial(
       evidenceInWindow: null,
       note: "no answer",
     };
-  const correct =
-    f.correct === "pass" ? finding.result === "pass" : finding.result === "fail" || finding.result === "warn";
+  // strict: a deliberate conflict must be reported as `fail`; `warn` and `unchecked` are not correct for it
+  const correct = finding.result === f.correct;
   let evidenceInWindow: boolean | null = null;
   if (f.eventWindowMs && finding.result !== "pass") {
     const slack = samplingPrecisionMs(TEMPORAL_SAMPLING_V1) + CALIBRATION_ACCEPTANCE.eventSlackMs;
@@ -453,6 +481,13 @@ export async function runTemporalCalibration(args: {
 }): Promise<CalibrationReport> {
   const fixtures = args.fixtures ?? TEMPORAL_FIXTURES;
   const trials = args.trials ?? CALIBRATION_ACCEPTANCE.trials;
+  // the ceilings themselves must be real numbers: a NaN ceiling would make every comparison false (= no ceiling)
+  if (!Number.isInteger(args.maxTransportCalls) || args.maxTransportCalls <= 0)
+    throw new Error("Calibration needs a positive integer request ceiling; nothing was sent.");
+  if (typeof args.maxUsd !== "number" || !Number.isFinite(args.maxUsd) || args.maxUsd <= 0)
+    throw new Error("Calibration needs a positive, finite dollar ceiling; nothing was sent.");
+  if (!Number.isInteger(trials) || trials <= 0)
+    throw new Error("Calibration needs a positive integer trial count; nothing was sent.");
   const now = args.now ?? new Date();
   const render = args.render ?? ((f) => renderFixture(f));
   const rendered = new Map<string, Uint8Array>();
@@ -468,9 +503,18 @@ export async function runTemporalCalibration(args: {
     throw new Error(
       `Calibration needs ${plannedCalls} provider requests, above the ceiling of ${args.maxTransportCalls}; nothing was sent.`,
     );
-  const estimatedMaxUsd =
-    inputs.reduce((n, { input }) => n + (args.provider.estimate(input, now).maxUsd || 0), 0) * trials;
-  if (!Number.isFinite(estimatedMaxUsd) || estimatedMaxUsd > args.maxUsd)
+  // UNKNOWN cost blocks: every per-fixture estimate must be a finite, non-negative number (never `|| 0`)
+  let perTrialUsd = 0;
+  for (const { f, input } of inputs) {
+    const usd = args.provider.estimate(input, now).maxUsd;
+    if (typeof usd !== "number" || !Number.isFinite(usd) || usd < 0)
+      throw new Error(
+        `Calibration cannot estimate the cost of fixture ${f.id} (estimate ${String(usd)}); unknown cost blocks the run. Nothing was sent.`,
+      );
+    perTrialUsd += usd;
+  }
+  const estimatedMaxUsd = perTrialUsd * trials;
+  if (estimatedMaxUsd > args.maxUsd)
     throw new Error(
       `Calibration's worst-case estimate $${estimatedMaxUsd.toFixed(4)} exceeds the ceiling of $${args.maxUsd}; nothing was sent.`,
     );
