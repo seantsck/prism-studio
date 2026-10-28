@@ -33,7 +33,17 @@ export function AutoQaReconciler({
     reconcileAttemptQaAction(form)
       .then((result) => {
         setDone({ key: dueKey, result });
-        if (result.outcomes.some((o) => o === "deterministic_created" || o === "semantic_queued"))
+        // refresh whenever the server's truth differs from what this page rendered: something was created, OR another
+        // tab/page created it a moment earlier ("already"). Once per due truth (`fired`), so this cannot loop.
+        if (
+          result.outcomes.some(
+            (o) =>
+              o === "deterministic_created" ||
+              o === "semantic_queued" ||
+              o === "semantic_already_queued" ||
+              o === "already_current",
+          )
+        )
           router.refresh();
       })
       .catch(() =>
