@@ -41,6 +41,14 @@ export interface AnalyzerPreview {
   estimate: { expectedUsd: number | null; maxUsd: number | null; basis: string; pricingVersion: string };
   blockers: string[];
   requiresAcknowledgement: boolean;
+  /** 3A.3: the plan sends the FULL output video (disclosed and acknowledged separately). */
+  fullVideo: {
+    durationMs: number | null;
+    byteSize: number | null;
+    transfer: "inline" | "provider_file" | null;
+    criteria: string[];
+    fps: number | null;
+  } | null;
 }
 
 const usd = (n: number | null) =>
@@ -71,13 +79,15 @@ export function AnalysisLauncher({
 }) {
   const [selected, setSelected] = useState(defaultId ?? analyzers[0]?.id ?? "");
   const [ack, setAck] = useState(false);
+  const [ackVideo, setAckVideo] = useState(false);
   const a = analyzers.find((x) => x.id === selected);
   if (!a) {
     return <div className="border border-dashed border-line2 p-3 text-muted">No analyzer is configured.</div>;
   }
   const blocked = a.blockers.length > 0 || !a.usable;
   const needsAck = a.requiresAcknowledgement;
-  const canSubmit = canRun && !blocked && (!needsAck || ack) && a.counts.requests > 0;
+  const fv = a.fullVideo;
+  const canSubmit = canRun && !blocked && (!needsAck || ack) && (!fv || ackVideo) && a.counts.requests > 0;
 
   return (
     <ActionForm
@@ -91,6 +101,7 @@ export function AnalysisLauncher({
       <input type="hidden" name="analyzer" value={a.id} />
       <input type="hidden" name="nonce" value={nonce} />
       <input type="hidden" name="ackSpend" value={ack ? "1" : "0"} />
+      <input type="hidden" name="ackDirectVideo" value={fv && ackVideo ? "1" : "0"} />
 
       <div className="flex flex-wrap items-center gap-3">
         <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted">
@@ -101,6 +112,7 @@ export function AnalysisLauncher({
           onChange={(e) => {
             setSelected(e.target.value);
             setAck(false);
+            setAckVideo(false);
           }}
           aria-label="Analyzer"
           data-testid="analyzer-select"
@@ -265,6 +277,42 @@ export function AnalysisLauncher({
             reject anything.
           </span>
         </label>
+      ) : null}
+
+      {fv ? (
+        <div
+          className="space-y-1 border border-warn/40 bg-warn/5 p-2.5 text-[12px]"
+          data-testid="full-video-disclosure"
+        >
+          <div className="font-semibold">Full delivery video will be sent</div>
+          <ul className="list-disc pl-4 text-muted">
+            <li>
+              To <b>{a.providerName}</b> · model <b>{a.modelLabel}</b>, for {fv.criteria.length} temporal
+              criteria.
+            </li>
+            <li>
+              The selected delivery video
+              {fv.durationMs != null ? `, ${(fv.durationMs / 1000).toFixed(1)} s` : ""}
+              {fv.byteSize != null ? `, ${(fv.byteSize / 1024 / 1024).toFixed(1)} MB` : ""}
+              {fv.fps ? `, sampled at ${fv.fps} frames per second` : ""}.
+            </li>
+            <li>
+              {fv.transfer === "provider_file"
+                ? "Sent as a temporary provider file, deleted after the analysis (a failed deletion stays visible; the provider also expires it)."
+                : "Sent inline with the request; no provider file is kept."}
+            </li>
+            <li>Included in the worst-case estimate of {usd(a.estimate.maxUsd)}.</li>
+          </ul>
+          <label className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              checked={ackVideo}
+              onChange={(e) => setAckVideo(e.target.checked)}
+              data-testid="ack-direct-video"
+            />
+            <span>I understand the full delivery video will be sent to the analyzer for this run.</span>
+          </label>
+        </div>
       ) : null}
 
       <div className="flex items-center gap-3">

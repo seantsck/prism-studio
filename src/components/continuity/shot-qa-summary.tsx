@@ -294,6 +294,9 @@ export function AutoQaLine({ autoQa, reviewHref }: { autoQa: AutoQaView; reviewH
         ) : null}
         {s.state === "queued" ? `Semantic QA queued automatically${analyzer}` : null}
         {s.state === "due" ? `Semantic QA will be queued automatically${analyzer}` : null}
+        {s.temporal && (s.state === "queued" || s.state === "due") ? (
+          <span data-testid="auto-qa-temporal"> · includes full-video temporal QA</span>
+        ) : null}
         {s.state === "blocked" ? `Semantic auto-analysis blocked — ${s.reasons.join(" ")}` : null}
       </span>
     </div>

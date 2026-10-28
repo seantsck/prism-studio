@@ -3,6 +3,7 @@ import {
   AUTO_SEMANTIC_NONCE,
   autoQaEligibility,
   deterministicAutomationKey,
+  directVideoPermitted,
   ELIGIBILITY_MESSAGES,
   planReconcile,
   semanticPolicyBlockers,
@@ -18,7 +19,12 @@ import type { AttemptView } from "@/data/generation-repository";
 import type { AnalysisJob, AttemptDelivery, ContinuityRunView } from "@/data/media-qa-repository";
 import type { ProjectData } from "@/domain/schemas";
 import { readVerified, type DeliveryDeps } from "@/media/delivery";
-import { AnalysisSubmitError, analysisIdempotencyKey, submitAnalysis } from "./analysis/submit";
+import {
+  AnalysisSubmitError,
+  analysisIdempotencyKey,
+  plansDirectVideo,
+  submitAnalysis,
+} from "./analysis/submit";
 import type { ContinuityAnalysisProvider } from "./analysis/provider";
 import { computeQaInputs, deterministicFindings, type QaInputs } from "./service";
 
@@ -52,6 +58,8 @@ export interface AutoQaState {
   semanticJob: AnalysisJob | null;
   provider: ContinuityAnalysisProvider | null;
   analyzer: AnalyzerAvailability | null;
+  /** 3A.3: the automatic semantic analysis would include the full output video (temporal coverage). */
+  temporal: boolean;
 }
 
 export function autoQaState(args: {
@@ -95,6 +103,7 @@ export function autoQaState(args: {
       semanticJob: null,
       provider,
       analyzer,
+      temporal: false,
     };
   }
   const deterministicKey = deterministicAutomationKey({
@@ -105,8 +114,19 @@ export function autoQaState(args: {
     packageFingerprint: inputs.packageFingerprint,
     rulesVersion: CONTINUITY_RULES_VERSION,
   });
-  // the automatic semantic identity: the existing job idempotency key with a STABLE nonce (no time involved)
-  const semanticKey = provider ? analysisIdempotencyKey(inputs, provider, AUTO_SEMANTIC_NONCE) : null;
+  // the automatic semantic identity: the existing job idempotency key with a STABLE nonce (no time involved). It names
+  // the analyzer VERSION and (3A.3) whether the full video is covered, so new temporal coverage for unchanged truth
+  // (a v2 analyzer, or the owner newly allowing full video) is due once, without calling the older run stale.
+  const temporal = provider
+    ? plansDirectVideo({
+        inputs,
+        provider,
+        directVideoAllowed: directVideoPermitted(args.policy, "automatic"),
+      })
+    : false;
+  const semanticKey = provider
+    ? analysisIdempotencyKey(inputs, provider, AUTO_SEMANTIC_NONCE, { temporal })
+    : null;
   const semanticJob = semanticKey ? (args.jobs.find((j) => j.idempotencyKey === semanticKey) ?? null) : null;
   return {
     eligibility,
@@ -118,6 +138,7 @@ export function autoQaState(args: {
     semanticJob,
     provider,
     analyzer,
+    temporal,
   };
 }
 
@@ -131,6 +152,8 @@ export interface AutoQaView {
     analyzer: string | null;
     state: "off" | "suggested" | "queued" | "due" | "blocked";
     reasons: string[];
+    /** 3A.3: the automatic semantic analysis includes the full output video (temporal criteria). */
+    temporal: boolean;
   };
   /** The page should invoke the reconciliation (once per key). */
   due: boolean;
@@ -146,7 +169,13 @@ export function autoQaView(state: AutoQaState, policy: ProjectQaPolicy): AutoQaV
       eligible: false,
       reason: ELIGIBILITY_MESSAGES[state.eligibility],
       deterministic: "not_eligible",
-      semantic: { mode, analyzer: policy.analyzer, state: mode === "off" ? "off" : "blocked", reasons: [] },
+      semantic: {
+        mode,
+        analyzer: policy.analyzer,
+        state: mode === "off" ? "off" : "blocked",
+        reasons: [],
+        temporal: false,
+      },
       due: false,
       dueKey: null,
     };
@@ -156,16 +185,17 @@ export function autoQaView(state: AutoQaState, policy: ProjectQaPolicy): AutoQaV
     : state.semanticCovered
       ? "covered_by_semantic"
       : "due";
+  const base = { mode, analyzer: policy.analyzer, temporal: mode === "automatic" && state.temporal };
   const semantic: AutoQaView["semantic"] =
     mode === "off"
-      ? { mode, analyzer: policy.analyzer, state: "off", reasons: [] }
+      ? { ...base, state: "off", reasons: [] }
       : mode === "suggest"
-        ? { mode, analyzer: policy.analyzer, state: "suggested", reasons: [] }
+        ? { ...base, state: "suggested", reasons: [] }
         : state.semanticCovered
-          ? { mode, analyzer: policy.analyzer, state: "queued", reasons: [] }
+          ? { ...base, state: "queued", reasons: [] }
           : blockers.length > 0
-            ? { mode, analyzer: policy.analyzer, state: "blocked", reasons: blockers.map((b) => b.message) }
-            : { mode, analyzer: policy.analyzer, state: "due", reasons: [] };
+            ? { ...base, state: "blocked", reasons: blockers.map((b) => b.message) }
+            : { ...base, state: "due", reasons: [] };
   const due = deterministic === "due" || semantic.state === "due";
   return {
     eligible: true,
@@ -289,6 +319,11 @@ export async function reconcileAttemptQa(args: {
           nonce: AUTO_SEMANTIC_NONCE,
           limits: deps.limits,
           projectPolicy: policy,
+          // 3A.3: the full video only under the owner's explicit full-video permission AND standing consent
+          directVideo: {
+            allowed: directVideoPermitted(policy, "automatic"),
+            acknowledged: directVideoPermitted(policy, "automatic"),
+          },
           now: deps.now?.(),
         });
         outcomes.push(r.duplicate ? "semantic_already_queued" : "semantic_queued");
