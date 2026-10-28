@@ -10,7 +10,9 @@ QA stays **advisory**. An analyzer never approves, rejects, retries, regenerates
 Frame or Location View, changes a Character Continuity Lock or touches an Episode Edit. People keep creative
 authority.
 
-**Status:** implemented with fake transports and a calibration harness. **No live Gemini calibration has run.**
+**Status:** implemented with fake transports and a calibration harness. **Live calibration not yet successfully
+completed:** the first live attempt (2026-10-28) got zero model answers (provider quota/infrastructure; see
+[the incident record](#first-live-attempt-2026-10-28-provider-access-failure-not-an-evaluated-trial)).
 Migration 0045 is **applied to hosted DEV and verified** (2026-10-28; see
 [migration-policy](migration-policy.md)). Lip sync stays **unchecked**.
 
@@ -194,8 +196,8 @@ full video, so every image-only key is exactly what it was in 3A.2. Consequences
   - geography kept and swapped;
   - lip-sync readiness: an abstract mouth proxy with a pulsed tone, synchronised and offset by 400 ms.
 - **Pre-registered acceptance**, fixed before any live call: 3 trials per fixture. A criterion is usable only if every
-  fixture is answered correctly 3/3, and event fixtures cite evidence inside their window ± (250 ms sampling precision
-  - 500 ms). `unchecked` and errors never count.
+  fixture is answered correctly 3/3, and event fixtures cite evidence inside their window, widened on each side by
+  750 ms (250 ms sampling precision and 500 ms slack). `unchecked` and errors never count.
 - **Strict grading** (tightened in the 3A.3 technical review, BEFORE any live call). Every conflict fixture is
   deliberate and unambiguous, so only `fail` is correct for it; `warn` ("possible deviation") is not definitive enough
   to claim a production capability. On a pass fixture, `warn` is also wrong, which catches a hallucinated "possible"
@@ -203,26 +205,107 @@ full video, so every image-only key is exactly what it was in 3A.2. Consequences
 - **Unknown cost blocks.** Every fixture's estimate must be a finite, non-negative number before it is summed (no
   `|| 0`), and the request and dollar ceilings must themselves be valid. Otherwise the run is refused before anything
   is sent.
-- **Harness.** One request per fixture per trial, no corrections. The request count and worst-case dollars are
-  checked against hard ceilings **before** anything is sent.
+- **Harness.** One request per fixture per trial, no corrections, no retry (the SDK's own retry is off:
+  `retryOptions: { attempts: 1 }`). The request count and worst-case dollars are checked against hard ceilings
+  **before** anything is sent.
+- **Run control** (`CALIBRATION_RUN_CONTROL`, fixed before the next live run; it changes when a run stops, never how
+  an answer is graded):
+  - the **first HTTP 429 aborts** the run. The project cannot complete the trial set at this schedule, and
+    continuing only adds correlated missing trials under rate pressure. A 429 is labelled `quota_or_billing_exhausted`
+    only when the provider's message says so, otherwise `quota_or_rate_limit`. The production worker is unchanged: it
+    still requeues a 429 durably;
+  - a single 500/503 is an error trial (not retried); **3 consecutive 5xx abort** the run as provider-unavailable;
+  - an aborted run still writes its partial report (status, abort reason, HTTP status, sanitized message, the trials
+    done, the unattempted count, request counters, cost status) and the CLI exits 3. Every criterion of an aborted run
+    reads "NOT ACCEPTED — calibration incomplete", which is distinct from "model answered incorrectly" and from
+    "provider errors (no answer)".
+- **Cost honesty.** The report counts analysis, upload and correction attempts and the calls that reported usage.
+  `actualUsd` is `0` only when no generation request left Prism, the provider's figure only when **every** generation
+  attempt reported usage, and otherwise `null` (UNKNOWN: a 429/5xx/timeout without usage may or may not be billed).
+  `knownUsageUsd` is the lower bound from the calls that did report usage.
 
-CI runs it with the fake transport (`src/continuity/__tests__/temporal-calibration.test.ts`). The unit suite proves
-four things: a truthful oracle passes; an "always pass" analyzer is caught; `warn` on a conflict fixture is not
-correct; and the ceilings, or an unknown estimate, refuse before sending.
+CI runs it with the fake transport (`src/continuity/__tests__/temporal-calibration.test.ts`). The unit suite proves:
 
-### Live calibration gate (NOT run; needs separate authorisation)
+- a truthful oracle passes, and an "always pass" analyzer is caught;
+- `warn` on a conflict fixture is not correct;
+- the ceilings, or an unknown estimate, refuse before sending;
+- the run-control rules: 429 fail-fast, 5xx, the partial report, UNKNOWN cost for missing or mixed usage, and zero
+  only when nothing was sent;
+- pacing (with an injected clock, so nothing waits) and the quota preflight.
+
+`gemini-sdk-transport.test.ts` drives the real SDK over a stubbed fetch and proves one request per call for 429, 500,
+503 and a timeout.
+
+### First live attempt (2026-10-28): provider access failure, not an evaluated trial
+
+The run used `temporal-calibration-v1`, `gemini-3.8-flash`, analyzer v2, prompt v2 and 4 fps, with 48 planned
+requests, a $1.25 ceiling and a $1.018092 worst-case estimate.
+
+- **What happened:** all 48 attempted requests returned provider errors: **40 × HTTP 429** ("You exceeded your current
+  quota, please check your plan and billing details"), **4 × 503** and **4 × 500**. There were **zero model answers**
+  and no evaluable evidence. No usage metadata came back, so the **actual cost is unknown**.
+- **What it means:** there is **no model-quality conclusion**. The fixtures, truth labels, windows, trials and
+  threshold remain valid and unchanged, because no model output was seen, and `temporal-calibration-v1` stands.
+- **What happened next:** there was no rerun. Only synthetic clips were sent. The harness was remediated as described
+  above before any new paid gate: UNKNOWN cost, 429 fail-fast, partial abort report, and live pacing with a quota
+  preflight.
+
+### Live calibration gate (needs separate authorisation)
+
+#### Operator readiness (before authorisation)
+
+Check these in **Google AI Studio** for the **same project** that backs `GEMINI_API_KEY`. Gemini limits are per
+project, not per key, and Prism cannot read them from a key. Prism never changes billing, keys, projects or quotas.
+
+- The project is available.
+- An active billing account is linked (paid tier).
+- The usage tier is appropriate.
+- `gemini-3.8-flash` has nonzero active limits, and its **RPM**, **TPM** and **RPD** are known.
+- Today's **remaining** requests cover the 48-request plan.
+- No project **spend cap** blocks the plan.
+- Any prepaid balance requirement is satisfied.
+
+Record these for the gate:
+
+```
+PROJECT TIER:
+MODEL RPM LIMIT:
+MODEL TPM LIMIT:
+MODEL RPD LIMIT:
+PROJECT SPEND CAP:
+BILLING ACTIVE: YES/NO
+```
+
+A one-request connectivity check, if it is ever authorised, is not a calibration trial. It must not use a v1 fixture,
+and it never replaces any of the 48 observations.
+
+#### Command
 
 ```
 PRISM_STUDIO_TEMPORAL_CALIBRATION_LIVE=1 PRISM_STUDIO_ALLOW_PAID_ANALYSIS=1 \
 npm run continuity:temporal:calibrate -- --live --model gemini-3.8-flash \
-  --max-calls 48 --max-usd 1.25 --i-understand-this-sends-synthetic-video-and-costs-money --out <report.json>
+  --max-calls 48 --max-usd 1.25 \
+  --max-rpm <RPM> --max-tpm <TPM> --max-rpd <RPD> --confirm-rpd-remaining \
+  --billing-active yes --project-tier "<tier>" --spend-cap "<cap or none>" \
+  --i-understand-this-sends-synthetic-video-and-costs-money --out <report.json>
 ```
 
-- **Scope:** exactly the 16 fixtures × 3 trials = 48 generate requests (inline clips, no uploads).
-- **Ceilings:** at most 48 transport calls; worst-case estimate ≈ $1.02 at the current price table, refused above the
-  ceiling. Only synthetic clips leave Prism.
-- **Checks:** provider files cleaned up (none are expected for inline clips). The report records results, transport
-  calls, estimate and actual cost.
+- **Scope:** exactly the 16 fixtures × 3 trials = 48 generate requests (inline clips, no uploads). The plan is never
+  shrunk to fit a quota.
+- **Readiness is required:** every limit, the RPD-remaining confirmation, `--billing-active yes`, the tier and the
+  spend cap. Without them the run is refused before anything is sent.
+- **Pacing:** generation requests start no faster than `floor(RPM × 0.8)` per minute, start to start. Pacing never
+  changes media, prompt, grading or sampling, and never retries.
+- **Preflight before any request:**
+  - planned requests ≤ `--max-calls`;
+  - worst-case estimate ≤ `--max-usd`;
+  - planned requests ≤ RPD;
+  - worst-case tokens per minute ≤ TPM. This is the largest request's estimated input tokens plus its output ceiling,
+    multiplied by the paced requests per minute.
+- **Ceilings:** at most 48 transport calls; the worst-case estimate is ≈ $1.02 at the current price table. Only
+  synthetic clips leave Prism.
+- **Checks:** provider files are cleaned up (none are expected for inline clips). The report records the run status,
+  results, request counters, the pacing plan, the estimate, and the actual cost or UNKNOWN.
 - **Decision:** `video_temporal` stays declared only if all six video criteria (camera movement, screen direction,
   eyelines, action beats, forbidden actions, geography) are accepted. `lip_sync` is declared
   only if the lip-sync fixtures are accepted; until then `GEMINI_LIP_SYNC_CALIBRATED = false`.
@@ -248,8 +331,7 @@ Hosted gate (2026-10-28): rehearsed with `--dry-run` (rolled back), applied with
 `44cc9360b867cc1d30b5fa8d758eca311f56b01d3485bb100d235c87d265d325`; every existing policy reads `false`; on a
 disposable Project the owner can set and clear the permission (revisioned, stale revision refused) while a stranger and
 `anon` can neither read nor change it; the generation and continuity workers cannot read the policy; hosted browser E2E
-40/40. The permission is **off** on every real Project, and the server direct-video gate stays unset. **Live Gemini
-calibration: NOT RUN.**
+40/40. The permission is **off** on every real Project, and the server direct-video gate stays unset.
 
 ## Versions
 
