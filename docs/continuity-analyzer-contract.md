@@ -57,6 +57,18 @@ from the request's own inputs, no provider-supplied severity/approval, refusal â
 unknown, estimate non-negative). Provider differences live behind the adapter; **Gemini and OpenAI implement the
 same normalized analyzer contract**, so a finding looks identical whichever produced it.
 
+**Direct video (Phase 3A.3)** ([temporal-video-qa](temporal-video-qa.md)):
+
+- A provider either declares no video (`videoCapabilities()` = `[]`, as OpenAI and Mock do: OpenAI's models list
+  video input as unsupported), or answers a `direct_video` batch with the SAME normalized finding shape, whose
+  evidence is timestamped inside the clip (`atMs`, optional `endMs`, schema 2). There is no separate temporal result
+  shape.
+- Gemini (analyzer v2) declares `video_temporal` only when the server gate is on and the model accepts video;
+  `lip_sync` is calibration-gated and not declared.
+- A video part carries the batch's frozen `sampling.fps`; a still batch can never carry video.
+- A provider-file upload is announced through `beforeTransportCall({ kind: "upload" })` before it happens.
+- `videoTransfer(byteSize)` tells the preflight whether the video goes inline or as a temporary provider file.
+
 Capability vocabulary (unchanged ids â†’ the product's names): `image_identity` = identity visual similarity,
 `wardrobe` = wardrobe/hair/makeup/jewelry, `object_presence` = props, `scene_match` = location/set/weather,
 `character_count`, `composition` = composition/camera, `lighting` = lighting/time of day, `video_temporal` =

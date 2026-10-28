@@ -124,6 +124,12 @@ tables keep their grants). **From 0045 on, a migration that creates a table must
 `npm run db:migrate -- --dry-run` rehearses the pending files: they are applied for real inside the transaction, which
 is then **always rolled back** (nothing persists). Use it before applying a migration to the hosted project.
 
+**0045** (Phase 3A.3, **built, not applied to hosted DEV**) adds `project_qa_policies.direct_video_allowed boolean not
+null default false`: the owner's explicit permission to send the FULL selected delivery video for temporal Shot QA
+([temporal-video-qa](temporal-video-qa.md)). One column, no new table (so no new-table grant is needed), no grant,
+revoke or policy change; every existing policy gets `false`. Applying it is a separate authorised gate (`db:validate`,
+`db:behavior`, `db:rls`, `db:worker-role` and `db:continuity-analysis` carry its checks).
+
 ## Adding a migration
 
 1. Create `supabase/migrations/NNNN_name.sql` with the next number. Do not touch earlier files.

@@ -1,0 +1,223 @@
+# Temporal Video QA (Phase 3A.3)
+
+Phase 3A.1 asked whether a Shot appears to match production truth. Phase 3A.2 made that QA automatic. Phase 3A.3 asks
+the questions a still frame cannot answer:
+
+> Did the requested motion, blocking and action actually happen through time, and where in the video did Prism see
+> the evidence?
+
+QA stays **advisory**. An analyzer never approves, rejects, retries, regenerates, marks Best, selects a Production
+Frame or Location View, changes a Character Continuity Lock or touches an Episode Edit. People keep creative
+authority.
+
+**Status:** implemented with fake transports and a calibration harness. **No live Gemini calibration has run.**
+Migration 0045 is **built, not applied** to hosted DEV. Lip sync stays **unchecked**.
+
+## One system, not a second one
+
+Temporal QA is the existing continuity-analysis pipeline. Nothing parallel was built:
+
+`ContinuityAnalysisProvider` (`modes()` = `image_set` | `direct_video`, `videoCapabilities()`) → `buildAnalysisPlan` →
+frozen job snapshot + external-media manifest → continuity worker → `continuity_analysis_costs` → ordinary normalized
+findings → 3A.1 Shot QA priority, human overrides and 3A.2 automation.
+
+One run can contain **image-set batches** (identity, wardrobe, set, framing, lighting, Production Frame fidelity) **and
+a direct-video batch** (only the criteria where time matters), under the same frozen run and job. A durable retry
+resumes at the first incomplete batch and never re-sends a completed image or video batch.
+
+## Providers (verified 2026-10-28)
+
+| Provider   | Direct video                                                     | Why                                                                                                                                                                                                                                                    |
+| ---------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Gemini** | **First direct-video provider**                                  | The official docs list video input with timestamp-oriented understanding (MP4/WebM, inline for small clips, Files API for larger ones); static sampling defaults to 1 fps and a custom rate is set per video part (`videoMetadata.fps`, range (0, 24]) |
+| **OpenAI** | **None** (`modes()` = `image_set`, `videoCapabilities()` = `[]`) | The GPT-6 model pages list video input as **Not supported**. The OpenAI Videos _generation_ endpoint is not video understanding. An OpenAI run judges still-image criteria; temporal criteria stay unchecked                                           |
+
+The Gemini analyzer is now **version 2** (it was 1). The version is part of the analysis job identity, so a v1
+(image-only) run of unchanged truth does not suppress a v2 run that can add temporal coverage.
+
+## Who must say yes (no single switch is enough)
+
+A direct-video batch is planned only when **all** of these hold:
+
+1. **Server gate** `PRISM_STUDIO_GEMINI_DIRECT_VIDEO=1` (off by default).
+2. The analyzer is Gemini, the model's verified record accepts **video**, a credential is present.
+3. **Project full-video permission** `project_qa_policies.direct_video_allowed` (migration **0045**, default **false**).
+4. The current QA subject is a **video** within Prism's bounds (see below).
+5. The usual gates: Project per-run / 24-hour ceilings, the global per-run / rolling ceilings, active-job limit,
+   transport-call and correction ceilings.
+
+**Manual runs** also need the run's own **full-video acknowledgement**. The launcher discloses that the full delivery
+video will be sent, plus the provider, model, duration, size, sampling rate, inline vs temporary provider file,
+cleanup and the worst-case estimate. The spend checkbox alone does not enable submit.
+
+**Automatic runs** need both `direct_video_allowed` and 3A.2's standing `external_media_allowed`. The Automatic
+confirmation then says the full video may be sent without asking each time.
+
+`direct_video_allowed` is never inferred from a credential, the semantic mode, `external_media_allowed` or a past
+manual analysis. Migration 0045 gives every existing row `false`, so a Project that enabled Automatic in 3A.2
+**does not** start sending full videos when 3A.3 code is deployed.
+
+Without the permission, semantic QA still runs (image-set criteria); temporal criteria are planned `not_allowed` and
+stay unchecked with "The Project has not allowed full-video analysis". Free deterministic QA is never blocked.
+
+## The subject that is sent
+
+Exactly what Shot QA considers current: the selected delivery master, else the provider primary output. Its asset id
+and checksum are frozen in the input and manifest. The worker re-verifies the checksum before anything is sent; a
+mismatch, a missing object or an unsupported format is an **infrastructure** failure, never a creative mismatch.
+
+Prism-owned bounds, checked by the planner before any transport: MP4/WebM only, known duration, at most **30 s**
+and **100 MB**. Nothing is transcoded just to please a provider. An image output leaves temporal criteria unchecked
+("The output is not a video").
+
+## Sampling policy `shot-temporal-static-v1`
+
+| Setting        | Value                                           | Reason                                                                                                                             |
+| -------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Processing     | static (uniform)                                | Short Shots: predictable, auditable and calibratable. Agentic/dynamic navigation is not used                                       |
+| Frame rate     | **4 fps** (`videoMetadata.fps`)                 | The documented 1 fps default can miss fast action; 250 ms spacing resolves a camera move, beat order or direction in a 3–10 s Shot |
+| Inline vs file | inline ≤ 12 MB, else a temporary Files-API copy | Prism-owned, below the documented inline request limit                                                                             |
+| Token estimate | ⌈s × fps⌉ × 300 + ⌈s⌉ × 32                      | Documented 258 tokens/frame (default resolution) rounded up, plus 32 tokens/s audio                                                |
+
+The policy id and fps are frozen on every direct-video batch, so they are in the plan fingerprint and the job
+snapshot. Whether 4 fps is enough for each criterion is a **calibration** question, not an assumption.
+
+## Criteria (rules version unchanged)
+
+`CONTINUITY_RULES_VERSION` stays **`3a.1`**. The temporal criteria already existed with the same expected truth,
+severity and routing; only an analyzer's ability to judge them changed. Analyzer capability is not production truth,
+so no run becomes "QA stale" because a better analyzer exists. Coverage is tracked separately.
+
+| Criterion                                   | Capability       | Notes                                                                                                          |
+| ------------------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------- |
+| `camera_movement`                           | `video_temporal` | Apparent frame motion; ambiguous motion is warn/unchecked, not an invented camera move                         |
+| `action_continuity` (beats)                 | `video_temporal` | Observed order and approximate timing vs the frozen beat timestamps                                            |
+| `screen_direction`, `eyelines`, `geography` | `video_temporal` | Within this one Shot only (cross-Shot continuity is 3A.4); unchecked when not visible enough                   |
+| `forbiddenActions:*`                        | `video_temporal` | Fail only when observed (with its time); pass only after inspecting the whole clip                             |
+| `lip_sync`                                  | `lip_sync`       | **Not declared by any adapter**: "Lip sync — unchecked: the temporal lip-sync analyzer is not yet calibrated." |
+
+Identity, wardrobe, set, framing, lighting and Production Frame opening fidelity stay image-set (more precise, cheaper).
+
+## Prompt, schema, evidence
+
+- Prompt **`continuity-gemini-video-v2`**: a dedicated temporal instruction. It covers production text as data,
+  media-injection resistance, fictional characters only, the whole clip, no inferred events, the camera/beat/staging
+  rules, the forbidden-action rule, no severity/approval/score, and no frame-accurate claims. `video-v1` (dormant,
+  architecture-era) only appears on historical runs.
+- Schema **2** (`ANALYSIS_SCHEMA_VERSION`): direct-video evidence is `{ input, timestampMs, endMs | null,
+observation }`. Validation is strict:
+  - evidence must cite the video that was sent;
+  - integers only, `0 ≤ timestampMs ≤ duration`, `timestampMs ≤ endMs ≤ duration`;
+  - every pass/warn/fail answer needs at least one timestamped video evidence item.
+
+  A still-image answer can never carry `endMs`, a timestamp on a reference or contact sheet, or a frame time other
+  than the frame's own. Severity, approval and score keys are rejected. A violation uses the run's single correction,
+  then fails visibly. Schema-1 runs are read as they are; nothing historical is rewritten.
+
+- `RUBRIC_VERSION` stays `continuity-rubric-1`: the result meanings (pass / warn / fail / unchecked) did not change.
+- Evidence lives in the existing JSON (`continuity_findings.evidence.items[].endMs`); no SQL change was needed.
+
+**Precision:** times are shown as approximate (`≈ 00:01.0–00:02.5`), never as frame numbers. Clicking evidence seeks
+the existing output player to the moment or interval start (`SeekButton`); no new player.
+
+## Review surface
+
+- Each run gets a **Temporal Video QA** line: `N evaluated · M unchecked`, with the reason for each unchecked
+  criterion (server disabled, Project permission missing, analyzer has no video, output not a video, lip sync not
+  calibrated, not enough visible evidence). "Evaluated" never means "passed".
+- The manifest states whether the **full output video** was sent (asset, checksum) or why not.
+- Temporal FAIL/WARNING findings feed the same 3A.1 issue ordering and rejection-reason **suggestions**. There is
+  no temporal score and no automatic rejection.
+
+## Provider files
+
+A video over the inline limit becomes a **temporary** Gemini Files-API copy:
+
+- The upload is an outbound request: it is counted against the run's transport ceiling **before** it happens, and a
+  refused count uploads nothing.
+- Only the provider file name is recorded (job `provider_files`); never the URI, bytes, a signed Prism URL or a
+  credential. The copy is never canonical media.
+- It is deleted best-effort after the analysis. A failed delete is recorded as `cleanup_failed`, stays visible, and
+  never rewrites the result or triggers a re-upload. The provider also expires files after 48 h.
+
+## Cost
+
+Same ledger (`continuity_analysis_costs`) and gates as 3A.2. The pre-request worst-case estimate (frames at the frozen
+rate plus audio, plus one correction re-sending the input) is the spend-gate ceiling. Actual cost comes only from
+provider usage metadata; missing usage is UNKNOWN, never zero. Full-video permission bypasses no spend gate.
+
+## Automatic orchestration (3A.2) and coverage
+
+The automatic semantic identity is the existing job idempotency key with the stable nonce, which already names
+analyzer id, **version** and model. 3A.3 adds a coverage flag `temporal` **only** when the analysis would plan the
+full video, so every image-only key is exactly what it was in 3A.2. Consequences:
+
+- A Gemini v1 image-only run of unchanged truth: the v2 analysis is new coverage, queued **once**.
+- The owner allows the full video: one new temporal-capable run; repeats dedupe.
+- The owner turns it off again: the image-only analysis of that truth already exists, so nothing new is queued and
+  no video is sent. Existing jobs are never changed.
+- Older runs are **not** marked stale: they remain a truthful record ("these temporal criteria were unchecked").
+
+## Calibration (required before production capability claims)
+
+`src/continuity/calibration/temporal-calibration.ts` (`temporal-calibration-v1`) holds the calibration set:
+
+- **Fixtures.** 14 deterministic synthetic clips rendered by ffmpeg (no copyrighted footage, no real person):
+  - camera pan right, plus a reverse control and a static control;
+  - left→right direction plus a reverse;
+  - beats in order, reordered, omitted;
+  - forbidden action occurring at 2–3 s, plus an absent control;
+  - geography kept and swapped;
+  - lip-sync readiness: an abstract mouth proxy with a pulsed tone, synchronised and offset by 400 ms.
+- **Pre-registered acceptance**, fixed before any live call: 3 trials per fixture. A criterion is usable only if every
+  fixture is answered correctly 3/3, and event fixtures cite evidence inside their window ± (250 ms sampling precision
+  - 500 ms). `unchecked` and errors never count. "fail" accepts fail or warn.
+- **Harness.** One request per fixture per trial, no corrections. The request count and worst-case dollars are
+  checked against hard ceilings **before** anything is sent.
+
+CI runs it with the fake transport (`src/continuity/__tests__/temporal-calibration.test.ts`). The unit suite proves
+three things: a truthful oracle passes, an "always pass" analyzer is caught, and the ceilings refuse before sending.
+
+### Live calibration gate (NOT run; needs separate authorisation)
+
+```
+PRISM_STUDIO_TEMPORAL_CALIBRATION_LIVE=1 PRISM_STUDIO_ALLOW_PAID_ANALYSIS=1 \
+npm run continuity:temporal:calibrate -- --live --model gemini-3.8-flash \
+  --max-calls 42 --max-usd 1.00 --i-understand-this-sends-synthetic-video-and-costs-money --out <report.json>
+```
+
+- **Scope:** exactly the 14 fixtures × 3 trials = 42 generate requests (inline clips, no uploads).
+- **Ceilings:** at most 42 transport calls; worst-case estimate ≈ $0.90 at the current price table, refused above the
+  ceiling. Only synthetic clips leave Prism.
+- **Checks:** provider files cleaned up (none are expected for inline clips). The report records results, transport
+  calls, estimate and actual cost.
+- **Decision:** `video_temporal` stays declared only if the five video criteria are accepted. `lip_sync` is declared
+  only if the lip-sync fixtures are accepted; until then `GEMINI_LIP_SYNC_CALIBRATED = false`.
+
+## Pre-paid validation
+
+`npm run continuity:pre-paid:check` (network trapped, nothing sent) also reports:
+
+- the direct-video gate state and that the model accepts video;
+- the video is in the frozen plan with consent and absent without it;
+- the estimate covers at least the documented per-frame and audio cost;
+- the paid-analysis gate blocks it;
+- zero outbound requests.
+
+## Migration 0045 (built, not applied)
+
+`alter table project_qa_policies add column direct_video_allowed boolean not null default false`. No new table, no
+grant or revoke, no policy change (owner-only RLS on the table is unchanged; `anon` and both worker roles still have no
+privilege). Forward-only; the applied 0044 is unchanged. Before 0045 is applied, the policy reads full-video
+permission as `false`; saving `true` reports that 0045 is needed, and saving `false` works.
+
+## Versions
+
+| Identity                   | Before                       | After                        | Why                                                           |
+| -------------------------- | ---------------------------- | ---------------------------- | ------------------------------------------------------------- |
+| `CONTINUITY_RULES_VERSION` | `3a.1`                       | `3a.1`                       | Criteria, expected values, severity and routing are unchanged |
+| Gemini analyzer version    | `1`                          | `2`                          | Production temporal capability; new coverage identity         |
+| Direct-video prompt        | `continuity-gemini-video-v1` | `continuity-gemini-video-v2` | New temporal instruction and evidence contract                |
+| `RUBRIC_VERSION`           | `continuity-rubric-1`        | `continuity-rubric-1`        | Result meanings unchanged                                     |
+| `ANALYSIS_SCHEMA_VERSION`  | `1`                          | `2`                          | Interval evidence (`endMs`) and duration-bounded timestamps   |
+| Migration head             | `0044`                       | `0045` (built, not applied)  | Explicit full-video consent                                   |

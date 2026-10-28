@@ -112,7 +112,8 @@ The `2c.1` `camera` criterion combined shot size, framing and movement and was j
 
 - `camera_framing` (shot size + framing) — `composition`, judged from review frames;
 - `camera_movement` (dolly, pan, tilt, crane, handheld…) — `video_temporal`, **unchecked** unless direct-video analysis
-  is enabled and the analyzer declares `video_temporal`.
+  is enabled on the server, the analyzer declares `video_temporal` and the Project allows full-video analysis
+  ([temporal-video-qa](temporal-video-qa.md)).
 
 ### Constraints
 
@@ -128,8 +129,11 @@ Lack of capability is never inferred as a pass.
 ### Temporal limitations
 
 Action beats, screen direction, eyelines, geography, camera movement, forbidden actions and lip sync need temporal or
-audio analysis. While direct-video analysis is disabled or uncalibrated they stay **unchecked** with the plan's reason
-(“Needs direct-video analysis, which is not enabled. Stays unchecked.”). Phase 3A.3 addresses temporal QA.
+audio analysis. **Phase 3A.3** ([temporal-video-qa](temporal-video-qa.md)) lets Gemini judge them from the full output
+video when the server gate is on AND the Project allows full-video analysis, with timestamped evidence. Otherwise they
+stay **unchecked** with the plan's specific reason (server disabled, Project permission missing, analyzer has no
+video, output not a video). Lip sync stays unchecked until a live calibration passes. Temporal findings feed the same
+issue ordering; there is no temporal score.
 
 ## Suggested rejection reasons
 
