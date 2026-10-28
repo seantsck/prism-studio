@@ -82,6 +82,8 @@ const expectedTables = [
   "episode_edits",
   "episode_edit_items",
   "episode_edit_audio_placements",
+  // Phase 3A.2: one owner-controlled Shot QA automation policy per Project
+  "project_qa_policies",
 ];
 const tables = (await rows("select tablename, rowsecurity from pg_tables where schemaname='public'")).filter(
   (t) => t.tablename !== "prism_migrations",
@@ -138,6 +140,7 @@ const must = {
     "episode_edit_items_attempt_idx",
     "episode_edit_items_asset_idx",
     "episode_edit_audio_placements_take_idx",
+    "continuity_runs_automation_key",
   ],
   triggers: [
     "dialogue_locked_guard",

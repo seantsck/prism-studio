@@ -397,6 +397,76 @@ try {
     });
   }
 
+  // ── 0044: Shot QA automation (policy honesty, automatic-run identity) ──
+  if (!(await client.query("select to_regclass('public.project_qa_policies') t")).rows[0].t) {
+    results.push([
+      "migration 0044 (Shot QA automation) is applied",
+      false,
+      "project_qa_policies does not exist",
+    ]);
+  } else {
+    await expectError(
+      "qa policy: automatic without consent or ceilings is rejected",
+      "insert into project_qa_policies (project_id, semantic_mode, analyzer) values ($1, 'automatic', 'openai')",
+      [P],
+      /project_qa_policies_automatic_is_explicit/,
+    );
+    await expectError(
+      "qa policy: a per-run ceiling above the 24-hour ceiling is rejected",
+      "insert into project_qa_policies (project_id, max_cost_per_run_usd, max_cost_per_day_usd) values ($1, 2, 1)",
+      [P],
+      /project_qa_policies_run_within_day/,
+    );
+    await expectOk(
+      "qa policy: a fully explicit automatic policy is accepted (default mode is off)",
+      async () => {
+        await client.query("savepoint q");
+        try {
+          const d = await client.query(
+            "insert into project_qa_policies (project_id) values ($1) returning semantic_mode, external_media_allowed",
+            [P],
+          );
+          await client.query(
+            "update project_qa_policies set semantic_mode='automatic', analyzer='openai', external_media_allowed=true, max_cost_per_run_usd=0.05, max_cost_per_day_usd=1, revision=revision+1 where project_id=$1",
+            [P],
+          );
+          return {
+            ok: d.rows[0].semantic_mode === "off" && d.rows[0].external_media_allowed === false,
+            msg: JSON.stringify(d.rows[0]),
+          };
+        } finally {
+          await client.query("rollback to savepoint q");
+        }
+      },
+    );
+    const AS = id();
+    await client.query("insert into assets (id, project_id, type, name) values ($1,$2,'video',$3)", [
+      AS,
+      P,
+      "qa.mp4",
+    ]);
+    const runInsert =
+      "insert into continuity_runs (project_id, attempt_id, run_number, subject_asset_id, analyzer, analyzer_version, analyzer_kind, rules_version, package_fingerprint, subject_fingerprint, criteria_fingerprint, reference_fingerprint, automation_key) values ($1,$2,$3,$4,'deterministic','3a.1','deterministic','3a.1','p','s','c','r',$5)";
+    const KEY = "k".repeat(64);
+    await client.query(runInsert, [P, A1, 901, AS, KEY]);
+    await expectError(
+      "qa run: a second automatic run with the same identity is rejected",
+      runInsert,
+      [P, A1, 902, AS, KEY],
+      /continuity_runs_automation_key/,
+    );
+    await expectOk("qa run: manual runs (no identity) may repeat the same truth", async () => {
+      await client.query(runInsert, [P, A1, 903, AS, null]);
+      await client.query(runInsert, [P, A1, 904, AS, null]);
+    });
+    await expectError(
+      "qa run: the automatic identity is frozen",
+      "update continuity_runs set automation_key = $2 where project_id = $1 and run_number = 901",
+      [P, "j".repeat(64)],
+      /frozen snapshot/,
+    );
+  }
+
   await expectOk("deleting a project cascades to children (incl. shot Looks in use)", async () => {
     await client.query("savepoint c");
     await client.query("delete from projects where id=$1", [P]);

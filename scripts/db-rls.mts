@@ -184,6 +184,8 @@ try {
     "continuity_analysis_jobs",
     "continuity_analysis_costs",
     "continuity_analysis_events",
+    // Phase 3A.2
+    "project_qa_policies",
   ];
   for (const table of scoped) {
     const mine = await raw(

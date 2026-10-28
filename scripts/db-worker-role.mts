@@ -265,6 +265,13 @@ try {
   await mustFail("cannot read auth.users", "select id from auth.users limit 1");
   await mustFail("cannot read Storage object metadata", "select id from storage.objects limit 1");
   await mustFail("cannot read the migration ledger", "select * from public.prism_migrations limit 1");
+  // Phase 3A.2 (0044): no access to the Project QA policy or to continuity runs (automation identity included)
+  await mustFail("cannot read Project QA policies", "select * from project_qa_policies limit 1");
+  await mustFail(
+    "cannot write Project QA policies",
+    "update project_qa_policies set semantic_mode = 'automatic'",
+  );
+  await mustFail("cannot read continuity runs", "select automation_key from continuity_runs limit 1");
   await mustFail("cannot alter projects", "update projects set title = title");
   await mustFail("cannot read project secrets/columns beyond id+owner", "select title from projects limit 1");
   await mustFail("cannot create tables", "create table prism_worker_probe (x int)");
