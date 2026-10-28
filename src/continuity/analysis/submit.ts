@@ -8,6 +8,8 @@ import { ensureReviewArtifacts, readVerified, type DeliveryDeps } from "@/media/
 import { deterministicFindings, type QaInputs } from "@/continuity/service";
 import type { AnalysisSpendPolicy } from "@/domain/continuity/analysis/cost";
 import { analysisSpendBlockers } from "@/domain/continuity/analysis/cost";
+import { videoIneligibility } from "@/domain/continuity/analysis/plan";
+import { TEMPORAL_SAMPLING_V1 } from "@/domain/continuity/analysis/temporal";
 import { projectBudgetBlockers, type ProjectQaPolicy } from "@/domain/continuity/automation";
 import { buildAnalysisInput, buildAnalysisMedia, inputAssetIdsOf, type OutputMediaSet } from "./prepare";
 import type { ContinuityAnalysisProvider } from "./provider";
@@ -41,6 +43,8 @@ export function plansDirectVideo(args: {
   directVideoAllowed: boolean;
 }): boolean {
   if (!args.directVideoAllowed || args.inputs.subject?.type !== "video") return false;
+  // the same eligibility the planner applies: an ineligible video is never covered, so its key stays image-only
+  if (videoIneligibility(args.inputs.subject, TEMPORAL_SAMPLING_V1) != null) return false;
   if (!args.provider.modes().includes("direct_video")) return false;
   const caps = args.provider.videoCapabilities();
   return args.inputs.criteria.some(

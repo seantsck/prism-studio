@@ -91,7 +91,7 @@ export interface PlanInput {
 
 /** Why the output video cannot be sent for temporal analysis (null = eligible). Checked BEFORE any transport. */
 export function videoIneligibility(
-  video: Pick<AnalysisMedia, "mime" | "durationMs" | "byteSize"> | null,
+  video: Pick<AnalysisMedia, "mime" | "durationMs" | "byteSize" | "checksum"> | null,
   policy: TemporalSamplingPolicy,
 ): string | null {
   if (!video)
@@ -104,6 +104,9 @@ export function videoIneligibility(
     return `The output video is longer than Prism's ${policy.maxDurationMs / 1000} s temporal-analysis limit.`;
   if (video.byteSize == null || video.byteSize > policy.maxBytes)
     return `The output video is larger than Prism's ${Math.round(policy.maxBytes / 1024 / 1024)} MB temporal-analysis limit.`;
+  // the full video leaves Prism only if the worker can prove it is exactly the frozen subject
+  if (!video.checksum)
+    return "The output video has no recorded checksum, so Prism cannot prove which file would be sent.";
   return null;
 }
 

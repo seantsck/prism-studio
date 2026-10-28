@@ -316,6 +316,7 @@ describe("camera semantics: stills judge framing, only temporal analysis judges 
       mime: "video/mp4",
       durationMs: 4500,
       byteSize: 2_000_000,
+      checksum: "a".repeat(64), // 3A.3: a video without a recorded checksum is never planned
     });
     const analyzer = {
       ...mock(),

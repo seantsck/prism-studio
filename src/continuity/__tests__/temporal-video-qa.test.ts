@@ -148,6 +148,8 @@ describe("temporal planning: server gate, Project consent, video eligibility, li
       /larger/,
     );
     expect(videoIneligibility({ ...video, mime: "video/quicktime" }, TEMPORAL_SAMPLING_V1)).toMatch(/format/);
+    // no recorded checksum: Prism could not prove which file it sends, so the video is never planned
+    expect(videoIneligibility({ ...video, checksum: null }, TEMPORAL_SAMPLING_V1)).toMatch(/checksum/);
     const { provider } = gemini([]);
     const p = buildAnalysisPlan({
       analyzer: provider.plannerView(),
@@ -267,6 +269,29 @@ describe("temporal evidence validation (schema 2)", () => {
     ["video evidence without a timestamp", ev({ timestampMs: null, endMs: null })],
   ])("rejects %s", (_name, bad) => {
     expect(validateBatchResponse(answer([bad]), vb, vmedia).ok).toBe(false);
+  });
+
+  it("endpoints are inclusive by decision: [0, durationMs] for a moment and an interval end; one past is rejected", () => {
+    // durationMs (4500) is the clip's final instant as Prism records it; provider timestamps are coarse (the
+    // sampling interval), so an event in the last sample may legitimately be reported AT the duration
+    expect(validateBatchResponse(answer([ev({ timestampMs: 0, endMs: null })]), vb, vmedia).ok).toBe(true);
+    expect(validateBatchResponse(answer([ev({ timestampMs: 4500, endMs: null })]), vb, vmedia).ok).toBe(true);
+    expect(validateBatchResponse(answer([ev({ timestampMs: 4000, endMs: 4500 })]), vb, vmedia).ok).toBe(true);
+    expect(validateBatchResponse(answer([ev({ timestampMs: 4500, endMs: 4500 })]), vb, vmedia).ok).toBe(true);
+    expect(validateBatchResponse(answer([ev({ timestampMs: 4501, endMs: null })]), vb, vmedia).ok).toBe(
+      false,
+    );
+    expect(validateBatchResponse(answer([ev({ timestampMs: 4000, endMs: 4501 })]), vb, vmedia).ok).toBe(
+      false,
+    );
+  });
+
+  it("direct-video evidence must cite THE sent video: a reference sent alongside it cannot carry a timestamp", () => {
+    const withRef: AnalysisBatch = { ...vb, referenceInputIds: ["ref:identity:1"] };
+    expect(
+      validateBatchResponse(answer([ev({ input: "ref:identity:1", endMs: null })]), withRef, vmedia).ok,
+    ).toBe(false);
+    expect(validateBatchResponse(answer([ev({ input: "sheet" })]), vb, vmedia).ok).toBe(false);
   });
 
   it("a pass/warn/fail with NO timestamped video evidence is rejected; unchecked without evidence is fine", () => {
@@ -443,6 +468,41 @@ describe("Gemini direct video transfer: inline vs temporary provider file", () =
     expect(t2.transport.calls).toBe(0);
   });
 
+  it.each([
+    ["timeout", null, "outcome_unknown"],
+    ["network", null, "outcome_unknown"],
+    ["server_error", 500, "outcome_unknown"],
+    ["rate_limit", 429, "rate_limit"],
+    ["overloaded", 503, "overloaded"],
+    ["auth", 401, "auth"],
+    ["invalid_input", 400, "invalid_input"],
+  ] as const)(
+    "a failed upload (%s) is classified honestly and no analysis request follows it",
+    async (category, status, expected) => {
+      const { transport, provider } = gemini(answerAll("pass", "video"));
+      transport.uploadFile = async () => {
+        throw new GeminiTransportError(category, status, "upload failed");
+      };
+      const input = makeInput({}, provider.plannerView(), { directVideoAllowed: true });
+      const b = input.plan.batches.find((x) => x.mode === "direct_video")!;
+      const err = await provider
+        .analyzeBatch({
+          batch: b,
+          input,
+          media: new Map([["video", { inputId: "video", mime: "video/mp4", bytes: big }]]),
+          ctx: analysisCtx(),
+        })
+        .catch((e: unknown) => e as AnalysisBatchError);
+      expect(err).toBeInstanceOf(AnalysisBatchError);
+      expect((err as AnalysisBatchError).category).toBe(expected);
+      // an ambiguous upload may have reached the provider: never "nothing was sent", never auto-retried
+      expect((err as AnalysisBatchError).message).not.toMatch(/nothing was sent/i);
+      if (expected === "outcome_unknown")
+        expect((err as AnalysisBatchError).message).toMatch(/temporary copy.*48 hours/);
+      expect(transport.calls).toBe(0);
+    },
+  );
+
   it("a small video is inline (no provider file); cleanup reports deleted / cleanup_failed and never throws", async () => {
     const { transport, provider } = gemini(answerAll("pass", "video"));
     const input = makeInput({}, provider.plannerView(), { directVideoAllowed: true });
@@ -517,6 +577,20 @@ describe("analysis coverage identity", () => {
     expect(
       plansDirectVideo({ inputs: ctx.inputs, provider: gemini([], OFF).provider, directVideoAllowed: true }),
     ).toBe(false);
+  });
+
+  it("an INELIGIBLE video is never temporal coverage: consent on gives the same image-only identity (no duplicate run)", async () => {
+    const ctx = await setup();
+    const { provider } = gemini([]);
+    for (const bad of [
+      { durationMs: 60_000 },
+      { checksum: null },
+      { mime: "video/quicktime" },
+      { byteSize: null },
+    ]) {
+      const inputs = { ...ctx.inputs, subject: { ...ctx.inputs.subject!, ...bad } };
+      expect(plansDirectVideo({ inputs, provider, directVideoAllowed: true })).toBe(false);
+    }
   });
 });
 
@@ -707,6 +781,26 @@ media("automatic semantic QA and full-video consent (3A.2 orchestration, 3A.3 co
     const third = await jobs(ctx);
     expect(third).toHaveLength(2);
     expect(third.find((j) => j.id === temporalJob.id)!.inputSnapshot).toEqual(temporalJob.inputSnapshot);
+
+    // re-enabling with nothing else changed: the earlier temporal run already covers this exact truth + analyzer
+    const reOptIn = AUTO({ directVideoAllowed: true, revision: 4 });
+    expect((await reconcile(ctx, g.provider, reOptIn)).outcomes).toEqual(["semantic_already_queued"]);
+    expect(await jobs(ctx)).toHaveLength(2);
+  });
+
+  it("automatic full video needs the standing external-media consent too (direct-video permission alone is not enough)", async () => {
+    const ctx = await setup();
+    const g = gemini(answerAll("pass"));
+    const r = await reconcile(
+      ctx,
+      g.provider,
+      AUTO({ directVideoAllowed: true, externalMediaAllowed: false }),
+    );
+    expect(r.outcomes).not.toContain("semantic_queued");
+    expect(
+      (await jobs(ctx)).every((j) => j.inputSnapshot.plan.batches.every((b) => b.mode === "image_set")),
+    ).toBe(true);
+    expect(g.transport.calls).toBe(0);
   });
 
   it("a Gemini v1 (image-only era) automatic run of the same truth does not suppress a v2 temporal run", async () => {

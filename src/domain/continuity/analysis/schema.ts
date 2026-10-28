@@ -302,6 +302,12 @@ export function validateBatchResponse(
  * Direct-video evidence must point INTO the clip that was actually sent: a time, inside the duration, and an interval
  * that runs forward and ends inside the clip. (JSON cannot carry NaN/Infinity; integers are enforced by the schema.)
  */
+/**
+ * Direct-video evidence bounds, decided deliberately: both a moment and an interval end lie in the CLOSED range
+ * [0, durationMs]. The recorded duration is treated as the clip's final instant, because provider timestamps are only
+ * as precise as the sampling interval and an event in the last sample may be reported at the duration itself;
+ * anything past it is rejected.
+ */
 function videoEvidenceProblem(
   e: { timestampMs: number | null; endMs?: number | null },
   m: AnalysisMedia | undefined,

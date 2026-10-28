@@ -84,6 +84,47 @@ export interface GeminiProviderOptions {
   pricing?: PricingTable;
 }
 
+/**
+ * Maps a failed Files-API upload honestly. A confirmed 429/503 means the provider refused it (safe to requeue). A
+ * timeout, network or 5xx failure is AMBIGUOUS: the bytes may have reached Gemini and a temporary file may exist that
+ * Prism never learned the name of (so cannot delete; Gemini deletes it automatically after 48 hours). It is
+ * `outcome_unknown`, never retried automatically and never reported as "nothing was sent". No analysis request was
+ * made after a failed upload, so no analysis cost was incurred by it.
+ */
+function uploadError(err: unknown): AnalysisBatchError {
+  const e = err instanceof GeminiTransportError ? err : null;
+  const status = e?.httpStatus ?? undefined;
+  if (e?.category === "rate_limit" || e?.category === "overloaded")
+    return new AnalysisBatchError(
+      e.category,
+      "video_upload_refused",
+      "The analyzer refused the video upload (busy); nothing was analysed. It will be retried later.",
+      [],
+      false,
+      e.retryAfterMs ?? undefined,
+      status,
+    );
+  if (e?.category === "auth" || e?.category === "invalid_input")
+    return new AnalysisBatchError(
+      e.category,
+      "video_upload_rejected",
+      "The analyzer rejected the video upload; nothing was analysed.",
+      [],
+      false,
+      undefined,
+      status,
+    );
+  return new AnalysisBatchError(
+    "outcome_unknown",
+    "video_upload_outcome_unknown",
+    "The video upload did not complete and its outcome is unknown: the provider may hold a temporary copy that Prism cannot delete (Gemini deletes it automatically after 48 hours). Nothing was analysed; it will not be retried automatically.",
+    [],
+    false,
+    undefined,
+    status,
+  );
+}
+
 export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
   readonly id = GEMINI_ANALYZER_ID;
   readonly version = GEMINI_ANALYZER_VERSION;
@@ -255,16 +296,7 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
             displayName: p.inputId ?? "video",
           });
         } catch (err) {
-          const e = err instanceof GeminiTransportError ? err : null;
-          throw new AnalysisBatchError(
-            e?.category === "rate_limit" || e?.category === "overloaded" ? e.category : "invalid_input",
-            "video_upload_failed",
-            "The video could not be uploaded to the analyzer; nothing was analysed.",
-            [],
-            false,
-            e?.retryAfterMs ?? undefined,
-            e?.httpStatus ?? undefined,
-          );
+          throw uploadError(err);
         }
         ctx.onProviderFile?.(f.name);
         parts.push({ type: "file", mimeType: m.mime, fileUri: f.uri, videoFps });
