@@ -103,6 +103,12 @@ deferred-unique order, picture by kind with a kind/column check and a source tri
 ACTION (the 0042 lesson), owner-only RLS, no worker grant
 ([timeline-performance-assembly](timeline-performance-assembly.md)).
 
+**0044** (Phase 3A.2, **built, not applied to hosted DEV**) adds `project_qa_policies` (one owner-only Shot QA
+automation policy per Project; `semantic_mode` default `off`; `automatic` must name an analyzer, carry media consent and
+two finite ceilings, database-enforced; revision for optimistic concurrency; no grant to `anon` or either worker role)
+and the nullable `continuity_runs.automation_key` (unique per Project when set, frozen by the run guard; historical rows
+null) ([automatic-shot-qa](automatic-shot-qa.md)). Applying it is a separate authorised gate.
+
 `npm run db:migrate -- --dry-run` rehearses the pending files: they are applied for real inside the transaction, which
 is then **always rolled back** (nothing persists). Use it before applying a migration to the hosted project.
 

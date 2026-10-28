@@ -136,14 +136,15 @@ test("human override is appended; the analyzer finding stays; a re-run is a sepa
   await expect(again.getByTestId("override-note")).toContainText("Human:");
   await expect(again.getByTestId("system-result")).toHaveText(system);
 
-  // re-run: a NEW run, the old one is untouched
-  await page.getByTestId("run-analysis").click();
-  await expect(page.locator('[data-testid="history-row"]')).toHaveCount(2, { timeout: 90_000 });
-  await expect(page.getByTestId("status-semantic")).toContainText(/complete/i, { timeout: 90_000 });
+  // re-run: a NEW run, the old one is untouched (automatic deterministic runs also sit in the history since 3A.2)
   const rows = page.locator('[data-testid="history-row"]');
+  const before = await rows.count();
+  await page.getByTestId("run-analysis").click();
+  await expect(rows).toHaveCount(before + 1, { timeout: 90_000 });
+  await expect(page.getByTestId("status-semantic")).toContainText(/complete/i, { timeout: 90_000 });
   await expect(rows.nth(0)).toContainText("mock-continuity");
-  await expect(rows.nth(1)).toContainText("Run 1");
-  // opening run 1 still shows the override
+  await expect(rows.nth(1)).toContainText("mock-continuity");
+  // opening the earlier mock run still shows the override
   await rows.nth(1).getByRole("link").click();
   await expect(page.getByTestId("override-note").first()).toContainText("Human:");
 });
@@ -167,9 +168,12 @@ test("OpenAI (gpt-6-luna, fake transport): preview, acknowledged paid submit, fi
   await expect(page.getByTestId("run-analysis")).toBeDisabled();
   await page.getByTestId("ack-analysis-spend").check();
   await expect(page.getByTestId("run-analysis")).toBeEnabled();
+  const historyBefore = await page.locator('[data-testid="history-row"]').count();
   await page.getByTestId("run-analysis").click();
   // wait for THIS run first: until the page refreshes, the previous Mock run's "complete" would satisfy the next check
-  await expect(page.locator('[data-testid="history-row"]')).toHaveCount(3, { timeout: 90_000 });
+  await expect(page.locator('[data-testid="history-row"]')).toHaveCount(historyBefore + 1, {
+    timeout: 90_000,
+  });
   await expect(page.getByTestId("status-semantic")).toContainText(/openai.*complete/i, { timeout: 90_000 });
 
   // findings are labelled by provider; cost is the analysis ledger, separate from generation
@@ -194,7 +198,7 @@ test("OpenAI (gpt-6-luna, fake transport): preview, acknowledged paid submit, fi
 
   // history retains provider + model next to the earlier mock runs
   const rows = page.locator('[data-testid="history-row"]');
-  await expect(rows).toHaveCount(3);
+  await expect(rows).toHaveCount(historyBefore + 1);
   await expect(rows.nth(0)).toContainText("openai");
   await expect(rows.nth(0)).toContainText("gpt-6-luna");
   await expect(rows.nth(1)).toContainText("mock-continuity");
