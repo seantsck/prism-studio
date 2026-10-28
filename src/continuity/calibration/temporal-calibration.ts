@@ -398,6 +398,55 @@ export interface CalibrationTrial {
   correct: boolean;
   evidenceInWindow: boolean | null;
   note: string;
+  /** Error trials only: the provider HTTP status (when it answered) and the normalized category. */
+  httpStatus?: number | null;
+  errorCategory?: string;
+}
+
+/**
+ * RUN CONTROL (not grading), fixed before the next live run and never tuned on model answers. The first live attempt
+ * (2026-10-28) produced ZERO model answers (48 provider errors: 40×429, 4×503, 4×500), so it is not an evaluated
+ * calibration trial and `temporal-calibration-v1` stays uncontaminated.
+ *
+ *  - The FIRST HTTP 429 aborts the run: the project's quota or request schedule cannot complete the pre-registered
+ *    trial set, and continuing only produces correlated missing trials under rate pressure. (Calibration only: the
+ *    production worker still requeues a 429 durably.)
+ *  - `maxConsecutive5xx` consecutive HTTP 5xx answers abort the run as provider-unavailable. A single 5xx is an error
+ *    trial (never retried).
+ *  - Live pacing keeps `rpmSafety` of the operator-declared RPM limit, start to start.
+ */
+export const CALIBRATION_RUN_CONTROL = {
+  abortOnHttp429: true,
+  maxConsecutive5xx: 3,
+  rpmSafety: 0.8,
+} as const;
+
+export type CalibrationRunStatus = "completed" | "aborted_provider" | "aborted_local_policy";
+
+/**
+ * Per criterion: `accepted`, or why not. `incomplete` = the pre-registered test did not finish (an aborted run);
+ * `incorrect` = the model answered and at least one answer was graded wrong; `provider_errors` = every miss was an
+ * error with no answer (nothing was learned about the model).
+ */
+export type CriterionVerdict =
+  "accepted" | "not_accepted_incomplete" | "not_accepted_incorrect" | "not_accepted_provider_errors";
+
+/** Operator-declared limits of the Google project behind the key (read from AI Studio; never inferred). */
+export interface CalibrationQuota {
+  maxRpm: number;
+  maxTpm: number;
+  maxRpd: number;
+}
+
+export interface CalibrationQuotaPlan extends CalibrationQuota {
+  effectiveRpm: number;
+  minIntervalMs: number;
+  plannedAnalysisRequests: number;
+  /** Largest single request: estimated input tokens + the output ceiling (thinking included). */
+  maxTokensPerRequest: number;
+  maxInputTokensPerRequest: number;
+  /** Worst case in any minute at the paced rate (conservative: input + output ceiling). */
+  worstCaseTokensPerMinute: number;
 }
 
 export interface CalibrationReport {
@@ -406,12 +455,44 @@ export interface CalibrationReport {
   analyzerVersion: string;
   model: string;
   sampling: string;
+  status: CalibrationRunStatus;
+  /** Present when the run aborted: why, and on which trial. The message is the transport's sanitized text. */
+  abort: {
+    reason: "quota_or_billing_exhausted" | "quota_or_rate_limit" | "provider_unavailable" | "local_policy";
+    httpStatus: number | null;
+    category: string;
+    message: string;
+    fixture: string;
+    trial: number;
+  } | null;
   trials: CalibrationTrial[];
+  trialsPlanned: number;
+  trialsAttempted: number;
+  trialsUnattempted: number;
+  /** Provider responses received (an answer, a refusal or an invalid answer); errors without a response are not. */
+  answersReceived: number;
+  /** Every outbound request (uploads included). */
   transportCalls: number;
+  uploadAttempts: number;
+  analysisAttempts: number;
+  correctionAttempts: number;
+  /** Generation calls whose response carried complete usage metadata. */
+  usageReportedCalls: number;
   estimatedMaxUsd: number;
+  /**
+   * TOTAL actual spend: 0 only when no generation request left Prism; the provider's figure only when EVERY
+   * generation attempt reported usage; otherwise null = UNKNOWN (a 429/5xx/timeout without usage may or may not
+   * have been billed). Never a partial sum presented as the total.
+   */
   actualUsd: number | null;
-  /** Per criterion: did EVERY fixture meet the pre-registered rule? */
+  costStatus: "none_sent" | "known" | "unknown";
+  /** Spend of the calls that DID report usage (a lower bound when costStatus is unknown). */
+  knownUsageUsd: number | null;
+  reportedTokens: { inputTokens: number; outputTokens: number; thoughtsTokens: number };
+  quota: CalibrationQuotaPlan | null;
+  /** Per criterion: did EVERY fixture meet the pre-registered rule? (false for every criterion of an aborted run) */
   accepted: Record<CalibrationCriterion, boolean>;
+  verdicts: Record<CalibrationCriterion, CriterionVerdict>;
   /** The capability decision this calibration supports (lip sync stays OFF unless accepted). */
   lipSyncCapable: boolean;
 }
@@ -466,9 +547,90 @@ export function acceptance(trials: CalibrationTrial[]): Record<CalibrationCriter
 }
 
 /**
+ * A conservative reason for a 429. The pinned SDK exposes only the HTTP status and message, so "quota or billing" is
+ * claimed only when the provider's message says so; anything else is "quota or rate limit" (never assumed daily).
+ */
+export function http429Reason(message: string): "quota_or_billing_exhausted" | "quota_or_rate_limit" {
+  return /exceeded your current quota|billing/i.test(message)
+    ? "quota_or_billing_exhausted"
+    : "quota_or_rate_limit";
+}
+
+/**
+ * Live-run readiness the operator declares from AI Studio for the SAME Google project that backs the key (limits are
+ * per project, not per key; Prism cannot read them). Returns the refusals; empty = ready to plan.
+ */
+export function liveReadinessProblems(r: {
+  maxRpm?: number;
+  maxTpm?: number;
+  maxRpd?: number;
+  rpdRemainingConfirmed?: boolean;
+  billingActive?: string;
+  projectTier?: string;
+  spendCap?: string;
+}): string[] {
+  const out: string[] = [];
+  const posInt = (v: number | undefined) => typeof v === "number" && Number.isInteger(v) && v > 0;
+  if (!posInt(r.maxRpm))
+    out.push("--max-rpm must be the project's active RPM limit for the model (a positive integer).");
+  if (!posInt(r.maxTpm))
+    out.push("--max-tpm must be the project's active TPM limit for the model (a positive integer).");
+  if (!posInt(r.maxRpd))
+    out.push("--max-rpd must be the project's active RPD limit for the model (a positive integer).");
+  if (r.rpdRemainingConfirmed !== true)
+    out.push("--confirm-rpd-remaining is required: confirm today's REMAINING requests cover the plan.");
+  if (r.billingActive !== "yes")
+    out.push("--billing-active yes is required (an active billing account is linked).");
+  if (!r.projectTier?.trim()) out.push("--project-tier is required (as shown in AI Studio).");
+  if (!r.spendCap?.trim()) out.push('--spend-cap is required (the project spend cap, or "none").');
+  return out;
+}
+
+/** Pacing + token/day preflight from the declared limits. Throws (nothing sent) when the plan does not fit. */
+export function planQuota(
+  quota: CalibrationQuota,
+  plannedAnalysisRequests: number,
+  perRequest: Array<{ inputTokens: number; maxOutputTokens: number }>,
+): CalibrationQuotaPlan {
+  for (const [k, v] of Object.entries(quota))
+    if (!Number.isInteger(v) || v <= 0)
+      throw new Error(`Calibration needs a positive integer ${k}; nothing was sent.`);
+  const effectiveRpm = Math.floor(quota.maxRpm * CALIBRATION_RUN_CONTROL.rpmSafety);
+  if (effectiveRpm < 1)
+    throw new Error(`An RPM limit of ${quota.maxRpm} leaves no paced request per minute; nothing was sent.`);
+  const minIntervalMs = Math.ceil(60_000 / effectiveRpm);
+  const maxInputTokensPerRequest = Math.max(0, ...perRequest.map((p) => p.inputTokens));
+  const maxTokensPerRequest = Math.max(0, ...perRequest.map((p) => p.inputTokens + p.maxOutputTokens));
+  const worstCaseTokensPerMinute = Math.min(effectiveRpm, plannedAnalysisRequests) * maxTokensPerRequest;
+  if (worstCaseTokensPerMinute > quota.maxTpm)
+    throw new Error(
+      `At ${effectiveRpm} requests/min the worst case is ${worstCaseTokensPerMinute} tokens/min, above the TPM limit of ${quota.maxTpm}; nothing was sent.`,
+    );
+  if (plannedAnalysisRequests > quota.maxRpd)
+    throw new Error(
+      `The plan needs ${plannedAnalysisRequests} requests, above the RPD limit of ${quota.maxRpd}; nothing was sent.`,
+    );
+  return {
+    ...quota,
+    effectiveRpm,
+    minIntervalMs,
+    plannedAnalysisRequests,
+    maxTokensPerRequest,
+    maxInputTokensPerRequest,
+    worstCaseTokensPerMinute,
+  };
+}
+
+const usageComplete = (c: UsageCall) =>
+  c.inputTokens != null && (c.outputTokens != null || c.thoughtsTokens != null);
+
+/**
  * Runs the calibration under HARD ceilings: the number of provider requests and the worst-case dollar estimate are
  * computed up front and the run is refused before anything is sent if either would exceed its ceiling. One request
- * per fixture per trial; no correction requests (a malformed answer is graded as an error).
+ * per fixture per trial; no correction requests (a malformed answer is graded as an error); no retry. A live run
+ * (`live: true`) must declare the project's limits (`quota`): requests are then paced start to start, and the plan
+ * must fit the TPM and RPD limits before anything is sent. The run aborts (and still returns its partial report) on
+ * the first 429, on `maxConsecutive5xx` consecutive 5xx answers, or on a local ceiling.
  */
 export async function runTemporalCalibration(args: {
   provider: ContinuityAnalysisProvider;
@@ -478,6 +640,11 @@ export async function runTemporalCalibration(args: {
   maxTransportCalls: number;
   maxUsd: number;
   now?: Date;
+  live?: boolean;
+  quota?: CalibrationQuota;
+  /** Injected for tests; default wall clock and real sleep. */
+  clock?: () => number;
+  sleep?: (ms: number) => Promise<void>;
 }): Promise<CalibrationReport> {
   const fixtures = args.fixtures ?? TEMPORAL_FIXTURES;
   const trials = args.trials ?? CALIBRATION_ACCEPTANCE.trials;
@@ -488,7 +655,11 @@ export async function runTemporalCalibration(args: {
     throw new Error("Calibration needs a positive, finite dollar ceiling; nothing was sent.");
   if (!Number.isInteger(trials) || trials <= 0)
     throw new Error("Calibration needs a positive integer trial count; nothing was sent.");
+  if (args.live && !args.quota)
+    throw new Error("A live calibration needs the project's declared RPM/TPM/RPD limits; nothing was sent.");
   const now = args.now ?? new Date();
+  const clock = args.clock ?? (() => Date.now());
+  const sleep = args.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const render = args.render ?? ((f) => renderFixture(f));
   const rendered = new Map<string, Uint8Array>();
   for (const f of fixtures) rendered.set(f.id, await render(f));
@@ -505,26 +676,33 @@ export async function runTemporalCalibration(args: {
     );
   // UNKNOWN cost blocks: every per-fixture estimate must be a finite, non-negative number (never `|| 0`)
   let perTrialUsd = 0;
+  const perRequest: Array<{ inputTokens: number; maxOutputTokens: number }> = [];
   for (const { f, input } of inputs) {
-    const usd = args.provider.estimate(input, now).maxUsd;
+    const est = args.provider.estimate(input, now);
+    const usd = est.maxUsd;
     if (typeof usd !== "number" || !Number.isFinite(usd) || usd < 0)
       throw new Error(
         `Calibration cannot estimate the cost of fixture ${f.id} (estimate ${String(usd)}); unknown cost blocks the run. Nothing was sent.`,
       );
     perTrialUsd += usd;
+    perRequest.push({ inputTokens: est.tokens.inputTokens, maxOutputTokens: est.tokens.maxOutputTokens });
   }
   const estimatedMaxUsd = perTrialUsd * trials;
   if (estimatedMaxUsd > args.maxUsd)
     throw new Error(
       `Calibration's worst-case estimate $${estimatedMaxUsd.toFixed(4)} exceeds the ceiling of $${args.maxUsd}; nothing was sent.`,
     );
+  const quota = args.quota ? planQuota(args.quota, fixtures.length * trials, perRequest) : null;
 
   const out: CalibrationTrial[] = [];
   const calls: UsageCall[] = [];
-  let transportCalls = 0;
+  const counts = { transport: 0, upload: 0, analysis: 0, correction: 0 };
+  let abort: CalibrationReport["abort"] = null;
+  let consecutive5xx = 0;
+  let lastStart: number | null = null;
   const files: string[] = [];
   try {
-    for (let t = 1; t <= trials; t++) {
+    run: for (let t = 1; t <= trials; t++) {
       for (const { f, input } of inputs) {
         const batch = input.plan.batches[0]!;
         try {
@@ -537,48 +715,133 @@ export async function runTemporalCalibration(args: {
               sleep: async () => undefined,
               canCorrect: () => false,
               onProviderFile: (ref) => void files.push(ref),
-              beforeTransportCall: async () => {
-                if (transportCalls >= args.maxTransportCalls)
+              beforeTransportCall: async ({ kind }) => {
+                if (counts.transport >= args.maxTransportCalls)
                   throw new AnalysisBatchError(
                     "local_policy_block",
                     "ceiling",
                     "Calibration request ceiling reached.",
                   );
-                transportCalls += 1;
+                // start-to-start pacing of generation requests at the declared, safety-margined RPM
+                if (quota && kind !== "upload") {
+                  if (lastStart != null) {
+                    const wait = lastStart + quota.minIntervalMs - clock();
+                    if (wait > 0) await sleep(wait);
+                  }
+                  lastStart = clock();
+                }
+                counts.transport += 1;
+                counts[kind] += 1;
               },
             },
           });
           calls.push(...res.calls);
+          consecutive5xx = 0;
           out.push({
             ...gradeTrial(f, res.findings.find((x) => x.criterionKey === f.criterion) ?? null),
             trial: t,
           });
         } catch (err) {
-          if (err instanceof AnalysisBatchError) calls.push(...err.calls);
-          if (err instanceof AnalysisBatchError && err.category === "local_policy_block") throw err;
+          const e = err instanceof AnalysisBatchError ? err : null;
+          if (e) calls.push(...e.calls);
+          const message = err instanceof Error ? err.message.slice(0, 200) : "error";
+          const status = e?.httpStatus ?? null;
           out.push({
             ...gradeTrial(f, null),
             trial: t,
-            note: err instanceof Error ? err.message.slice(0, 200) : "error",
+            note: message,
+            httpStatus: status,
+            errorCategory: e?.category ?? "error",
           });
+          consecutive5xx = status != null && status >= 500 ? consecutive5xx + 1 : 0;
+          const at = {
+            httpStatus: status,
+            category: e?.category ?? "error",
+            message,
+            fixture: f.id,
+            trial: t,
+          };
+          if (e?.category === "local_policy_block") abort = { reason: "local_policy", ...at };
+          else if (CALIBRATION_RUN_CONTROL.abortOnHttp429 && status === 429)
+            abort = { reason: http429Reason(message), ...at };
+          else if (consecutive5xx >= CALIBRATION_RUN_CONTROL.maxConsecutive5xx)
+            abort = { reason: "provider_unavailable", ...at };
+          if (abort) break run;
         }
       }
     }
   } finally {
     if (files.length && args.provider.cleanupFiles) await args.provider.cleanupFiles(files);
   }
-  const accepted = acceptance(out);
+
+  const status: CalibrationRunStatus =
+    abort == null
+      ? "completed"
+      : abort.reason === "local_policy"
+        ? "aborted_local_policy"
+        : "aborted_provider";
+  const graded = acceptance(out);
+  const accepted = Object.fromEntries(
+    Object.entries(graded).map(([c, ok]) => [c, status === "completed" && ok]),
+  ) as Record<CalibrationCriterion, boolean>;
+  const verdicts = Object.fromEntries(
+    (Object.keys(accepted) as CalibrationCriterion[]).map((c) => {
+      const mine = out.filter((t) => t.criterion === c);
+      const v: CriterionVerdict =
+        status !== "completed"
+          ? "not_accepted_incomplete"
+          : accepted[c]
+            ? "accepted"
+            : mine.some((t) => t.result !== "error" && !t.correct)
+              ? "not_accepted_incorrect"
+              : "not_accepted_provider_errors";
+      return [c, v];
+    }),
+  ) as Record<CalibrationCriterion, CriterionVerdict>;
+
+  // cost: never a partial sum presented as the total
+  const generationAttempts = counts.analysis + counts.correction;
+  const reported = calls.filter(usageComplete);
+  const priced = (cs: UsageCall[]) => (cs.length ? args.provider.actualCost(cs, now).amountUsd : 0);
+  const totalKnown =
+    generationAttempts > 0 && calls.length === generationAttempts && reported.length === calls.length;
+  const actualUsd = generationAttempts === 0 ? 0 : totalKnown ? priced(calls) : null;
+  const costStatus: CalibrationReport["costStatus"] =
+    generationAttempts === 0 ? "none_sent" : actualUsd == null ? "unknown" : "known";
+  const knownUsageUsd = priced(reported);
+  const sum = (k: "inputTokens" | "outputTokens" | "thoughtsTokens") =>
+    reported.reduce((n, c) => n + (c[k] ?? 0), 0);
+
   return {
     version: CALIBRATION_VERSION,
     analyzer: args.provider.id,
     analyzerVersion: args.provider.version,
     model: args.provider.model,
     sampling: TEMPORAL_SAMPLING_V1.id,
+    status,
+    abort,
     trials: out,
-    transportCalls,
+    trialsPlanned: fixtures.length * trials,
+    trialsAttempted: out.length,
+    trialsUnattempted: fixtures.length * trials - out.length,
+    answersReceived: calls.length,
+    transportCalls: counts.transport,
+    uploadAttempts: counts.upload,
+    analysisAttempts: counts.analysis,
+    correctionAttempts: counts.correction,
+    usageReportedCalls: reported.length,
     estimatedMaxUsd: Math.round(estimatedMaxUsd * 1e6) / 1e6,
-    actualUsd: calls.length ? args.provider.actualCost(calls, now).amountUsd : 0,
+    actualUsd,
+    costStatus,
+    knownUsageUsd,
+    reportedTokens: {
+      inputTokens: sum("inputTokens"),
+      outputTokens: sum("outputTokens"),
+      thoughtsTokens: sum("thoughtsTokens"),
+    },
+    quota,
     accepted,
+    verdicts,
     lipSyncCapable: accepted.lip_sync,
   };
 }
