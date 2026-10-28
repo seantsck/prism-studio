@@ -339,6 +339,40 @@ media("automatic QA over the real service (memory repositories, no provider netw
     expect(await runsOf(h, attemptId!)).toEqual([]);
   });
 
+  it("before migration 0044: nothing is due, and reconciling reads / probes no media and records nothing", async () => {
+    const h = makeHarness();
+    const attemptId = await generated(h);
+    // an un-migrated database: the same memory store, reporting that automatic runs cannot be stored
+    const qa = Object.assign(Object.create(h.repo.mediaQa) as typeof h.repo.mediaQa, {
+      automationReady: async () => false,
+    });
+    const probe = vi.fn(() => Promise.reject(new Error("probe must not run before 0044")));
+    const r = await reconcile(h, attemptId, AUTO(), {
+      qa,
+      processor: Object.assign(Object.create(processor) as typeof processor, { probe }),
+    });
+    expect(r.outcomes).toEqual(["not_eligible"]);
+    expect(r.reasons[0]).toMatch(/migration 0044/);
+    expect(probe).not.toHaveBeenCalled();
+    expect(await runsOf(h, attemptId)).toEqual([]);
+    expect(await jobsOf(h, attemptId)).toEqual([]);
+
+    const data = await h.data();
+    const view = (await h.repo.generation.getAttemptView(attemptId))!;
+    const state = autoQaState({
+      data,
+      view,
+      delivery: null,
+      runs: [],
+      jobs: [],
+      policy: P(),
+      providers: depsOf(h).providers,
+      availability,
+      automationReady: false,
+    });
+    expect(autoQaView(state, P())).toMatchObject({ due: false, dueKey: null, eligible: false });
+  });
+
   it("suggest: deterministic QA plus a suggestion; zero jobs, zero cost, zero transport calls", async () => {
     const h = makeHarness();
     const attemptId = await generated(h);
@@ -380,6 +414,7 @@ media("automatic QA over the real service (memory repositories, no provider netw
       policy: AUTO(),
       providers: depsOf(h).providers,
       availability,
+      automationReady: true,
     });
     expect(autoQaView(state, AUTO())).toMatchObject({ due: false, deterministic: "covered_by_semantic" });
     expect(autoQaView(state, AUTO()).semantic.state).toBe("queued");

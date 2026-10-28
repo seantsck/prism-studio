@@ -887,6 +887,24 @@ export class PostgresMediaQaData implements MediaQaRepository {
 
   // ───────────────────────── Project QA policy ─────────────────────────
 
+  /** Migrations are forward-only: once 0044 is seen applied it stays applied (re-checked until then). */
+  private automationApplied = false;
+
+  async automationReady() {
+    if (this.automationApplied) return true;
+    // catalog lookups need no table privilege and never raise when the table / column is absent
+    this.automationApplied = await this.tx(async (c) => {
+      const r = await c.query(
+        `select to_regclass('public.project_qa_policies') is not null
+                and exists (select 1 from pg_attribute
+                             where attrelid = 'public.continuity_runs'::regclass
+                               and attname = 'automation_key' and not attisdropped) as ready`,
+      );
+      return Boolean(r.rows[0]?.ready);
+    });
+    return this.automationApplied;
+  }
+
   async getQaPolicy(projectId: string) {
     try {
       return await this.tx(async (c) => {

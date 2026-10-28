@@ -204,10 +204,12 @@ export interface ReconcileResult {
   jobId: string | null;
 }
 
-export type EligibilityReason = "attempt_missing" | "not_succeeded" | "no_output" | "no_production_truth";
+export type EligibilityReason =
+  "attempt_missing" | "not_migrated" | "not_succeeded" | "no_output" | "no_production_truth";
 
 export const ELIGIBILITY_MESSAGES: Record<EligibilityReason, string> = {
   attempt_missing: "That attempt no longer exists in this Project.",
+  not_migrated: "Automatic Shot QA needs database migration 0044, which is not applied to this database yet.",
   not_succeeded: "Only a completed generation gets automatic QA.",
   no_output: "This attempt has no output to check.",
   no_production_truth: "The Shot's production truth could not be assembled.",
@@ -216,11 +218,15 @@ export const ELIGIBILITY_MESSAGES: Record<EligibilityReason, string> = {
 /** Same eligibility as a manual continuity review: a succeeded attempt with a judgeable subject and a Shot. */
 export function autoQaEligibility(args: {
   attemptInProject: boolean;
+  /** The database can hold automatic runs and the Project policy (migration 0044). */
+  automationReady: boolean;
   status: string;
   hasSubject: boolean;
   hasTruth: boolean;
 }): EligibilityReason | null {
   if (!args.attemptInProject) return "attempt_missing";
+  // before 0044 nothing automatic can be stored: decide that BEFORE any media is read or probed
+  if (!args.automationReady) return "not_migrated";
   if (args.status !== "succeeded") return "not_succeeded";
   if (!args.hasTruth) return "no_production_truth";
   if (!args.hasSubject) return "no_output";

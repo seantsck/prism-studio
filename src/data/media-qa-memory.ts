@@ -467,6 +467,10 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
     return clone(job);
   }
 
+  async automationReady() {
+    return true;
+  }
+
   async getQaPolicy(projectId: string) {
     return clone(this.qaPolicies.get(projectId) ?? defaultQaPolicy(projectId));
   }

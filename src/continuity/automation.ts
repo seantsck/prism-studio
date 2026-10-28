@@ -63,6 +63,8 @@ export function autoQaState(args: {
   policy: ProjectQaPolicy;
   providers: Map<string, ContinuityAnalysisProvider>;
   availability: AnalyzerAvailability[];
+  /** `qa.automationReady()`: false before migration 0044 (then nothing is due and nothing is probed). */
+  automationReady: boolean;
   now?: Date;
 }): AutoQaState {
   const inputs = computeQaInputs({
@@ -73,6 +75,7 @@ export function autoQaState(args: {
   });
   const eligibility = autoQaEligibility({
     attemptInProject: args.view.attempt.projectId === args.data.project.id,
+    automationReady: args.automationReady,
     status: args.view.attempt.status,
     hasTruth: inputs !== null,
     hasSubject: Boolean(inputs?.subject),
@@ -235,10 +238,11 @@ export async function reconcileAttemptQa(args: {
   let runId: string | null = null;
   let jobId: string | null = null;
   try {
-    const [delivery, runs, jobs] = await Promise.all([
+    const [delivery, runs, jobs, automationReady] = await Promise.all([
       deps.qa.getDelivery(view.attempt.id),
       deps.qa.listAttemptRuns(view.attempt.id),
       deps.qa.listAttemptAnalysisJobs(view.attempt.id),
+      deps.qa.automationReady(),
     ]);
     const state = autoQaState({
       data,
@@ -249,6 +253,7 @@ export async function reconcileAttemptQa(args: {
       policy,
       providers: deps.providers,
       availability: deps.availability,
+      automationReady,
       now: deps.now?.(),
     });
     const blockers =

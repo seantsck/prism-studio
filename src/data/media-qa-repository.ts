@@ -480,6 +480,11 @@ export interface MediaQaRepository {
   analysisSpentSince(projectId: string | null, sinceIso: string): Promise<number>;
 
   // ── Project QA policy (Phase 3A.2, owner only) ──
+  /**
+   * Whether this database can store automatic runs and the Project policy (migration 0044). Cheap; checked before any
+   * automatic work so an un-migrated database never reads or probes media for a run it cannot record.
+   */
+  automationReady(): Promise<boolean>;
   /** The Project's policy; the default (semantic automation off, revision 0) when none was ever saved. */
   getQaPolicy(projectId: string): Promise<ProjectQaPolicy>;
   /**

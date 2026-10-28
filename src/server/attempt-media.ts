@@ -33,12 +33,13 @@ export interface AttemptMedia {
 
 export async function loadAttemptMedia(data: ProjectData, view: AttemptView): Promise<AttemptMedia> {
   const qa = await getMediaQaRepo();
-  const [selection, derivations, runs, jobs, policy] = await Promise.all([
+  const [selection, derivations, runs, jobs, policy, automationReady] = await Promise.all([
     qa.getDelivery(view.attempt.id),
     qa.listAttemptDerivations(view.attempt.id),
     qa.listAttemptRuns(view.attempt.id),
     qa.listAttemptAnalysisJobs(view.attempt.id),
     qa.getQaPolicy(data.project.id),
+    qa.automationReady(),
   ]);
   const inputs = computeQaInputs({ data, view, delivery: selection });
   const original = inputs?.original ?? null;
@@ -90,6 +91,7 @@ export async function loadAttemptMedia(data: ProjectData, view: AttemptView): Pr
         policy,
         providers: getAnalysisProviders(),
         availability: getAnalyzerAvailability(),
+        automationReady,
       }),
       policy,
     ),

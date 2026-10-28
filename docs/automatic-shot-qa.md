@@ -129,8 +129,10 @@ is unchanged. A QA infrastructure failure is not a creative failure.
 - `continuity_runs.automation_key`: nullable, unique per Project when set, frozen by the run guard; historical rows
   stay null. The continuity worker's column-level grants on runs do not include it.
 
-Before 0044 is applied, a Supabase-mode app keeps working: the policy reads as the default (off), and an automatic
-deterministic run reports "Automatic QA needs database migration 0044". Applying 0044 to hosted DEV is a separate,
+Before 0044 is applied, a Supabase-mode app keeps working: the policy reads as the default (off), and a cheap catalog
+check (`automationReady`) makes every attempt "not eligible: Automatic Shot QA needs database migration 0044", so no
+reconciliation is due, the page fires none, and nothing reads or probes media for a run the database cannot record.
+Manual Run QA and manual analysis are unchanged. Applying 0044 to hosted DEV is a separate,
 explicitly authorised gate (`db:migrate:check`, `db:migrate`, then `db:validate`, `db:behavior`, `db:rls`,
 `db:worker-role`).
 
