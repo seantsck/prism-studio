@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { checksumOf } from "../../../scripts/lib/migrations.mjs";
 
 /**
- * Static checks of migration 0045 (Phase 3A.3), which is BUILT but not applied to any database in this phase. The
- * hosted behaviour is covered by db:validate / db:behavior / db:rls / db:worker-role at the 0045 hosted gate.
+ * Static checks of migration 0045 (Phase 3A.3), which is applied to and verified on hosted DEV. The hosted behaviour
+ * is covered by db:validate / db:behavior / db:rls / db:worker-role / db:continuity-analysis.
  */
 
 const DIR = "supabase/migrations";
