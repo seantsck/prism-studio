@@ -711,12 +711,14 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
 }
 
 /** Stores exactly what the owner entered (an empty analyzer becomes null); nothing is inferred or promoted. */
-function normalisePolicy(p: QaPolicyInput): QaPolicyInput {
+function normalisePolicy(p: QaPolicyInput): QaPolicyInput & { directVideoAllowed: boolean } {
   return {
     semanticMode: p.semanticMode,
     analyzer: p.analyzer || null,
     externalMediaAllowed: p.externalMediaAllowed,
     maxCostPerRunUsd: p.maxCostPerRunUsd,
     maxCostPerDayUsd: p.maxCostPerDayUsd,
+    // 3A.3: never implied; a caller that does not set it (3A.2) saves false
+    directVideoAllowed: p.directVideoAllowed === true,
   };
 }

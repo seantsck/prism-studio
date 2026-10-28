@@ -31,6 +31,8 @@ import {
 
 const NOT_MIGRATED =
   "Automatic Shot QA needs database migration 0044, which is not applied to this database yet.";
+const NOT_MIGRATED_0045 =
+  "Full-video (temporal) Shot QA permission needs database migration 0045, which is not applied to this database yet.";
 
 const mapQaPolicy = (r: Row): ProjectQaPolicy => ({
   projectId: String(r.project_id),
@@ -39,6 +41,8 @@ const mapQaPolicy = (r: Row): ProjectQaPolicy => ({
   externalMediaAllowed: Boolean(r.external_media_allowed),
   maxCostPerRunUsd: r.max_cost_per_run_usd == null ? null : Number(r.max_cost_per_run_usd),
   maxCostPerDayUsd: r.max_cost_per_day_usd == null ? null : Number(r.max_cost_per_day_usd),
+  // absent before migration 0045: full-video analysis is simply not allowed
+  directVideoAllowed: r.direct_video_allowed === true,
   revision: Number(r.revision),
   updatedBy: r.updated_by ? String(r.updated_by) : null,
   updatedAt:
@@ -922,6 +926,7 @@ export class PostgresMediaQaData implements MediaQaRepository {
     const errors = qaPolicyErrors(input.policy);
     if (errors.length > 0) throw new MediaQaError("invalid", errors.join(" "));
     const p = input.policy;
+    const directVideo = p.directVideoAllowed === true;
     const values = [
       input.projectId,
       p.semanticMode,
@@ -932,29 +937,44 @@ export class PostgresMediaQaData implements MediaQaRepository {
       input.by,
       input.now,
     ];
-    try {
-      const saved = await this.tx(async (c) => {
+    // 0045 adds direct_video_allowed; `withColumn: false` is the 0044-only shape (it can only ever write "false")
+    const write = (withColumn: boolean) =>
+      this.tx(async (c) => {
         const r =
           input.expectedRevision === 0
             ? await c.query(
                 `insert into project_qa_policies
                    (project_id, semantic_mode, analyzer, external_media_allowed, max_cost_per_run_usd,
-                    max_cost_per_day_usd, revision, updated_by, updated_at)
-                 values ($1, $2, $3, $4, $5, $6, 1, $7, $8)
+                    max_cost_per_day_usd, revision, updated_by, updated_at${withColumn ? ", direct_video_allowed" : ""})
+                 values ($1, $2, $3, $4, $5, $6, 1, $7, $8${withColumn ? ", $9" : ""})
                  on conflict (project_id) do nothing
                  returning *`,
-                values,
+                withColumn ? [...values, directVideo] : values,
               )
             : await c.query(
                 `update project_qa_policies set
                    semantic_mode = $2, analyzer = $3, external_media_allowed = $4, max_cost_per_run_usd = $5,
-                   max_cost_per_day_usd = $6, revision = revision + 1, updated_by = $7, updated_at = $8
+                   max_cost_per_day_usd = $6, revision = revision + 1, updated_by = $7, updated_at = $8${
+                     withColumn ? ", direct_video_allowed = $10" : ""
+                   }
                  where project_id = $1 and revision = $9
                  returning *`,
-                [...values, input.expectedRevision],
+                withColumn
+                  ? [...values, input.expectedRevision, directVideo]
+                  : [...values, input.expectedRevision],
               );
         return r.rows[0] ? mapQaPolicy(r.rows[0]) : null;
       });
+    try {
+      let saved: ProjectQaPolicy | null;
+      try {
+        saved = await write(true);
+      } catch (err) {
+        // before 0045 the column does not exist: "false" needs no column; "true" cannot be stored honestly
+        if ((err as { code?: string }).code !== "42703") throw err;
+        if (directVideo) throw new MediaQaError("not_migrated", NOT_MIGRATED_0045);
+        saved = await write(false);
+      }
       if (!saved)
         throw new MediaQaError(
           "conflict",

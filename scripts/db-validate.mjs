@@ -191,7 +191,7 @@ const fn = await rows(
 
 // ── column-level + storage + migration-ledger checks ──
 const columns = await rows(
-  "select table_name, column_name from information_schema.columns where table_schema='public' and table_name in ('assets','shots','performance_takes','storyboard_frames','generation_attempts','dialogue_lines','shot_reference_assets','generation_jobs','generation_outputs','generation_costs','project_bibles','continuity_runs','continuity_analysis_jobs')",
+  "select table_name, column_name from information_schema.columns where table_schema='public' and table_name in ('assets','shots','performance_takes','storyboard_frames','generation_attempts','dialogue_lines','shot_reference_assets','generation_jobs','generation_outputs','generation_costs','project_bibles','continuity_runs','continuity_analysis_jobs','project_qa_policies')",
 );
 const hasCol = (t, c) => columns.some((x) => x.table_name === t && x.column_name === c);
 const columnProblems = [
@@ -217,6 +217,9 @@ const columnProblems = [
     ["project_bibles", "delivery_width"],
     ["continuity_runs", "criteria_fingerprint"],
     ["continuity_runs", "external_manifest"],
+    ["continuity_runs", "automation_key"],
+    // 0045 (Phase 3A.3): explicit full-video consent for temporal Shot QA
+    ["project_qa_policies", "direct_video_allowed"],
     ["continuity_analysis_jobs", "lease_token"],
     ["continuity_analysis_jobs", "provider_state"],
     ["generation_jobs", "lease_token"],

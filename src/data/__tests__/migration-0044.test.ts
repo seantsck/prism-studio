@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest";
 import { checksumOf } from "../../../scripts/lib/migrations.mjs";
 
 /**
- * Static checks of migration 0044 (Phase 3A.2), which is BUILT but not applied to any database in this phase. The
- * hosted behaviour is covered by db:validate / db:behavior / db:rls / db:worker-role at the hosted migration gate.
+ * Static checks of migration 0044 (Phase 3A.2). Applied to hosted DEV on 2026-10-28: the file is now immutable, so
+ * its ledger checksum is pinned here. The hosted behaviour is covered by db:validate / db:behavior / db:rls /
+ * db:worker-role.
  */
 
 const DIR = "supabase/migrations";
@@ -12,12 +13,12 @@ const sql = readFileSync(`${DIR}/0044_shot_qa_automation.sql`, "utf8");
 const code = sql.replace(/--.*$/gm, ""); // statements only, no comments
 
 describe("migration 0044 — Shot QA automation", () => {
-  it("is the latest migration and never touches 0043 (ledger checksum of the applied file)", () => {
+  it("follows 0043, never touches it, and is itself unchanged since it was applied (ledger checksums)", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe("0044_shot_qa_automation.sql");
-    expect(files.at(-2)).toBe("0043_episode_edits.sql");
+    expect(files[files.indexOf("0044_shot_qa_automation.sql") - 1]).toBe("0043_episode_edits.sql");
+    expect(checksumOf(sql)).toBe("31abe729026e1c89b9590d9167b2d608b1747de4bae72fdf7bcdb7961b72dcd7");
     expect(checksumOf(readFileSync(`${DIR}/0043_episode_edits.sql`, "utf8"))).toBe(
       "9e8e6d0a176aa6a9d7c23388df6a43f46fb362bd1b27e36c714d5c9d94128124",
     );

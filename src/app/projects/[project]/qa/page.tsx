@@ -1,7 +1,12 @@
 import { PageHeader } from "@/components/ui";
 import { QaPolicyForm } from "@/components/continuity/qa-policy-form";
 import { analysisSpendBlockers } from "@/domain/continuity/analysis/cost";
-import { getAnalysisConfig, getAnalyzerStatuses, getMediaQaRepo } from "@/server/media-qa";
+import {
+  getAnalysisConfig,
+  getAnalyzerStatuses,
+  getMediaQaRepo,
+  getPreviewProviders,
+} from "@/server/media-qa";
 import { requireProject } from "@/server/repo";
 
 export const dynamic = "force-dynamic";
@@ -12,11 +17,18 @@ export default async function ShotQaSettingsPage({ params }: { params: Promise<{
   const data = await requireProject(slug);
   const policy = await (await getMediaQaRepo()).getQaPolicy(data.project.id);
   const config = getAnalysisConfig();
+  const providers = getPreviewProviders();
   const analyzers = getAnalyzerStatuses().map((s) => ({
     id: s.id,
     label: `${s.providerName} · ${s.modelLabel}`,
     kind: s.kind,
     usable: s.usable || s.kind === "mock",
+    // 3A.3: what this server can do with video for this analyzer (the Project permission is separate)
+    temporal: providers.get(s.id)?.modes().includes("direct_video")
+      ? { available: true, label: "temporal QA available (video capable, server enabled)" }
+      : s.id === "gemini"
+        ? { available: false, label: "server disabled (direct video is off on this server)" }
+        : { available: false, label: "this analyzer does not support temporal video" },
     blockers: [
       ...(s.missingConfig.length ? [`missing ${s.missingConfig.join(", ")}.`] : []),
       ...(s.kind === "model"
@@ -59,6 +71,7 @@ export default async function ShotQaSettingsPage({ params }: { params: Promise<{
               externalMediaAllowed: policy.externalMediaAllowed,
               maxCostPerRunUsd: policy.maxCostPerRunUsd,
               maxCostPerDayUsd: policy.maxCostPerDayUsd,
+              directVideoAllowed: policy.directVideoAllowed,
               revision: policy.revision,
             }}
             analyzers={analyzers}

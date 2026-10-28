@@ -272,6 +272,15 @@ try {
     "update project_qa_policies set semantic_mode = 'automatic'",
   );
   await mustFail("cannot read continuity runs", "select automation_key from continuity_runs limit 1");
+  // Phase 3A.3 (0045): nor the full-video consent column
+  await mustFail(
+    "cannot read the Project full-video consent",
+    "select direct_video_allowed from project_qa_policies limit 1",
+  );
+  await mustFail(
+    "cannot grant full-video consent",
+    "update project_qa_policies set direct_video_allowed = true",
+  );
   await mustFail("cannot alter projects", "update projects set title = title");
   await mustFail("cannot read project secrets/columns beyond id+owner", "select title from projects limit 1");
   await mustFail("cannot create tables", "create table prism_worker_probe (x int)");
