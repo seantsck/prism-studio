@@ -112,12 +112,15 @@ test.describe("continuity analysis (signed in, real queue + continuity worker lo
     await expect(identity.getByTestId("override-note")).toContainText("Human:");
     await expect(identity.getByTestId("system-result")).toHaveText(system);
 
-    // re-run: a NEW run; history keeps both
+    // re-run: a NEW run; history keeps both (an automatic deterministic run also sits in the history since 3A.2)
+    const rows = page.locator('[data-testid="history-row"]');
+    const before = await rows.count();
     await page.getByTestId("run-analysis").click();
     await expect(page.getByTestId("analysis-progress")).toBeVisible({ timeout: 60_000 });
     tsx("scripts/continuity-worker.mts", ["--until-idle"]);
     await page.goto(path);
-    await expect(page.locator('[data-testid="history-row"]')).toHaveCount(2, { timeout: 30_000 });
-    await expect(page.locator('[data-testid="history-row"]').nth(1)).toContainText("Run 1");
+    await expect(rows).toHaveCount(before + 1, { timeout: 30_000 });
+    await expect(rows.nth(0)).toContainText("mock-continuity");
+    await expect(rows.nth(1)).toContainText("mock-continuity");
   });
 });

@@ -103,11 +103,23 @@ deferred-unique order, picture by kind with a kind/column check and a source tri
 ACTION (the 0042 lesson), owner-only RLS, no worker grant
 ([timeline-performance-assembly](timeline-performance-assembly.md)).
 
-**0044** (Phase 3A.2, **built, not applied to hosted DEV**) adds `project_qa_policies` (one owner-only Shot QA
+**0044** (Phase 3A.2, **applied to hosted DEV on 2026-10-28**) adds `project_qa_policies` (one owner-only Shot QA
 automation policy per Project; `semantic_mode` default `off`; `automatic` must name an analyzer, carry media consent and
 two finite ceilings, database-enforced; revision for optimistic concurrency; no grant to `anon` or either worker role)
 and the nullable `continuity_runs.automation_key` (unique per Project when set, frozen by the run guard; historical rows
-null) ([automatic-shot-qa](automatic-shot-qa.md)). Applying it is a separate authorised gate.
+null) ([automatic-shot-qa](automatic-shot-qa.md)). Hosted gate: `db:migrate:dry-run-check` 7/7, `--dry-run` rehearsal
+rolled back (ledger unchanged), then `db:migrate` applied exactly 0044 (ledger 44 rows, checksum
+`31abe729026e1c89b9590d9167b2d608b1747de4bae72fdf7bcdb7961b72dcd7`, 0043 unchanged, `MIGRATION CHECKSUMS OK`);
+historical QA rows unchanged, 0 non-null automation keys, 0 policy rows; `db:validate` STRUCTURE OK, `db:behavior` 55/55,
+`db:rls` 67/67, `db:worker-role` 58/58 (REAL LOGIN), `db:continuity-analysis` 78/78, `db:media-qa` 39/39, hosted
+browser E2E 40/40.
+
+**Table grants (Supabase default privileges).** Like 0040-0043, 0044 relies on the project's default privileges to give
+`authenticated` (the role the app uses via `set local role authenticated`) access to a new table, guarded by RLS, and
+revokes `anon` explicitly. Supabase stops granting new `public` tables to `anon` / `authenticated` / `service_role`
+automatically (default for new projects from 2026-05-30, enforced on existing projects from 2026-10-30; existing
+tables keep their grants). **From 0045 on, a migration that creates a table must grant `authenticated` explicitly**
+(and never `anon` unless intended).
 
 `npm run db:migrate -- --dry-run` rehearses the pending files: they are applied for real inside the transaction, which
 is then **always rolled back** (nothing persists). Use it before applying a migration to the hosted project.

@@ -134,7 +134,7 @@ worker refuses to start against Supabase rather than falling back to anything we
 
 Automatic QA runs only in the signed-in application, under the owner's RLS ([automatic-shot-qa](automatic-shot-qa.md)).
 The generation worker gains nothing: it still cannot read continuity tables, Project truth or the new
-`project_qa_policies` (0044 revokes `anon` and both worker roles and grants nothing). The continuity worker never reads
+`project_qa_policies` (0044 revokes `anon` and both worker roles and grants them nothing; owners reach it as `authenticated` under RLS). The continuity worker never reads
 the mutable policy: the app applies it and freezes an authorised job, so a later policy change cannot rewrite the
 meaning of a queued job. Automatic semantic QA needs a persisted standing authorisation (analyzer, media consent, two
 finite Project ceilings, all database-enforced) and still passes the server's global analysis spend gate; a Project

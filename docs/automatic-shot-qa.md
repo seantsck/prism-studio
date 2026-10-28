@@ -120,7 +120,7 @@ is unchanged. A QA infrastructure failure is not a creative failure.
   `Semantic QA queued automatically`, `Semantic auto-analysis blocked — …`, `Semantic automation off`) shown next to,
   never merged with, the 3A.1 Shot QA state.
 
-## Persistence: migration 0044 (built, not applied to hosted DEV)
+## Persistence: migration 0044 (applied to hosted DEV)
 
 - `project_qa_policies`: one owner-only row per Project (`semantic_mode` default `off`, `analyzer`,
   `external_media_allowed` default false, `max_cost_per_run_usd`, `max_cost_per_day_usd`, `revision`, `updated_by`,
@@ -132,7 +132,7 @@ is unchanged. A QA infrastructure failure is not a creative failure.
 Before 0044 is applied, a Supabase-mode app keeps working: the policy reads as the default (off), and a cheap catalog
 check (`automationReady`) makes every attempt "not eligible: Automatic Shot QA needs database migration 0044", so no
 reconciliation is due, the page fires none, and nothing reads or probes media for a run the database cannot record.
-Manual Run QA and manual analysis are unchanged. Applying 0044 to hosted DEV is a separate,
+Manual Run QA and manual analysis are unchanged. 0044 was applied to hosted DEV on 2026-10-28 through the
 explicitly authorised gate (`db:migrate:check`, `db:migrate`, then `db:validate`, `db:behavior`, `db:rls`,
 `db:worker-role`).
 
