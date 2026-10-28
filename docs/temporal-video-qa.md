@@ -236,6 +236,12 @@ CI runs it with the fake transport (`src/continuity/__tests__/temporal-calibrati
 `gemini-sdk-transport.test.ts` drives the real SDK over a stubbed fetch and proves one request per call for 429, 500,
 503 and a timeout.
 
+`temporal-calibration-cli.test.ts` proves the CLI's order of checks. It covers every live refusal: the
+acknowledgement, the env flags, the model, the ceilings, each readiness requirement and the credential. Each refusal
+exits 2, names the failed requirement, and happens **before** the network transport exists. No transport factory
+call, no SDK client, no request. The CLI logic lives in `src/continuity/calibration/temporal-calibration-cli.ts`; the
+script only injects the real SDK transport.
+
 ### First live attempt (2026-10-28): provider access failure, not an evaluated trial
 
 The run used `temporal-calibration-v1`, `gemini-3.8-flash`, analyzer v2, prompt v2 and 4 fps, with 48 planned
