@@ -11,8 +11,11 @@ Frame or Location View, changes a Character Continuity Lock or touches an Episod
 authority.
 
 **Status:** implemented with fake transports and a calibration harness. **Live calibration not yet successfully
-completed:** the first live attempt (2026-10-28) got zero model answers (provider quota/infrastructure; see
-[the incident record](#first-live-attempt-2026-10-28-provider-access-failure-not-an-evaluated-trial)).
+completed:** two live attempts (both 2026-10-28) got zero model answers and are not model-quality evidence. The
+first was a provider quota/infrastructure failure
+([record](#first-live-attempt-2026-10-28-provider-access-failure-not-an-evaluated-trial)); the second was a billing
+refusal, HTTP 402 ([record](#second-live-attempt-2026-10-28-provider-billing-refusal-not-an-evaluated-trial)). The
+provider-access fail-fast is now in place, and a third run is pending separate authorisation.
 Migration 0045 is **applied to hosted DEV and verified** (2026-10-28; see
 [migration-policy](migration-policy.md)). Lip sync stays **unchecked**.
 

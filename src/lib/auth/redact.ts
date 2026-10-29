@@ -117,6 +117,8 @@ export function redactText(input: unknown): string {
   text = text.replace(/\bsb_(?:secret|publishable)_[A-Za-z0-9_-]{8,}\b/g, MASK);
   // OpenAI-style API keys (sk-..., sk-proj-...).
   text = text.replace(/\bsk-[A-Za-z0-9_-]{16,}/g, MASK);
+  // Google API keys (Gemini: AIza + 35 characters), even when not the configured key.
+  text = text.replace(/\bAIza[0-9A-Za-z_-]{35}\b/g, MASK);
   // Any fragment that looks like it carries tokens.
   text = text.replace(/#[^\s]*(?:access_token|refresh_token|type=recovery)[^\s]*/gi, `#${MASK}`);
   // Literal values of known secret environment variables.

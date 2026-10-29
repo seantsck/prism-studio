@@ -464,8 +464,114 @@ describe("calibration run control, cost honesty and live pacing", () => {
       expect(json).not.toContain("zzzzzzzz");
       expect(r.abort?.message).toContain("HTTP 402");
       expect(r.abort?.message).toContain("credits depleted");
+      // a query-string credential: a Google-shaped key that is NOT the configured one, and an access token
+      const other = `AIza${"B".repeat(35)}`;
+      const q = await run(
+        new FakeGeminiTransport(() => ({
+          kind: "error",
+          error: access(
+            402,
+            `Gemini returned HTTP 402: see https://x.test/v1?key=${other}&access_token=tttttttt9`,
+          ),
+        })),
+      );
+      const qj = JSON.stringify(q);
+      expect(qj).not.toContain(other);
+      expect(qj).not.toContain("tttttttt9");
     } finally {
       vi.unstubAllEnvs();
+    }
+  });
+
+  it("counts: a model answer vs an HTTP rejection vs a timeout vs an unusable (schema-invalid) model response", async () => {
+    // fixture order: [valid answer, 400 rejection, timeout, schema-invalid response]
+    const fixtures = TEMPORAL_FIXTURES.slice(0, 4);
+    const transport = new FakeGeminiTransport((req, n) =>
+      n === 0
+        ? ok(req)
+        : n === 1
+          ? {
+              kind: "error",
+              error: new GeminiTransportError("invalid_input", 400, "Gemini returned HTTP 400"),
+            }
+          : n === 2
+            ? { kind: "error", error: new GeminiTransportError("timeout", null, "timed out") }
+            : { kind: "text", text: "not json at all" },
+    );
+    const r = await run(transport, { fixtures, trials: 1 });
+    expect(transport.calls).toBe(4);
+    expect(r.status).toBe("completed");
+    expect(r.trials.map((t) => [t.result === "error", t.httpStatus ?? null])).toEqual([
+      [false, null], // answered: not rejected, not unanswered
+      [true, 400], // rejected AND unanswered
+      [true, null], // unanswered, not rejected
+      [true, null], // the model DID respond, but unusably: unanswered, not rejected
+    ]);
+    expect(r.trialsRejected).toBe(1);
+    expect(r.trialsUnanswered).toBe(3);
+    // model responses = the 2xx bodies (the valid AND the schema-invalid one), never the rejection or the timeout
+    expect(r.answersReceived).toBe(2);
+    expect(r.analysisAttempts).toBe(4);
+  });
+
+  it("first-request 402: zero model responses, one rejection", async () => {
+    const r = await run(
+      new FakeGeminiTransport(() => ({ kind: "error", error: access(402, "Gemini returned HTTP 402") })),
+    );
+    expect(r.answersReceived).toBe(0);
+    expect(r.trialsRejected).toBe(1);
+    expect(r.trialsUnanswered).toBe(1);
+  });
+
+  it("a criterion with a genuine model answer before a provider abort is 'incomplete', not 'not measured'", async () => {
+    const [first, second] = TEMPORAL_FIXTURES.filter((f) => f.criterion === "camera_movement");
+    const other = TEMPORAL_FIXTURES.find((f) => f.criterion === "geography")!;
+    // camera answer → camera 402 (same criterion, now with an errored trial too) → geography never reached
+    const transport = new FakeGeminiTransport((req, n) =>
+      n === 0 ? ok(req) : { kind: "error", error: access(402, "Gemini returned HTTP 402") },
+    );
+    const r = await run(transport, { fixtures: [first!, second!, other], trials: 1 });
+    expect(transport.calls).toBe(2);
+    expect(r.status).toBe("aborted_provider");
+    expect(r.trials.filter((t) => t.criterion === "camera_movement").map((t) => t.result)).toEqual([
+      "pass",
+      "error",
+    ]);
+    expect(r.verdicts.camera_movement).toBe("not_accepted_incomplete");
+    expect(r.trials.some((t) => t.criterion === "geography")).toBe(false);
+    expect(r.verdicts.geography).toBe("not_measured_provider_error"); // zero attempts: [].every(...) is true
+    // a provider failure never becomes a quality verdict
+    expect(Object.values(r.verdicts)).not.toContain("not_accepted_incorrect");
+    expect(r.trials.every((t) => t.result === "error" || t.correct || t.evidenceInWindow !== false)).toBe(
+      true,
+    );
+  });
+
+  it("cost: success with usage + a 402 without usage → known lower bound, total UNKNOWN (never the partial sum)", async () => {
+    const transport = new FakeGeminiTransport((req, n) =>
+      n === 0 ? ok(req) : { kind: "error", error: access(402, "Gemini returned HTTP 402") },
+    );
+    const r = await run(transport, { fixtures: TEMPORAL_FIXTURES.slice(0, 2), trials: 1 });
+    expect(r.analysisAttempts).toBe(2);
+    expect(r.usageReportedCalls).toBe(1);
+    expect(r.knownUsageUsd).toBeGreaterThan(0);
+    expect(r.actualUsd).toBeNull();
+    expect(r.costStatus).toBe("unknown");
+  });
+
+  it("usage with a legitimate zero (output 0 / thoughts null, or output null / thoughts 0) is complete", async () => {
+    for (const usage of [
+      { promptTokens: 1000, candidatesTokens: 0, thoughtsTokens: null },
+      { promptTokens: 1000, candidatesTokens: null, thoughtsTokens: 0 },
+    ]) {
+      const transport = new FakeGeminiTransport((req) => {
+        const step = ok(req);
+        return step.kind === "json" ? { ...step, usage } : step;
+      });
+      const r = await run(transport, { fixtures: TEMPORAL_FIXTURES.slice(0, 1), trials: 1 });
+      expect(r.usageReportedCalls).toBe(1);
+      expect(r.costStatus).toBe("known");
+      expect(Number.isFinite(r.actualUsd)).toBe(true);
     }
   });
 

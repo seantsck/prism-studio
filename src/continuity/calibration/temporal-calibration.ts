@@ -504,11 +504,18 @@ export interface CalibrationReport {
   trialsPlanned: number;
   trialsAttempted: number;
   trialsUnattempted: number;
-  /** Attempted trials that got no model answer (every error trial: rejected, timed out, refused locally). */
+  /**
+   * Attempted trials with no GRADEABLE answer: every error trial, i.e. an HTTP rejection, a timeout/network failure, a
+   * local refusal, or a model response that was unusable (schema-invalid, safety-blocked).
+   */
   trialsUnanswered: number;
-  /** Of those, the trials the provider REJECTED with an HTTP status. */
+  /** Of those, the trials the provider REJECTED with an HTTP error status (no model response at all). */
   trialsRejected: number;
-  /** Provider responses received (an answer, a refusal or an invalid answer); errors without a response are not. */
+  /**
+   * Model responses received: generation calls that came back with a 2xx response body, whether the answer was
+   * usable, schema-invalid or safety-blocked (one usage record each). HTTP rejections (4xx/5xx) and timeouts are NOT
+   * model responses and are not counted here; they are in `trialsRejected` / `trialsUnanswered`.
+   */
   answersReceived: number;
   /** Every outbound request (uploads included). */
   transportCalls: number;
@@ -826,6 +833,8 @@ export async function runTemporalCalibration(args: {
   const verdicts = Object.fromEntries(
     (Object.keys(accepted) as CalibrationCriterion[]).map((c) => {
       const mine = out.filter((t) => t.criterion === c);
+      // deliberate: `every` on an EMPTY list is true, so a criterion the run never reached before a provider abort is
+      // "not measured"; one genuine model answer makes it "incomplete"
       const v: CriterionVerdict =
         status === "aborted_provider" && mine.every((t) => t.result === "error")
           ? "not_measured_provider_error"

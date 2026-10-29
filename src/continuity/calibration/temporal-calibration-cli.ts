@@ -153,7 +153,7 @@ export async function runCalibrationCli(deps: CalibrationCliDeps): Promise<numbe
         `pacing: ${report.quota.effectiveRpm} req/min (≥${report.quota.minIntervalMs} ms apart) · worst case ${report.quota.worstCaseTokensPerMinute} tokens/min ≤ TPM ${report.quota.maxTpm} · ${report.quota.plannedAnalysisRequests} requests ≤ RPD ${report.quota.maxRpd}`,
       );
     log(
-      `status=${report.status}${report.abort ? ` abort=${report.abort.reason} http=${report.abort.httpStatus ?? "-"} at ${report.abort.fixture}#${report.abort.trial}` : ""} trials=${report.trialsAttempted}/${report.trialsPlanned} rejected=${report.trialsRejected} unanswered=${report.trialsUnanswered} unattempted=${report.trialsUnattempted} responses=${report.answersReceived}`,
+      `status=${report.status}${report.abort ? ` abort=${report.abort.reason} http=${report.abort.httpStatus ?? "-"} at ${report.abort.fixture}#${report.abort.trial}` : ""} trials=${report.trialsAttempted}/${report.trialsPlanned} rejected=${report.trialsRejected} unanswered=${report.trialsUnanswered} unattempted=${report.trialsUnattempted} model_responses=${report.answersReceived}`,
     );
     for (const [c, v] of Object.entries(report.verdicts)) log(`${VERDICT[v]}  ${c}`);
     log(

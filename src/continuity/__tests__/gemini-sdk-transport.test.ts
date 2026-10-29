@@ -59,6 +59,7 @@ describe("SdkGeminiTransport (stubbed fetch, no network)", () => {
     [401, "API key not valid. Please pass a valid API key.", "UNAUTHENTICATED", "auth"],
     [402, "Your prepayment credits are depleted.", "FAILED_PRECONDITION", "invalid_input"],
     [403, "Permission denied on the project.", "PERMISSION_DENIED", "auth"],
+    [404, "models/gemini-x is not found for API version v1beta.", "NOT_FOUND", "invalid_input"],
     [500, "Internal error encountered.", "INTERNAL", "server_error"],
     [503, "This model is currently experiencing high demand.", "UNAVAILABLE", "overloaded"],
   ] as const) {

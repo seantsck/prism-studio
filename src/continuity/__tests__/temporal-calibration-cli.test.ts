@@ -64,6 +64,9 @@ const withValue = (name: string, v: string) => {
 };
 
 const hasFfmpeg = await processor.available(); // the live path renders the 16 synthetic fixtures
+const createLiveTransport = vi.fn(async () => {
+  throw new Error("sentinel: the live transport factory was reached");
+});
 
 let realFetch: typeof fetch;
 let outbound = 0;
@@ -283,6 +286,47 @@ describe("calibration CLI: live readiness is validated before any SDK transport 
       expect(logs.join("\n")).toMatch(/status=aborted_provider abort=provider_billing_error http=402/);
       expect(logs.join("\n")).toMatch(/billing could not be established from usage metadata/);
       expect(logs.join("\n")).not.toMatch(/model answered incorrectly/);
+      expect(logs.join("\n")).not.toContain(ENV.GEMINI_API_KEY);
+    },
+    240_000,
+  );
+
+  it.skipIf(!hasFfmpeg)(
+    "a run that completes exits 0 (fake transport) and still writes its report",
+    async () => {
+      let written = "";
+      const code = await runCalibrationCli({
+        argv: ["--out", "fake.json"],
+        env: {},
+        createLiveTransport,
+        log: () => undefined,
+        error: () => undefined,
+        writeReport: (_p, j) => void (written = j),
+      });
+      expect(code).toBe(0);
+      expect(JSON.parse(written).status).toBe("completed");
+      expect(createLiveTransport).not.toHaveBeenCalled();
+      expect(outbound).toBe(0);
+    },
+    240_000,
+  );
+
+  it.skipIf(!hasFfmpeg)(
+    "a report that cannot be written is not swallowed (it propagates to the script's exit 1)",
+    async () => {
+      // fake mode reaches writeReport after the run; a failing write must surface, never exit 0
+      await expect(
+        runCalibrationCli({
+          argv: ["--out", "x.json"],
+          env: {},
+          createLiveTransport,
+          log: () => undefined,
+          error: () => undefined,
+          writeReport: () => {
+            throw new Error("EACCES: report not writable");
+          },
+        }),
+      ).rejects.toThrow(/EACCES/);
     },
     240_000,
   );
