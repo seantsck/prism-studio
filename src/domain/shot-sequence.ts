@@ -11,6 +11,18 @@ import {
 } from "./production-frame";
 import type { ProjectData, Shot } from "./schemas";
 import { summarizeEpisode } from "./summary";
+import {
+  declaredContinuityOf,
+  describeTransitionTruth,
+  transitionCharactersOf,
+  type DeclaredContinuity,
+  type TransitionCharacterTruth,
+  type TransitionFact,
+} from "./transition-truth";
+
+// The comparison itself is shared with the Phase 3A.4 cut domain (domain/transition-truth.ts); re-exported so board
+// consumers keep importing from here.
+export type { TransitionCategory, TransitionFact } from "./transition-truth";
 
 /**
  * Phase 2G.5 Shot Sequence Board: the episode reviewed as a SEQUENCE OF CANONICAL STILLS ("do these Shots cut
@@ -89,17 +101,8 @@ export interface SequenceStoryboard {
   latest: { frameId: string; version: number; approved: boolean } | null;
 }
 
-export interface SequenceCharacter {
-  characterId: string;
-  name: string;
-  /** "lock" = a selected Character Continuity Lock is authoritative; "live" = the editable library */
-  authority: "lock" | "live";
-  lock: { id: string; name: string; lockFingerprint: string } | null;
-  lookId: string | null;
-  lookName: string | null;
-  /** a stored selection that no longer matches the assignment (integrity blocker, never a silent fallback) */
-  issue: string | null;
-}
+/** One assigned Character's appearance authority (the shared transition-truth shape). */
+export type SequenceCharacter = TransitionCharacterTruth;
 
 export interface SequenceIntegrityIssue {
   code: "location_view" | "character_continuity" | "continuity_orphan";
@@ -129,13 +132,7 @@ export interface ShotSequenceItem {
   location: { id: string; name: string } | null;
   locationView: { id: string; name: string } | null;
   characters: SequenceCharacter[];
-  continuity: {
-    previousShotId: string | null;
-    screenDirection: string;
-    facingDirection: string;
-    weather: string;
-    timeOfDay: string;
-  };
+  continuity: { previousShotId: string | null } & DeclaredContinuity;
   link: SequenceLink;
   integrityIssues: SequenceIntegrityIssue[];
   preflightBlockers: number;
@@ -167,33 +164,6 @@ function linkOf(stored: string | null, expected: string | null): SequenceLink {
 
 // ───────────────────────── transitions ─────────────────────────
 
-export type TransitionCategory =
-  | "sequence_link"
-  | "scene"
-  | "location"
-  | "location_view"
-  | "characters"
-  | "character_continuity"
-  | "look"
-  | "screen_direction"
-  | "weather"
-  | "time_of_day";
-
-/**
- * A transition fact. Only a sequence-link mismatch is an `error`. Everything else that differs is a `change`: a human
- * review aid describing what changes across the cut, which may be an intentional filmmaking decision. `stable` records
- * what demonstrably carries over (same Lock, same Look, same Location / View).
- */
-export interface TransitionFact {
-  category: TransitionCategory;
-  severity: "error" | "change" | "stable";
-  /** a Character name for character facts */
-  subject?: string;
-  message: string;
-  from?: string | null;
-  to?: string | null;
-}
-
 export interface ShotSequenceTransition {
   fromShotId: string;
   toShotId: string;
@@ -206,127 +176,6 @@ export interface ShotSequenceTransition {
   /** errors + changes (what a reviewer needs to look at) */
   changes: TransitionFact[];
   stable: TransitionFact[];
-}
-
-const said = (s: string | null | undefined) => (s ?? "").trim();
-const differs = (a: string, b: string) => a !== "" && b !== "" && a.toLowerCase() !== b.toLowerCase();
-
-function characterFacts(a: ShotSequenceItem, b: ShotSequenceItem): TransitionFact[] {
-  const facts: TransitionFact[] = [];
-  const inA = new Map(a.characters.map((c) => [c.characterId, c]));
-  const inB = new Map(b.characters.map((c) => [c.characterId, c]));
-  for (const c of a.characters)
-    if (!inB.has(c.characterId))
-      facts.push({ category: "characters", severity: "change", subject: c.name, message: `${c.name} exits` });
-  for (const c of b.characters)
-    if (!inA.has(c.characterId))
-      facts.push({
-        category: "characters",
-        severity: "change",
-        subject: c.name,
-        message: `${c.name} enters`,
-      });
-  for (const to of b.characters) {
-    const from = inA.get(to.characterId);
-    // an invalid stored selection is the Shot's integrity blocker; its appearance is not compared
-    if (!from || from.issue || to.issue) continue;
-    const name = to.name;
-    if (from.lock && to.lock) {
-      if (from.lock.lockFingerprint === to.lock.lockFingerprint)
-        facts.push({
-          category: "character_continuity",
-          severity: "stable",
-          subject: name,
-          message: `${name}: same Continuity Lock "${to.lock.name}"`,
-        });
-      else
-        facts.push({
-          category: "character_continuity",
-          severity: "change",
-          subject: name,
-          message: `${name}: Continuity Lock "${from.lock.name}" → "${to.lock.name}"`,
-          from: from.lock.name,
-          to: to.lock.name,
-        });
-    } else if (from.lock || to.lock) {
-      const label = (c: SequenceCharacter) =>
-        c.lock
-          ? `Continuity Lock "${c.lock.name}"`
-          : `live appearance${c.lookName ? ` · ${c.lookName}` : ""}`;
-      facts.push({
-        category: "character_continuity",
-        severity: "change",
-        subject: name,
-        message: `${name}: ${label(from)} → ${label(to)} (appearance authority changes)`,
-        from: label(from),
-        to: label(to),
-      });
-    } else if (from.lookId !== to.lookId) {
-      facts.push({
-        category: "look",
-        severity: "change",
-        subject: name,
-        message: `${name}: Look ${from.lookName ?? "none"} → ${to.lookName ?? "none"}`,
-        from: from.lookName,
-        to: to.lookName,
-      });
-    } else if (to.lookId) {
-      facts.push({
-        category: "look",
-        severity: "stable",
-        subject: name,
-        message: `${name}: same Look ${to.lookName ?? ""}`.trim(),
-      });
-    }
-  }
-  return facts;
-}
-
-function locationFacts(a: ShotSequenceItem, b: ShotSequenceItem): TransitionFact[] {
-  const name = (i: ShotSequenceItem) => i.location?.name ?? "no Location";
-  if ((a.location?.id ?? null) !== (b.location?.id ?? null))
-    return [
-      {
-        category: "location",
-        severity: "change",
-        message: `Location ${name(a)} → ${name(b)}`,
-        from: a.location?.name ?? null,
-        to: b.location?.name ?? null,
-      },
-    ];
-  if (!b.location) return [];
-  // the View is optional: without a selected View on both sides nothing is inferred
-  if (!a.locationView || !b.locationView)
-    return [{ category: "location", severity: "stable", message: `Same Location ${b.location.name}` }];
-  if (a.locationView.id === b.locationView.id)
-    return [
-      {
-        category: "location_view",
-        severity: "stable",
-        message: `Same Location ${b.location.name}, same View ${b.locationView.name}`,
-      },
-    ];
-  return [
-    {
-      category: "location_view",
-      severity: "change",
-      message: `${b.location.name}: View ${a.locationView.name} → ${b.locationView.name}`,
-      from: a.locationView.name,
-      to: b.locationView.name,
-    },
-  ];
-}
-
-function textFact(
-  category: "screen_direction" | "weather" | "time_of_day",
-  label: string,
-  from: string,
-  to: string,
-  note = "",
-): TransitionFact[] {
-  return differs(from, to)
-    ? [{ category, severity: "change", message: `${label} changes: ${from} → ${to}${note}`, from, to }]
-    : [];
 }
 
 /** The derived facts across one cut (A immediately before B in the actual order). */
@@ -343,34 +192,7 @@ export function describeTransition(a: ShotSequenceItem, b: ShotSequenceItem): Sh
       from: b.link.storedPreviousShotId,
       to: a.shotId,
     });
-  if (a.sceneId !== b.sceneId)
-    facts.push({
-      category: "scene",
-      severity: "change",
-      message: `Scene ${a.sceneNumber} → Scene ${b.sceneNumber} (${b.sceneSlugline})`,
-      from: a.sceneNumber,
-      to: b.sceneNumber,
-    });
-  facts.push(...locationFacts(a, b), ...characterFacts(a, b));
-  const review = " (needs human review)";
-  facts.push(
-    ...textFact(
-      "screen_direction",
-      "Screen direction",
-      a.continuity.screenDirection,
-      b.continuity.screenDirection,
-      review,
-    ),
-    ...textFact(
-      "screen_direction",
-      "Facing direction",
-      a.continuity.facingDirection,
-      b.continuity.facingDirection,
-      review,
-    ),
-    ...textFact("weather", "Weather", a.continuity.weather, b.continuity.weather),
-    ...textFact("time_of_day", "Time of day", a.continuity.timeOfDay, b.continuity.timeOfDay),
-  );
+  facts.push(...describeTransitionTruth(a, b));
   return {
     fromShotId: a.shotId,
     toShotId: b.shotId,
@@ -557,28 +379,8 @@ function itemOf(
     locationView: ctx.selectedLocationView
       ? { id: ctx.selectedLocationView.id, name: ctx.selectedLocationView.name }
       : null,
-    characters: ctx.characters.map((c) => ({
-      characterId: c.assignment.characterId,
-      name: c.character?.name ?? c.appearance.name ?? "Unknown Character",
-      authority: c.appearance.source === "continuity_lock" ? "lock" : "live",
-      lock: c.appearance.lock
-        ? {
-            id: c.appearance.lock.lockId,
-            name: c.appearance.lock.name,
-            lockFingerprint: c.appearance.lock.lockFingerprint,
-          }
-        : null,
-      lookId: c.appearance.look?.id ?? null,
-      lookName: c.appearance.look?.name ?? null,
-      issue: c.continuityLockIssue?.message ?? null,
-    })),
-    continuity: {
-      previousShotId: shot.continuity.previousShotId,
-      screenDirection: said(shot.spatial.screenDirection),
-      facingDirection: said(shot.spatial.facingDirection),
-      weather: said(shot.continuity.weather),
-      timeOfDay: said(shot.continuity.timeOfDay),
-    },
+    characters: transitionCharactersOf(ctx),
+    continuity: { previousShotId: shot.continuity.previousShotId, ...declaredContinuityOf(shot) },
     link: linkOf(shot.continuity.previousShotId, expectedPrevious),
     integrityIssues,
     preflightBlockers: report.blockers.length,

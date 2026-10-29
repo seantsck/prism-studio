@@ -1,9 +1,10 @@
 # Sequence Continuity Supervisor (Phase 3A.4)
 
-**Status: architecture accepted; implementation not started (2026-10-29).** The owner reviewed this design and
-accepted it with fixes, and those fixes are applied below. The owner decisions are recorded in
-[§21](#21-owner-decisions-and-implementation-details). No production code, migration, provider call or calibration
-exists for 3A.4 yet. Each implementation slice ([§22](#22-implementation-slices)) is its own gate.
+**Status: architecture accepted; 3A.4A implemented; 3A.4B–F pending (2026-10-29).** The owner reviewed this design
+and accepted it with fixes, and those fixes are applied below. The owner decisions are recorded in
+[§21](#21-owner-decisions-and-implementation-details). 3A.4A (the pure cut domain and deterministic projection,
+[§22](#3a4a-implementation-notes)) exists. There is still no UI, persistence, migration, provider mode, provider call or
+calibration for 3A.4. Each implementation slice ([§22](#22-implementation-slices)) is its own gate.
 
 **Question it answers:** _does this cut work as continuity?_ In other words, does Shot B continue Shot A correctly at
 the cut that actually exists in the Episode Edit, as opposed to each Shot satisfying its own truth?
@@ -437,7 +438,10 @@ A transition run is **stale** when any of these differ from the frozen values, a
 | `SEQUENCE_RULES_VERSION`                                                                                                                                                      | `rules_version`             | Criteria construction changed           |
 
 **Not stale:** a change anywhere else in the Episode, the global edit revision, a reorder elsewhere, audio placements,
-`source_audio`, cut intent, overrides, or a new analyzer version (that is new **coverage**, the 3A.3 rule).
+`source_audio`, cut intent, overrides, or a new analyzer version (that is new **coverage**, the 3A.3 rule). Nor are
+the cut's edit facts (pinned picture, source integrity / currentness, linked Shot QA, the stored previous-Shot link):
+they are recomputed on every read and composed into the assessment live, so they never need a stale run to appear.
+The reference set is **criterion-relevant**: only references a currently applicable semantic criterion could use.
 
 **Trim sensitivity:** windows are computed from the trims, so changing A's out-point or B's in-point changes
 `subject_fingerprint` and makes the cut stale. A's **in-point** matters only when A is shorter than W (the window then
@@ -856,7 +860,7 @@ behaviour.
 
 ## 22. Implementation slices
 
-Each slice is separately reviewed and gated. None has started.
+Each slice is separately reviewed and gated. 3A.4A is implemented; 3A.4B–F have not started.
 
 | Slice     | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Migration           | Paid / live calls           |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------- |
@@ -869,6 +873,66 @@ Each slice is separately reviewed and gated. None has started.
 
 3A.4A and 3A.4B deliver value (free, deterministic cut review in edit order) before any schema change. Semantic cut
 QA cannot appear in production before 3A.4E accepts a family.
+
+### 3A.4A implementation notes
+
+The code is in `src/domain/continuity/sequence.ts` (the cut domain) and `src/domain/transition-truth.ts` (the shared
+declared-truth comparison). Both are pure.
+
+- **Adjacency:** `buildEpisodeCuts({ data, view, shotQa? })` takes the `buildEpisodeEditView` result. n items give
+  n − 1 cuts in edit order. Per-item source usability, currentness and replacement facts come from the edit view and
+  are not re-derived.
+- **Shared comparison:** the Sequence Board's comparison moved unchanged into `describeTransitionTruth`. The board
+  keeps its own link fact; the cut has `cut:link`. A golden file, recorded from the board before the refactor
+  (`src/domain/__tests__/fixtures/shot-sequence-golden.json`), proves the board's output is unchanged.
+- **Edge frames:** A's last displayed frame is quantised at the edit rate in **item-local** time, so a trim of an
+  earlier item never moves it. The edit rate enters the subject fingerprint only through that exact edge-frame
+  instant, and B's first frame is its in-point.
+- **Subject:** per side, the kind, attempt, Asset, parent checksum, effective window and edge-frame instant, under
+  `cut-edge-static-v1`. A's in-point and B's out-point change it only when they reach the 2-second window.
+- **Keys:** the deterministic criteria are `cut:picture`, `cut:source_integrity` (critical, the only deterministic
+  fail), `cut:source_currentness`, `cut:shot_qa` (only when the caller supplies Shot QA states), `cut:link`,
+  `cut:location`, `cut:character:<id>`, `cut:declared_direction`, `cut:declared_time` (time of day, weather and
+  lighting) and `cut:declared_props`. A declared difference is a `warn`, never a `fail`.
+- **Semantic families:** the ten families are domain descriptors only, and each is `unchecked` with "not yet
+  calibrated" (or with the placeholder, no-picture or unusable-source reason). The eyeline criterion is one per cut,
+  `cut:eyeline`, because an eyeline match usually connects a Character in A with a different one in B.
+- **Scene boundary:** Prism assigns `n_a` before any analysis. `cut:character_appearance:<id>` still applies across a
+  boundary.
+- **Intent:** `CutIntent` and `cutIntentEffective` (the predecessor binding) are types and pure logic only, with no
+  persistence. Edit facts (`cut:picture`, source, Shot QA, link) are never covered by intent.
+- **Comparable declarations:** a declared criterion compares only fields declared on **both** sides.
+  `cut:declared_direction` compares screen direction and facing direction separately; `cut:declared_time` compares
+  time of day, weather and lighting separately. With no comparable field the result is `n_a` (one side's weather and
+  the other's lighting prove nothing), any comparable difference is a `warn`, and all comparable fields equal is a
+  `pass`. `cut:declared_props` compares the assigned prop sets whenever either side assigns one (they are explicit),
+  and the free-text prop notes only when both sides declare them; with neither it is `n_a`. The Sequence Board is
+  unchanged: this is cut-domain logic over the shared facts.
+- **Assessment composition (`effectiveTransitionFindings`):** the assessment reads one finding per **current**
+  criterion, merged by key. Deterministic criteria always take the cut's current projection, recomputed on read,
+  never a run's frozen value. Analyzer criteria take the current run's effective result (overrides applied by the
+  caller) when it has one, and otherwise keep the projection's `unchecked` / `n_a`. A run never replaces Prism's
+  `n_a`, and run findings for criteria the cut no longer has are ignored. So missing analysis is never a pass: a
+  failed or incomplete current run leaves its important semantic criteria `unchecked`, and the cut reads "Unchecked
+  transition" unless a higher state applies. No ninth state was added; 3A.4B can show the run failure separately.
+- **Status before and after a run (accepted for 3A.4B):** before any semantic run, a cut reads "No sequence QA yet"
+  even with deterministic warnings, which stay visible as findings; only a deterministic `cut:source_integrity`
+  fail reads "Critical continuity break". Once a current run exists, the assessment combines the current
+  deterministic projection with the run's semantic results, so a deterministic warning (for example a currentness
+  change, a re-linked Shot or a critical Shot QA mismatch arriving after the run) makes the cut "Needs review".
+- **Criteria fingerprint:** it covers the declared-truth and semantic criteria, not the edit facts
+  (`EDIT_FACT_CRITERIA`: `cut:picture`, `cut:source_integrity`, `cut:source_currentness`, `cut:shot_qa`, `cut:link`).
+  Those are recomputed on read, so supplying Shot QA, a newer approval or a re-linked Shot never stales a run.
+- **Reference fingerprint (`referencesForCut`):** each side's references are candidates, kept only when a currently
+  applicable semantic criterion could use them (`usedBy`). A Lock serves the shared Character's
+  `cut:character_appearance:<id>` and `cut:wardrobe:<id>`, an identity image the appearance and a Look image the
+  wardrobe. A Location View serves axis, geography, lighting and object continuity. A one-sided Character's
+  references and, across a Scene boundary, the Location View, are therefore never in it. The Production Frame a clip
+  was generated from is general visual provenance of that side: it stays while any semantic criterion applies. The
+  order is canonical (side, role, ref, Asset, checksum), never ProjectData insertion order.
+- **Not built in 3A.4A:** UI, persistence, migrations, provider mode or capability, mode-scoped versions, media
+  extraction and orchestration. `CONTINUITY_RULES_VERSION`, Shot criteria, Shot fingerprints and the provider contract
+  are unchanged.
 
 ## 23. Out of scope for 3A.4
 
