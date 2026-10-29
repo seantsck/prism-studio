@@ -10,13 +10,13 @@ QA stays **advisory**. An analyzer never approves, rejects, retries, regenerates
 Frame or Location View, changes a Character Continuity Lock or touches an Episode Edit. People keep creative
 authority.
 
-**Status:** implemented with fake transports and a calibration harness; live Gemini analysis is operational.
-**Production temporal calibration not yet accepted.** The fourth live attempt (2026-10-29, `temporal-calibration-v1`)
-got 48/48 model answers and accepted five of six production families. Its one miss, screen direction, was traced to a
-**v1 fixture truth defect**, not a model failure
-([record](#fourth-live-attempt-2026-10-29-calibration-v1-fixture-truth-mismatch)). `temporal-calibration-v2` corrects
-that truth; a full v2 run is pending separate authorisation. The first three live attempts (all 2026-10-28) got zero
-model answers and are not model-quality evidence. The
+**Status:** implemented; live Gemini analysis is operational. **Gemini temporal calibration v2 verified**
+(2026-10-29): the fifth live attempt (`temporal-calibration-v2`, analyzer v3) accepted **all six production temporal
+families** 3/3 on every fixture ([record](#fifth-live-attempt-2026-10-29-calibration-v2-verified)). Phase 3A.3 final
+acceptance is pending. The fourth attempt (`temporal-calibration-v1`) got 48/48 answers and accepted five of six; its
+screen-direction miss was a **v1 fixture truth defect**, not a model failure
+([record](#fourth-live-attempt-2026-10-29-calibration-v1-fixture-truth-mismatch)). The first three live attempts (all
+2026-10-28) got zero model answers and are not model-quality evidence. The
 first was a provider quota/infrastructure failure
 ([record](#first-live-attempt-2026-10-28-provider-access-failure-not-an-evaluated-trial)); the second was a billing
 refusal, HTTP 402 ([record](#second-live-attempt-2026-10-28-provider-billing-refusal-not-an-evaluated-trial)); the
@@ -396,6 +396,37 @@ The configuration was the same, run at the Tier 1 limits the operator declared (
     version, distinguishes this experiment.
   - Production acceptance needs a **complete v2 run** (all 16 fixtures × 3 trials, after the smoke). v1's five
     accepted families are supporting evidence only, and a screen-direction-only rerun does not substitute for it.
+
+### Fifth live attempt (2026-10-29): calibration v2 verified
+
+- **What ran:** at head `8d8a4695335fea5c0fa5dfb108fd45bc931898d6`, the committed analyzer-contract smoke and then
+  one complete `temporal-calibration-v2` run.
+  - Stack: Gemini analyzer v3, `gemini-3.8-flash`, prompt `continuity-gemini-video-v2`, analysis schema 2,
+    continuity rules `3a.1`, `shot-temporal-static-v1` at 4 fps.
+  - 16 fixtures × 3 trials, synthetic media only (the committed ffmpeg fixtures; no Project, Storage, attempt or user
+    media).
+  - Calibration input hash `7ef1957c5b3632dffd5985c2f193e6310fa7de0f2661c8b188fad9d78864d4e3`, verified before
+    network.
+- **Smoke:** PASS. HTTP 200, provider accepted, local validation ok, one request, no upload, $0.00166 known. The
+  Windows shell exit was **0** with no libuv assertion, which confirms the graceful-exit wrapper fix live.
+- **Calibration:** completed with a clean shell exit 0 and no assertion.
+  - 48/48 model answers; 0 rejected, unanswered or unattempted; no uploads, no corrections, no provider or request
+    errors.
+  - Tokens: 95,247 input / 8,396 output / 2,031 thinking. Actual cost **$0.110537** (known: 48/48 calls reported
+    usage), against a worst-case estimate of $1.018074.
+  - **Accepted, 3/3 on every fixture:**
+    - **camera movement:** pan right `pass`; reversed and static `fail`.
+    - **screen direction:** left-to-right `pass`; reversed `fail`.
+    - **eyelines:** on target `pass`; broken `fail`, with evidence in the window.
+    - **action continuity:** in order `pass`; reordered `fail` (evidence in the window); omitted `fail`.
+    - **forbidden action:** occurs `fail`, with evidence in the window; absent `pass`.
+    - **geography:** kept `pass`; swapped `fail`, with evidence in the window.
+  - **Evidence-window failures:** none.
+  - **Lip-sync proxy:** not accepted (`unchecked` 3/3 on both the synchronised and the offset fixture). It is
+    non-production; `GEMINI_LIP_SYNC_CALIBRATED` stays `false` and lip sync stays unchecked.
+- **What it means:** production `video_temporal` calibration is **verified** for the six families above under
+  `temporal-calibration-v2`. The v1 history (four attempts, including the fixture truth defect) is retained above.
+  Phase 3A.3 final acceptance is a separate decision.
 
 ### Analyzer-contract smoke
 
