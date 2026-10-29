@@ -10,11 +10,7 @@ import {
 } from "@/domain/continuity/analysis/cost";
 import type { PlannerAnalyzer } from "@/domain/continuity/analysis/plan";
 import { buildCorrectionText, buildPrompt } from "@/domain/continuity/analysis/prompt";
-import {
-  responseJsonSchemaFor,
-  uncheckedFinding,
-  validateBatchResponse,
-} from "@/domain/continuity/analysis/schema";
+import { uncheckedFinding, validateBatchResponse } from "@/domain/continuity/analysis/schema";
 import {
   DEFAULT_ANALYSIS_BUDGET,
   type AnalysisBatch,
@@ -37,6 +33,7 @@ import {
   GEMINI_PRICING,
   type GeminiConfig,
 } from "./config";
+import { geminiResponseJsonSchema } from "./response-schema";
 import {
   GeminiTransportError,
   type GeminiPart,
@@ -337,7 +334,7 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
       model: this.model,
       systemInstruction: spec.systemInstruction,
       turns,
-      responseJsonSchema: responseJsonSchemaFor(mode),
+      responseJsonSchema: geminiResponseJsonSchema(mode, criteria),
       maxOutputTokens: maxOutputTokensFor(criteria, this.cfg.maxOutputTokensCap),
       temperature: 0,
       thinkingLevel: this.cfg.thinkingLevel,

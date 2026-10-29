@@ -14,8 +14,9 @@
 // cannot infer them): the model's active RPM / TPM / RPD limits, confirmation that today's remaining requests cover
 // the plan, an active billing account, the tier and the spend cap. The planned request count, the worst-case estimate
 // and the paced token/day load are checked BEFORE anything is sent; requests are paced start to start at 80% of the
-// declared RPM. The first 401/402/403/404 (provider access) or 429, or 3 consecutive 5xx, aborts the run; the partial
-// report is still written and the exit code is 3. Only synthetic fixtures leave Prism (no project media). The pre-registered acceptance rule is in
+// declared RPM. The first 401/402/403/404 (provider access) or 429, 3 consecutive 5xx, or 2 consecutive identical
+// 400s (request contract) aborts the run; the partial report is still written and the exit code is 3. Run
+// `continuity:temporal:smoke` (the analyzer-contract smoke) and require PASS before any live calibration. Only synthetic fixtures leave Prism (no project media). The pre-registered acceptance rule is in
 // temporal-calibration.ts; the report says which capabilities the evidence supports (lip sync stays OFF unless it
 // passes). Fake mode accepts the same limits to exercise the quota preflight; it never waits.
 //

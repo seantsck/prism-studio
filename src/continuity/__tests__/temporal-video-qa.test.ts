@@ -185,7 +185,8 @@ describe("temporal planning: server gate, Project consent, video eligibility, li
     expect(GEMINI_LIP_SYNC_CALIBRATED).toBe(false);
     const { provider } = gemini([]);
     expect(provider.videoCapabilities()).toEqual(["video_temporal"]);
-    expect(GEMINI_ANALYZER_VERSION).toBe("2");
+    // 3 = the compact, batch-aware Gemini response schema (v2's was refused with HTTP 400); prompt/schema unchanged
+    expect(GEMINI_ANALYZER_VERSION).toBe("3");
   });
 
   it("the planner never sends video without consent even when the caller forgets to pass it (default false)", () => {
@@ -628,7 +629,7 @@ media(
       const vb = plan.batches.filter((b) => b.mode === "direct_video");
       expect(vb).toHaveLength(1);
       expect(job.inputSnapshot.schemaVersion).toBe(2);
-      expect(job.inputSnapshot.analyzerVersion).toBe("2");
+      expect(job.inputSnapshot.analyzerVersion).toBe(GEMINI_ANALYZER_VERSION);
       // the frozen video is exactly the current subject, by asset id and checksum
       const v = job.inputSnapshot.media.find((m) => m.kind === "video")!;
       expect(v.assetId).toBe(ctx.inputs.subject!.id);
@@ -803,7 +804,7 @@ media("automatic semantic QA and full-video consent (3A.2 orchestration, 3A.3 co
     expect(g.transport.calls).toBe(0);
   });
 
-  it("a Gemini v1 (image-only era) automatic run of the same truth does not suppress a v2 temporal run", async () => {
+  it("a Gemini v1 (image-only era) automatic run of the same truth does not suppress a temporal run", async () => {
     const ctx = await setup();
     const g = gemini(answerAll("pass"));
     const v1 = Object.assign(Object.create(g.provider) as GeminiAnalysisProvider, { version: "1" });
@@ -813,6 +814,19 @@ media("automatic semantic QA and full-video consent (3A.2 orchestration, 3A.3 co
     );
     const all = await jobs(ctx);
     expect(all).toHaveLength(2);
-    expect(all.map((j) => j.inputSnapshot.analyzerVersion).sort()).toEqual(["1", "2"]);
+    expect(all.map((j) => j.inputSnapshot.analyzerVersion).sort()).toEqual(["1", GEMINI_ANALYZER_VERSION]);
+  });
+
+  it("a Gemini v2 automatic job (old request contract, refused with HTTP 400) does not cover the v3 request", async () => {
+    const ctx = await setup();
+    const g = gemini(answerAll("pass"));
+    const v2 = Object.assign(Object.create(g.provider) as GeminiAnalysisProvider, { version: "2" });
+    const policy = AUTO({ directVideoAllowed: true });
+    expect((await reconcile(ctx, v2, policy)).outcomes).toContain("semantic_queued");
+    // same truth, same stable nonce: only the analyzer version tells the fixed request apart
+    expect((await reconcile(ctx, g.provider, policy)).outcomes).toContain("semantic_queued");
+    const all = await jobs(ctx);
+    expect(all.map((j) => j.inputSnapshot.analyzerVersion).sort()).toEqual(["2", "3"]);
+    expect(new Set(all.map((j) => j.idempotencyKey)).size).toBe(2);
   });
 });

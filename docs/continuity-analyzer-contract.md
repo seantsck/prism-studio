@@ -63,7 +63,7 @@ same normalized analyzer contract**, so a finding looks identical whichever prod
   video input as unsupported), or answers a `direct_video` batch with the SAME normalized finding shape, whose
   evidence is timestamped inside the clip (`atMs`, optional `endMs`, schema 2). There is no separate temporal result
   shape.
-- Gemini (analyzer v2) declares `video_temporal` only when the server gate is on and the model accepts video;
+- Gemini (analyzer v3; v2 added temporal analysis, v3 the compact batch-aware Gemini response schema) declares `video_temporal` only when the server gate is on and the model accepts video;
   `lip_sync` is calibration-gated and not declared.
 - A video part carries the batch's frozen `sampling.fps`; a still batch can never carry video.
 - A provider-file upload is announced through `beforeTransportCall({ kind: "upload" })` before it happens.

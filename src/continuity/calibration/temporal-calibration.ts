@@ -260,7 +260,10 @@ const CATEGORY: Record<CalibrationCriterion, ContinuityCategory> = {
 };
 
 /** Renders one fixture to MP4 bytes with ffmpeg (argument arrays only, no shell); deterministic flags. */
-export async function renderFixture(f: CalibrationFixture, ffmpeg = "ffmpeg"): Promise<Uint8Array> {
+export async function renderFixture(
+  f: Pick<CalibrationFixture, "id" | "durationMs" | "video" | "audio">,
+  ffmpeg = "ffmpeg",
+): Promise<Uint8Array> {
   const dir = await mkdtemp(path.join(tmpdir(), "prism-temporal-fixture-"));
   const out = path.join(dir, `${f.id}.mp4`);
   // the video graph is self-contained (source filters inside -filter_complex); audio, when present, is input 0
@@ -312,32 +315,71 @@ export function fixtureInput(
   provider: ContinuityAnalysisProvider,
   bytes: Uint8Array,
 ): ContinuityAnalysisInput {
+  return temporalAnalysisInput(
+    {
+      id: f.id,
+      idPrefix: "calibration",
+      runKeyPrefix: CALIBRATION_VERSION,
+      label: "Calibration clip",
+      key: f.criterion,
+      category: CATEGORY[f.criterion],
+      capability: CAPABILITY[f.criterion],
+      sourceRef: CALIBRATION_VERSION,
+      expected: f.expected,
+      durationMs: f.durationMs,
+    },
+    provider,
+    bytes,
+  );
+}
+
+/**
+ * A one-criterion, video-only direct-video analysis input (640×360, the production sampling policy). Shared by the
+ * calibration fixtures and the analyzer-contract smoke, so the smoke exercises the SAME request construction.
+ */
+export function temporalAnalysisInput(
+  spec: {
+    id: string;
+    idPrefix: string;
+    runKeyPrefix: string;
+    label: string;
+    key: string;
+    category: ContinuityCategory;
+    capability: AnalyzerCapability;
+    sourceRef: string;
+    expected: string;
+    durationMs: number;
+  },
+  provider: ContinuityAnalysisProvider,
+  bytes: Uint8Array,
+): ContinuityAnalysisInput {
   const checksum = createHash("sha256").update(bytes).digest("hex");
+  const ref = `${spec.idPrefix}:${spec.id}`;
   const media: AnalysisMedia[] = [
     {
       inputId: "video",
       kind: "video",
       role: "output_video",
-      label: "Calibration clip",
-      assetId: `calibration:${f.id}`,
+      label: spec.label,
+      assetId: ref,
       checksum,
       mime: "video/mp4",
       width: W,
       height: H,
       byteSize: bytes.length,
-      durationMs: f.durationMs,
+      durationMs: spec.durationMs,
       atMs: null,
     },
   ];
   const criterion = {
-    key: f.criterion,
-    category: CATEGORY[f.criterion],
+    key: spec.key,
+    category: spec.category,
     severity: "major" as const,
-    title: f.criterion,
-    sourceRef: CALIBRATION_VERSION,
-    expected: f.expected,
+    title: spec.key,
+    sourceRef: spec.sourceRef,
+    expected: spec.expected,
     handler: "analyzer" as const,
-    capability: CAPABILITY[f.criterion],
+    capability: spec.capability,
     position: 0,
   };
   // calibration measures what the analyzer CAN do: lip sync is offered to it here (and only here) so the gate
@@ -346,7 +388,7 @@ export function fixtureInput(
   const plan = buildAnalysisPlan({
     analyzer: {
       ...view,
-      videoCapabilities: [...new Set([...view.videoCapabilities, CAPABILITY[f.criterion]])],
+      videoCapabilities: [...new Set([...view.videoCapabilities, spec.capability])],
     },
     criteria: [criterion],
     media,
@@ -355,9 +397,9 @@ export function fixtureInput(
   });
   return {
     version: 1,
-    runKey: `${CALIBRATION_VERSION}:${f.id}`,
-    attemptId: `calibration:${f.id}`,
-    subjectAssetId: `calibration:${f.id}`,
+    runKey: `${spec.runKeyPrefix}:${spec.id}`,
+    attemptId: ref,
+    subjectAssetId: ref,
     providerOriginalAssetId: null,
     criteria: [
       {
@@ -415,12 +457,33 @@ export interface CalibrationTrial {
  *  - `maxConsecutive5xx` consecutive HTTP 5xx answers abort the run as provider-unavailable. A single 5xx is an error
  *    trial (never retried).
  *  - Live pacing keeps `rpmSafety` of the operator-declared RPM limit, start to start.
+ *  - `maxConsecutiveIdentical400` consecutive HTTP 400 answers with the SAME sanitized error signature abort the run
+ *    as `request_contract_invalid`. One 400 may be a fixture-specific input problem and stays an error trial; two
+ *    different fixtures refused identically, back to back, mean the shared request construction is invalid. (The
+ *    third live attempt sent all 48 requests into an identical 400 INVALID_ARGUMENT: Gemini refused the response
+ *    schema, not any fixture.) A success or any other outcome resets the count.
  */
 export const CALIBRATION_RUN_CONTROL = {
   abortOnHttp429: true,
   maxConsecutive5xx: 3,
+  maxConsecutiveIdentical400: 2,
   rpmSafety: 0.8,
 } as const;
+
+/**
+ * A safe, stable signature for an HTTP 400: status, normalized category and the sanitized message with volatile
+ * tokens (long digit or hex runs, e.g. request ids) masked. Never request data or credentials (the message is the
+ * transport's redacted text).
+ */
+export function http400Signature(status: number, category: string, message: string): string {
+  const msg = redactText(message)
+    .replace(/\b[0-9a-f]{12,}\b/gi, "#")
+    .replace(/\d{4,}/g, "#")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  return `${status}|${category}|${msg}`;
+}
 
 /**
  * PROVIDER ACCESS FAILURES abort the run on their FIRST occurrence. They mean that the account or project cannot serve
@@ -493,6 +556,7 @@ export interface CalibrationReport {
       | "quota_or_rate_limit"
       | "provider_unavailable"
       | ProviderAccessFailure
+      | "request_contract_invalid"
       | "local_policy";
     httpStatus: number | null;
     category: string;
@@ -677,7 +741,7 @@ const usageComplete = (c: UsageCall) =>
  * (`live: true`) must declare the project's limits (`quota`): requests are then paced start to start, and the plan
  * must fit the TPM and RPD limits before anything is sent. The run aborts (and still returns its partial report) on
  * the first provider access failure (401/402/403/404), on the first 429, on `maxConsecutive5xx` consecutive 5xx
- * answers, or on a local ceiling.
+ * answers, on `maxConsecutiveIdentical400` consecutive identical 400s, or on a local ceiling.
  */
 export async function runTemporalCalibration(args: {
   provider: ContinuityAnalysisProvider;
@@ -746,6 +810,7 @@ export async function runTemporalCalibration(args: {
   const counts = { transport: 0, upload: 0, analysis: 0, correction: 0 };
   let abort: CalibrationReport["abort"] = null;
   let consecutive5xx = 0;
+  let identical400 = { signature: "", count: 0 };
   let lastStart: number | null = null;
   const files: string[] = [];
   try {
@@ -784,6 +849,7 @@ export async function runTemporalCalibration(args: {
           });
           calls.push(...res.calls);
           consecutive5xx = 0;
+          identical400 = { signature: "", count: 0 };
           out.push({
             ...gradeTrial(f, res.findings.find((x) => x.criterionKey === f.criterion) ?? null),
             trial: t,
@@ -805,6 +871,13 @@ export async function runTemporalCalibration(args: {
             errorCategory: category,
           });
           consecutive5xx = status != null && status >= 500 ? consecutive5xx + 1 : 0;
+          if (status === 400) {
+            const signature = http400Signature(status, category, message);
+            identical400 =
+              signature === identical400.signature
+                ? { signature, count: identical400.count + 1 }
+                : { signature, count: 1 };
+          } else identical400 = { signature: "", count: 0 };
           const at = { httpStatus: status, category, message, fixture: f.id, trial: t };
           if (e?.category === "local_policy_block") abort = { reason: "local_policy", ...at };
           else if (access) abort = { reason: access, ...at };
@@ -812,6 +885,8 @@ export async function runTemporalCalibration(args: {
             abort = { reason: http429Reason(message), ...at };
           else if (consecutive5xx >= CALIBRATION_RUN_CONTROL.maxConsecutive5xx)
             abort = { reason: "provider_unavailable", ...at };
+          else if (identical400.count >= CALIBRATION_RUN_CONTROL.maxConsecutiveIdentical400)
+            abort = { reason: "request_contract_invalid", ...at };
           if (abort) break run;
         }
       }

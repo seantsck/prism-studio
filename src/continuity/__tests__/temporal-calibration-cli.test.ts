@@ -292,6 +292,53 @@ describe("calibration CLI: live readiness is validated before any SDK transport 
   );
 
   it.skipIf(!hasFfmpeg)(
+    "third-run regression: the same live command + identical HTTP 400 INVALID_ARGUMENT → 2 requests, abort, exit 3",
+    async () => {
+      const argv = [
+        ...["--live", "--model", "gemini-3.8-flash", "--max-calls", "48", "--max-usd", "1.25"],
+        ...["--max-rpm", "1000", "--max-tpm", "2000000", "--max-rpd", "10000", "--confirm-rpd-remaining"],
+        ...["--billing-active", "yes", "--project-tier", "Tier 1", "--spend-cap", "250"],
+        ...["--i-understand-this-sends-synthetic-video-and-costs-money", "--out", "third-run.json"],
+      ];
+      const fake = new FakeGeminiTransport(() => ({
+        kind: "error",
+        error: new GeminiTransportError(
+          "invalid_input",
+          400,
+          'Gemini returned HTTP 400: {"error":{"code":[redacted],"message":"Request contains an invalid argument.","status":"INVALID_ARGUMENT"}}',
+        ),
+      }));
+      const logs: string[] = [];
+      let report = "";
+      const code = await runCalibrationCli({
+        argv,
+        env: ENV,
+        createLiveTransport: async () => fake,
+        log: (l) => void logs.push(l),
+        error: () => undefined,
+        writeReport: (_p, j) => void (report = j),
+      });
+      expect(code).toBe(3);
+      expect(fake.calls).toBe(2);
+      expect(outbound).toBe(0);
+      expect(JSON.parse(report)).toMatchObject({
+        status: "aborted_provider",
+        abort: { reason: "request_contract_invalid", httpStatus: 400 },
+        trialsPlanned: 48,
+        trialsAttempted: 2,
+        trialsRejected: 2,
+        trialsUnattempted: 46,
+        answersReceived: 0,
+        actualUsd: null,
+        costStatus: "unknown",
+      });
+      expect(logs.join("\n")).toMatch(/abort=request_contract_invalid http=400/);
+      expect(logs.join("\n")).not.toMatch(/model answered incorrectly/);
+    },
+    240_000,
+  );
+
+  it.skipIf(!hasFfmpeg)(
     "a run that completes exits 0 (fake transport) and still writes its report",
     async () => {
       let written = "";

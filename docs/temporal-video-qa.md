@@ -11,11 +11,14 @@ Frame or Location View, changes a Character Continuity Lock or touches an Episod
 authority.
 
 **Status:** implemented with fake transports and a calibration harness. **Live calibration not yet successfully
-completed:** two live attempts (both 2026-10-28) got zero model answers and are not model-quality evidence. The
+completed:** three live attempts (all 2026-10-28) got zero model answers and are not model-quality evidence. The
 first was a provider quota/infrastructure failure
 ([record](#first-live-attempt-2026-10-28-provider-access-failure-not-an-evaluated-trial)); the second was a billing
-refusal, HTTP 402 ([record](#second-live-attempt-2026-10-28-provider-billing-refusal-not-an-evaluated-trial)). The
-provider-access fail-fast is now in place, and a third run is pending separate authorisation.
+refusal, HTTP 402 ([record](#second-live-attempt-2026-10-28-provider-billing-refusal-not-an-evaluated-trial)); the
+third was a **Gemini request-contract incompatibility**, HTTP 400 INVALID_ARGUMENT on the analyzer's response schema
+([record](#third-live-attempt-2026-10-28-gemini-request-contract-incompatibility-not-an-evaluated-trial)). The
+request contract is remediated (Gemini analyzer v3) and verified on a diagnostic clip. A fourth run is pending
+separate authorisation, and it must first pass the [analyzer-contract smoke](#analyzer-contract-smoke).
 Migration 0045 is **applied to hosted DEV and verified** (2026-10-28; see
 [migration-policy](migration-policy.md)). Lip sync stays **unchecked**.
 
@@ -38,8 +41,9 @@ resumes at the first incomplete batch and never re-sends a completed image or vi
 | **Gemini** | **First direct-video provider**                                  | The official docs list video input with timestamp-oriented understanding (MP4/WebM, inline for small clips, Files API for larger ones); static sampling defaults to 1 fps and a custom rate is set per video part (`videoMetadata.fps`, range (0, 24]) |
 | **OpenAI** | **None** (`modes()` = `image_set`, `videoCapabilities()` = `[]`) | The GPT-6 model pages list video input as **Not supported**. The OpenAI Videos _generation_ endpoint is not video understanding. An OpenAI run judges still-image criteria; temporal criteria stay unchecked                                           |
 
-The Gemini analyzer is now **version 2** (it was 1). The version is part of the analysis job identity, so a v1
-(image-only) run of unchanged truth does not suppress a v2 run that can add temporal coverage.
+The Gemini analyzer is now **version 3**. It was 1 (image only), then 2 (temporal), and 3 adds the compact,
+batch-aware Gemini response schema after v2's was refused with HTTP 400. The version is part of the analysis job
+identity, so an older run of unchanged truth does not suppress a v3 run.
 
 ## Who must say yes (no single switch is enough)
 
@@ -232,12 +236,32 @@ full video, so every image-only key is exactly what it was in 3A.2. Consequences
     malformed or oversized request is a fixture/harness input problem that need not affect the other fixtures. The
     harness classifies by HTTP status; the transport's production taxonomy (`categoryForStatus`) is unchanged;
 
+  - **2 consecutive HTTP 400s with the same error signature abort** the run as `request_contract_invalid`
+    (`maxConsecutiveIdentical400`). The signature (`http400Signature`) is the status, the category and the sanitized
+    message with volatile ids masked. One 400 may still be one fixture's input problem, so a single 400, a different
+    400 or any other outcome in between resets the count. Two different fixtures refused identically, back to back,
+    mean the shared request construction is invalid. This rule was added after the third attempt, which sent all 48
+    requests into an identical 400;
   - an aborted run still writes its partial report (status `aborted_provider`, abort reason, HTTP status, sanitized
     and re-redacted message, the trials done, the attempted / rejected / unanswered / unattempted counts, request
     counters, cost status) and the CLI exits 3. In an aborted run a criterion the model answered at least once reads
     "NOT ACCEPTED — calibration incomplete"; a criterion with no model answer reads "NOT MEASURED — provider error
     before any model answer (not a quality result)". Both are distinct from "model answered incorrectly" and from a
     completed run's "provider errors (no answer)".
+- **Gemini response schema** (`geminiResponseJsonSchema`, Gemini analyzer v3). The structured-output schema sent to
+  Gemini is derived from the provider-neutral one. It keeps the shape: types, nullable unions, enums, `required`,
+  `additionalProperties: false` and descriptions. It drops every `maxItems`/`minItems`/`minimum`/`maximum`, and sets
+  `criteria.maxItems` to the batch's actual criterion count instead of 40. The reason is that Gemini refuses a
+  constraint state that is too large with HTTP 400 INVALID_ARGUMENT; see the third-attempt record. **Local validation
+  is unchanged and stricter:** `validateBatchResponse` still enforces the Zod bounds, sent criterion ids, sent inputs,
+  timestamps, duplicates and evidence rules on every answer, and it, not the provider schema, is the correctness
+  boundary. The OpenAI adapter keeps the neutral schema.
+  - **Version decision:** `GEMINI_ANALYZER_VERSION` 2 → 3. The response schema is not part of the analysis job
+    identity, and the automatic path treats any existing job with its key as covered. So without the bump, a v2 job
+    (which could only have been refused) would cover the same truth for the fixed request. The prompt
+    (`continuity-gemini-video-v2`), `ANALYSIS_SCHEMA_VERSION`, `CONTINUITY_RULES_VERSION`, capabilities and
+    `temporal-calibration-v1` are unchanged. No calibration answer was ever produced under v2, so the calibration
+    stays uncontaminated.
 - **Cost honesty.** The report counts analysis, upload and correction attempts and the calls that reported usage.
   `actualUsd` is `0` only when no generation request left Prism, the provider's figure only when **every** generation
   attempt reported usage, and otherwise `null` (UNKNOWN: a 429/5xx/timeout without usage may or may not be billed).
@@ -249,7 +273,9 @@ CI runs it with the fake transport (`src/continuity/__tests__/temporal-calibrati
 - `warn` on a conflict fixture is not correct;
 - the ceilings, or an unknown estimate, refuse before sending;
 - the run-control rules: 429 fail-fast, 5xx, first-error abort on 401/402/403/404 (1 request, 47 of 48 unattempted,
-  every criterion NOT MEASURED, cost UNKNOWN), ordinary 4xx input errors continuing, redaction of provider error
+  every criterion NOT MEASURED, cost UNKNOWN), the third-run replay (identical 400s abort after 2 requests as
+  `request_contract_invalid`, 46 unattempted), a single 400 followed by an answer continuing, ordinary 4xx input
+  errors continuing, redaction of provider error
   bodies in the report, the partial report, UNKNOWN cost for missing or mixed usage, and zero only when nothing was
   sent;
 - pacing (with an injected clock, so nothing waits) and the quota preflight.
@@ -290,6 +316,47 @@ The configuration was the same, run at the Tier 1 limits the operator declared (
 - **What it means:** there is **no model-quality conclusion**, and `temporal-calibration-v1` stands unchanged. There
   was no rerun.
 
+### Third live attempt (2026-10-28): Gemini request-contract incompatibility, not an evaluated trial
+
+- **What happened:**
+  - A one-request connectivity smoke (minimal schema, inline synthetic clip) returned HTTP 200 with valid output, so
+    billing, the key, project access, the model, video input and basic structured output all worked.
+  - The 48 calibration requests that followed all returned **HTTP 400 INVALID_ARGUMENT** ("Request contains an
+    invalid argument"). There were zero model responses and zero usage reports, and the cost of the rejected
+    requests is unknown.
+- **Harness gap:** a non-access 400 was a per-fixture error trial, so all 48 were sent and the run exited 0. This is
+  now fixed by the identical-400 abort above.
+- **Diagnosis:** three sacrificial requests on a new diagnostic clip, never a fixture.
+  1. The exact v2 analyzer request returned 400.
+  2. The same request with only the response schema replaced by `{ok: boolean}` returned 200. This proves the
+     response schema is the failing layer.
+  3. The fixed v3 analyzer request (compact, batch-aware schema) returned 200, and Prism's local validation accepted
+     the answer.
+
+  Google's error body named no field (only code, message and status). The cause is the schema's constraint
+  complexity: 40 criteria × nested evidence and string arrays with item counts, numeric bounds and nullable integers.
+  Which single constraint tipped it was not isolated, because the compact schema was accepted. Diagnostic spend was
+  $0.003079 known, plus one 400 without usage.
+
+- **What it means:** there is **no model-quality conclusion**, and `temporal-calibration-v1` (fixtures, truth,
+  windows, trials, grader, 4 fps, prompt) stands unchanged. There was no rerun.
+
+### Analyzer-contract smoke
+
+`npm run continuity:temporal:smoke` (`src/continuity/calibration/analyzer-contract-smoke.ts`) sends **one** request
+built through the same code path as a real temporal batch. It uses the same analyzer, prompt builder, direct-video
+mode, provider-facing schema, 4 fps sampling metadata and thinking configuration. The input is a new synthetic
+diagnostic clip (a navy field with a green square, 2 s) and a sacrificial criterion (`diagnostic_visibility`). It is
+never a fixture and carries no calibration truth.
+
+It reports whether the provider accepted the request and, separately, whether Prism's local validation accepted the
+answer. A 200 whose answer fails local validation is not a pass. It never grades quality. Hard ceilings: 1 request,
+$0.05, no upload, no correction, no retry. Live mode needs the same flags and acknowledgement as the calibration. Exit
+codes: 0 pass, 2 refused (nothing sent), 3 sent but not a pass.
+
+**A live calibration must first pass this smoke.** A basic connectivity smoke is not enough: it passed before the
+third attempt.
+
 ### Live calibration gate (needs separate authorisation)
 
 #### Operator readiness (before authorisation)
@@ -316,8 +383,8 @@ PROJECT SPEND CAP:
 BILLING ACTIVE: YES/NO
 ```
 
-A one-request connectivity check, if it is ever authorised, is not a calibration trial. It must not use a v1 fixture,
-and it never replaces any of the 48 observations.
+The [analyzer-contract smoke](#analyzer-contract-smoke) must PASS first. Like any connectivity check, it is not a
+calibration trial: it never uses a v1 fixture, and it never replaces any of the 48 observations.
 
 #### Command
 
@@ -375,11 +442,11 @@ disposable Project the owner can set and clear the permission (revisioned, stale
 
 ## Versions
 
-| Identity                   | Before                       | After                        | Why                                                           |
-| -------------------------- | ---------------------------- | ---------------------------- | ------------------------------------------------------------- |
-| `CONTINUITY_RULES_VERSION` | `3a.1`                       | `3a.1`                       | Criteria, expected values, severity and routing are unchanged |
-| Gemini analyzer version    | `1`                          | `2`                          | Production temporal capability; new coverage identity         |
-| Direct-video prompt        | `continuity-gemini-video-v1` | `continuity-gemini-video-v2` | New temporal instruction and evidence contract                |
-| `RUBRIC_VERSION`           | `continuity-rubric-1`        | `continuity-rubric-1`        | Result meanings unchanged                                     |
-| `ANALYSIS_SCHEMA_VERSION`  | `1`                          | `2`                          | Interval evidence (`endMs`) and duration-bounded timestamps   |
-| Migration head             | `0044`                       | `0045` (hosted DEV)          | Explicit full-video consent                                   |
+| Identity                   | Before                       | After                        | Why                                                            |
+| -------------------------- | ---------------------------- | ---------------------------- | -------------------------------------------------------------- |
+| `CONTINUITY_RULES_VERSION` | `3a.1`                       | `3a.1`                       | Criteria, expected values, severity and routing are unchanged  |
+| Gemini analyzer version    | `1`                          | `3`                          | Temporal capability (v2) + compact Gemini response schema (v3) |
+| Direct-video prompt        | `continuity-gemini-video-v1` | `continuity-gemini-video-v2` | New temporal instruction and evidence contract                 |
+| `RUBRIC_VERSION`           | `continuity-rubric-1`        | `continuity-rubric-1`        | Result meanings unchanged                                      |
+| `ANALYSIS_SCHEMA_VERSION`  | `1`                          | `2`                          | Interval evidence (`endMs`) and duration-bounded timestamps    |
+| Migration head             | `0044`                       | `0045` (hosted DEV)          | Explicit full-video consent                                    |

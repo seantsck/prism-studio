@@ -10,6 +10,7 @@ import {
   TEMPORAL_FIXTURES,
   acceptance,
   gradeTrial,
+  http400Signature,
   http429Reason,
   liveReadinessProblems,
   planQuota,
@@ -65,7 +66,12 @@ describe("calibration design is pre-registered", () => {
     // the 2026-10-28 first live attempt got zero model answers: not an evaluated trial, so v1 stands unchanged
     expect(CALIBRATION_VERSION).toBe("temporal-calibration-v1");
     expect(TEMPORAL_FIXTURES).toHaveLength(16);
-    expect(CALIBRATION_RUN_CONTROL).toEqual({ abortOnHttp429: true, maxConsecutive5xx: 3, rpmSafety: 0.8 });
+    expect(CALIBRATION_RUN_CONTROL).toEqual({
+      abortOnHttp429: true,
+      maxConsecutive5xx: 3,
+      maxConsecutiveIdentical400: 2,
+      rpmSafety: 0.8,
+    });
     expect(new Set(TEMPORAL_FIXTURES.map((f) => f.id)).size).toBe(TEMPORAL_FIXTURES.length);
   });
 
@@ -444,6 +450,96 @@ describe("calibration run control, cost honesty and live pacing", () => {
       403: "provider_authorization_error",
       404: "provider_model_unavailable",
     });
+  });
+
+  /** The exact third-attempt refusal (Gemini rejected the response schema for every fixture). */
+  const invalidArgument = (requestId = "") =>
+    new GeminiTransportError(
+      "invalid_input",
+      400,
+      `Gemini returned HTTP 400: {"error":{"code":[redacted],"message":"Request contains an invalid argument.","status":"INVALID_ARGUMENT"}}${requestId}`,
+    );
+
+  it("third-run replay: identical HTTP 400 on every request → abort after 2 as request_contract_invalid", async () => {
+    const transport = new FakeGeminiTransport(() => ({ kind: "error", error: invalidArgument() }));
+    const r = await run(transport);
+    expect(transport.calls).toBe(2);
+    expect(r.status).toBe("aborted_provider");
+    expect(r.abort).toMatchObject({
+      reason: "request_contract_invalid",
+      httpStatus: 400,
+      category: "invalid_input",
+      fixture: TEMPORAL_FIXTURES[1]!.id,
+      trial: 1,
+    });
+    expect(r.trialsPlanned).toBe(48);
+    expect(r.trialsAttempted).toBe(2);
+    expect(r.trialsRejected).toBe(2);
+    expect(r.trialsUnattempted).toBe(46);
+    expect(r.answersReceived).toBe(0);
+    expect(Object.values(r.accepted).some(Boolean)).toBe(false);
+    expect(Object.values(r.verdicts).every((v) => v === "not_measured_provider_error")).toBe(true);
+    expect(r.actualUsd).toBeNull();
+    expect(r.costStatus).toBe("unknown");
+  });
+
+  it("a single fixture's 400 then a model answer: the run continues, the answer is measured, the count resets", async () => {
+    // 400, answer, 400, answer, … : never two identical 400s back to back
+    const transport = new FakeGeminiTransport((req, n) =>
+      n % 2 === 0 ? { kind: "error", error: invalidArgument() } : ok(req),
+    );
+    const r = await run(transport);
+    expect(transport.calls).toBe(48);
+    expect(r.status).toBe("completed");
+    expect(r.abort).toBeNull();
+    expect(r.trialsRejected).toBe(24);
+    expect(r.answersReceived).toBe(24);
+    expect(r.trials[1]).toMatchObject({ result: "pass" });
+  });
+
+  it("two consecutive 400s with DIFFERENT signatures are fixture errors, not a contract failure", async () => {
+    const transport = new FakeGeminiTransport((req, n) =>
+      n === 0
+        ? { kind: "error", error: invalidArgument() }
+        : n === 1
+          ? {
+              kind: "error",
+              error: new GeminiTransportError(
+                "invalid_input",
+                400,
+                "Gemini returned HTTP 400: Video too short.",
+              ),
+            }
+          : ok(req),
+    );
+    const r = await run(transport);
+    expect(transport.calls).toBe(48);
+    expect(r.status).toBe("completed");
+  });
+
+  it("the 400 signature ignores volatile request ids; a 413 between two 400s resets the count", async () => {
+    const ids = new FakeGeminiTransport((_req, n) => ({
+      kind: "error",
+      error: invalidArgument(` (request 7f3a9c0e5b2d4a61${n}, ts 1730123456789${n})`),
+    }));
+    expect((await run(ids)).abort?.reason).toBe("request_contract_invalid");
+    expect(ids.calls).toBe(2);
+    const reset = new FakeGeminiTransport((req, n) =>
+      n === 0 || n === 2
+        ? { kind: "error", error: invalidArgument() }
+        : n === 1
+          ? {
+              kind: "error",
+              error: new GeminiTransportError("invalid_input", 413, "Gemini returned HTTP 413"),
+            }
+          : ok(req),
+    );
+    const r = await run(reset);
+    expect(r.status).toBe("completed");
+    expect(reset.calls).toBe(48);
+    expect(http400Signature(400, "invalid_input", "Request contains an invalid argument.")).toBe(
+      "400|invalid_input|request contains an invalid argument.",
+    );
   });
 
   it("a provider error body is redacted before it reaches the report (key, bearer header, api_key param)", async () => {
