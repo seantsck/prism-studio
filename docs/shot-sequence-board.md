@@ -114,6 +114,11 @@ Every adjacent pair A → B gets a transition, including across a Scene boundary
 A locked Shot is compared by its Lock, never by today's mutable library. Prism does not judge the 180° rule. Invalid
 selections are the Shot's integrity blockers.
 
+Since Phase 3A.4A the declared-truth comparison behind these facts lives in `src/domain/transition-truth.ts`
+(`describeTransitionTruth`). The board and the Sequence Continuity Supervisor's cut domain both use it
+([sequence-continuity-supervisor](sequence-continuity-supervisor.md)). The board's output is unchanged; a golden test
+pins it.
+
 **Compare** on a card opens a larger side-by-side panel for that cut. It shows:
 
 - both visuals with their labels and freshness;

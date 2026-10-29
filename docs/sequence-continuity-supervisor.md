@@ -1,9 +1,10 @@
 # Sequence Continuity Supervisor (Phase 3A.4)
 
-**Status: architecture accepted; implementation not started (2026-10-29).** The owner reviewed this design and
-accepted it with fixes, and those fixes are applied below. The owner decisions are recorded in
-[§21](#21-owner-decisions-and-implementation-details). No production code, migration, provider call or calibration
-exists for 3A.4 yet. Each implementation slice ([§22](#22-implementation-slices)) is its own gate.
+**Status: architecture accepted; 3A.4A implemented; 3A.4B–F pending (2026-10-29).** The owner reviewed this design
+and accepted it with fixes, and those fixes are applied below. The owner decisions are recorded in
+[§21](#21-owner-decisions-and-implementation-details). 3A.4A (the pure cut domain and deterministic projection,
+[§22](#3a4a-implementation-notes)) exists. There is still no UI, persistence, migration, provider mode, provider call or
+calibration for 3A.4. Each implementation slice ([§22](#22-implementation-slices)) is its own gate.
 
 **Question it answers:** _does this cut work as continuity?_ In other words, does Shot B continue Shot A correctly at
 the cut that actually exists in the Episode Edit, as opposed to each Shot satisfying its own truth?
@@ -856,7 +857,7 @@ behaviour.
 
 ## 22. Implementation slices
 
-Each slice is separately reviewed and gated. None has started.
+Each slice is separately reviewed and gated. 3A.4A is implemented; 3A.4B–F have not started.
 
 | Slice     | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Migration           | Paid / live calls           |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------- |
@@ -869,6 +870,37 @@ Each slice is separately reviewed and gated. None has started.
 
 3A.4A and 3A.4B deliver value (free, deterministic cut review in edit order) before any schema change. Semantic cut
 QA cannot appear in production before 3A.4E accepts a family.
+
+### 3A.4A implementation notes
+
+The code is in `src/domain/continuity/sequence.ts` (the cut domain) and `src/domain/transition-truth.ts` (the shared
+declared-truth comparison). Both are pure.
+
+- **Adjacency:** `buildEpisodeCuts({ data, view, shotQa? })` takes the `buildEpisodeEditView` result. n items give
+  n − 1 cuts in edit order. Per-item source usability, currentness and replacement facts come from the edit view and
+  are not re-derived.
+- **Shared comparison:** the Sequence Board's comparison moved unchanged into `describeTransitionTruth`. The board
+  keeps its own link fact; the cut has `cut:link`. A golden file, recorded from the board before the refactor
+  (`src/domain/__tests__/fixtures/shot-sequence-golden.json`), proves the board's output is unchanged.
+- **Edge frames:** A's last displayed frame is quantised at the edit rate in **item-local** time, so a trim of an
+  earlier item never moves it. The edit rate enters the subject fingerprint only through that exact edge-frame
+  instant, and B's first frame is its in-point.
+- **Subject:** per side, the kind, attempt, Asset, parent checksum, effective window and edge-frame instant, under
+  `cut-edge-static-v1`. A's in-point and B's out-point change it only when they reach the 2-second window.
+- **Keys:** the deterministic criteria are `cut:picture`, `cut:source_integrity` (critical, the only deterministic
+  fail), `cut:source_currentness`, `cut:shot_qa` (only when the caller supplies Shot QA states), `cut:link`,
+  `cut:location`, `cut:character:<id>`, `cut:declared_direction`, `cut:declared_time` (time of day, weather and
+  lighting) and `cut:declared_props`. A declared difference is a `warn`, never a `fail`.
+- **Semantic families:** the ten families are domain descriptors only, and each is `unchecked` with "not yet
+  calibrated" (or with the placeholder, no-picture or unusable-source reason). The eyeline criterion is one per cut,
+  `cut:eyeline`, because an eyeline match usually connects a Character in A with a different one in B.
+- **Scene boundary:** Prism assigns `n_a` before any analysis. `cut:character_appearance:<id>` still applies across a
+  boundary.
+- **Intent:** `CutIntent` and `cutIntentEffective` (the predecessor binding) are types and pure logic only, with no
+  persistence. Edit facts (`cut:picture`, source, Shot QA, link) are never covered by intent.
+- **Not built in 3A.4A:** UI, persistence, migrations, provider mode or capability, mode-scoped versions, media
+  extraction and orchestration. `CONTINUITY_RULES_VERSION`, Shot criteria, Shot fingerprints and the provider contract
+  are unchanged.
 
 ## 23. Out of scope for 3A.4
 
