@@ -5,6 +5,7 @@ import { AnalysisSubmitError, submitAnalysis } from "@/continuity/analysis/submi
 import { reconcileAttemptQa } from "@/continuity/automation";
 import { computeQaInputs, runContinuityReview } from "@/continuity/service";
 import {
+  directVideoPermitted,
   qaPolicyErrors,
   SEMANTIC_MODES,
   type ReconcileResult,
@@ -219,6 +220,8 @@ async function saveQaPolicy_impl(form: FormData): Promise<ActionResult> {
     externalMediaAllowed: str(form, "externalMediaAllowed") === "1",
     maxCostPerRunUsd: money(form, "maxCostPerRunUsd"),
     maxCostPerDayUsd: money(form, "maxCostPerDayUsd"),
+    // 3A.3: only an explicit checkbox; never inferred from the mode, a credential or media consent
+    directVideoAllowed: str(form, "directVideoAllowed") === "1",
   };
   const errors = qaPolicyErrors(policy);
   if (errors.length > 0) throw new UserFacingError(errors.join(" "));
@@ -290,6 +293,9 @@ async function startContinuityAnalysis_impl(form: FormData) {
   const inputs = computeQaInputs({ data, view, delivery });
   if (!inputs?.subject) throw new UserFacingError("This attempt has no output to analyse.");
   const config = getAnalysisConfig();
+  // 3A.3: the full video only when the Project allows it (owner policy, read here, never from the client) AND this
+  // run explicitly acknowledged the full-video transfer
+  const policy = await qa.getQaPolicy(data.project.id);
   try {
     await guard(async () => {
       const deps = await getDeliveryDeps(userId);
@@ -303,6 +309,10 @@ async function startContinuityAnalysis_impl(form: FormData) {
         acknowledged: str(form, "ackSpend") === "1",
         nonce: str(form, "nonce") || new Date().toISOString(),
         limits: config.limits,
+        directVideo: {
+          allowed: directVideoPermitted(policy, "manual"),
+          acknowledged: str(form, "ackDirectVideo") === "1",
+        },
       });
     });
   } catch (err) {

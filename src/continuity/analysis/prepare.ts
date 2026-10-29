@@ -18,6 +18,7 @@ import {
   type AnalysisMedia,
   type ContinuityAnalysisInput,
 } from "@/domain/continuity/analysis/types";
+import { TEMPORAL_SAMPLING_V1 } from "@/domain/continuity/analysis/temporal";
 import type { QaInputs } from "@/continuity/service";
 import type { Asset } from "@/domain/schemas";
 import { reviewFramePositions } from "@/media/delivery";
@@ -110,6 +111,8 @@ export function buildAnalysisInput(args: {
   provider: ContinuityAnalysisProvider;
   runKey: string;
   subject: Asset;
+  /** 3A.3: the Project allows the full video for this path (default false: no video is planned). */
+  directVideoAllowed?: boolean;
 }): ContinuityAnalysisInput {
   const { inputs, provider } = args;
   const plan = buildAnalysisPlan({
@@ -117,6 +120,8 @@ export function buildAnalysisInput(args: {
     criteria: inputs.criteria,
     media: args.media,
     budget: DEFAULT_ANALYSIS_BUDGET,
+    directVideoAllowed: args.directVideoAllowed === true,
+    sampling: TEMPORAL_SAMPLING_V1,
   });
   const adaptation = inputs.adaptation;
   return {
@@ -171,6 +176,17 @@ export interface AnalysisPreview {
   blockers: SpendBlocker[];
   /** Spend > 0 requires explicit acknowledgement. */
   requiresAcknowledgement: boolean;
+  /**
+   * 3A.3: the plan sends the FULL output video. Disclosed before the run and acknowledged separately (a spend
+   * checkbox is not consent to a full-video transfer).
+   */
+  fullVideo: {
+    durationMs: number | null;
+    byteSize: number | null;
+    transfer: "inline" | "provider_file" | null;
+    criteria: string[];
+    sampling: { policy: string; fps: number } | null;
+  } | null;
 }
 
 export function previewAnalysis(args: {
@@ -182,6 +198,8 @@ export function previewAnalysis(args: {
   policy: AnalysisSpendPolicy;
   spentLast24hUsd: number;
   now: Date;
+  /** 3A.3: the Project's full-video permission for this path. */
+  directVideoAllowed?: boolean;
 }): { preview: AnalysisPreview; input: ContinuityAnalysisInput } {
   let { output } = args;
   let framesPending = false;
@@ -217,7 +235,10 @@ export function previewAnalysis(args: {
     provider: args.provider,
     runKey: "preview",
     subject: args.subject,
+    directVideoAllowed: args.directVideoAllowed === true,
   });
+  const videoBatches = input.plan.batches.filter((b) => b.mode === "direct_video");
+  const video = input.media.find((m) => m.kind === "video") ?? null;
   const estimate = args.provider.estimate(input, args.now);
   const maxUsd = Number.isFinite(estimate.maxUsd) ? estimate.maxUsd : null;
   const blockers =
@@ -244,6 +265,19 @@ export function previewAnalysis(args: {
       framesPending,
       blockers,
       requiresAcknowledgement: args.provider.kind === "model" && (maxUsd == null || maxUsd > 0),
+      fullVideo:
+        videoBatches.length > 0 && video
+          ? {
+              durationMs: video.durationMs,
+              byteSize: video.byteSize,
+              transfer:
+                video.byteSize != null && args.provider.videoTransfer
+                  ? args.provider.videoTransfer(video.byteSize)
+                  : null,
+              criteria: videoBatches.flatMap((b) => b.criterionKeys),
+              sampling: videoBatches[0]!.sampling ?? null,
+            }
+          : null,
     },
   };
 }

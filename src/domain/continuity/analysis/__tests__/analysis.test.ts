@@ -46,17 +46,30 @@ describe("analysis planning", () => {
       modes: ["image_set", "direct_video"] as const,
       videoCapabilities: ["video_temporal"] as const,
     };
-    const p = buildAnalysisPlan({ analyzer: withVideo, criteria: CRITERIA, media: MEDIA });
+    const p = buildAnalysisPlan({
+      analyzer: withVideo,
+      criteria: CRITERIA,
+      media: MEDIA,
+      directVideoAllowed: true,
+    });
     expect(p.items.find((i) => i.criterionKey === "screen_direction")).toMatchObject({
       status: "planned",
       mode: "direct_video",
     });
-    // lip_sync still not declared
-    expect(p.items.find((i) => i.criterionKey === "lip_sync")!.status).toBe("unsupported");
+    // lip_sync still not declared: calibration-gated, with the specific reason
+    expect(p.items.find((i) => i.criterionKey === "lip_sync")).toMatchObject({
+      status: "unsupported",
+      reason: expect.stringMatching(/not yet calibrated/),
+    });
+    // 3A.3: enabled + declared is not enough: the Project must allow the full video
+    const noConsent = buildAnalysisPlan({ analyzer: withVideo, criteria: CRITERIA, media: MEDIA });
+    expect(noConsent.items.find((i) => i.criterionKey === "screen_direction")!.status).toBe("not_allowed");
+    expect(noConsent.batches.some((b) => b.mode === "direct_video")).toBe(false);
     const noVideo = buildAnalysisPlan({
       analyzer: withVideo,
       criteria: CRITERIA,
       media: MEDIA.filter((m) => m.kind !== "video"),
+      directVideoAllowed: true,
     });
     expect(noVideo.items.find((i) => i.criterionKey === "screen_direction")!.status).toBe("no_media");
   });

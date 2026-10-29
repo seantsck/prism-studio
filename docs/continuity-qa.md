@@ -98,8 +98,10 @@ Three things are now shown separately: **deterministic QA** (metadata checks), *
 job run by a worker; none / queued / analysing / complete / failed) and **human review** (overrides + close-out).
 
 - **Plan first** (`buildAnalysisPlan`): every criterion is routed to analyzer (image set / direct video),
-  deterministic, manual, `unsupported` (analyzer does not declare the capability) or `no_media`. Unsupported and
-  no-media criteria stay **UNCHECKED with the reason**, never PASS.
+  deterministic, manual, `unsupported` (analyzer does not declare the capability), `no_media` or (3A.3)
+  `not_allowed` (the Project has not allowed the full video). These criteria stay **UNCHECKED with the reason**, never
+  PASS. Since Phase 3A.3 one run may mix image-set batches with one direct-video batch for the temporal criteria
+  ([temporal-video-qa](temporal-video-qa.md)).
 - **Findings carry evidence**: observations citing exact inputs (reference image / output frame / contact sheet /
   video + timestamp), contradictions, limitations, analyzer/model, and "analysis confidence (advisory)".
   The page shows expected references next to the output evidence frames.

@@ -699,9 +699,19 @@ try {
     "attempt_deliveries",
     "continuity_checks",
     "prism_migrations",
+    // Phase 3A.2 / 3A.3: the mutable Project QA policy (incl. 0045 full-video consent) is never read by the worker
+    "project_qa_policies",
   ]) {
     const e = await workerErr(`select 1 from ${table} limit 1`);
     check(`cannot read ${table}`, denied(e) || /does not exist/.test(e), e);
+  }
+  {
+    const e = await workerErr("select automation_key from continuity_runs limit 1");
+    check(
+      "cannot read continuity_runs.automation_key (3A.2 identity is not a worker concern)",
+      denied(e) || /does not exist/.test(e),
+      e,
+    );
   }
   check(
     "cannot create or alter schema objects",

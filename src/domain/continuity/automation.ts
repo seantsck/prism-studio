@@ -28,6 +28,12 @@ export interface ProjectQaPolicy {
   externalMediaAllowed: boolean;
   maxCostPerRunUsd: number | null;
   maxCostPerDayUsd: number | null;
+  /**
+   * 3A.3 (migration 0045): the owner allows sending the FULL selected delivery video to the chosen analyzer for
+   * temporal Shot QA. Separate from `externalMediaAllowed` (bounded frames/references) and never implied by it, by a
+   * credential, by the semantic mode or by a past manual analysis. Default false: no 3A.2 policy gains it.
+   */
+  directVideoAllowed: boolean;
   revision: number;
   updatedBy: string | null;
   updatedAt: string | null;
@@ -40,6 +46,7 @@ export const defaultQaPolicy = (projectId: string): ProjectQaPolicy => ({
   externalMediaAllowed: false,
   maxCostPerRunUsd: null,
   maxCostPerDayUsd: null,
+  directVideoAllowed: false,
   revision: 0,
   updatedBy: null,
   updatedAt: null,
@@ -48,7 +55,22 @@ export const defaultQaPolicy = (projectId: string): ProjectQaPolicy => ({
 export type QaPolicyInput = Pick<
   ProjectQaPolicy,
   "semanticMode" | "analyzer" | "externalMediaAllowed" | "maxCostPerRunUsd" | "maxCostPerDayUsd"
->;
+> & {
+  /** Absent (a 3A.2 caller) = false. */
+  directVideoAllowed?: boolean;
+};
+
+/**
+ * Whether an analysis may send the full output video (3A.3). A manual run needs the Project's full-video permission
+ * (plus its own per-run acknowledgement, checked at submit); an AUTOMATIC run also needs the standing external-media
+ * consent, because nobody acknowledges it at the time.
+ */
+export function directVideoPermitted(
+  policy: Pick<ProjectQaPolicy, "directVideoAllowed" | "externalMediaAllowed">,
+  path: "manual" | "automatic",
+): boolean {
+  return policy.directVideoAllowed === true && (path === "manual" || policy.externalMediaAllowed === true);
+}
 
 const finite = (n: number | null): n is number => n != null && Number.isFinite(n) && n >= 0;
 

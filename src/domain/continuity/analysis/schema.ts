@@ -3,7 +3,9 @@ import {
   FINDING_RESULTS,
   type AnalysisBatch,
   type AnalysisMedia,
+  type AnalysisMode,
   type EvidenceSource,
+  type FindingEvidence,
   type NormalizedFinding,
 } from "./types";
 
@@ -44,6 +46,45 @@ export const criterionAnswerSchema = z
 
 export const analysisResponseSchema = z.object({ criteria: z.array(criterionAnswerSchema).max(40) }).strict();
 export type AnalysisResponse = z.infer<typeof analysisResponseSchema>;
+
+/**
+ * Direct-video answers (schema 2, Phase 3A.3): evidence may name an interval end. Kept SEPARATE from the still-image
+ * schema so an image-set answer can never carry an invented time range (`.strict()` rejects `endMs` there).
+ */
+export const videoEvidenceItemSchema = z
+  .object({
+    input: z.string().min(1).max(80),
+    timestampMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(24 * 3600 * 1000)
+      .nullable(),
+    endMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(24 * 3600 * 1000)
+      .nullable(),
+    observation: z.string().min(1).max(500),
+  })
+  .strict();
+
+export const videoCriterionAnswerSchema = z
+  .object({
+    criterionId: z.string().min(1).max(200),
+    result: z.enum(FINDING_RESULTS),
+    confidence: z.number().min(0).max(1).nullable(),
+    summary: z.string().min(1).max(700),
+    evidence: z.array(videoEvidenceItemSchema).max(8),
+    contradictions: z.array(z.string().min(1).max(400)).max(6),
+    limitations: z.array(z.string().min(1).max(300)).max(6),
+  })
+  .strict();
+
+export const videoAnalysisResponseSchema = z
+  .object({ criteria: z.array(videoCriterionAnswerSchema).max(40) })
+  .strict();
 
 /**
  * JSON Schema handed to the provider's structured-output mode. Uses only the subset Gemini documents as
@@ -104,6 +145,50 @@ export const ANALYSIS_RESPONSE_JSON_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+/** The provider structured-output schema for a direct-video batch: the image schema plus a nullable `endMs`. */
+export const ANALYSIS_RESPONSE_JSON_SCHEMA_VIDEO = {
+  ...ANALYSIS_RESPONSE_JSON_SCHEMA,
+  properties: {
+    criteria: {
+      ...ANALYSIS_RESPONSE_JSON_SCHEMA.properties.criteria,
+      items: {
+        ...ANALYSIS_RESPONSE_JSON_SCHEMA.properties.criteria.items,
+        properties: {
+          ...ANALYSIS_RESPONSE_JSON_SCHEMA.properties.criteria.items.properties,
+          evidence: {
+            type: "array",
+            maxItems: 8,
+            items: {
+              type: "object",
+              properties: {
+                input: { type: "string", description: "The video inputId from DATA.inputs." },
+                timestampMs: {
+                  type: ["integer", "null"],
+                  minimum: 0,
+                  description:
+                    "Approximate moment, in ms from the start of the clip (within DATA.video.durationMs).",
+                },
+                endMs: {
+                  type: ["integer", "null"],
+                  minimum: 0,
+                  description: "End of the observed interval in ms, or null for a single moment.",
+                },
+                observation: { type: "string" },
+              },
+              required: ["input", "timestampMs", "endMs", "observation"],
+              additionalProperties: false,
+            },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+/** The structured-output schema for a batch's mode. */
+export const responseJsonSchemaFor = (mode: AnalysisMode) =>
+  mode === "direct_video" ? ANALYSIS_RESPONSE_JSON_SCHEMA_VIDEO : ANALYSIS_RESPONSE_JSON_SCHEMA;
+
 export type ValidationOutcome =
   { ok: true; findings: NormalizedFinding[]; missing: string[] } | { ok: false; errors: string[] };
 
@@ -125,9 +210,12 @@ const sourceOf = (m: AnalysisMedia | undefined): EvidenceSource =>
  */
 export function validateBatchResponse(
   raw: string | null | undefined,
-  batch: Pick<AnalysisBatch, "criterionKeys" | "referenceInputIds" | "outputInputIds">,
+  batch: Pick<AnalysisBatch, "criterionKeys" | "referenceInputIds" | "outputInputIds"> & {
+    mode?: AnalysisMode;
+  },
   media: AnalysisMedia[],
 ): ValidationOutcome {
+  const temporal = batch.mode === "direct_video";
   if (raw == null || raw.trim() === "") return { ok: false, errors: ["The response was empty."] };
   if (raw.length > MAX_RESPONSE_CHARS)
     return { ok: false, errors: [`The response exceeded ${MAX_RESPONSE_CHARS} characters.`] };
@@ -137,7 +225,7 @@ export function validateBatchResponse(
   } catch {
     return { ok: false, errors: ["The response was not valid JSON."] };
   }
-  const parsed = analysisResponseSchema.safeParse(json);
+  const parsed = (temporal ? videoAnalysisResponseSchema : analysisResponseSchema).safeParse(json);
   if (!parsed.success) {
     return {
       ok: false,
@@ -163,22 +251,38 @@ export function validateBatchResponse(
       continue;
     }
     seen.add(a.criterionId);
-    const evidence = [];
-    for (const e of a.evidence) {
+    const evidence: FindingEvidence[] = [];
+    const who = `Evidence for "${a.criterionId.slice(0, 40)}"`;
+    for (const e of a.evidence as Array<(typeof a.evidence)[number] & { endMs?: number | null }>) {
       if (!sentInputs.has(e.input)) {
-        errors.push(
-          `Evidence for "${a.criterionId.slice(0, 40)}" cites "${e.input.slice(0, 40)}", which was not an input of this request.`,
-        );
+        errors.push(`${who} cites "${e.input.slice(0, 40)}", which was not an input of this request.`);
         continue;
       }
       const m = allowedInputs.get(e.input);
+      const problem = temporal ? videoEvidenceProblem(e, m) : stillEvidenceProblem(e, m);
+      if (problem) {
+        errors.push(`${who}: ${problem}`);
+        continue;
+      }
       evidence.push({
         input: e.input,
         assetId: m?.assetId ?? null,
         atMs: e.timestampMs ?? m?.atMs ?? null,
+        ...(temporal ? { endMs: e.endMs ?? null } : {}),
         observation: e.observation,
         source: sourceOf(m),
       });
+    }
+    // a temporal judgement must say WHERE in the clip it was observed
+    if (
+      temporal &&
+      a.result !== "unchecked" &&
+      !evidence.some((x) => x.source === "video" && x.atMs != null)
+    ) {
+      errors.push(
+        `Answer for "${a.criterionId.slice(0, 40)}" is ${a.result} but cites no timestamped evidence from the video.`,
+      );
+      continue;
     }
     findings.push({
       criterionKey: a.criterionId,
@@ -192,6 +296,46 @@ export function validateBatchResponse(
   }
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, findings, missing: batch.criterionKeys.filter((k) => !seen.has(k)) };
+}
+
+/**
+ * Direct-video evidence must point INTO the clip that was actually sent: a time, inside the duration, and an interval
+ * that runs forward and ends inside the clip. (JSON cannot carry NaN/Infinity; integers are enforced by the schema.)
+ */
+/**
+ * Direct-video evidence bounds, decided deliberately: both a moment and an interval end lie in the CLOSED range
+ * [0, durationMs]. The recorded duration is treated as the clip's final instant, because provider timestamps are only
+ * as precise as the sampling interval and an event in the last sample may be reported at the duration itself;
+ * anything past it is rejected.
+ */
+function videoEvidenceProblem(
+  e: { timestampMs: number | null; endMs?: number | null },
+  m: AnalysisMedia | undefined,
+): string | null {
+  if (!m || m.kind !== "video") return "direct-video evidence must cite the video input.";
+  if (e.timestampMs == null) return "video evidence needs timestampMs.";
+  const duration = m.durationMs;
+  if (duration == null || !Number.isFinite(duration)) return "the video duration is unknown.";
+  if (e.timestampMs > duration)
+    return `timestampMs ${e.timestampMs} is after the end of the clip (${duration} ms).`;
+  if (e.endMs != null) {
+    if (e.endMs < e.timestampMs) return `endMs ${e.endMs} is before timestampMs ${e.timestampMs}.`;
+    if (e.endMs > duration) return `endMs ${e.endMs} is after the end of the clip (${duration} ms).`;
+  }
+  return null;
+}
+
+/** Still-image evidence may not invent time: a reference/contact sheet has none; a frame only its own position. */
+function stillEvidenceProblem(
+  e: { timestampMs: number | null },
+  m: AnalysisMedia | undefined,
+): string | null {
+  if (e.timestampMs == null) return null;
+  if (!m || m.kind === "reference" || m.kind === "contact_sheet")
+    return `"${(m?.inputId ?? "?").slice(0, 40)}" is a still image: timestampMs must be null.`;
+  if (m.kind === "output_frame" && m.atMs != null && e.timestampMs !== m.atMs)
+    return `frame "${m.inputId.slice(0, 40)}" is at ${m.atMs} ms: timestampMs must be null or ${m.atMs}.`;
+  return null;
 }
 
 /** The finding recorded for a criterion the provider could not or would not judge. */

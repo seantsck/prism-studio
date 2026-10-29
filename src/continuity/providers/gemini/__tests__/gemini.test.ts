@@ -396,7 +396,7 @@ describe("direct video (architecture; fake transport only, disabled by default)"
     PRISM_STUDIO_GEMINI_DIRECT_VIDEO: "1",
   });
   const mkVideo = (provider: GeminiAnalysisProvider) => {
-    const inp = makeInput({}, provider.plannerView());
+    const inp = makeInput({}, provider.plannerView(), { directVideoAllowed: true });
     const b = inp.plan.batches.find((x) => x.mode === "direct_video")!;
     return { inp, b };
   };
@@ -416,8 +416,9 @@ describe("direct video (architecture; fake transport only, disabled by default)"
     const { b } = mkVideo(on);
     expect(b).toMatchObject({
       mode: "direct_video",
-      promptVersion: "continuity-gemini-video-v1",
+      promptVersion: "continuity-gemini-video-v2",
       outputInputIds: ["video"],
+      sampling: { policy: "shot-temporal-static-v1", fps: 4 },
     });
     expect(b.criterionKeys).toContain("screen_direction");
   });
@@ -435,7 +436,9 @@ describe("direct video (architecture; fake transport only, disabled by default)"
             result: "warn",
             confidence: 0.6,
             summary: "Direction reverses near the end.",
-            evidence: [{ input: "video", timestampMs: 3400, observation: "Moves left-to-right." }],
+            evidence: [
+              { input: "video", timestampMs: 3400, endMs: null, observation: "Moves left-to-right." },
+            ],
             contradictions: [],
             limitations: ["sampling is approximate"],
           })),
@@ -448,9 +451,12 @@ describe("direct video (architecture; fake transport only, disabled by default)"
     const out = await provider.analyzeBatch({ batch: b, input: inp, media, ctx: ctx() });
     expect(transport.uploads).toHaveLength(0);
     expect(transport.requests[0]!.inlineMedia).toBe(1);
+    expect(transport.requests[0]!.inlineVideos).toBe(1);
+    expect(transport.requests[0]!.videoFps).toEqual([4]);
+    expect(transport.requests[0]!.videoSchema).toBe(true);
     expect(transport.requests[0]!.systemInstruction).toMatch(/frame-accurate/i);
     const f = out.findings[0]!;
-    expect(f.evidence[0]).toMatchObject({ input: "video", atMs: 3400, source: "video" });
+    expect(f.evidence[0]).toMatchObject({ input: "video", atMs: 3400, endMs: null, source: "video" });
   });
 
   it("a large video goes through the Files API, is recorded, and is deleted best-effort afterwards", async () => {
@@ -470,6 +476,8 @@ describe("direct video (architecture; fake transport only, disabled by default)"
     expect(transport.uploads).toHaveLength(1);
     expect(refs).toEqual([transport.uploads[0]!.name]);
     expect(transport.requests[0]!.inlineMedia).toBe(0); // referenced by file URI, not inlined
+    expect(transport.requests[0]!.fileParts).toBe(1);
+    expect(transport.requests[0]!.videoFps).toEqual([4]);
     expect(await provider.cleanupFiles(refs)).toEqual([{ ref: refs[0], state: "deleted" }]);
     expect(transport.deleted).toEqual(refs);
     transport.failDelete = true;

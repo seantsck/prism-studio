@@ -6,9 +6,10 @@ import type { AnalysisErrorCategory } from "@/domain/continuity/analysis/types";
  */
 export type GeminiPart =
   | { type: "text"; text: string }
-  | { type: "inline"; mimeType: string; dataBase64: string }
+  /** `videoFps` (3A.3): the frozen sampling rate for a video part (`videoMetadata.fps`). */
+  | { type: "inline"; mimeType: string; dataBase64: string; videoFps?: number }
   /** Files-API reference (direct video). Operational metadata only; never canonical media. */
-  | { type: "file"; mimeType: string; fileUri: string };
+  | { type: "file"; mimeType: string; fileUri: string; videoFps?: number };
 
 export interface GeminiTurn {
   role: "user" | "model";

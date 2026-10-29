@@ -103,8 +103,15 @@ export const PLANNER: PlannerAnalyzer = {
 export function makeInput(
   over: Partial<ContinuityAnalysisInput> = {},
   planner: PlannerAnalyzer = PLANNER,
+  /** 3A.3: the Project's full-video permission (default false, as in production). */
+  planOpts: { directVideoAllowed?: boolean } = {},
 ): ContinuityAnalysisInput {
-  const plan = buildAnalysisPlan({ analyzer: planner, criteria: CRITERIA, media: MEDIA });
+  const plan = buildAnalysisPlan({
+    analyzer: planner,
+    criteria: CRITERIA,
+    media: MEDIA,
+    directVideoAllowed: planOpts.directVideoAllowed,
+  });
   const criteria = CRITERIA.flatMap((c) =>
     c.capability
       ? [

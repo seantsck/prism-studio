@@ -55,6 +55,12 @@ const ISOLATED_2I = "zzzzzzzzzzzzzzzzzzzzz-episode-edit.spec.ts";
 const ISOLATED_3A2 = "zzzzzzzzzzzzzzzzzzzzzz-automatic-qa.spec.ts";
 
 /**
+ * The Phase 3A.3 temporal-QA spec gets its own memory server too: it changes the Project policy (Automatic, then
+ * full-video permission) and runs Gemini through the in-memory FAKE transport with the server's direct-video gate on.
+ */
+const ISOLATED_3A3 = "zzzzzzzzzzzzzzzzzzzzzzz-temporal-video-qa.spec.ts";
+
+/**
  * TEST SERVERS ONLY. Playwright's request client reuses keep-alive sockets; at Node's default idle-close boundary
  * (5 s + 1 s buffer) the server could close a socket while `page.request` was reusing it, giving ECONNRESET before
  * the request reached the app. Longer than the longest test (20 min), so each test's request context closes first.
@@ -69,7 +75,7 @@ export default defineConfig({
   projects: [
     {
       name: "memory",
-      testIgnore: ["supabase-*.spec.ts", ISOLATED_2H, ISOLATED_2I, ISOLATED_3A2],
+      testIgnore: ["supabase-*.spec.ts", ISOLATED_2H, ISOLATED_2I, ISOLATED_3A2, ISOLATED_3A3],
       use: { baseURL: "http://localhost:3102" },
     },
     {
@@ -86,6 +92,11 @@ export default defineConfig({
       name: "memory-3a2-isolated",
       testMatch: ISOLATED_3A2,
       use: { baseURL: "http://localhost:3105" },
+    },
+    {
+      name: "memory-3a3-isolated",
+      testMatch: ISOLATED_3A3,
+      use: { baseURL: "http://localhost:3106" },
     },
   ],
   // Started in order: the first builds; the others serve the same build from separate processes (separate stores).
@@ -118,6 +129,20 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 120_000,
       env: memoryEnv(3105),
+    },
+    {
+      command: `npx next start -p 3106 ${KEEP_ALIVE}`,
+      url: "http://localhost:3106",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: {
+        ...memoryEnv(3106),
+        // Gemini through the FAKE transport only (memory mode + PRISM_STUDIO_ANALYSIS_TRANSPORT=fake): the placeholder
+        // is not a credential and nothing can leave the process. The server's direct-video gate is on here only.
+        GEMINI_API_KEY: "e2e-placeholder-not-a-credential",
+        PRISM_STUDIO_GEMINI_DIRECT_VIDEO: "1",
+        PRISM_STUDIO_MAX_ANALYSIS_USD_PER_RUN: "0.50",
+      },
     },
   ],
 });

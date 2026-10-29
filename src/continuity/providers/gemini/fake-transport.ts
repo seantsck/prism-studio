@@ -33,6 +33,12 @@ export interface RecordedRequest {
   inlineMedia: number;
   turns: number;
   maxOutputTokens: number;
+  /** 3A.3: media parts by kind, and the sampling rate each video part carried. Never the bytes or file URI. */
+  inlineVideos: number;
+  fileParts: number;
+  videoFps: number[];
+  /** Whether the request used the direct-video structured-output schema (has `endMs`). */
+  videoSchema: boolean;
 }
 
 const DEFAULT_USAGE = { promptTokens: 2000, candidatesTokens: 300, thoughtsTokens: 40, totalTokens: 2340 };
@@ -71,6 +77,15 @@ export class FakeGeminiTransport implements GeminiTransport {
       inlineMedia: req.turns.reduce((n, t) => n + t.parts.filter((p) => p.type === "inline").length, 0),
       turns: req.turns.length,
       maxOutputTokens: req.maxOutputTokens,
+      inlineVideos: req.turns.reduce(
+        (n, t) => n + t.parts.filter((p) => p.type === "inline" && p.mimeType.startsWith("video/")).length,
+        0,
+      ),
+      fileParts: req.turns.reduce((n, t) => n + t.parts.filter((p) => p.type === "file").length, 0),
+      videoFps: req.turns.flatMap((t) =>
+        t.parts.flatMap((p) => (p.type !== "text" && p.videoFps ? [p.videoFps] : [])),
+      ),
+      videoSchema: JSON.stringify(req.responseJsonSchema).includes('"endMs"'),
     });
     const n = this.i++;
     const step =
@@ -133,8 +148,22 @@ export function answerAll(
     const json = JSON.parse(data!.slice(data!.indexOf("{"))) as {
       criteria: Array<{ criterionId: string }>;
       inputs: Array<{ inputId: string }>;
+      video?: { durationMs: number | null };
     };
     const input = evidenceInput ?? json.inputs.at(-1)?.inputId ?? "none";
+    // a direct-video batch: timestamped interval evidence inside the clip (schema 2)
+    const duration = json.video?.durationMs ?? null;
+    const evidence =
+      json.video && duration
+        ? [
+            {
+              input,
+              timestampMs: Math.round(duration * 0.2),
+              endMs: Math.round(duration * 0.6),
+              observation: "Observed across this interval of the clip.",
+            },
+          ]
+        : [{ input, timestampMs: null, observation: "Visible in the supplied frame." }];
     return {
       kind: "json",
       body: {
@@ -143,7 +172,7 @@ export function answerAll(
           result,
           confidence: 0.8,
           summary: `Appears ${result === "pass" ? "consistent" : "inconsistent"} with the expectation.`,
-          evidence: [{ input, timestampMs: null, observation: "Visible in the supplied frame." }],
+          evidence,
           contradictions: result === "fail" ? ["Differs from the reference."] : [],
           limitations: [],
         })),

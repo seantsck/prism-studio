@@ -36,6 +36,8 @@ import {
 import type { AnalysisCost } from "@/data/media-qa-repository";
 import { assetUrl } from "@/lib/utils";
 import { providerHealth } from "@/domain/continuity/analysis/health";
+import { formatEvidenceTime, temporalCoverage } from "@/domain/continuity/analysis/temporal";
+import { directVideoPermitted } from "@/domain/continuity/automation";
 import { currentFailedAnalysis } from "@/domain/continuity/analysis/latest";
 import { modelDisplay, providerDisplayName } from "@/continuity/analysis/models";
 import { loadAttemptMedia } from "@/server/attempt-media";
@@ -90,6 +92,8 @@ interface EvidenceItem {
   input: string;
   assetId: string | null;
   atMs: number | null;
+  /** Direct video (schema 2): end of the observed interval. Absent on schema-1 evidence. */
+  endMs?: number | null;
   observation: string;
   source: string;
 }
@@ -173,6 +177,7 @@ export default async function ContinuityPage({
     };
     const since = hoursAgoIso(24);
     const spent = await qa.analysisSpentSince(null, since);
+    const qaPolicy = await qa.getQaPolicy(data.project.id);
     for (const st of statuses) {
       const provider = getPreviewProviders().get(st.id);
       if (!provider) continue;
@@ -185,6 +190,8 @@ export default async function ContinuityPage({
         policy: config.paid,
         spentLast24hUsd: spent,
         now: new Date(),
+        // 3A.3: what a MANUAL run may send (the Project's full-video permission)
+        directVideoAllowed: directVideoPermitted(qaPolicy, "manual"),
       });
       const sent = preview.plan.manifest.entries.filter((e) => e.sent);
       previews.push({
@@ -212,7 +219,7 @@ export default async function ContinuityPage({
         framesPending: preview.framesPending,
         counts: preview.summary,
         unsupported: preview.plan.items
-          .filter((i) => i.status === "unsupported" || i.status === "no_media")
+          .filter((i) => i.status === "unsupported" || i.status === "no_media" || i.status === "not_allowed")
           .map((i) => ({ key: i.criterionKey, reason: i.reason })),
         sent: sent.map((e) => ({ inputId: e.inputId, role: e.role, kind: e.kind, label: e.role })),
         omitted: preview.plan.manifest.entries
@@ -226,9 +233,36 @@ export default async function ContinuityPage({
         },
         blockers: preview.blockers.map((b) => b.message),
         requiresAcknowledgement: preview.requiresAcknowledgement,
+        fullVideo: preview.fullVideo
+          ? {
+              durationMs: preview.fullVideo.durationMs,
+              byteSize: preview.fullVideo.byteSize,
+              transfer: preview.fullVideo.transfer,
+              criteria: preview.fullVideo.criteria,
+              fps: preview.fullVideo.sampling?.fps ?? null,
+            }
+          : null,
       });
     }
   }
+
+  // ── 3A.3: what was examined THROUGH TIME in the selected run (separate from the Shot QA state) ──
+  const temporal = media.inputs
+    ? temporalCoverage({
+        criteria: media.inputs.criteria.map((c) => ({
+          key: c.key,
+          title: c.title,
+          capability: c.capability,
+        })),
+        planItems: selected?.view.run.analysisPlan?.items ?? null,
+        results: new Map(
+          (selected?.view.findings ?? []).map((x) => [
+            x.finding.criterionKey,
+            { result: x.finding.result, resultSource: x.finding.resultSource },
+          ]),
+        ),
+      })
+    : null;
 
   // ── findings grouped by severity, then result ──
   const rows = selected ? selected.findings.map((eff, i) => ({ eff, f: selected.view.findings[i]! })) : [];
@@ -356,6 +390,22 @@ export default async function ContinuityPage({
           reviewHref={`/projects/${slug}/generations/${attemptId}/continuity`}
         />
         <AutoQaReconciler projectSlug={slug} attemptId={attemptId} dueKey={media.autoQa.dueKey} />
+        {temporal && temporal.total > 0 ? (
+          <div className="text-[11px] text-muted" data-testid="temporal-coverage">
+            <span className="font-semibold">Temporal Video QA</span> ·{" "}
+            <span data-testid="temporal-evaluated">{temporal.evaluated} evaluated</span> ·{" "}
+            <span data-testid="temporal-unchecked">{temporal.unchecked.length} unchecked</span>
+            {temporal.unchecked.length > 0 ? (
+              <ul className="mt-0.5 list-disc pl-4 text-faint">
+                {temporal.unchecked.map((u) => (
+                  <li key={u.key} data-testid="temporal-unchecked-reason" data-key={u.key}>
+                    {u.title}: {u.reason}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
 
         {/* three separate statuses: never one overloaded check */}
         <div className="grid gap-3 md:grid-cols-3" data-testid="qa-status-strip">
@@ -630,13 +680,36 @@ export default async function ContinuityPage({
                       const omitted = run.externalManifest!.entries.filter(
                         (e) => !e.sent && e.omissionReason === "input_budget",
                       );
+                      // 3A.3: the FULL output video is stated on its own, never counted as an "image"
+                      const video = run.externalManifest!.entries.find((e) => e.kind === "video") ?? null;
+                      const VIDEO_OMISSION: Record<string, string> = {
+                        direct_video_disabled: "direct video is not enabled for this analyzer/server",
+                        direct_video_not_allowed: "the Project has not allowed full-video analysis",
+                        video_not_eligible: "the video is outside Prism's temporal-analysis limits",
+                        no_matching_criterion: "no temporal criterion needed it",
+                      };
                       return (
                         <>
                           <p className="text-[12px]">
                             {run.externalManifest!.analyzer === "mock-continuity"
                               ? "Nothing left Prism (mock analyzer)."
-                              : `${sent.filter((e) => e.kind !== "reference").length} output image(s), ${sent.filter((e) => e.kind === "reference").length} reference image(s) and ${run.externalManifest!.criteriaSent} criteria text(s) sent to ${providerDisplayName(run.externalManifest!.analyzer)} · ${modelDisplay(run.externalManifest!.analyzer, run.externalManifest!.model)}.`}
+                              : `${sent.filter((e) => e.kind !== "reference" && e.kind !== "video").length} output image(s), ${sent.filter((e) => e.kind === "reference").length} reference image(s) and ${run.externalManifest!.criteriaSent} criteria text(s) sent to ${providerDisplayName(run.externalManifest!.analyzer)} · ${modelDisplay(run.externalManifest!.analyzer, run.externalManifest!.model)}.`}
                           </p>
+                          {video?.sent ? (
+                            <p className="text-[11.5px] text-warn" data-testid="manifest-video">
+                              The full output video was sent for temporal analysis (asset{" "}
+                              {video.assetId.slice(0, 8)}, checksum{" "}
+                              {video.checksum?.slice(0, 10) ?? "unknown"}).
+                            </p>
+                          ) : video && run.externalManifest!.analyzer !== "mock-continuity" ? (
+                            <p className="text-[11.5px] text-faint" data-testid="manifest-video-omitted">
+                              Full video not sent:{" "}
+                              {VIDEO_OMISSION[video.omissionReason ?? ""] ??
+                                video.omissionReason ??
+                                "not planned"}
+                              .
+                            </p>
+                          ) : null}
                           {omitted.length > 0 ? (
                             <p className="text-[11.5px] text-warn">
                               Not sent due to the input budget: {omitted.map((e) => e.inputId).join(", ")}
@@ -805,7 +878,11 @@ export default async function ContinuityPage({
                                             </div>
                                           )}
                                           <div className="text-center font-mono text-[9px] text-faint">
-                                            {it.atMs != null ? `${(it.atMs / 1000).toFixed(2)}s` : it.input}
+                                            {it.atMs != null
+                                              ? it.source === "video"
+                                                ? formatEvidenceTime(it.atMs, it.endMs)
+                                                : `${(it.atMs / 1000).toFixed(2)}s`
+                                              : it.input}
                                           </div>
                                           <div
                                             className="text-center text-[9px] text-accent"
@@ -820,7 +897,14 @@ export default async function ContinuityPage({
                                       <p key={k} className="text-[11px] text-muted">
                                         <span className="font-mono text-faint">{it.input}</span>{" "}
                                         {it.atMs != null && subject?.type === "video" ? (
-                                          <SeekButton atMs={it.atMs} />
+                                          <SeekButton
+                                            atMs={it.atMs}
+                                            label={
+                                              it.source === "video"
+                                                ? `▶ ${formatEvidenceTime(it.atMs, it.endMs)}`
+                                                : undefined
+                                            }
+                                          />
                                         ) : null}{" "}
                                         — {it.observation}
                                       </p>

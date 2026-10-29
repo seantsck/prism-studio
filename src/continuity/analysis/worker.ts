@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { analysisSpendBlockers, type AnalysisSpendPolicy } from "@/domain/continuity/analysis/cost";
 import { boundedDerivative } from "@/domain/continuity/analysis/plan";
+import { TEMPORAL_SAMPLING_V1 } from "@/domain/continuity/analysis/temporal";
 import {
   DEFAULT_MAX_CORRECTIONS,
   DEFAULT_MAX_TRANSPORT_CALLS,
@@ -75,7 +76,8 @@ export interface AnalysisWorkerOptions {
 /** Provider answers that PROVE nothing was processed: the durable queue may ask again later. */
 const SAFE_REQUEUE: readonly AnalysisErrorCategory[] = ["rate_limit", "overloaded"];
 /** Direct-video input ceiling (also bounds what may be uploaded to a provider's temporary file store). */
-const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+/** The same bound the planner applies (one constant: planner and worker cannot disagree). */
+const MAX_VIDEO_BYTES = TEMPORAL_SAMPLING_V1.maxBytes;
 
 export class ContinuityAnalysisWorker {
   readonly workerId: string;
@@ -193,6 +195,18 @@ export class ContinuityAnalysisWorker {
     }
     if (job.status === "cancel_requested") {
       return fail("cancelled", "cancelled", "Analysis cancelled.", null, true);
+    }
+    // ── version guard: a job is executed only by the analyzer VERSION it was frozen for ──
+    // The version names the request contract (e.g. Gemini v3 = the compact response schema). A job queued under an
+    // older version (still waiting, or durably requeued after a 429/503) must not be sent with newer request
+    // semantics while its run says otherwise: it fails before anything is sent, and a new analysis is planned for
+    // the current version.
+    if (job.inputSnapshot.analyzerVersion !== provider.version) {
+      return fail(
+        "config",
+        "analyzer_version_mismatch",
+        `This analysis was planned for ${job.analyzer} v${job.inputSnapshot.analyzerVersion}, but this worker runs v${provider.version}. Nothing was sent; start a new analysis.`,
+      );
     }
 
     // ── spend gate at execution time (paid analyzers only) ──
@@ -367,7 +381,7 @@ export class ContinuityAnalysisWorker {
       const analysed = new Set(findings.map((f) => f.criterionKey));
       for (const item of input.plan.items) {
         if (analysed.has(item.criterionKey)) continue;
-        if (item.status === "unsupported" || item.status === "no_media") {
+        if (item.status === "unsupported" || item.status === "no_media" || item.status === "not_allowed") {
           findings.push(uncheckedFinding(item.criterionKey, item.status, item.reason));
         }
       }
@@ -525,6 +539,9 @@ export class ContinuityAnalysisWorker {
         throw new Error(`Input ${m.inputId} is not a supported video.`);
       if (bytes.length > MAX_VIDEO_BYTES)
         throw new Error(`Input ${m.inputId} exceeds the video analysis size limit.`);
+      // 3A.3: the FULL video leaves Prism, so it must be exactly the frozen subject (infrastructure failure otherwise)
+      if (!m.checksum || createHash("sha256").update(bytes).digest("hex") !== m.checksum)
+        throw new Error(`Input ${m.inputId} does not match its recorded checksum; nothing was sent.`);
       return { inputId: m.inputId, mime: format === "mp4" ? "video/mp4" : "video/webm", bytes };
     }
     if (format !== "png" && format !== "jpeg" && format !== "webp") {

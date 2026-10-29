@@ -1,3 +1,4 @@
+import { TEMPORAL_SAMPLING_V1, videoInputTokens } from "./temporal";
 import type { AnalysisBudget, AnalysisMedia } from "./types";
 
 /**
@@ -79,13 +80,17 @@ export function estimateTokens(args: {
   budget: AnalysisBudget;
   /** Provider-specific image tokenization (defaults to Gemini's documented tiling). */
   imageTokenFn?: (width: number | null, height: number | null) => number;
+  /** Direct video: the batch's frozen sampling rate (3A.3). */
+  videoFps?: number;
 }): TokenEstimate {
   const imageTokenFn = args.imageTokenFn ?? imageTokens;
   let input = textTokens(args.promptChars) + 600; // system instruction + schema overhead
   for (const m of args.media) {
     if (m.kind === "video") {
-      // ~300 tokens/second at default resolution, plus audio; conservative.
-      input += Math.ceil(((m.durationMs ?? 5000) / 1000) * 300);
+      // sampled frames at the frozen rate × a rounded-up per-frame cost, plus audio; an unknown duration is priced
+      // at Prism's maximum temporal length (a planner never sends such a video, but the estimate must not shrink)
+      const policy = { ...TEMPORAL_SAMPLING_V1, fps: args.videoFps ?? TEMPORAL_SAMPLING_V1.fps };
+      input += videoInputTokens(m.durationMs ?? policy.maxDurationMs, policy);
       continue;
     }
     // images are bounded before sending: estimate the bounded size

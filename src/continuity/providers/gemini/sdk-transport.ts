@@ -36,12 +36,19 @@ export class SdkGeminiTransport implements GeminiTransport {
     });
   }
 
+  /**
+   * Uploads, then waits for ACTIVE. The status polls (`files.get`) are free metadata reads, not data-carrying requests,
+   * so only the upload itself counts against the transport ceiling. If the file was created but never became usable
+   * (or polling failed), it is deleted here best-effort, because the caller never receives its name.
+   */
   async uploadFile(args: { bytes: Uint8Array; mimeType: string; displayName: string }) {
+    let created: string | null = null;
     try {
       let file = await this.ai.files.upload({
         file: new Blob([args.bytes as BlobPart], { type: args.mimeType }),
         config: { mimeType: args.mimeType, displayName: args.displayName.slice(0, 80) },
       });
+      created = file.name ?? null;
       for (let i = 0; i < 30 && file.state === "PROCESSING" && file.name; i++) {
         await new Promise((r) => setTimeout(r, 2000));
         file = await this.ai.files.get({ name: file.name });
@@ -55,6 +62,7 @@ export class SdkGeminiTransport implements GeminiTransport {
       }
       return { name: file.name, uri: file.uri };
     } catch (err) {
+      if (created) await this.ai.files.delete({ name: created }).catch(() => undefined);
       if (err instanceof GeminiTransportError) throw err;
       throw mapSdkError(err);
     }
@@ -77,9 +85,13 @@ export class SdkGeminiTransport implements GeminiTransport {
           parts: t.parts.map((p) =>
             p.type === "text"
               ? { text: p.text }
-              : p.type === "inline"
-                ? { inlineData: { mimeType: p.mimeType, data: p.dataBase64 } }
-                : { fileData: { mimeType: p.mimeType, fileUri: p.fileUri } },
+              : {
+                  ...(p.type === "inline"
+                    ? { inlineData: { mimeType: p.mimeType, data: p.dataBase64 } }
+                    : { fileData: { mimeType: p.mimeType, fileUri: p.fileUri } }),
+                  // static sampling at the batch's frozen rate (documented range (0, 24]; default would be 1 fps)
+                  ...(p.videoFps ? { videoMetadata: { fps: p.videoFps } } : {}),
+                },
           ),
         })),
         config: {

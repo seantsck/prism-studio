@@ -104,6 +104,12 @@ the new truth. Old runs are never refreshed or rewritten.
 Policy changes govern **new** submissions only: `off → automatic` lets the next reconciliation queue semantic QA;
 `automatic → off` stops future semantic jobs and does not cancel a job that was validly authorised and queued.
 
+**Phase 3A.3 coverage** ([temporal-video-qa](temporal-video-qa.md)): an automatic semantic run includes the full
+output video only with the Project's separate `direct_video_allowed` (0045, default false) AND the standing
+`external_media_allowed`. The automatic identity names the analyzer version and, only when the full video is planned,
+a `temporal` coverage flag. So a newer analyzer, or newly allowed full video, queues ONE new run for unchanged truth
+without calling the older run stale. Turning full video off again queues nothing new.
+
 ## Failure behaviour
 
 A QA infrastructure failure (ffmpeg unavailable, object missing, checksum mismatch, database error) returns `failed`

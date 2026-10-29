@@ -1,6 +1,12 @@
 import { fingerprint } from "../../hash";
 import type { AnalyzerCapability, ContinuityCriterion } from "../model";
 import {
+  DIRECT_VIDEO_MIMES,
+  TEMPORAL_SAMPLING_V1,
+  temporalCapabilityReason,
+  type TemporalSamplingPolicy,
+} from "./temporal";
+import {
   DEFAULT_ANALYSIS_BUDGET,
   promptVersionFor,
   type AnalysisBatch,
@@ -74,6 +80,34 @@ export interface PlanInput {
   /** Everything eligible. Output media (frames / sheet / video) have kind != "reference". */
   media: AnalysisMedia[];
   budget?: AnalysisBudget;
+  /**
+   * 3A.3: the Project explicitly allows sending the FULL selected delivery video (`direct_video_allowed`). Absent =
+   * false: a server/analyzer that can do direct video still plans NO video without the Project's consent.
+   */
+  directVideoAllowed?: boolean;
+  /** Frozen on every direct-video batch. */
+  sampling?: TemporalSamplingPolicy;
+}
+
+/** Why the output video cannot be sent for temporal analysis (null = eligible). Checked BEFORE any transport. */
+export function videoIneligibility(
+  video: Pick<AnalysisMedia, "mime" | "durationMs" | "byteSize" | "checksum"> | null,
+  policy: TemporalSamplingPolicy,
+): string | null {
+  if (!video)
+    return "The output is not a video (or its file is unavailable): temporal criteria need the output video.";
+  if (!video.mime || !(DIRECT_VIDEO_MIMES as readonly string[]).includes(video.mime))
+    return `The output video format (${video.mime ?? "unknown"}) is not supported for temporal analysis.`;
+  if (video.durationMs == null || !Number.isFinite(video.durationMs) || video.durationMs <= 0)
+    return "The output video's duration is unknown, so timestamps could not be checked.";
+  if (video.durationMs > policy.maxDurationMs)
+    return `The output video is longer than Prism's ${policy.maxDurationMs / 1000} s temporal-analysis limit.`;
+  if (video.byteSize == null || video.byteSize > policy.maxBytes)
+    return `The output video is larger than Prism's ${Math.round(policy.maxBytes / 1024 / 1024)} MB temporal-analysis limit.`;
+  // the full video leaves Prism only if the worker can prove it is exactly the frozen subject
+  if (!video.checksum)
+    return "The output video has no recorded checksum, so Prism cannot prove which file would be sent.";
+  return null;
 }
 
 export const toAnalysisCriterion = (c: ContinuityCriterion): AnalysisCriterion | null =>
@@ -99,6 +133,8 @@ function rankedReferences(roles: readonly string[], media: AnalysisMedia[]): Ana
 
 export function buildAnalysisPlan(input: PlanInput): ContinuityAnalysisPlan {
   const budget = input.budget ?? DEFAULT_ANALYSIS_BUDGET;
+  const sampling = input.sampling ?? TEMPORAL_SAMPLING_V1;
+  const directVideoAllowed = input.directVideoAllowed === true;
   const { analyzer } = input;
   const items: PlanItem[] = [];
   const planned: Array<{
@@ -113,6 +149,7 @@ export function buildAnalysisPlan(input: PlanInput): ContinuityAnalysisPlan {
     .sort((a, b) => (a.atMs ?? 0) - (b.atMs ?? 0));
   const sheet = input.media.find((m) => m.kind === "contact_sheet") ?? null;
   const video = input.media.find((m) => m.kind === "video") ?? null;
+  const videoProblem = videoIneligibility(video, sampling);
   const outputsForImageSet: AnalysisMedia[] =
     frames.length > 0 ? frames.slice(0, budget.maxOutputImagesPerBatch) : sheet ? [sheet] : [];
 
@@ -143,26 +180,45 @@ export function buildAnalysisPlan(input: PlanInput): ContinuityAnalysisPlan {
     const ac = toAnalysisCriterion(c)!;
 
     if (temporal) {
-      const supported = analyzer.modes.includes("direct_video") && analyzer.videoCapabilities.includes(cap);
-      if (!supported) {
+      // order: what the analyzer/server can do, then what the Project allows, then whether this video qualifies
+      if (!analyzer.modes.includes("direct_video")) {
         items.push({
           ...base,
           status: "unsupported",
           mode: "direct_video",
           capability: cap,
-          reason: analyzer.modes.includes("direct_video")
-            ? `${analyzer.id} does not declare ${cap}.`
-            : "Needs direct-video analysis, which is not enabled. Stays unchecked.",
+          reason:
+            "Needs direct-video analysis, which this analyzer does not offer here (server disabled or no video support). Stays unchecked.",
         });
         continue;
       }
-      if (!video) {
+      if (!analyzer.videoCapabilities.includes(cap)) {
+        items.push({
+          ...base,
+          status: "unsupported",
+          mode: "direct_video",
+          capability: cap,
+          reason: temporalCapabilityReason(cap, analyzer.id),
+        });
+        continue;
+      }
+      if (!directVideoAllowed) {
+        items.push({
+          ...base,
+          status: "not_allowed",
+          mode: "direct_video",
+          capability: cap,
+          reason: "The Project has not allowed full-video analysis (Shot QA settings). Stays unchecked.",
+        });
+        continue;
+      }
+      if (videoProblem) {
         items.push({
           ...base,
           status: "no_media",
           mode: "direct_video",
           capability: cap,
-          reason: "No output video is available.",
+          reason: videoProblem,
         });
         continue;
       }
@@ -247,6 +303,7 @@ export function buildAnalysisPlan(input: PlanInput): ContinuityAnalysisPlan {
         outputInputIds:
           mode === "direct_video" ? (video ? [video.inputId] : []) : outputsForImageSet.map((m) => m.inputId),
         omittedReferenceInputIds: slice[0]!.omitted.map((r) => r.inputId),
+        ...(mode === "direct_video" ? { sampling: { policy: sampling.id, fps: sampling.fps } } : {}),
       });
     }
   }
@@ -254,6 +311,14 @@ export function buildAnalysisPlan(input: PlanInput): ContinuityAnalysisPlan {
     for (const k of b.criterionKeys) items.find((it) => it.criterionKey === k)!.batchId = b.id;
 
   // ── manifest: everything eligible, sent or not, with the reason ──
+  const temporalItems = items.filter((i) => i.mode === "direct_video");
+  const videoOmission: ManifestEntry["omissionReason"] = temporalItems.some((i) => i.status === "not_allowed")
+    ? "direct_video_not_allowed"
+    : temporalItems.some((i) => i.status === "no_media")
+      ? "video_not_eligible"
+      : !analyzer.modes.includes("direct_video")
+        ? "direct_video_disabled"
+        : "no_matching_criterion";
   const sentIds = new Set(batches.flatMap((b) => [...b.referenceInputIds, ...b.outputInputIds]));
   const entries: ManifestEntry[] = input.media
     .map((m) => ({
@@ -267,7 +332,7 @@ export function buildAnalysisPlan(input: PlanInput): ContinuityAnalysisPlan {
       omissionReason: sentIds.has(m.inputId)
         ? null
         : m.kind === "video"
-          ? ("direct_video_disabled" as const)
+          ? videoOmission
           : batches.some((b) => b.omittedReferenceInputIds.includes(m.inputId))
             ? ("input_budget" as const)
             : ("no_matching_criterion" as const),
@@ -304,6 +369,10 @@ export interface PlanSummary {
   manual: number;
   unsupported: number;
   noMedia: number;
+  /** 3A.3: criteria the Project's media consent keeps unchecked (full video not allowed). */
+  notAllowed: number;
+  /** 3A.3: the full output video leaves Prism in this plan. */
+  videoSent: boolean;
   referencesSent: number;
   referencesOmitted: number;
   outputImagesSent: number;
@@ -319,6 +388,8 @@ export function summarizePlan(plan: ContinuityAnalysisPlan): PlanSummary {
     manual: c("manual"),
     unsupported: c("unsupported"),
     noMedia: c("no_media"),
+    notAllowed: c("not_allowed"),
+    videoSent: sent.some((e) => e.kind === "video"),
     referencesSent: sent.filter((e) => e.kind === "reference").length,
     referencesOmitted: plan.manifest.entries.filter((e) => e.omissionReason === "input_budget").length,
     outputImagesSent: sent.filter((e) => e.kind !== "reference" && e.kind !== "video").length,

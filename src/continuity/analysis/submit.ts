@@ -8,6 +8,8 @@ import { ensureReviewArtifacts, readVerified, type DeliveryDeps } from "@/media/
 import { deterministicFindings, type QaInputs } from "@/continuity/service";
 import type { AnalysisSpendPolicy } from "@/domain/continuity/analysis/cost";
 import { analysisSpendBlockers } from "@/domain/continuity/analysis/cost";
+import { videoIneligibility } from "@/domain/continuity/analysis/plan";
+import { TEMPORAL_SAMPLING_V1 } from "@/domain/continuity/analysis/temporal";
 import { projectBudgetBlockers, type ProjectQaPolicy } from "@/domain/continuity/automation";
 import { buildAnalysisInput, buildAnalysisMedia, inputAssetIdsOf, type OutputMediaSet } from "./prepare";
 import type { ContinuityAnalysisProvider } from "./provider";
@@ -15,7 +17,14 @@ import type { ContinuityAnalysisProvider } from "./provider";
 export class AnalysisSubmitError extends Error {
   constructor(
     readonly code:
-      "spend_blocked" | "project_budget_blocked" | "needs_ack" | "no_output" | "nothing_to_analyse" | "limit",
+      | "spend_blocked"
+      | "project_budget_blocked"
+      | "needs_ack"
+      /** 3A.3: the plan sends the full video and this manual run did not acknowledge exactly that. */
+      | "needs_video_ack"
+      | "no_output"
+      | "nothing_to_analyse"
+      | "limit",
     message: string,
   ) {
     super(message);
@@ -23,11 +32,37 @@ export class AnalysisSubmitError extends Error {
   }
 }
 
-/** Stable per (attempt, subject, criteria, references, analyzer, model, prompt+rubric) + a client nonce. */
+/**
+ * 3A.3: would this analysis plan the FULL output video? (the analyzer can do direct video here, it declares a
+ * capability some analyzer-handled criterion needs, the subject is a video, and the Project allows it). Cheap and
+ * plan-free, so the read side (is semantic QA due?) and the submission agree on the analysis COVERAGE identity.
+ */
+export function plansDirectVideo(args: {
+  inputs: Pick<QaInputs, "criteria" | "subject">;
+  provider: Pick<ContinuityAnalysisProvider, "modes" | "videoCapabilities">;
+  directVideoAllowed: boolean;
+}): boolean {
+  if (!args.directVideoAllowed || args.inputs.subject?.type !== "video") return false;
+  // the same eligibility the planner applies: an ineligible video is never covered, so its key stays image-only
+  if (videoIneligibility(args.inputs.subject, TEMPORAL_SAMPLING_V1) != null) return false;
+  if (!args.provider.modes().includes("direct_video")) return false;
+  const caps = args.provider.videoCapabilities();
+  return args.inputs.criteria.some(
+    (c) => c.handler === "analyzer" && c.capability != null && caps.includes(c.capability),
+  );
+}
+
+/**
+ * Stable per (attempt, subject, criteria, references, analyzer + version, model, rubric) + a client nonce. The
+ * analyzer VERSION is part of it (a newer analyzer version, e.g. Gemini v3, is new coverage for the same truth, and a
+ * job of an older version never covers it); 3A.3 adds the coverage flag
+ * `temporal` ONLY when the analysis plans the full video, so every image-only key is exactly what it was in 3A.2.
+ */
 export function analysisIdempotencyKey(
   inputs: QaInputs,
   provider: ContinuityAnalysisProvider,
   nonce: string,
+  coverage: { temporal: boolean } = { temporal: false },
 ): string {
   return createHash("sha256")
     .update(
@@ -40,6 +75,7 @@ export function analysisIdempotencyKey(
         provider.model,
         RUBRIC_VERSION,
         nonce,
+        ...(coverage.temporal ? ["temporal"] : []),
       ].join("|"),
     )
     .digest("hex");
@@ -67,6 +103,12 @@ export async function submitAnalysis(args: {
    * below (they can only be stricter). Absent for a manual analysis.
    */
   projectPolicy?: ProjectQaPolicy;
+  /**
+   * 3A.3: full-video analysis. `allowed` = the Project permits it for this path (`directVideoPermitted`);
+   * `acknowledged` = this run explicitly accepted sending the full video (a manual run's own checkbox; the
+   * automatic path's standing consent). Absent = no full video is planned.
+   */
+  directVideo?: { allowed: boolean; acknowledged: boolean };
   now?: Date;
 }): Promise<{ run: ContinuityRunView; job: AnalysisJob; duplicate: boolean }> {
   const { inputs, view, provider, deps } = args;
@@ -86,15 +128,32 @@ export async function submitAnalysis(args: {
     ...(art.contactSheet ? [art.contactSheet.asset] : []),
   ];
   const media = buildAnalysisMedia({ inputs, assets, output, subject });
-  const key = analysisIdempotencyKey(inputs, provider, args.nonce);
+  const directVideoAllowed = args.directVideo?.allowed === true;
+  const key = analysisIdempotencyKey(inputs, provider, args.nonce, {
+    temporal: plansDirectVideo({ inputs, provider, directVideoAllowed }),
+  });
   const input = {
-    ...buildAnalysisInput({ inputs, media, provider, runKey: key.slice(0, 16), subject }),
+    ...buildAnalysisInput({
+      inputs,
+      media,
+      provider,
+      runKey: key.slice(0, 16),
+      subject,
+      directVideoAllowed,
+    }),
     attemptId: view.attempt.id,
   };
   if (input.plan.batches.length === 0) {
     throw new AnalysisSubmitError(
       "nothing_to_analyse",
       "No criterion can be analysed automatically with this analyzer (all are deterministic, manual, unsupported or lack media).",
+    );
+  }
+
+  if (input.plan.batches.some((b) => b.mode === "direct_video") && args.directVideo?.acknowledged !== true) {
+    throw new AnalysisSubmitError(
+      "needs_video_ack",
+      "This analysis sends the FULL output video to the analyzer: acknowledge the full-video transfer to continue.",
     );
   }
 

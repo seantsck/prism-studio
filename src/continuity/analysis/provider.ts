@@ -54,7 +54,11 @@ export interface AnalysisContext {
    * "request sent". It may throw `AnalysisBatchError("local_policy_block")`: the transport is then never invoked
    * and nothing is counted as sent.
    */
-  beforeTransportCall?(info: { batch: AnalysisBatch; kind: "analysis" | "correction" }): Promise<void>;
+  beforeTransportCall?(info: {
+    batch: AnalysisBatch;
+    /** "upload" (3A.3): a temporary provider file for a direct-video batch; it counts like any outbound request. */
+    kind: "analysis" | "correction" | "upload";
+  }): Promise<void>;
   /** Whether the run may still spend a schema-correction request (undefined ⇒ allowed). */
   canCorrect?(): boolean;
   /** A temporary provider-side file now exists (operational metadata only; never canonical media). */
@@ -85,6 +89,8 @@ export interface ContinuityAnalysisProvider {
     media: Map<string, MediaBytes>;
     ctx: AnalysisContext;
   }): Promise<BatchOutcome>;
+  /** 3A.3: how a video of this size would be sent (preflight disclosure). Absent = the analyzer sends no video. */
+  videoTransfer?(byteSize: number): "inline" | "provider_file";
   /** Best-effort deletion of temporary provider-side files. Never throws; reports what happened per file. */
   cleanupFiles?(refs: string[]): Promise<Array<{ ref: string; state: "deleted" | "cleanup_failed" }>>;
 }

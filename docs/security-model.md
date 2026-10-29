@@ -140,6 +140,26 @@ meaning of a queued job. Automatic semantic QA needs a persisted standing author
 finite Project ceilings, all database-enforced) and still passes the server's global analysis spend gate; a Project
 ceiling can only be stricter. A reconciliation never calls a provider itself.
 
+## Temporal Video QA (Phase 3A.3)
+
+Sending the **full** delivery video is a separate, explicit Project permission (`direct_video_allowed`, migration 0045,
+default false; [temporal-video-qa](temporal-video-qa.md)). It is never implied by a credential, the semantic mode, the
+3A.2 media consent or a past manual run. A manual run also needs its own full-video acknowledgement. The server gate
+(`PRISM_STUDIO_GEMINI_DIRECT_VIDEO`) and every spend gate still apply.
+
+The worker sends only the frozen subject: it re-verifies the checksum (a video without a recorded checksum is never
+sent), and a mismatch is an infrastructure failure.
+A temporary provider file is an operational copy: only its name is recorded (never its URI, the bytes, a signed
+Prism URL or the key). It is deleted best-effort, and a `cleanup_failed` stays visible. Cleanup is **not**
+crash-safe:
+
+- A worker that dies between upload and cleanup leaves the copy until Gemini's automatic 48-hour deletion; the
+  reclaimed job fails `outcome_unknown` and nothing is re-sent.
+- An ambiguous upload (timeout or network) has the same limit.
+
+Neither worker role gains any privilege: 0045 adds one column to an owner-only table with no grant, and the
+continuity worker never reads the policy. OpenAI never receives video.
+
 ## Residual risks and gaps
 
 These are known and unmitigated unless noted.

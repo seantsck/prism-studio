@@ -417,6 +417,52 @@ try {
       [P],
       /project_qa_policies_run_within_day/,
     );
+    // ── 0045 (Phase 3A.3): full-video consent is its own explicit column, default false ──
+    if (
+      !(
+        await client.query(
+          "select 1 from information_schema.columns where table_name='project_qa_policies' and column_name='direct_video_allowed'",
+        )
+      ).rowCount
+    ) {
+      results.push([
+        "migration 0045 (full-video consent) is applied",
+        false,
+        "project_qa_policies.direct_video_allowed does not exist",
+      ]);
+    } else {
+      await expectOk(
+        "qa policy (0045): full-video consent defaults to false, even for a fully explicit automatic policy",
+        async () => {
+          await client.query("savepoint dv");
+          try {
+            const d = await client.query(
+              "insert into project_qa_policies (project_id, semantic_mode, analyzer, external_media_allowed, max_cost_per_run_usd, max_cost_per_day_usd) values ($1, 'automatic', 'gemini', true, 0.05, 1) returning direct_video_allowed",
+              [P],
+            );
+            const u = await client.query(
+              "update project_qa_policies set direct_video_allowed = true, revision = revision + 1 where project_id = $1 returning direct_video_allowed, revision",
+              [P],
+            );
+            return {
+              ok:
+                d.rows[0].direct_video_allowed === false &&
+                u.rows[0].direct_video_allowed === true &&
+                u.rows[0].revision === 2,
+              msg: JSON.stringify([d.rows[0], u.rows[0]]),
+            };
+          } finally {
+            await client.query("rollback to savepoint dv");
+          }
+        },
+      );
+      await expectError(
+        "qa policy (0045): full-video consent is never null",
+        "insert into project_qa_policies (project_id, direct_video_allowed) values ($1, null)",
+        [P],
+        /null value in column "direct_video_allowed"/,
+      );
+    }
     await expectOk(
       "qa policy: a fully explicit automatic policy is accepted (default mode is off)",
       async () => {
