@@ -9,7 +9,8 @@
 //     --i-understand-this-sends-synthetic-video-and-costs-money --out smoke.json
 //
 // The logic lives in src/continuity/calibration/analyzer-contract-smoke.ts; this wrapper only supplies the real
-// transport, argv and env.
+// transport, argv and env, and ends the process gracefully (cli-exit.ts: no forced exit mid-teardown).
+import { exitGracefully } from "../src/continuity/calibration/cli-exit";
 import { runSmokeCli } from "../src/continuity/calibration/analyzer-contract-smoke";
 
 runSmokeCli({
@@ -20,9 +21,9 @@ runSmokeCli({
     return new SdkGeminiTransport({ apiKey });
   },
 }).then(
-  (code) => process.exit(code),
+  (code) => exitGracefully(code),
   (err: unknown) => {
     console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
+    exitGracefully(1);
   },
 );

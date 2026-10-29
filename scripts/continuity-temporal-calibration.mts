@@ -21,7 +21,9 @@
 // passes). Fake mode accepts the same limits to exercise the quota preflight; it never waits.
 //
 // The logic lives in src/continuity/calibration/temporal-calibration-cli.ts (tested: every live refusal happens before
-// the SDK transport below is created). This wrapper only supplies the real transport, argv and env.
+// the SDK transport below is created). This wrapper only supplies the real transport, argv and env, and ends the
+// process gracefully (cli-exit.ts: no forced exit mid-teardown).
+import { exitGracefully } from "../src/continuity/calibration/cli-exit";
 import { runCalibrationCli } from "../src/continuity/calibration/temporal-calibration-cli";
 
 runCalibrationCli({
@@ -32,9 +34,9 @@ runCalibrationCli({
     return new SdkGeminiTransport({ apiKey });
   },
 }).then(
-  (code) => process.exit(code),
+  (code) => exitGracefully(code),
   (err: unknown) => {
     console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
+    exitGracefully(1);
   },
 );

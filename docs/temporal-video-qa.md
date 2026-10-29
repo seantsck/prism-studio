@@ -10,15 +10,20 @@ QA stays **advisory**. An analyzer never approves, rejects, retries, regenerates
 Frame or Location View, changes a Character Continuity Lock or touches an Episode Edit. People keep creative
 authority.
 
-**Status:** implemented with fake transports and a calibration harness. **Live calibration not yet successfully
-completed:** three live attempts (all 2026-10-28) got zero model answers and are not model-quality evidence. The
+**Status:** implemented with fake transports and a calibration harness; live Gemini analysis is operational.
+**Production temporal calibration not yet accepted.** The fourth live attempt (2026-10-29, `temporal-calibration-v1`)
+got 48/48 model answers and accepted five of six production families. Its one miss, screen direction, was traced to a
+**v1 fixture truth defect**, not a model failure
+([record](#fourth-live-attempt-2026-10-29-calibration-v1-fixture-truth-mismatch)). `temporal-calibration-v2` corrects
+that truth; a full v2 run is pending separate authorisation. The first three live attempts (all 2026-10-28) got zero
+model answers and are not model-quality evidence. The
 first was a provider quota/infrastructure failure
 ([record](#first-live-attempt-2026-10-28-provider-access-failure-not-an-evaluated-trial)); the second was a billing
 refusal, HTTP 402 ([record](#second-live-attempt-2026-10-28-provider-billing-refusal-not-an-evaluated-trial)); the
 third was a **Gemini request-contract incompatibility**, HTTP 400 INVALID_ARGUMENT on the analyzer's response schema
 ([record](#third-live-attempt-2026-10-28-gemini-request-contract-incompatibility-not-an-evaluated-trial)). The
-request contract is remediated (Gemini analyzer v3) and verified on a diagnostic clip. A fourth run is pending
-separate authorisation, and it must first pass the [analyzer-contract smoke](#analyzer-contract-smoke).
+request contract is remediated (Gemini analyzer v3) and verified live by the committed
+[analyzer-contract smoke](#analyzer-contract-smoke), which every live calibration must pass first.
 Migration 0045 is **applied to hosted DEV and verified** (2026-10-28; see
 [migration-policy](migration-policy.md)). Lip sync stays **unchecked**.
 
@@ -202,11 +207,15 @@ full video, so every image-only key is exactly what it was in 3A.2. Consequences
 
 ## Calibration (required before production capability claims)
 
-`src/continuity/calibration/temporal-calibration.ts` (`temporal-calibration-v1`) holds the calibration set:
+`src/continuity/calibration/temporal-calibration.ts` (`temporal-calibration-v2`) holds the calibration set. v2 differs
+from v1 only in the screen-direction truth text (see the
+[fourth attempt](#fourth-live-attempt-2026-10-29-calibration-v1-fixture-truth-mismatch)):
 
 - **Fixtures.** 16 deterministic synthetic clips rendered by ffmpeg (no copyrighted footage, no real person):
   - camera pan right, plus a reverse control and a static control;
-  - left→right direction plus a reverse;
+  - left→right direction plus a reverse. Truth (v2): "The red subject moves left to right across the frame". The
+    70 px square runs x = 0 → 570 in a 640 px frame, so it reaches the right edge but never exits; v1's truth wrongly
+    said "(exits screen-right)";
   - eyeline: a face proxy whose pupil faces the target, plus a control where it turns away at 2 s;
   - beats in order, reordered, omitted;
   - forbidden action occurring at 2–3 s, plus an absent control;
@@ -351,6 +360,43 @@ The configuration was the same, run at the Tier 1 limits the operator declared (
 - **What it means:** there is **no model-quality conclusion**, and `temporal-calibration-v1` (fixtures, truth,
   windows, trials, grader, 4 fps, prompt) stands unchanged. There was no rerun.
 
+### Fourth live attempt (2026-10-29): calibration v1 fixture truth mismatch
+
+- **What ran:** the committed analyzer-contract smoke, then one complete `temporal-calibration-v1` run. Both used
+  Gemini analyzer v3, `gemini-3.8-flash`, prompt `continuity-gemini-video-v2`, analysis schema 2,
+  `shot-temporal-static-v1` at 4 fps, 16 fixtures × 3 trials, and synthetic media only (calibration input hash
+  `9ae49ee7e30af6b32cd42a1c62d9e4aa7625b036412aa5010bfbfaabbeea77ea`).
+- **Smoke:** PASS. HTTP 200, provider accepted, local validation ok, one request, no upload, $0.001652 known. The
+  wrapper's forced `process.exit` then hit a Windows libuv `UV_HANDLE_CLOSING` assertion during shutdown, after the
+  report was written, so the shell saw 127. The wrappers now exit gracefully (`cli-exit.ts`).
+- **Calibration:** completed. There were 48/48 model answers, with 0 rejected, 0 unanswered, 0 unattempted, no
+  provider or request errors and no corrections. The actual cost was **$0.10941** (known: 48/48 calls reported
+  usage). There were no evidence-window failures.
+  - **Accepted (3/3 on every fixture):** camera movement, eyelines, action continuity, forbidden action, geography.
+  - **Not accepted:** screen direction. `direction-reversed` was answered `fail` 3/3, correctly. The positive
+    `direction-left-to-right` was answered **`warn` 3/3**. Each answer said the square moves left to right but does
+    not fully exit screen-right before the clip ends.
+  - **Lip-sync proxy:** `unchecked` 3/3 on both fixtures ("no characters, mouths, or dialogue"). It is
+    non-production, and `GEMINI_LIP_SYNC_CALIBRATED` stays `false`.
+- **Root cause (by code inspection, independent of the answers):** the positive render is
+  `overlay=x='t/4*(640-70)'`. The 70 px square starts at x = 0 and ends at x = 570, so it occupies 570–640: it
+  touches the right edge and never moves beyond it. v1's truth, "The red subject moves left to right (exits
+  screen-right)", claimed an exit that the pixels never perform. The model's `warn` is consistent with the pixels.
+- **What it means:**
+  - This is a **calibration fixture truth mismatch**, and **not** model-quality evidence against screen-direction
+    capability.
+  - v1 is a completed but **not accepted** calibration. It is not re-graded and its WARNs are not reinterpreted.
+  - **`temporal-calibration-v2`** corrects the truth text of both direction fixtures to "The red subject moves left
+    to right across the frame". The positive fixture stays `pass` and the reverse stays `fail`.
+  - Nothing else changed: no pixels (no exit was added, because this criterion tests direction, not exits), no other
+    fixture, window, duration, audio, grading, trials, threshold, sampling, prompt or schema.
+  - The v2 calibration input hash is
+    `7ef1957c5b3632dffd5985c2f193e6310fa7de0f2661c8b188fad9d78864d4e3`.
+  - The analyzer stays **v3**: its request contract is unchanged, and the calibration version, not the analyzer
+    version, distinguishes this experiment.
+  - Production acceptance needs a **complete v2 run** (all 16 fixtures × 3 trials, after the smoke). v1's five
+    accepted families are supporting evidence only, and a screen-direction-only rerun does not substitute for it.
+
 ### Analyzer-contract smoke
 
 `npm run continuity:temporal:smoke` (`src/continuity/calibration/analyzer-contract-smoke.ts`) sends **one** request
@@ -362,7 +408,8 @@ never a fixture and carries no calibration truth.
 It reports whether the provider accepted the request and, separately, whether Prism's local validation accepted the
 answer. A 200 whose answer fails local validation is not a pass. It never grades quality. Hard ceilings: 1 request,
 $0.05, no upload, no correction, no retry. Live mode needs the same flags and acknowledgement as the calibration. Exit
-codes: 0 pass, 2 refused (nothing sent), 3 sent but not a pass.
+codes: 0 pass, 2 refused (nothing sent), 3 sent but not a pass. Both wrappers set `process.exitCode` rather than
+calling `process.exit` mid-teardown; an unref'd 10 s fallback forces the same code if a handle never closes.
 
 **A live calibration must first pass this smoke.** A basic connectivity smoke is not enough: it passed before the
 third attempt.
@@ -459,6 +506,7 @@ disposable Project the owner can set and clear the permission (revisioned, stale
 | Identity                   | Before                       | After                        | Why                                                            |
 | -------------------------- | ---------------------------- | ---------------------------- | -------------------------------------------------------------- |
 | `CONTINUITY_RULES_VERSION` | `3a.1`                       | `3a.1`                       | Criteria, expected values, severity and routing are unchanged  |
+| Calibration version        | —                            | `temporal-calibration-v2`    | v1 direction truth claimed an exit the pixels never perform    |
 | Gemini analyzer version    | `1`                          | `3`                          | Temporal capability (v2) + compact Gemini response schema (v3) |
 | Direct-video prompt        | `continuity-gemini-video-v1` | `continuity-gemini-video-v2` | New temporal instruction and evidence contract                 |
 | `RUBRIC_VERSION`           | `continuity-rubric-1`        | `continuity-rubric-1`        | Result meanings unchanged                                      |

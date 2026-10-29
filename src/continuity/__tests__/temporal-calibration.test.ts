@@ -63,8 +63,9 @@ describe("calibration design is pre-registered", () => {
       expect(fx.some((f) => f.correct === "fail")).toBe(true);
     }
     expect(CALIBRATION_ACCEPTANCE).toEqual({ trials: 3, minCorrectPerFixture: 3, eventSlackMs: 500 });
-    // the 2026-10-28 first live attempt got zero model answers: not an evaluated trial, so v1 stands unchanged
-    expect(CALIBRATION_VERSION).toBe("temporal-calibration-v1");
+    // v1's first three live attempts got zero model answers; the fourth (48/48 answers) exposed a screen-direction
+    // truth defect, so the corrected truth is a new version (v2), never a re-grade of v1
+    expect(CALIBRATION_VERSION).toBe("temporal-calibration-v2");
     expect(TEMPORAL_FIXTURES).toHaveLength(16);
     expect(CALIBRATION_RUN_CONTROL).toEqual({
       abortOnHttp429: true,
@@ -73,6 +74,30 @@ describe("calibration design is pre-registered", () => {
       rpmSafety: 0.8,
     });
     expect(new Set(TEMPORAL_FIXTURES.map((f) => f.id)).size).toBe(TEMPORAL_FIXTURES.length);
+  });
+
+  it("screen direction (v2): the truth states only the direction the pixels show, never a frame exit", () => {
+    const pos = TEMPORAL_FIXTURES.find((f) => f.id === "direction-left-to-right")!;
+    const rev = TEMPORAL_FIXTURES.find((f) => f.id === "direction-reversed")!;
+    expect(pos.expected).toBe("The red subject moves left to right across the frame");
+    expect(rev.expected).toBe(pos.expected);
+    for (const f of [pos, rev]) {
+      expect(f.criterion).toBe("screen_direction");
+      expect(f.expected).not.toMatch(/exit|off-?screen/i);
+    }
+    expect(pos.correct).toBe("pass");
+    expect(rev.correct).toBe("fail");
+    // endpoint invariant from the committed overlay x-expressions: the 70 px square spans 0 → 640-70 = 570, so it
+    // touches the right edge (570..640) and never leaves the 640 px frame; the reverse runs 570 → 0
+    const xAt = (f: CalibrationFixture, t: number) => {
+      const expr = /overlay=x='([^']+)'/.exec(f.video)![1]!;
+      expect(expr).toMatch(/^[\d\s+\-*/.()t]+$/);
+      return Function("t", `return ${expr};`)(t) as number;
+    };
+    expect(pos.video).toContain("color=c=red:s=70x70");
+    expect([xAt(pos, 0), xAt(pos, 4)]).toEqual([0, 570]);
+    expect([xAt(rev, 0), xAt(rev, 4)]).toEqual([570, 0]);
+    expect(Math.max(xAt(pos, 4), xAt(rev, 0)) + 70).toBe(640);
   });
 
   it("an empty result set accepts nothing (unchecked/errors never count)", () => {

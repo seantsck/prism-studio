@@ -27,7 +27,9 @@ import { AnalysisBatchError, type ContinuityAnalysisProvider, type UsageCall } f
  * The expectations below are fixed BEFORE any live answer is seen. Changing them after a live run is a new
  * calibration version, never a re-grade.
  */
-export const CALIBRATION_VERSION = "temporal-calibration-v1";
+// v2 (2026-10-29): the screen-direction truth text is corrected (see the direction fixtures). Every other fixture,
+// the pixels, windows and grading are v1's; v1 stays the record of the fourth live run, never re-graded.
+export const CALIBRATION_VERSION = "temporal-calibration-v2";
 
 export type CalibrationCriterion =
   | "camera_movement"
@@ -96,11 +98,15 @@ export const TEMPORAL_FIXTURES: readonly CalibrationFixture[] = [
     video: `testsrc2=s=1920x${H}:d=${D}:r=24,crop=${W}:${H}:x=640:y=0`,
   },
   // ── screen direction: a proxy subject crossing the frame ──
+  // The square (70 px) runs x = 0 → W-70 over the clip: it reaches the right edge but never leaves the frame. v1's
+  // truth said "(exits screen-right)", which these pixels never do; the fourth live run answered WARN 3/3 on the
+  // positive fixture for exactly that. v2 states only the direction the pixels show. Do not reintroduce an exit
+  // claim (or add an exit to the render): this criterion tests direction, not frame exits.
   {
     id: "direction-left-to-right",
     criterion: "screen_direction",
     description: "A red square proxy moves from frame left to frame right.",
-    expected: "The red subject moves left to right (exits screen-right)",
+    expected: "The red subject moves left to right across the frame",
     correct: "pass",
     durationMs: D * 1000,
     video: `${bg}[b];${box("red")}[s];[b][s]overlay=x='t/${D}*${W - 70}':y=145`,
@@ -109,7 +115,7 @@ export const TEMPORAL_FIXTURES: readonly CalibrationFixture[] = [
     id: "direction-reversed",
     criterion: "screen_direction",
     description: "Reverse control: the red square moves right to left.",
-    expected: "The red subject moves left to right (exits screen-right)",
+    expected: "The red subject moves left to right across the frame",
     correct: "fail",
     durationMs: D * 1000,
     video: `${bg}[b];${box("red")}[s];[b][s]overlay=x='${W - 70}-t/${D}*${W - 70}':y=145`,
