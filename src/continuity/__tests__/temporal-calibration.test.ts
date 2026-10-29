@@ -6,12 +6,14 @@ import {
   CALIBRATION_ACCEPTANCE,
   CALIBRATION_RUN_CONTROL,
   CALIBRATION_VERSION,
+  PROVIDER_ACCESS_FAILURES,
   TEMPORAL_FIXTURES,
   acceptance,
   gradeTrial,
   http429Reason,
   liveReadinessProblems,
   planQuota,
+  providerAccessFailure,
   renderFixture,
   runTemporalCalibration,
   type CalibrationFixture,
@@ -334,7 +336,7 @@ describe("calibration run control, cost honesty and live pacing", () => {
     expect(b.costStatus).toBe("unknown");
   });
 
-  it("the FIRST 429 aborts the run: partial report, unattempted trials counted, every criterion 'incomplete'", async () => {
+  it("the FIRST 429 aborts the run: partial report, unattempted trials counted, no criterion accepted", async () => {
     const transport = new FakeGeminiTransport((req, n) =>
       n < 6 ? ok(req) : { kind: "error", error: q429() },
     );
@@ -351,8 +353,120 @@ describe("calibration run control, cost honesty and live pacing", () => {
     expect(r.trialsUnattempted).toBe(41);
     expect(r.trials.at(-1)).toMatchObject({ result: "error", httpStatus: 429, errorCategory: "rate_limit" });
     expect(Object.values(r.accepted).some(Boolean)).toBe(false);
-    expect(Object.values(r.verdicts).every((v) => v === "not_accepted_incomplete")).toBe(true);
+    // answered criteria are "incomplete"; criteria the model never saw are "not measured" (never "incorrect")
+    const answered = new Set(r.trials.filter((t) => t.result !== "error").map((t) => t.criterion));
+    expect(answered.size).toBeGreaterThan(0);
+    for (const [c, v] of Object.entries(r.verdicts))
+      expect(v).toBe(answered.has(c as never) ? "not_accepted_incomplete" : "not_measured_provider_error");
     expect(r.actualUsd).toBeNull(); // the 429 reported no usage
+  });
+
+  /** The exact shape of the second live attempt: 16 fixtures × 3 trials, the provider refuses the account. */
+  const access = (status: number, message: string) =>
+    new GeminiTransportError(status === 401 || status === 403 ? "auth" : "invalid_input", status, message);
+  for (const [status, reason] of [
+    [402, "provider_billing_error"],
+    [401, "provider_authentication_error"],
+    [403, "provider_authorization_error"],
+    [404, "provider_model_unavailable"],
+  ] as const) {
+    it(`HTTP ${status} on the FIRST request aborts at once as ${reason}: 1 request, 47 unattempted, nothing measured`, async () => {
+      const transport = new FakeGeminiTransport(() => ({
+        kind: "error",
+        error: access(status, `Gemini returned HTTP ${status}: provider refused the project`),
+      }));
+      const r = await run(transport);
+      expect(transport.calls).toBe(1);
+      expect(r.status).toBe("aborted_provider");
+      expect(r.abort).toMatchObject({
+        reason,
+        category: reason,
+        httpStatus: status,
+        fixture: TEMPORAL_FIXTURES[0]!.id,
+        trial: 1,
+      });
+      expect(r.trialsPlanned).toBe(48);
+      expect(r.trialsAttempted).toBe(1);
+      expect(r.trialsRejected).toBe(1);
+      expect(r.trialsUnanswered).toBe(1);
+      expect(r.trialsUnattempted).toBe(47);
+      expect(r.analysisAttempts).toBe(1);
+      expect(r.transportCalls).toBe(1);
+      expect(r.uploadAttempts).toBe(0);
+      expect(r.correctionAttempts).toBe(0);
+      expect(r.answersReceived).toBe(0);
+      // the account failure is never filed as the fixture's invalid input
+      expect(r.trials).toEqual([
+        expect.objectContaining({ result: "error", httpStatus: status, errorCategory: reason }),
+      ]);
+      // no quality conclusion: nothing accepted, nothing "incorrect", every criterion NOT MEASURED
+      expect(Object.values(r.accepted).some(Boolean)).toBe(false);
+      expect(Object.values(r.verdicts).every((v) => v === "not_measured_provider_error")).toBe(true);
+      expect(r.lipSyncCapable).toBe(false);
+      // no usage came back: cost is UNKNOWN (never assumed free), with $0 known usage
+      expect(r.usageReportedCalls).toBe(0);
+      expect(r.actualUsd).toBeNull();
+      expect(r.costStatus).toBe("unknown");
+      expect(r.knownUsageUsd).toBe(0);
+    });
+  }
+
+  it("ordinary per-fixture input errors (400, 413, 422) stay error trials: the run continues and completes", async () => {
+    for (const status of [400, 413, 422]) {
+      const transport = new FakeGeminiTransport((req, n) =>
+        n === 0
+          ? {
+              kind: "error",
+              error: new GeminiTransportError("invalid_input", status, `Gemini returned HTTP ${status}`),
+            }
+          : ok(req),
+      );
+      const r = await run(transport);
+      expect(transport.calls).toBe(48);
+      expect(r.status).toBe("completed");
+      expect(r.abort).toBeNull();
+      expect(r.trials[0]).toMatchObject({
+        result: "error",
+        httpStatus: status,
+        errorCategory: "invalid_input",
+      });
+      expect(r.trialsRejected).toBe(1);
+      expect(r.trialsUnattempted).toBe(0);
+    }
+    // a local refusal (no HTTP status) is not an access failure either
+    expect(providerAccessFailure(null)).toBeNull();
+    expect(providerAccessFailure(400)).toBeNull();
+    expect(providerAccessFailure(429)).toBeNull();
+    expect(providerAccessFailure(500)).toBeNull();
+    expect(PROVIDER_ACCESS_FAILURES).toEqual({
+      401: "provider_authentication_error",
+      402: "provider_billing_error",
+      403: "provider_authorization_error",
+      404: "provider_model_unavailable",
+    });
+  });
+
+  it("a provider error body is redacted before it reaches the report (key, bearer header, api_key param)", async () => {
+    const key = "AIzaSy-test-not-a-real-credential-000000";
+    vi.stubEnv("GEMINI_API_KEY", key);
+    try {
+      const transport = new FakeGeminiTransport(() => ({
+        kind: "error",
+        error: access(
+          402,
+          `Gemini returned HTTP 402: credits depleted for ${key}; Authorization: Bearer abcdefgh12345678 api_key=zzzzzzzz`,
+        ),
+      }));
+      const r = await run(transport);
+      const json = JSON.stringify(r);
+      expect(json).not.toContain(key);
+      expect(json).not.toContain("abcdefgh12345678");
+      expect(json).not.toContain("zzzzzzzz");
+      expect(r.abort?.message).toContain("HTTP 402");
+      expect(r.abort?.message).toContain("credits depleted");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("429 reasons are conservative: quota/billing only when the provider says so", () => {

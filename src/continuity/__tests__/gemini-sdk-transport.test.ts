@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SdkGeminiTransport } from "../providers/gemini/sdk-transport";
 import { GeminiTransportError, type GeminiRequest } from "../providers/gemini/transport";
 
@@ -55,6 +55,10 @@ describe("SdkGeminiTransport (stubbed fetch, no network)", () => {
       "rate_limit",
     ],
     [429, "Too many requests.", "RESOURCE_EXHAUSTED", "rate_limit"],
+    // account/project refusals: the calibration aborts on these by HTTP status (the transport taxonomy is unchanged)
+    [401, "API key not valid. Please pass a valid API key.", "UNAUTHENTICATED", "auth"],
+    [402, "Your prepayment credits are depleted.", "FAILED_PRECONDITION", "invalid_input"],
+    [403, "Permission denied on the project.", "PERMISSION_DENIED", "auth"],
     [500, "Internal error encountered.", "INTERNAL", "server_error"],
     [503, "This model is currently experiencing high demand.", "UNAVAILABLE", "overloaded"],
   ] as const) {
@@ -68,6 +72,23 @@ describe("SdkGeminiTransport (stubbed fetch, no network)", () => {
       expect(calls()).toBe(1);
     });
   }
+
+  it("a provider error body that echoes a credential is redacted in the error message", async () => {
+    const key = "AIzaSy-test-not-a-real-credential-111111";
+    vi.stubEnv("GEMINI_API_KEY", key);
+    try {
+      const { t, calls } = transport(() =>
+        providerError(402, `Credits depleted for key ${key}. Authorization: Bearer abcdefgh12345678`, "X"),
+      );
+      const err = (await t.generate(req).catch((e: unknown) => e)) as GeminiTransportError;
+      expect(err.httpStatus).toBe(402);
+      expect(err.message).not.toContain(key);
+      expect(err.message).not.toContain("abcdefgh12345678");
+      expect(calls()).toBe(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 
   it("a timeout / aborted request is ONE request, mapped to timeout (never re-sent)", async () => {
     const { t, calls } = transport(() => {

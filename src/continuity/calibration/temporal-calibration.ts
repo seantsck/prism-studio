@@ -15,6 +15,7 @@ import {
   type ContinuityAnalysisInput,
   type NormalizedFinding,
 } from "@/domain/continuity/analysis/types";
+import { redactText } from "@/lib/auth/redact";
 import { AnalysisBatchError, type ContinuityAnalysisProvider, type UsageCall } from "../analysis/provider";
 
 /**
@@ -421,15 +422,44 @@ export const CALIBRATION_RUN_CONTROL = {
   rpmSafety: 0.8,
 } as const;
 
+/**
+ * PROVIDER ACCESS FAILURES abort the run on their FIRST occurrence. They mean that the account or project cannot serve
+ * any request until the operator fixes it, not that the fixture or the model failed, so every remaining trial would be
+ * rejected the same way. The second live attempt (2026-10-28) sent all 48 requests and got 48 × HTTP 402 ("prepayment
+ * credits are depleted"), because a 402 was then an ordinary `invalid_input` error trial. A 404 means the model or
+ * endpoint is not served for this project, which is equally run-wide. Other 4xx (400, 413, 422, …) stay per-trial
+ * error trials: a malformed or oversized request is a fixture/harness input problem that need not affect the other
+ * fixtures. (Calibration only: the transport's production taxonomy is unchanged.)
+ */
+export const PROVIDER_ACCESS_FAILURES = {
+  401: "provider_authentication_error",
+  402: "provider_billing_error",
+  403: "provider_authorization_error",
+  404: "provider_model_unavailable",
+} as const;
+export type ProviderAccessFailure = (typeof PROVIDER_ACCESS_FAILURES)[keyof typeof PROVIDER_ACCESS_FAILURES];
+
+export function providerAccessFailure(httpStatus: number | null): ProviderAccessFailure | null {
+  return httpStatus != null && Object.hasOwn(PROVIDER_ACCESS_FAILURES, httpStatus)
+    ? PROVIDER_ACCESS_FAILURES[httpStatus as keyof typeof PROVIDER_ACCESS_FAILURES]
+    : null;
+}
+
 export type CalibrationRunStatus = "completed" | "aborted_provider" | "aborted_local_policy";
 
 /**
- * Per criterion: `accepted`, or why not. `incomplete` = the pre-registered test did not finish (an aborted run);
- * `incorrect` = the model answered and at least one answer was graded wrong; `provider_errors` = every miss was an
- * error with no answer (nothing was learned about the model).
+ * Per criterion: `accepted`, or why not. `incomplete` = the pre-registered test did not finish (an aborted run) after
+ * the model answered some of the criterion's trials; `not_measured_provider_error` = the run aborted on the provider
+ * before the model answered ANY of the criterion's trials (not a quality result); `incorrect` = the model answered and
+ * at least one answer was graded wrong; `provider_errors` = a completed run where every miss was an error with no
+ * answer (nothing was learned about the model).
  */
 export type CriterionVerdict =
-  "accepted" | "not_accepted_incomplete" | "not_accepted_incorrect" | "not_accepted_provider_errors";
+  | "accepted"
+  | "not_accepted_incomplete"
+  | "not_measured_provider_error"
+  | "not_accepted_incorrect"
+  | "not_accepted_provider_errors";
 
 /** Operator-declared limits of the Google project behind the key (read from AI Studio; never inferred). */
 export interface CalibrationQuota {
@@ -458,7 +488,12 @@ export interface CalibrationReport {
   status: CalibrationRunStatus;
   /** Present when the run aborted: why, and on which trial. The message is the transport's sanitized text. */
   abort: {
-    reason: "quota_or_billing_exhausted" | "quota_or_rate_limit" | "provider_unavailable" | "local_policy";
+    reason:
+      | "quota_or_billing_exhausted"
+      | "quota_or_rate_limit"
+      | "provider_unavailable"
+      | ProviderAccessFailure
+      | "local_policy";
     httpStatus: number | null;
     category: string;
     message: string;
@@ -469,6 +504,10 @@ export interface CalibrationReport {
   trialsPlanned: number;
   trialsAttempted: number;
   trialsUnattempted: number;
+  /** Attempted trials that got no model answer (every error trial: rejected, timed out, refused locally). */
+  trialsUnanswered: number;
+  /** Of those, the trials the provider REJECTED with an HTTP status. */
+  trialsRejected: number;
   /** Provider responses received (an answer, a refusal or an invalid answer); errors without a response are not. */
   answersReceived: number;
   /** Every outbound request (uploads included). */
@@ -630,7 +669,8 @@ const usageComplete = (c: UsageCall) =>
  * per fixture per trial; no correction requests (a malformed answer is graded as an error); no retry. A live run
  * (`live: true`) must declare the project's limits (`quota`): requests are then paced start to start, and the plan
  * must fit the TPM and RPD limits before anything is sent. The run aborts (and still returns its partial report) on
- * the first 429, on `maxConsecutive5xx` consecutive 5xx answers, or on a local ceiling.
+ * the first provider access failure (401/402/403/404), on the first 429, on `maxConsecutive5xx` consecutive 5xx
+ * answers, or on a local ceiling.
  */
 export async function runTemporalCalibration(args: {
   provider: ContinuityAnalysisProvider;
@@ -744,24 +784,23 @@ export async function runTemporalCalibration(args: {
         } catch (err) {
           const e = err instanceof AnalysisBatchError ? err : null;
           if (e) calls.push(...e.calls);
-          const message = err instanceof Error ? err.message.slice(0, 200) : "error";
+          // the transport already sanitizes; redacted again here because this text lands in the written report
+          const message = err instanceof Error ? redactText(err.message).slice(0, 200) : "error";
           const status = e?.httpStatus ?? null;
+          const access = providerAccessFailure(status);
+          // an account/project failure is never filed as the fixture's `invalid_input`
+          const category = access ?? e?.category ?? "error";
           out.push({
             ...gradeTrial(f, null),
             trial: t,
             note: message,
             httpStatus: status,
-            errorCategory: e?.category ?? "error",
+            errorCategory: category,
           });
           consecutive5xx = status != null && status >= 500 ? consecutive5xx + 1 : 0;
-          const at = {
-            httpStatus: status,
-            category: e?.category ?? "error",
-            message,
-            fixture: f.id,
-            trial: t,
-          };
+          const at = { httpStatus: status, category, message, fixture: f.id, trial: t };
           if (e?.category === "local_policy_block") abort = { reason: "local_policy", ...at };
+          else if (access) abort = { reason: access, ...at };
           else if (CALIBRATION_RUN_CONTROL.abortOnHttp429 && status === 429)
             abort = { reason: http429Reason(message), ...at };
           else if (consecutive5xx >= CALIBRATION_RUN_CONTROL.maxConsecutive5xx)
@@ -788,13 +827,15 @@ export async function runTemporalCalibration(args: {
     (Object.keys(accepted) as CalibrationCriterion[]).map((c) => {
       const mine = out.filter((t) => t.criterion === c);
       const v: CriterionVerdict =
-        status !== "completed"
-          ? "not_accepted_incomplete"
-          : accepted[c]
-            ? "accepted"
-            : mine.some((t) => t.result !== "error" && !t.correct)
-              ? "not_accepted_incorrect"
-              : "not_accepted_provider_errors";
+        status === "aborted_provider" && mine.every((t) => t.result === "error")
+          ? "not_measured_provider_error"
+          : status !== "completed"
+            ? "not_accepted_incomplete"
+            : accepted[c]
+              ? "accepted"
+              : mine.some((t) => t.result !== "error" && !t.correct)
+                ? "not_accepted_incorrect"
+                : "not_accepted_provider_errors";
       return [c, v];
     }),
   ) as Record<CalibrationCriterion, CriterionVerdict>;
@@ -824,6 +865,8 @@ export async function runTemporalCalibration(args: {
     trialsPlanned: fixtures.length * trials,
     trialsAttempted: out.length,
     trialsUnattempted: fixtures.length * trials - out.length,
+    trialsUnanswered: out.filter((t) => t.result === "error").length,
+    trialsRejected: out.filter((t) => t.result === "error" && t.httpStatus != null).length,
     answersReceived: calls.length,
     transportCalls: counts.transport,
     uploadAttempts: counts.upload,

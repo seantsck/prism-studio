@@ -215,10 +215,26 @@ full video, so every image-only key is exactly what it was in 3A.2. Consequences
     only when the provider's message says so, otherwise `quota_or_rate_limit`. The production worker is unchanged: it
     still requeues a 429 durably;
   - a single 500/503 is an error trial (not retried); **3 consecutive 5xx abort** the run as provider-unavailable;
-  - an aborted run still writes its partial report (status, abort reason, HTTP status, sanitized message, the trials
-    done, the unattempted count, request counters, cost status) and the CLI exits 3. Every criterion of an aborted run
-    reads "NOT ACCEPTED — calibration incomplete", which is distinct from "model answered incorrectly" and from
-    "provider errors (no answer)".
+  - a **provider access failure aborts on its first occurrence** (`PROVIDER_ACCESS_FAILURES`):
+
+    | HTTP | Abort reason / trial category   | Why it is run-fatal                                    |
+    | ---- | ------------------------------- | ------------------------------------------------------ |
+    | 401  | `provider_authentication_error` | the key is not accepted                                |
+    | 402  | `provider_billing_error`        | the project cannot pay (e.g. prepaid credits depleted) |
+    | 403  | `provider_authorization_error`  | the project may not use the model or API               |
+    | 404  | `provider_model_unavailable`    | the model or endpoint is not served for this project   |
+
+    These say nothing about the fixture or the model, and every remaining trial would be refused the same way, so they
+    are never filed as the fixture's `invalid_input`. Other 4xx (400, 413, 422, …) stay **per-trial error trials**: a
+    malformed or oversized request is a fixture/harness input problem that need not affect the other fixtures. The
+    harness classifies by HTTP status; the transport's production taxonomy (`categoryForStatus`) is unchanged;
+
+  - an aborted run still writes its partial report (status `aborted_provider`, abort reason, HTTP status, sanitized
+    and re-redacted message, the trials done, the attempted / rejected / unanswered / unattempted counts, request
+    counters, cost status) and the CLI exits 3. In an aborted run a criterion the model answered at least once reads
+    "NOT ACCEPTED — calibration incomplete"; a criterion with no model answer reads "NOT MEASURED — provider error
+    before any model answer (not a quality result)". Both are distinct from "model answered incorrectly" and from a
+    completed run's "provider errors (no answer)".
 - **Cost honesty.** The report counts analysis, upload and correction attempts and the calls that reported usage.
   `actualUsd` is `0` only when no generation request left Prism, the provider's figure only when **every** generation
   attempt reported usage, and otherwise `null` (UNKNOWN: a 429/5xx/timeout without usage may or may not be billed).
@@ -229,18 +245,21 @@ CI runs it with the fake transport (`src/continuity/__tests__/temporal-calibrati
 - a truthful oracle passes, and an "always pass" analyzer is caught;
 - `warn` on a conflict fixture is not correct;
 - the ceilings, or an unknown estimate, refuse before sending;
-- the run-control rules: 429 fail-fast, 5xx, the partial report, UNKNOWN cost for missing or mixed usage, and zero
-  only when nothing was sent;
+- the run-control rules: 429 fail-fast, 5xx, first-error abort on 401/402/403/404 (1 request, 47 of 48 unattempted,
+  every criterion NOT MEASURED, cost UNKNOWN), ordinary 4xx input errors continuing, redaction of provider error
+  bodies in the report, the partial report, UNKNOWN cost for missing or mixed usage, and zero only when nothing was
+  sent;
 - pacing (with an injected clock, so nothing waits) and the quota preflight.
 
-`gemini-sdk-transport.test.ts` drives the real SDK over a stubbed fetch and proves one request per call for 429, 500,
-503 and a timeout.
+`gemini-sdk-transport.test.ts` drives the real SDK over a stubbed fetch and proves one request per call for 401, 402,
+403, 429, 500, 503 and a timeout, and that a provider error body echoing a credential is redacted.
 
 `temporal-calibration-cli.test.ts` proves the CLI's order of checks. It covers every live refusal: the
 acknowledgement, the env flags, the model, the ceilings, each readiness requirement and the credential. Each refusal
 exits 2, names the failed requirement, and happens **before** the network transport exists. No transport factory
 call, no SDK client, no request. The CLI logic lives in `src/continuity/calibration/temporal-calibration-cli.ts`; the
-script only injects the real SDK transport.
+script only injects the real SDK transport. A regression test replays the second live attempt's exact command with a
+fake transport that answers HTTP 402: one request, status `aborted_provider`, exit 3.
 
 ### First live attempt (2026-10-28): provider access failure, not an evaluated trial
 
@@ -255,6 +274,18 @@ requests, a $1.25 ceiling and a $1.018092 worst-case estimate.
 - **What happened next:** there was no rerun. Only synthetic clips were sent. The harness was remediated as described
   above before any new paid gate: UNKNOWN cost, 429 fail-fast, partial abort report, and live pacing with a quota
   preflight.
+
+### Second live attempt (2026-10-28): provider billing refusal, not an evaluated trial
+
+The configuration was the same, run at the Tier 1 limits the operator declared (RPM 1,000, TPM 2,000,000, RPD 10,000).
+
+- **What happened:** all 48 requests returned **HTTP 402** ("Your prepayment credits are depleted"). There were
+  **zero model answers**, no usage metadata, and the **actual cost is unknown**.
+- **Harness gap:** a 402 was then an ordinary `invalid_input` error trial, so the run sent all 48 requests, reported
+  `status=completed` and exited 0. It is fixed by the provider-access fail-fast above: the first 401/402/403/404 now
+  aborts the run.
+- **What it means:** there is **no model-quality conclusion**, and `temporal-calibration-v1` stands unchanged. There
+  was no rerun.
 
 ### Live calibration gate (needs separate authorisation)
 

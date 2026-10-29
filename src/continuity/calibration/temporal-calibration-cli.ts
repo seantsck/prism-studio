@@ -31,6 +31,7 @@ export interface CalibrationCliDeps {
 const VERDICT = {
   accepted: "ACCEPTED",
   not_accepted_incomplete: "NOT ACCEPTED — calibration incomplete",
+  not_measured_provider_error: "NOT MEASURED — provider error before any model answer (not a quality result)",
   not_accepted_incorrect: "NOT ACCEPTED — model answered incorrectly",
   not_accepted_provider_errors: "NOT ACCEPTED — provider errors (no answer)",
 } as const;
@@ -152,11 +153,11 @@ export async function runCalibrationCli(deps: CalibrationCliDeps): Promise<numbe
         `pacing: ${report.quota.effectiveRpm} req/min (≥${report.quota.minIntervalMs} ms apart) · worst case ${report.quota.worstCaseTokensPerMinute} tokens/min ≤ TPM ${report.quota.maxTpm} · ${report.quota.plannedAnalysisRequests} requests ≤ RPD ${report.quota.maxRpd}`,
       );
     log(
-      `status=${report.status}${report.abort ? ` abort=${report.abort.reason} http=${report.abort.httpStatus ?? "-"} at ${report.abort.fixture}#${report.abort.trial}` : ""} trials=${report.trialsAttempted}/${report.trialsPlanned} unattempted=${report.trialsUnattempted} responses=${report.answersReceived}`,
+      `status=${report.status}${report.abort ? ` abort=${report.abort.reason} http=${report.abort.httpStatus ?? "-"} at ${report.abort.fixture}#${report.abort.trial}` : ""} trials=${report.trialsAttempted}/${report.trialsPlanned} rejected=${report.trialsRejected} unanswered=${report.trialsUnanswered} unattempted=${report.trialsUnattempted} responses=${report.answersReceived}`,
     );
     for (const [c, v] of Object.entries(report.verdicts)) log(`${VERDICT[v]}  ${c}`);
     log(
-      `requests=${report.transportCalls} (analysis=${report.analysisAttempts} upload=${report.uploadAttempts} correction=${report.correctionAttempts} usage_reported=${report.usageReportedCalls}) estimate≤$${report.estimatedMaxUsd} actual=${report.actualUsd == null ? "UNKNOWN" : `$${report.actualUsd}`} (${report.costStatus}; known usage $${report.knownUsageUsd ?? "?"}) lip_sync_capable=${report.lipSyncCapable}`,
+      `requests=${report.transportCalls} (analysis=${report.analysisAttempts} upload=${report.uploadAttempts} correction=${report.correctionAttempts} usage_reported=${report.usageReportedCalls}) estimate≤$${report.estimatedMaxUsd} actual=${report.actualUsd == null ? "UNKNOWN" : `$${report.actualUsd}`} (${report.costStatus}; known usage $${report.knownUsageUsd ?? "?"}${report.costStatus === "unknown" ? "; billing could not be established from usage metadata" : ""}) lip_sync_capable=${report.lipSyncCapable}`,
     );
     log(`report: ${out}${live ? "" : " (fake transport: says nothing about a real analyzer)"}`);
     return report.status === "completed" ? 0 : 3;

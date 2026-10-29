@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { processor } from "../analysis/__tests__/queue-harness";
 import { runCalibrationCli } from "../calibration/temporal-calibration-cli";
+import { FakeGeminiTransport } from "../providers/gemini/fake-transport";
+import { GeminiTransportError } from "../providers/gemini/transport";
 
 /**
  * CLI ORDERING: every live refusal (acknowledgement, env flags, model, ceilings, the operator's quota/billing
@@ -59,6 +62,8 @@ const withValue = (name: string, v: string) => {
   const i = READY.indexOf(name as (typeof READY)[number]);
   return READY.map((a, j) => (j === i + 1 ? v : a));
 };
+
+const hasFfmpeg = await processor.available(); // the live path renders the 16 synthetic fixtures
 
 let realFetch: typeof fetch;
 let outbound = 0;
@@ -205,6 +210,82 @@ describe("calibration CLI: live readiness is validated before any SDK transport 
     expect(sdk.created).toBe(0);
     expect(outbound).toBe(0);
   });
+
+  it.skipIf(!hasFfmpeg)(
+    "second-run regression: the exact live command + HTTP 402 on the first request → 1 request, abort, exit 3",
+    async () => {
+      // the arguments of the 2026-10-28 second live attempt; the transport is a fake that refuses like Google did
+      const argv = [
+        "--live",
+        "--model",
+        "gemini-3.8-flash",
+        "--max-calls",
+        "48",
+        "--max-usd",
+        "1.25",
+        "--max-rpm",
+        "1000",
+        "--max-tpm",
+        "2000000",
+        "--max-rpd",
+        "10000",
+        "--confirm-rpd-remaining",
+        "--billing-active",
+        "yes",
+        "--project-tier",
+        "Tier 1",
+        "--spend-cap",
+        "250",
+        "--i-understand-this-sends-synthetic-video-and-costs-money",
+        "--out",
+        "second-run.json",
+      ];
+      const fake = new FakeGeminiTransport(() => ({
+        kind: "error",
+        error: new GeminiTransportError(
+          "invalid_input",
+          402,
+          "Gemini returned HTTP 402: Your prepayment credits are depleted.",
+        ),
+      }));
+      const logs: string[] = [];
+      let report = "";
+      const code = await runCalibrationCli({
+        argv,
+        env: ENV,
+        createLiveTransport: async () => fake,
+        log: (l) => void logs.push(l),
+        error: () => undefined,
+        writeReport: (_p, j) => void (report = j),
+      });
+      expect(code).toBe(3);
+      expect(fake.calls).toBe(1);
+      expect(sdk.created).toBe(0);
+      expect(outbound).toBe(0);
+      const r = JSON.parse(report);
+      expect(r).toMatchObject({
+        status: "aborted_provider",
+        abort: { reason: "provider_billing_error", httpStatus: 402 },
+        trialsPlanned: 48,
+        trialsAttempted: 1,
+        trialsRejected: 1,
+        trialsUnattempted: 47,
+        analysisAttempts: 1,
+        transportCalls: 1,
+        uploadAttempts: 0,
+        correctionAttempts: 0,
+        actualUsd: null,
+        costStatus: "unknown",
+        lipSyncCapable: false,
+      });
+      expect(Object.values(r.verdicts).every((v) => v === "not_measured_provider_error")).toBe(true);
+      expect(report).not.toContain(ENV.GEMINI_API_KEY);
+      expect(logs.join("\n")).toMatch(/status=aborted_provider abort=provider_billing_error http=402/);
+      expect(logs.join("\n")).toMatch(/billing could not be established from usage metadata/);
+      expect(logs.join("\n")).not.toMatch(/model answered incorrectly/);
+    },
+    240_000,
+  );
 
   it("control: with complete readiness the factory is reached exactly once (with the key) — still nothing sent", async () => {
     const r = await cli(READY);
