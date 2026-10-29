@@ -52,7 +52,7 @@ describe("Continuity Supervisor model: the persisted edit's actual cuts", () => 
       warningCuts: 0,
       semanticUnchecked: 0,
       sceneBoundaries: 0,
-      deterministicOnly: 0,
+      semanticMediaBlocked: 0,
     });
   });
 
@@ -90,7 +90,10 @@ describe("Continuity Supervisor model: the persisted edit's actual cuts", () => 
     expect(row.left.edgeFrame).toBe("Last displayed frame at source 5.959 s (computed)");
     expect(row.right.edgeFrame).toBe("First displayed frame at source 0.500 s (computed)");
     expect(JSON.stringify(row)).not.toMatch(/exact (last|first) frame/i);
-    expect(EDGE_MEDIA_NOTE).toMatch(/media derivation is implemented/);
+    expect(row.hasClipEdge).toBe(true);
+    expect(EDGE_MEDIA_NOTE).toBe(
+      "For generated clips, exact cut-edge media will be available when cut-edge derivation is implemented.",
+    );
     // links: Shot Prep, and the pinned attempt's existing Shot QA page
     expect(row.left.shotPrepUrl).toBe(
       `/projects/ojousama/episodes/ep-1/shots/${shotByCode(w.data, "2B").id}`,
@@ -180,8 +183,41 @@ describe("Continuity Supervisor model: the persisted edit's actual cuts", () => 
     expect(a.semantic[0].reason).toContain(PLACEHOLDER_REASON);
     expect(a.mediaEligible).toBe(false);
     expect(b.right.shotQaUrl).not.toBeNull();
-    expect(p.summary.deterministicOnly).toBe(2);
+    expect(p.summary.semanticMediaBlocked).toBe(2);
+    // placeholder → no picture: no generated-clip side, so no exact-edge-media note
+    expect(a.hasClipEdge).toBe(false);
+    expect(b.hasClipEdge).toBe(true);
     expect(p.filterCounts.media_blocked).toBe(2);
+  });
+});
+
+describe("Cuts blocked from semantic media: every cut whose media a future analysis could not use", () => {
+  it("placeholder → video, no picture → video and unusable video → video are blocked; valid clips are not", () => {
+    const w = world();
+    const placeholder = page(w, editOf(w, [storyboardItem(w, "2B"), videoItem(w, "2C")]));
+    const noPicture = page(
+      w,
+      editOf(w, [item(w.data, "2B", { kind: "none", durationMs: 2000 }), videoItem(w, "2C")]),
+    );
+    const unusable = page(
+      w,
+      editOf(w, [videoItem(w, "2B"), videoItem(w, "2C", { durationMs: 3000, outMs: 4000 })]),
+    );
+    const valid = page(w, editOf(w, [videoItem(w, "2B"), videoItem(w, "2C")]));
+    for (const [p, blocked] of [
+      [placeholder, true],
+      [noPicture, true],
+      [unusable, true],
+      [valid, false],
+    ] as const) {
+      expect(p.rows[0].mediaEligible).toBe(!blocked);
+      expect(p.summary.semanticMediaBlocked).toBe(blocked ? 1 : 0);
+      // the summary and the Media blocked filter agree
+      expect(p.filterCounts.media_blocked).toBe(p.summary.semanticMediaBlocked);
+    }
+    expect(unusable.rows[0].mediaReasons).toEqual(["The right source is not usable."]);
+    // an unusable clip is still a clip: not "no clip on a side"
+    expect(unusable.rows[0].hasClipEdge).toBe(true);
   });
 });
 

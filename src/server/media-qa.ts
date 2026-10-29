@@ -103,11 +103,16 @@ function ensureInlineAnalysisWorker(service: MemoryMediaQaService) {
   globalThis.__prismInlineAnalysisWorker = { stop: () => controller.abort() };
 }
 
-/** Derivations + continuity QA for the CURRENT user (RLS-bound in Supabase mode). */
-export async function getMediaQaRepo(): Promise<MediaQaRepository> {
+/**
+ * Derivations + continuity QA for the CURRENT user (RLS-bound in Supabase mode). In memory mode the default also starts
+ * the demo's in-process analysis worker, so a path that creates or submits work gets it processed. A pure READ (a page
+ * that only lists facts) passes `{ startInlineWorker: false }`: the same store, and visiting the page never starts the
+ * worker, so it can never begin an already queued job. Supabase mode has no inline worker either way.
+ */
+export async function getMediaQaRepo(opts: { startInlineWorker?: boolean } = {}): Promise<MediaQaRepository> {
   if (persistenceMode() === "memory") {
     const service = ((await getRepo()) as MemoryRepository).mediaQa;
-    ensureInlineAnalysisWorker(service);
+    if (opts.startInlineWorker !== false) ensureInlineAnalysisWorker(service);
     return service;
   }
   const user = await requireUser();

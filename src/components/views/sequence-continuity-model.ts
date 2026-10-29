@@ -35,8 +35,9 @@ import { picture, runsOf, type PictureVM, type RunVM, type Tone } from "./episod
  * descriptors (text): no derived edge-frame media exists yet, so nothing is ever called the exact edge frame.
  */
 
+/** Shown only on a cut with a generated-clip side: a placeholder still never gets temporal edge media. */
 export const EDGE_MEDIA_NOTE =
-  "Exact cut-edge frame will be available when cut-edge media derivation is implemented.";
+  "For generated clips, exact cut-edge media will be available when cut-edge derivation is implemented.";
 export const SEMANTIC_NOTE =
   "Semantic sequence analysis is not available yet: these cross-cut criteria are listed so you can see what is not checked. Nothing was analysed.";
 export const NO_EDIT_MESSAGE =
@@ -115,6 +116,8 @@ export interface CutRowVM {
   topIssue: TopIssueVM | null;
   mediaEligible: boolean;
   mediaReasons: string[];
+  /** a side is a generated clip with edge descriptors: the exact-edge-media note applies */
+  hasClipEdge: boolean;
   flags: { hasFail: boolean; hasWarn: boolean; hasUnchecked: boolean };
 }
 
@@ -124,7 +127,8 @@ export interface SummaryCountsVM {
   warningCuts: number;
   semanticUnchecked: number;
   sceneBoundaries: number;
-  deterministicOnly: number;
+  /** cuts whose media a future semantic analysis could not use (placeholder, no picture, unusable or unchecksummed clip) */
+  semanticMediaBlocked: number;
 }
 
 export interface SupervisorLinks {
@@ -324,6 +328,7 @@ function cutRow(
     topIssue: topIssue(cut, deterministic, importantUnchecked),
     mediaEligible: cut.semantic.mediaEligible,
     mediaReasons: cut.semantic.reasons,
+    hasClipEdge: left.edgeFrame !== null || right.edgeFrame !== null,
     flags: {
       hasFail: deterministic.some((f) => f.result === "fail"),
       hasWarn: deterministic.some((f) => f.result === "warn"),
@@ -356,7 +361,7 @@ export function continuityPage(args: {
       warningCuts: rows.filter((r) => r.flags.hasWarn).length,
       semanticUnchecked: rows.reduce((n, r) => n + r.semanticUnchecked, 0),
       sceneBoundaries: rows.filter((r) => r.crossesScene).length,
-      deterministicOnly: rows.filter((r) => !r.mediaEligible).length,
+      semanticMediaBlocked: rows.filter((r) => !r.mediaEligible).length,
     },
     filterCounts: {
       all: rows.length,

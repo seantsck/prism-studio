@@ -941,7 +941,7 @@ declared-truth comparison). Both are pure.
   (`src/server/sequence-continuity-page.ts`) is exactly the Episode Edit page's: the persisted edit
   (`getEpisodeEditRepo().getForEpisode`), its media facts (`loadEditMediaFacts`), then `buildEpisodeEditView` and
   `buildEpisodeCuts`. The display model (`src/components/views/sequence-continuity-model.ts`) is pure and re-derives
-  no cut logic. A page visit writes nothing.
+  no cut logic. A page visit writes nothing and starts no worker (see the review fix below).
 - **No edit / no cuts / error:** without a persisted edit the page says "Sequence Continuity needs a persisted Episode
   Edit because the edit determines the actual cuts." and links to the Episode Edit and the Sequence Board: cuts are
   never invented from Shot order and no edit is created. An edit with 0 or 1 item says "This edit has no cuts to
@@ -951,21 +951,22 @@ declared-truth comparison). Both are pure.
   deterministic warnings are shown as findings ("Needs attention", first), whatever the state; the Warnings filter and
   count use the findings, never the state.
 - **Counts and filters:** cuts, critical breaks, cuts with deterministic warnings, semantic criteria unchecked,
-  Scene boundaries and deterministic-only cuts (no clip on a side). There is no score. Reviewed / stale / intentional
+  Scene boundaries and cuts blocked from semantic media (a side is a placeholder, has no picture, or its clip is
+  unusable or unchecksummed: the same rows as the Media blocked filter). There is no score. Reviewed / stale / intentional
   counts are stated as unavailable. The client-local filters (All, Critical, Warnings, Unchecked, Scene boundaries,
   Media blocked) only hide server-rendered rows by their own data flags; "Unchecked" counts important applicable
   semantic criteria only, never `n_a`.
 - **Previews:** the PINNED sources through the private asset route: a muted clip for a video side, the still for a
   placeholder, a placeholder box for no picture. The edge window and the last / first displayed frame are shown as
   the 3A.4A descriptors (text, computed source times). No edge-frame media is derived, and nothing is called the
-  exact edge frame; exact cut-edge media remains 3A.4D.
+  exact edge frame; exact cut-edge media remains 3A.4D. The note "For generated clips, exact cut-edge media will be
+  available when cut-edge derivation is implemented." appears only on a cut with a generated-clip side: a placeholder
+  still never gets temporal edge media.
 - **Shot QA:** the optional current Shot QA state is NOT loaded in 3A.4B, so `cut:shot_qa` is absent. The only
   existing producer of a pinned attempt's Shot QA state is the Shot QA page's per-attempt read (`loadAttemptMedia`:
   runs, jobs, policy and automation state per attempt), which that page pairs with its automatic-QA reconciler; 3A.4B
   keeps the Supervisor to the Episode Edit's own read path instead. Each video side links to its pinned attempt's
-  Shot QA page (`/projects/<slug>/generations/<attemptId>/continuity`). (In memory mode the media-QA repository that
-  `loadEditMediaFacts` already uses for the Episode Edit page starts the demo's idle inline worker process-wide, as
-  before; the Supervisor submits no job, so that worker has nothing to do.)
+  Shot QA page (`/projects/<slug>/generations/<attemptId>/continuity`).
 - **Episode Edit markers:** between adjacent items of the PERSISTED edit, a small link to the cut's Supervisor anchor
   (`cut-<leftItemId>-<rightItemId>`), built from the same cut projection (`cut-marker-model.ts`). It shows a fail tone
   for a current source-integrity failure, a warn tone for deterministic warnings, else neutral, never a pass, with the
@@ -973,6 +974,14 @@ declared-truth comparison). Both are pure.
 - **Sequence Board:** an always-visible "Continuity Supervisor" link (the Supervisor's no-edit state is truthful, so a
   conditional link would only add an edit read to the board). The board's ordering, facts, golden output and sync are
   unchanged; the subtitle now says "planned Shot order". The Supervisor links back to the board.
+- **Technical review fix: reads no longer start a worker.** In memory mode `getMediaQaRepo()` starts the demo's
+  in-process continuity analysis worker, and `getGenerationRepo()` / `getCandidateRepo()` start the generation
+  worker, so as first implemented a GET of the Episode Edit or the Supervisor (through `loadEditMediaFacts`) could
+  start a worker that then processed work already queued in that process. The getters now take
+  `{ startInlineWorker: false }`: the same memory store without starting the worker (Supabase mode has no inline
+  worker either way). `loadEditMediaFacts` obtains all three repositories that way, so the Episode Edit and
+  Continuity Supervisor GETs are read-only with respect to worker activation too. Every path that creates or submits
+  work keeps the default and still starts its worker (`src/server/__tests__/read-only-repos.test.ts` proves both).
 - **Not built in 3A.4B:** transition-run or cut-intent persistence, migrations, semantic analysis, provider mode or
   capability, media derivation and automatic reconciliation.
 

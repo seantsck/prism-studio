@@ -88,9 +88,9 @@ export function SequenceContinuityView({ episode, page }: { episode: Episode; pa
           <Count label="Semantic criteria unchecked" value={s.semanticUnchecked} id="semantic-unchecked" />
           <Count label="Scene boundaries" value={s.sceneBoundaries} id="scene-boundaries" />
           <Count
-            label="Deterministic-only cuts (no clip on a side)"
-            value={s.deterministicOnly}
-            id="deterministic-only"
+            label="Cuts blocked from semantic media"
+            value={s.semanticMediaBlocked}
+            id="semantic-media-blocked"
           />
         </dl>
         <p className="text-[11px] text-faint" data-testid="continuity-runs-unavailable">
@@ -223,7 +223,11 @@ function CutRow({ row }: { row: CutRowVM }) {
         <SidePane side={row.left} />
         <SidePane side={row.right} />
       </div>
-      <p className="mt-1 text-[11px] text-faint">{EDGE_MEDIA_NOTE}</p>
+      {row.hasClipEdge ? (
+        <p className="mt-1 text-[11px] text-faint" data-testid="cut-edge-media-note">
+          {EDGE_MEDIA_NOTE}
+        </p>
+      ) : null}
 
       {row.attention.length ? (
         <section className="mt-2" data-testid="cut-attention">

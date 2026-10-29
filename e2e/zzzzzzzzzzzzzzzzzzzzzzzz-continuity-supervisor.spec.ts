@@ -119,11 +119,10 @@ test("rows are the edit's actual cuts, in edit order, and say No sequence QA yet
     "Location Tokyo Night Streets → Black Luxury Sedan",
   );
   await expect(cut.getByTestId("cut-top-issue")).toContainText("⚠");
-  // placeholders on both sides: their stills, never called an edge frame
+  // placeholders on both sides: their stills, never called an edge frame, and no promise of edge media for a still
   await expect(cut.getByTestId("cut-edge-frame")).toHaveCount(0);
-  await expect(cut).toContainText(
-    "Exact cut-edge frame will be available when cut-edge media derivation is implemented.",
-  );
+  await expect(cut.getByTestId("cut-edge-media-note")).toHaveCount(0);
+  await expect(page.getByTestId("count-semantic-media-blocked")).toContainText("13");
 });
 
 test("the Warnings filter keeps exactly the cuts with a deterministic WARN", async ({ page }) => {
