@@ -50,7 +50,7 @@ PRISM_STUDIO_CONTINUITY_ANALYZERS=mock,gemini   # which analyzers exist (default
 GEMINI_API_KEY=...                              # server/worker ONLY (GOOGLE_API_KEY also accepted)
 PRISM_STUDIO_GEMINI_ANALYSIS_MODEL=gemini-3.8-flash
 PRISM_STUDIO_GEMINI_THINKING_LEVEL=LOW          # MINIMAL|LOW|MEDIUM|HIGH (bounds thinking spend)
-PRISM_STUDIO_GEMINI_DIRECT_VIDEO=0              # direct video: architecture only, OFF
+PRISM_STUDIO_GEMINI_DIRECT_VIDEO=0              # direct video (3A.3, calibrated): OFF by default; also needs Project consent
 PRISM_STUDIO_ALLOW_PAID_ANALYSIS=false          # the analysis spend gate (separate from PAID_GENERATION)
 PRISM_STUDIO_MAX_ANALYSIS_USD_PER_RUN=0.10      # server-side ceiling; unset = paid analysis blocked
 PRISM_STUDIO_MAX_ANALYSIS_USD_PER_DAY=          # optional global daily ceiling

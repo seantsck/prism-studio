@@ -10,10 +10,11 @@ QA stays **advisory**. An analyzer never approves, rejects, retries, regenerates
 Frame or Location View, changes a Character Continuity Lock or touches an Episode Edit. People keep creative
 authority.
 
-**Status:** implemented; live Gemini analysis is operational. **Gemini temporal calibration v2 verified**
-(2026-10-29): the fifth live attempt (`temporal-calibration-v2`, analyzer v3) accepted **all six production temporal
-families** 3/3 on every fixture ([record](#fifth-live-attempt-2026-10-29-calibration-v2-verified)). Phase 3A.3 final
-acceptance is pending. The fourth attempt (`temporal-calibration-v1`) got 48/48 answers and accepted five of six; its
+**Status: accepted (2026-10-29).** Production temporal QA is accepted; lip sync remains separately uncalibrated
+([final acceptance](#final-acceptance-2026-10-29)). `video_temporal` is calibrated and available under the existing
+gates: direct video is supported technically but still needs the server gate and explicit Project consent, and QA
+stays advisory. The fifth live attempt (`temporal-calibration-v2`, analyzer v3) accepted **all six production temporal
+families** 3/3 on every fixture ([record](#fifth-live-attempt-2026-10-29-calibration-v2-verified)). The fourth attempt (`temporal-calibration-v1`) got 48/48 answers and accepted five of six; its
 screen-direction miss was a **v1 fixture truth defect**, not a model failure
 ([record](#fourth-live-attempt-2026-10-29-calibration-v1-fixture-truth-mismatch)). The first three live attempts (all
 2026-10-28) got zero model answers and are not model-quality evidence. The
@@ -26,6 +27,31 @@ request contract is remediated (Gemini analyzer v3) and verified live by the com
 [analyzer-contract smoke](#analyzer-contract-smoke), which every live calibration must pass first.
 Migration 0045 is **applied to hosted DEV and verified** (2026-10-28; see
 [migration-policy](migration-policy.md)). Lip sync stays **unchecked**.
+
+## Final acceptance (2026-10-29)
+
+**Production temporal QA accepted; lip sync remains separately uncalibrated.**
+
+- **Calibration:** `temporal-calibration-v2`, with input hash
+  `7ef1957c5b3632dffd5985c2f193e6310fa7de0f2661c8b188fad9d78864d4e3` checked before execution.
+- **Stack:** Gemini analyzer v3, `gemini-3.8-flash`, prompt `continuity-gemini-video-v2`, analysis schema 2, rules
+  `3a.1`, `shot-temporal-static-v1` at 4 fps.
+- **Run:** 16 fixtures × 3 trials, 48/48 model responses.
+  - All six production families accepted: camera movement, screen direction, eyelines, action continuity,
+    forbidden action, geography.
+  - Zero production fixture failures, zero provider errors, zero evidence-window failures, zero uploads, zero
+    corrections.
+- **Cost:** calibration **$0.110537** (known). The analyzer-contract smoke cost **$0.00166** (known).
+- **Operational:** the graceful-exit wrapper fix was verified live: the smoke and the calibration both exited 0 on
+  Windows with no libuv `UV_HANDLE_CLOSING` assertion.
+- **Data and scope:**
+  - Synthetic media only, and no Project media was sent.
+  - No hosted DB mutation (head 0045, checksums OK, no 0046).
+  - Direct video stays OFF by default; no real Project's full-video consent was enabled.
+- **Lip sync stays OFF:** both proxies were `unchecked` 3/3, `GEMINI_LIP_SYNC_CALIBRATED = false`, and `lip_sync` is
+  not in `VIDEO_CAPABILITIES`. This acceptance is not lip-sync acceptance.
+- **History is kept below.** Attempts 1–3 got zero model answers. Attempt 4 (`temporal-calibration-v1`) completed but
+  was not accepted, because of a fixture truth defect.
 
 ## One system, not a second one
 
@@ -426,7 +452,7 @@ The configuration was the same, run at the Tier 1 limits the operator declared (
     non-production; `GEMINI_LIP_SYNC_CALIBRATED` stays `false` and lip sync stays unchecked.
 - **What it means:** production `video_temporal` calibration is **verified** for the six families above under
   `temporal-calibration-v2`. The v1 history (four attempts, including the fixture truth defect) is retained above.
-  Phase 3A.3 final acceptance is a separate decision.
+  Phase 3A.3 was accepted on this evidence ([final acceptance](#final-acceptance-2026-10-29)).
 
 ### Analyzer-contract smoke
 

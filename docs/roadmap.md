@@ -191,13 +191,19 @@ request / package provenance. Extending generic revision coverage is a separate 
 - **One live provider analysis exists** (OpenAI `gpt-6-luna`, Run 5, 2 transport calls, $0.000502): the
   pipeline is proven end to end, but its two findings were UNCHECKED because the abstract fixture has no
   character. A semantic fixture (`continuity-semantic-test`: identity, black formal Look, red-jacket output) is
-  prepared; the semantic smoke is **not yet run** (needs explicit approval). Gemini (`gemini-3.8-flash`,
-  `gemini-3.6-flash`) still has no successful live inference: `generateContent` returned sustained 503
-  overload while auth, model access and parsing were verified at zero cost; Prism's durable retry, accounting
-  and ceilings behaved as designed ([continuity-costs](continuity-costs.md)).
+  prepared; the semantic smoke is **not yet run** (needs explicit approval).
+- **Gemini, historically:** during Phase 2D, Gemini (`gemini-3.8-flash`, `gemini-3.6-flash`) had no successful live
+  inference. `generateContent` returned sustained 503 overload, while auth, model access and parsing were verified
+  at zero cost. Prism's durable retry, accounting and ceilings behaved as designed
+  ([continuity-costs](continuity-costs.md)).
+- **Gemini, later:** Phase 3A.3 verified live Gemini direct-video inference with analyzer v3, whose request contract
+  is verified, and a successful 48-request temporal calibration
+  ([temporal-video-qa](temporal-video-qa.md#final-acceptance-2026-10-29)).
 - **Credential unverified**: no zero-cost verification call is made (none is documented as free).
-- **Direct video is architecture only** (OFF by default; fake-transport tests; no live use). Temporal
-  criteria stay unchecked until it is enabled and calibrated.
+- **Direct video** was architecture only in Phase 2D. Phase 3A.3 made it live and calibrated
+  `video_temporal` for six families: camera movement, screen direction, eyelines, action beats, forbidden actions and
+  geography. It stays **opt-in**: OFF by default, gated by the server switch AND explicit Project full-video consent,
+  plus the spend gates. Lip sync remains uncalibrated and OFF.
 - **Batching is conservative**: criteria with different reference sets get separate requests (identity vs
   wardrobe), re-sending the output frames; merging would cut cost but blur which references judged which criterion.
 - **Global spend ceilings only**; per-project budgets are a follow-up.
@@ -213,17 +219,18 @@ request / package provenance. Extending generic revision coverage is a separate 
 Built on the Phase 2C/2D continuity infrastructure (runs, findings, overrides, analysis jobs, costs); no parallel QA
 persistence. QA always advises; a person approves or rejects. Details: [shot-qa](shot-qa.md).
 
-| Slice    | Scope                                                                                                                                                                                                                                                                                                                           | Status                                                                                                              |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **3A.1** | **Shot QA Decision Layer**: pure assessment projection (states, priority issues, deterministic rejection-reason suggestions, freshness reasons); Production Frame / Location View fidelity from frozen truth; camera framing vs movement; honest constraint routing; Shot QA summary + Attempt card; rules `3a.1`; no migration | **complete** (PR #27)                                                                                               |
-| **3A.2** | Automatic QA orchestration: free deterministic QA automatically after output and delivery changes (eventually automatic, authenticated reconciliation); semantic auto-run only under an explicit Project policy, budgets and provider gates; migration 0044 applied to hosted DEV ([automatic-shot-qa](automatic-shot-qa.md))   | **complete** (PR #29)                                                                                               |
-| **3A.3** | Temporal Video QA: Gemini direct video (static 4 fps), Project full-video consent (0045, applied to hosted DEV), timestamped evidence, mixed image/video runs, calibration harness; live calibration + lip sync gated ([temporal-video-qa](temporal-video-qa.md))                                                               | **current** — implementation + hosted migration + Gemini temporal calibration v2 verified; final acceptance pending |
-| 3A.4     | Sequence Continuity Supervisor: adjacent-Shot / cut-level continuity across the Episode, batch review and dashboard                                                                                                                                                                                                             | planned                                                                                                             |
-| (later)  | Specialised analyzers (face identity / embeddings, Claude vision) behind the same normalized contract                                                                                                                                                                                                                           | —                                                                                                                   |
+| Slice    | Scope                                                                                                                                                                                                                                                                                                                           | Status                                                                                                                                        |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| **3A.1** | **Shot QA Decision Layer**: pure assessment projection (states, priority issues, deterministic rejection-reason suggestions, freshness reasons); Production Frame / Location View fidelity from frozen truth; camera framing vs movement; honest constraint routing; Shot QA summary + Attempt card; rules `3a.1`; no migration | **complete** (PR #27)                                                                                                                         |
+| **3A.2** | Automatic QA orchestration: free deterministic QA automatically after output and delivery changes (eventually automatic, authenticated reconciliation); semantic auto-run only under an explicit Project policy, budgets and provider gates; migration 0044 applied to hosted DEV ([automatic-shot-qa](automatic-shot-qa.md))   | **complete** (PR #29)                                                                                                                         |
+| **3A.3** | Temporal Video QA: Gemini direct video (static 4 fps), Project full-video consent (0045, applied to hosted DEV), timestamped evidence, mixed image/video runs, calibration harness; live calibration + lip sync gated ([temporal-video-qa](temporal-video-qa.md))                                                               | **complete** — Gemini temporal calibration v2 verified; six production temporal families accepted; lip sync remains separately gated (PR #32) |
+| 3A.4     | Sequence Continuity Supervisor: adjacent-Shot / cut-level continuity across the Episode, batch review and dashboard                                                                                                                                                                                                             | planned                                                                                                                                       |
+| (later)  | Specialised analyzers (face identity / embeddings, Claude vision) behind the same normalized contract                                                                                                                                                                                                                           | —                                                                                                                                             |
 
 Not in 3A.1–3A.3: automatic regeneration, approval or rejection; automatic analyzer routing; provider failover; Claude
-vision; face embeddings; cross-Shot / cut-level continuity (3A.4); cross-Episode QA. 3A.3 production temporal capability
-is backed by the verified calibration v2 (six temporal families; lip sync stays unchecked).
+vision; face embeddings; cross-Shot / cut-level continuity (3A.4); cross-Episode QA. 3A.3 production temporal QA is
+accepted on the verified calibration v2 (six temporal families). Lip sync stays unchecked and separately gated, and QA
+stays advisory.
 
 ## Phase 4 — persistent 3D sets + virtual cameras + blocking
 
