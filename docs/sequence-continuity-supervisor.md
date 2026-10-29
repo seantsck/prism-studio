@@ -1,8 +1,9 @@
 # Sequence Continuity Supervisor (Phase 3A.4)
 
-**Status: architecture in progress (2026-10-29).** This page is the design for review. No production code, migration,
-provider call or calibration exists for 3A.4 yet. Each section is the decision for one point of the 3A.4 brief, and
-[§21](#21-open-questions) lists what still needs the owner's decision.
+**Status: architecture accepted; implementation not started (2026-10-29).** The owner reviewed this design and
+accepted it with fixes, and those fixes are applied below. The owner decisions are recorded in
+[§21](#21-owner-decisions-and-implementation-details). No production code, migration, provider call or calibration
+exists for 3A.4 yet. Each implementation slice ([§22](#22-implementation-slices)) is its own gate.
 
 **Question it answers:** _does this cut work as continuity?_ In other words, does Shot B continue Shot A correctly at
 the cut that actually exists in the Episode Edit, as opposed to each Shot satisfying its own truth?
@@ -70,7 +71,7 @@ The unit is one **Cut**: the boundary between two adjacent items of one Episode 
 | left item id, right item id | **yes**                         | The cut's address. Item ids, not Shot ids, so a duplicate or intercut Shot later gives distinct cuts                                                                             |
 | left Shot, right Shot       | yes (derived from the items)    | Truth lookup and display                                                                                                                                                         |
 | left / right visual source  | yes                             | Kind plus exact attempt, Asset, checksum and trimmed interval (or frame id for a placeholder)                                                                                    |
-| left / right performance    | **no** (see §14)                | Audio placements do not change the pixels a visual cut check examines                                                                                                            |
+| left / right performance    | **no** (see §13)                | Audio placements do not change the pixels a visual cut check examines                                                                                                            |
 | relevant frozen truth       | yes                             | The cut criteria (expected values) and references, fingerprinted                                                                                                                 |
 
 `TransitionAddress = { editId, leftItemId, rightItemId }` names the cut. `transitionKey = sha256("cut-v1" | editId |
@@ -103,6 +104,10 @@ inferred from pixels by deterministic code, and nothing deterministic is sent to
 **Scene scope.** Inside one Scene, A and B are presumed continuous in time and space, so the full set applies. Across a
 Scene boundary only identity-level criteria apply by default. Location, lighting, time-of-day, geography, direction,
 eyeline, axis and action criteria are `n_a` with "Scene changes at this cut". This removes most cost and most noise.
+
+**Applicability is Prism's decision, made at planning, before anything is submitted.** A criterion that does not apply
+is recorded `n_a` by Prism and is never sent. The analyzer is never asked whether a criterion applies, and it cannot
+answer `n_a` (§10).
 
 ### Deterministic (free, computed on read, no media probing)
 
@@ -176,7 +181,7 @@ Rules carried over from 3A.3:
 
 ## 6. Media minimisation and cut-edge windows
 
-**Policy `cut-edge-static-v1` (proposed; window length and rate are a calibration question, not an assumption):**
+**Policy `cut-edge-static-v1` (owner decision Q4: 2,000 ms per side at 4 fps):**
 
 | Setting      | Value                                                                                               |
 | ------------ | --------------------------------------------------------------------------------------------------- |
@@ -191,34 +196,51 @@ Rules carried over from 3A.3:
 A normal cut sends **about 4 s of video and 2 stills** instead of two whole Shots: roughly 40–70 % less video than
 two 3–10 s Shots, and no audio.
 
+The window is **not** tuned before v1 exists. No calibration gate is spent comparing 1.5 s with 3 s. The 3A.4E
+calibration tests whether this 2-second policy is sufficient. If evidence later shows it is not, Prism introduces
+`cut-edge-static-v2` as a new policy id (which is part of the job identity) and never silently changes v1.
+
 ## 7. Derived clips: deterministic, checksummed, persisted
 
 Prism produces the windows locally, before submission, in the app server under the owner's session. This is the same
 place and authority that already produces review frames and contact sheets (`ensureReviewArtifacts`).
 
+**When derivation happens (owner decision Q6).** Cut-edge clips and stills are created **only** during explicit
+semantic preparation or submission, and **only for the cuts selected into the current batch or wave**. They are
+**never** created:
+
+- on page reads;
+- by the deterministic projection;
+- merely because an edit changed.
+
+The order is fixed: plan first, then pass the consent, policy and budget gates, then derive media for the bounded
+selected wave only. If an Episode has 100 cuts and the batch cap is 20, at most those 20 cuts' windows are derived. The
+other 80 are not touched before they are selected. Trim experimentation therefore never eagerly creates Assets.
+
 - **Operation:** the existing `asset_derivations` operations `trim` (clip) and `frame_extract` (still). The clip is
   re-encoded frame-accurately (a stream copy would start at a keyframe outside the window), with fixed encoder
   settings and `-an`. This needs a small processor method (`extractWindow(bytes, startMs, endMs)`), because the
   current `trimVideo` only trims from 0.
-- **Lineage:** `derivation_key = sha256(parent checksum | operation | {startMs, endMs, audio: "stripped", policy} |
-processor version)`. That key already exists in 0020 and is unique per Project, so re-preparing the same window is
-  a no-op, and the parent is always recorded.
+- **Lineage and deduplication:** `derivation_key = sha256(parent checksum | operation | {startMs, endMs, audio:
+"stripped", policy: "cut-edge-static-v1"} | processor version)` for a clip, and `(parent checksum | frame_extract |
+{atMs, policy})` for an edge still. That key already exists in 0020 and is unique per Project. Repeated preparation
+  of the same window or frame reuses the same valid derivation, and the parent is always recorded.
 - **Checksum:** the child Asset records its own sha256. The frozen job names the child Asset and its checksum, and the
   worker re-verifies that checksum before sending (the existing fail-closed rule).
 - **Exact timestamps:** each clip's `AnalysisMedia` carries the window
   (`window: { parentAssetId, parentChecksum, startMs, endMs }`), so evidence at clip time `t` maps to source time
   `startMs + t` and to edit-timeline time `itemStart + (startMs + t − sourceIn)`.
-- **Persisted, not ephemeral.** The worker can only read Assets named in its job and cannot write Storage. Evidence
-  must also stay reviewable: the Supervisor plays the exact clip the analyzer saw. Clips are small derived Assets,
-  tagged `cut-edge` and `derived`. A later storage-hygiene task may prune orphaned cut-edge Assets that no run
-  references (open question).
+- **Persisted, not ephemeral, and retained.** The worker can only read Assets named in its job and cannot write
+  Storage. Evidence must also stay reviewable: the Supervisor plays the exact clip the analyzer saw. Clips are small
+  derived Assets, tagged `cut-edge` and `derived`. 3A.4 retains them and adds **no garbage collector**. Cleanup of
+  orphaned or unused cut-edge derivations (ones no run references) is a **later hygiene task**, outside 3A.4.
 - **Identity uses the parent, not the child bytes.** Re-encoding may differ across ffmpeg builds, so the cut
   fingerprint uses the parent checksum plus the window. The child checksum is recorded for audit and for the send.
 
 ## 8. Provider model: one contract, one new mode
 
-`ContinuityAnalysisProvider` is reused. It gains **one analysis mode, `sequence_transition`** (proposed name), next to
-`image_set` and `direct_video`.
+`ContinuityAnalysisProvider` is reused. It gains **one analysis mode, `sequence_transition`**, next to `image_set` and
+`direct_video`. The name was accepted by the owner (Q7) as an internal contract name.
 
 - `direct_video` means "one Shot's video, timestamped inside it". Stretching it to two videos would break the
   single-video assumptions in `plan.ts`, `prompt.ts` and `prepare.ts`, and would blur accepted 3A.3 semantics.
@@ -231,18 +253,23 @@ There is no Gemini-specific pipeline. A provider declares the mode in `modes()` 
 `capabilities()`. Mock implements it for free tests, and the shared provider-contract suite gains the mode. OpenAI
 does not declare it (its models take no video).
 
+The mode needs a **mode-scoped analysis version**, because the existing contract has one scalar `provider.version`.
+That contract extension is specified in §14 and must be in place before 3A.4D.
+
 ## 9. Capability and calibration
 
 `video_temporal` calibration proves within-Shot judgement on one clip. It does **not** prove comparison across two
 clips. 3A.4 therefore keeps the two separately identifiable:
 
-- **New capability `cross_cut`** (proposed name), declared only for the `sequence_transition` mode and only when
+- **New capability `cross_cut`** (an internal contract name, accepted in Q7), declared only for the
+  `sequence_transition` mode and only when
   `GEMINI_CROSS_CUT_CALIBRATED` is true. It has its own **accepted-family list** (`CROSS_CUT_ACCEPTED_FAMILIES`,
   initially empty). A family not on the list stays `unsupported`. Unlike 3A.3's single switch, 3A.4 can then
   production-enable direction and eyeline while, for example, lighting is still being calibrated.
 - `GEMINI_LIP_SYNC_CALIBRATED` is unrelated and untouched. `VIDEO_CAPABILITIES` stays `["video_temporal"]`.
 - **Production default:** OFF. Semantic cut findings are not production-enabled until a 3A.4 calibration gate,
   separately authorised, accepts them.
+- **UI copy** says "Sequence Continuity" or "cut continuity". It never shows `cross_cut` or `sequence_transition`.
 
 ### Sequence calibration `sequence-calibration-v1` (sketch; not built in this gate)
 
@@ -262,7 +289,7 @@ in the fixture set, and the input hash is checked before execution.
 | geography           | landmark on the same side                                                            | landmark mirrored                         |
 | match on action     | motion phase continues (arm at 60 % → 65 %)                                          | motion restarts / mistimed (60 % → 10 %)  |
 | lighting            | key light from the same side and colour                                              | key flips side / colour temperature jumps |
-| inter-Scene control | any change across a Scene boundary                                                   | expected `n_a` (no request is sent)       |
+| inter-Scene control | any change across a Scene boundary                                                   | Prism plans `n_a`; no request is sent     |
 
 Acceptance is pre-registered, the same as 3A.3: 3 trials per fixture, 3/3 correct per fixture, conflict controls must
 be `fail` (`warn` and `unchecked` count as wrong), evidence must cite **both sides** with timestamps inside each clip,
@@ -313,17 +340,37 @@ Two validation rules are added for `sequence_transition` answers only:
 Ambiguous evidence ("the subject turns") without an input cannot be written: the input is mandatory, and the side is
 the input's prefix.
 
+### `n_a` is Prism's, never the analyzer's
+
+There are two vocabularies, and they stay different:
+
+| Layer                                            | Results                                |
+| ------------------------------------------------ | -------------------------------------- |
+| Prism continuity result (domain, findings table) | `pass · warn · fail · n_a · unchecked` |
+| Normalized analyzer response (schema 2)          | `pass · warn · fail · unchecked`       |
+
+3A.4 does **not** add `n_a` to the analyzer response schema. For sequence QA, `n_a` is assigned deterministically by
+Prism at planning time, for example:
+
+- screen-direction, eyeline, axis or action continuity across a Scene boundary;
+- geography or lighting continuity where the edit changes Location or Scene under the rules;
+- a Character criterion where the Character is not on both sides.
+
+Such a criterion is never submitted. An answer to an `n_a` criterion would be an unknown `criterionId`, and existing
+validation already rejects that. So analyzer schema 2 is unchanged, provider output never contains `n_a`, and the
+transition projection can still show `n_a`.
+
 ## 11. Result semantics for a cut
 
 Same enum (`pass · warn · fail · n_a · unchecked`), with cut meanings:
 
-| Result      | Meaning at a cut                                                                                                     |
-| ----------- | -------------------------------------------------------------------------------------------------------------------- |
-| `pass`      | No deviation from the declared continuity was found in the evaluated evidence. **Not approval**                      |
-| `warn`      | A **possible continuity deviation that needs human review**. Never "the AI disliked the edit"                        |
-| `fail`      | A clear contradiction of declared continuity truth (or a source-integrity failure)                                   |
-| `n_a`       | The criterion does not apply to this cut (Scene boundary, Character not on both sides)                               |
-| `unchecked` | Could not be judged: placeholder, no picture, not calibrated, not allowed, no media. Always with the specific reason |
+| Result      | Meaning at a cut                                                                                                                                          |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pass`      | No deviation from the declared continuity was found in the evaluated evidence. **Not approval**                                                           |
+| `warn`      | A **possible continuity deviation that needs human review**. Never "the AI disliked the edit"                                                             |
+| `fail`      | A clear contradiction of declared continuity truth (or a source-integrity failure)                                                                        |
+| `n_a`       | The criterion does not apply to this cut (Scene boundary, Character not on both sides). **Assigned by Prism's planning only**, never by an analyzer (§10) |
+| `unchecked` | Could not be judged: placeholder, no picture, not calibrated, not allowed, no media. Always with the specific reason                                      |
 
 The rubric that defines these meanings for cuts is versioned separately: `sequence-rubric-1`. Shot runs keep
 `continuity-rubric-1`.
@@ -341,8 +388,9 @@ Overrides alone cannot express intent. A `pass` override would claim the analyze
 override belongs to one run. The next trim makes a new run, and the filmmaker would have to re-declare a montage after
 every frame nudge.
 
-**Cut intent** (proposed) lives on the **incoming** item of the cut, because the intent of a cut is an editorial
-decision of the edit:
+**Cut intent (owner decision Q2)** lives in the Episode Edit's item representation as **incoming cut intent** on the
+right-hand item, because the intent of a cut is an editorial decision of the edit. There is no standalone intent
+table. The exact schema is deferred to 3A.4C. The sketch below is illustrative:
 
 ```
 episode_edit_items.incoming_cut_intent jsonb null
@@ -360,9 +408,18 @@ episode_edit_items.incoming_cut_intent jsonb null
   assessment shows a `fail` / `warn` inside the scope as "intentional (time jump, by <user>: <note>)" and leaves it
   out of the blocking counts. The system result stays visible.
 - **Not part of freshness:** declaring intent never makes a run stale and never triggers analysis.
-- **Survives trims and re-runs;** it **does not survive** a reorder. If B's left neighbour is no longer `fromItemId`,
-  the intent is shown as "declared for a previous neighbour, not applied" until it is re-confirmed or cleared.
-- **Alternative considered:** a separate `continuity_cut_intents` table. It was rejected because intent is
+- **Bound to its predecessor (mandatory).** The intent is declared for one cut, A → B, so it records the item it was
+  declared against: either `fromItemId` inside the payload or an equivalent companion predecessor-id field (3A.4C
+  chooses which). An intent declared for A → B must never silently become C → B after a reorder.
+- **Validity rule:** an intent is effective only when `intent.fromItemId === the current predecessor item id` of B. In
+  every other case it is **not effective**: it covers no finding and changes no state.
+- **Adjacency changes clear or invalidate it transactionally.** Every edit operation that changes B's predecessor
+  (reorder, insert, remove, replacing an item) clears or invalidates the affected incoming intents in the **same
+  transaction** under the edit's row lock. The validity rule is the backstop: even an intent that survived a bug never
+  applies to the wrong cut. A UI may say "declared for a previous neighbour, not applied" before it is cleared.
+- **Survives** trims and semantic re-runs. **Does not survive** adjacency changes or a reorder. **Never changes**
+  analyzer evidence, results or criteria.
+- **Alternative considered:** a separate `continuity_cut_intents` table. It was rejected by the owner because intent is
   editorial, belongs inside the edit's revision and concurrency model, and Phase 5 transitions (dissolves) will also
   be cut properties.
 
@@ -410,6 +467,35 @@ The existing `unique (project_id, idempotency_key)` makes a repeat return the sa
 `sha256("cut-subject-v1" | left side | right side | edit rate | window policy)`, where a side is `kind | attemptId |
 assetId | parent checksum | startMs | endMs`, or `kind | frameId | checksum` for a placeholder.
 
+### Mode-scoped analyzer version (required before 3A.4D)
+
+Today the provider contract has one scalar, `provider.version` (`src/continuity/analysis/provider.ts`). The worker
+fails a job as `analyzer_version_mismatch` when `job.inputSnapshot.analyzerVersion !== provider.version`
+(`src/continuity/analysis/worker.ts`). One scalar cannot say "Shot analysis is `3` and sequence analysis is
+`gemini-sequence-1`".
+
+**Contract extension:** the provider gains a mode-aware analysis identity, conceptually
+`provider.analysisVersion(mode)` (the exact name is decided in implementation).
+
+| Mode                        | Gemini returns      |
+| --------------------------- | ------------------- |
+| `image_set`, `direct_video` | `3` (unchanged)     |
+| `sequence_transition`       | `gemini-sequence-1` |
+
+**Invariants:**
+
+- **Shot job identities are unchanged.** A Shot job freezes `3` exactly as today, so no Shot idempotency key or
+  automatic Shot coverage key moves.
+- **The Shot worker guard still sees `3`.** For a Shot job the worker compares against the Shot-mode version.
+- **A transition job freezes `gemini-sequence-1`**, and the worker compares it against
+  `analysisVersion("sequence_transition")`.
+- Changing the sequence contract later (`gemini-sequence-2`) does not queue every Shot again. Changing the Shot
+  analyzer (`3` → `4`) does not silently relabel or re-run transition jobs.
+- **No silent request semantics under a frozen identity (the 3A.3 provenance rule).** A transition job frozen as
+  `gemini-sequence-1` executes only against the exact sequence contract that version names. A provider at
+  `gemini-sequence-2` fails a `gemini-sequence-1` job `analyzer_version_mismatch` before anything is sent, and the
+  job is never re-labelled or re-interpreted.
+
 ## 15. Persistence: compare and recommend
 
 | Option                                                              | For                                                                                    | Against                                                                                                         |
@@ -430,15 +516,13 @@ them.**
 ### Proposed migration 0046 (NOT created or applied in this gate)
 
 1. `continuity_runs`:
-   - add `subject_kind text not null default 'shot' check (subject_kind in ('shot','transition'))`;
-   - relax `attempt_id` and `subject_asset_id` to nullable, under
-     `check ((subject_kind = 'shot') = (attempt_id is not null and subject_asset_id is not null))`;
+   - add `subject_kind` (`attempt` | `transition`, default `attempt`);
+   - allow `attempt_id` and `subject_asset_id` to be null **only** for a transition run;
    - extend `guard_continuity_run` to freeze `subject_kind`.
 
-   Existing rows become `'shot'` and are otherwise unchanged. `unique (attempt_id, run_number)` still holds for Shots
-   (nulls are distinct).
+   Existing rows become `attempt` and are otherwise unchanged.
 
-2. `continuity_analysis_jobs`: the same `subject_kind` plus a nullable `attempt_id` under the same check; the guard
+2. `continuity_analysis_jobs`: the same `subject_kind`, with `attempt_id` null only for a transition job; the guard
    freezes it. The worker's column grants are unchanged (it needs neither field).
 3. **New table `continuity_transition_subjects`** (1:1 with a transition run):
    - `run_id` (unique, FK `(run_id, project_id)` → runs, on delete cascade), `project_id`;
@@ -452,7 +536,37 @@ them.**
    Item, Shot and attempt ids are **recorded history, not FKs**, so removing an item from the edit never deletes or
    blocks QA history (0043's rule that upstream changes never cascade into the edit, mirrored).
 
-4. `episode_edit_items.incoming_cut_intent jsonb null` with a shape check (§12).
+4. Incoming cut intent on `episode_edit_items` (§12), bound to its predecessor item id. The exact column shape is
+   decided in 3A.4C.
+
+**Subject invariants (database-enforced; the exact CHECK / FK design is 3A.4C's).** No malformed hybrid row may exist:
+
+| Subject kind | Must hold                                                                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `attempt`    | `attempt_id IS NOT NULL`, `subject_asset_id IS NOT NULL`, the Shot subject fields required, **no** transition subject row |
+| `transition` | `attempt_id IS NULL`, **exactly one** `continuity_transition_subjects` row for the run                                    |
+
+The same rule applies to jobs: an `attempt` job names its attempt, and a `transition` job does not. A job's subject
+kind equals its run's.
+
+**Transition run numbering.** Transition runs get their own deterministic numbering scope: run history per transition
+address (`transition_key`), recorded on the subject row and unique there. Shot numbering
+(`max(run_number) … where attempt_id = $1`, `unique (attempt_id, run_number)`) is never used or affected by transition
+rows. 3A.4C defines the exact scope and SQL.
+
+**Shot-query isolation (mandatory 3A.4C acceptance criterion).** Every existing Shot-oriented query over a generalised
+table explicitly constrains `subject_kind = 'attempt'`. That includes at least the two already found in
+`src/data/media-qa-postgres.ts` (`distinct on (attempt_id)` and `max(run_number) where attempt_id = $1`), but 3A.4C
+audits **all** queries over `continuity_runs` and `continuity_analysis_jobs`: repositories, the analysis store,
+automation, the dashboard, the asset-in-use check, health and latest-job reads, and the database proofs. Transition
+rows must never:
+
+- appear as Shot QA;
+- affect the latest Shot run;
+- affect Shot run numbering;
+- count as automatic Shot coverage.
+
+Tests prove each of these with transition rows present.
 
 **Security in 0046:**
 
@@ -462,9 +576,8 @@ continuity_transition_subjects to authenticated`; `revoke all … from anon`. Th
   row is frozen; deletion only cascades).
 - **No grant to `prism_generation_worker` or `prism_continuity_worker`.** The worker reads only its frozen job and the
   Assets named in it, so it needs nothing new.
-- Code obligations from the audit: every Shot-run query (`distinct on (attempt_id)`, `max(run_number) where
-attempt_id`, the asset-in-use check) filters `subject_kind = 'shot'`, and that is tested. The asset-in-use check
-  also counts cut-edge Assets named by transition jobs.
+- Code obligations: the Shot-query isolation above. The asset-in-use check also counts cut-edge Assets named by
+  transition jobs.
 
 The Project sequence-automation policy columns (§17) are a **later, separate migration** (proposed 0047, slice
 3A.4F), so each migration ships with the code that uses it. Neither is created in this gate.
@@ -503,7 +616,7 @@ questions from different orders, so tabs on one route would show two orders and 
 - the frozen references per side;
 - the run history;
 - the override form (existing);
-- the cut-intent form (an edit operation).
+- the cut-intent form (an edit operation). It shows whether the intent is effective for the current predecessor.
 
 **Filters:** critical / fail · warn · unchecked · stale · intentional · Scene (client-local, like the board).
 
@@ -527,17 +640,23 @@ panel, so the editor does not become a QA dashboard. The edit page performs no r
 | An edit mutation succeeds                  | Deterministic projection only (free, nothing persisted). Semantic work is **never** fired from inside an edit mutation |
 | Supervisor visit, Project mode `suggest`   | "N cuts due for semantic QA (estimate $X)" with a **Review batch** button                                              |
 | Supervisor visit, Project mode `automatic` | Submits due **settled** cuts within the limits below                                                                   |
-| Explicit **Review batch** (manual)         | One confirmation for the batch: cuts, windows, provider, model, worst-case total. A fresh batch nonce                  |
+| Explicit **Review batch** (manual)         | One confirmation for the batch with the exact disclosure in §19. A fresh batch nonce                                   |
 
-**Settling:** a cut is automatically submittable only when its subject fingerprint has been unchanged for a settle
-window (proposed 10 min since the last edit revision that changed it). Rapid trimming therefore queues nothing.
-Settling only filters; there is no timer or scheduler.
+**Settling (accepted, cut-local):** a cut is automatically submittable only when its own truth has been unchanged for a
+settle window of about 10 minutes. The change time is **cut-local**: it comes from the two items of that cut
+(`episode_edit_items.updated_at` of the left and right items) or another cut-local fact. It is **never** the global
+Episode Edit revision or `episode_edits.updated_at`. So changing an unrelated cut never resets settling for the whole
+Episode, and rapid trimming of one cut queues nothing for it. Settling only filters; there is no timer or scheduler.
+
+**Media is derived per wave, after the gates.** For every trigger the order is: plan the due cuts, select the bounded
+batch or wave, pass consent, policy and budget, and only then derive the selected cuts' edge media (§7).
 
 **Policy (later migration, 3A.4F):** `project_qa_policies.sequence_semantic_mode` (`off` default, `suggest`,
 `automatic`) and `max_transitions_per_batch`, which defaults low (proposed 20).
 
 - `automatic` requires an analyzer, the existing `external_media_allowed`, the existing `direct_video_allowed`, and
   finite ceilings. These are database-checked like 0044.
+- `direct_video_allowed = true` **alone never starts sequence QA** (§19).
 - Shot `semantic_mode = automatic` **never implies** sequence automation. It is a separate standing authorisation
   with its own confirmation text.
 
@@ -618,37 +737,91 @@ The 3A.1–3A.3 guarantees are preserved:
 - **Media path:** private media through the existing Asset route; no signed URL is stored; checksums are re-verified
   before send; provider-file cleanup as in 3A.3; every spend gate applies.
 
-**Consent: reuse `direct_video_allowed`.** Cut-edge windows are bounded, audio-free portions of the same Project's
-Shot output video, strictly less than the full video that permission already allows. A new flag would multiply
-consents without adding protection.
+### Consent: `direct_video_allowed` is reused and deliberately broadened (owner decision Q1)
 
-- What is sent must be disclosed exactly. The manual batch confirmation lists, per cut: two windows (source, start,
-  end, about 2 s each), two edge stills, the sided references, "audio is not sent", the provider and model, inline vs
-  temporary file, and the worst-case cost.
-- The permission's UI wording becomes "full Shot video or bounded cut-edge windows". That needs **owner sign-off**
-  because 0045's comment says "full selected delivery video" (§21, Q1).
-- One difference to disclose: a cut may pin a delivery version or a provider output that is **not** the Shot's
-  selected delivery master. Consent is per Project media, not per selection.
-- Without the permission, every semantic cut criterion is `not_allowed` / `unchecked`, and the deterministic checks
-  still run.
+There is no new video-consent boolean. This is **a deliberate semantic broadening** of the existing Project
+video-transfer permission, not merely a smaller use of the same scope. A cut-edge clip contains less data than a full
+video, but a cut may use an edit-pinned output that is **not** the Shot's currently selected delivery master.
 
-**Server gate:** reuse `PRISM_STUDIO_GEMINI_DIRECT_VIDEO`. The capability is still off until calibrated (§9). A
-separate env switch is an open question (Q3).
+**What 0045 meant, and still records.** Migration 0045 authorised sending **the full selected delivery video** for
+temporal Shot QA. 0045 is applied and immutable: `supabase/migrations/0045_project_qa_direct_video.sql`, its comment
+and its checksum are **not** edited. Its comment stays historical truth about what 0045 meant when it was applied.
+
+**What it means from Phase 3A.4.** `direct_video_allowed` is the Project-level permission for Prism to send Project
+Shot video media to the chosen semantic analyzer for temporal QA. Two cases are permitted:
+
+1. the full selected delivery video, for within-Shot temporal QA (3A.3, unchanged);
+2. bounded, audio-free cut-edge windows of an Episode Edit's **explicitly pinned** Shot output, for sequence QA.
+
+The second source need not be the Shot's selected delivery master. It **must**:
+
+- belong to the same Project;
+- be explicitly pinned by the Episode Edit;
+- have its exact Asset, checksum and window frozen before anything is sent;
+- be disclosed to the owner.
+
+The expanded meaning is described in current product documentation, current TypeScript comments, the policy UI
+wording and the confirmation / disclosure copy, all updated by the implementing slice. The policy UI wording becomes,
+for example, "Allow sending Shot video to the analyzer for temporal QA: the full selected delivery video for Shot QA,
+and short audio-free cut-edge clips of the video pinned in the Episode Edit for Sequence Continuity".
+
+### `direct_video_allowed` alone never starts sequence QA (mandatory)
+
+An existing `direct_video_allowed = true` never silently activates the new 3A.4 workflow. An owner who enabled temporal
+Shot video earlier has **not** opted into paid cut analysis.
+
+| Sequence semantic QA | Requires **all** of                                                                                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Manual**           | `direct_video_allowed = true`; an explicit **Review batch** action; the exact batch disclosure confirmed                                                                              |
+| **Automatic**        | `direct_video_allowed = true`; the existing `external_media_allowed`; the new `sequence_semantic_mode = automatic` (default `off`); the analyzer, server, calibration and spend gates |
+
+Without the permission, every semantic cut criterion is `not_allowed` / `unchecked`, and the deterministic checks still
+run.
+
+### Exact manual disclosure
+
+When the exact media is known, the manual batch confirmation states it. It never says only "video may be sent". It
+lists at least:
+
+- provider and model;
+- the number of cuts;
+- per cut, the left and right source Asset identity and display name;
+- whether either source differs from that Shot's currently selected delivery master;
+- the exact source start and end of each cut-edge window, and its approximate duration;
+- that audio is **not** sent;
+- the edge stills;
+- the reference images, per side;
+- inline vs temporary provider file;
+- the worst-case cost.
+
+### Server gate (owner decision Q3)
+
+There is **no** additional sequence-specific environment switch. Sending video stays behind the existing
+`PRISM_STUDIO_GEMINI_DIRECT_VIDEO`, together with:
+
+- the `cross_cut` capability defaulting OFF;
+- calibration acceptance per family;
+- `direct_video_allowed`;
+- `sequence_semantic_mode`;
+- the spend gates.
+
+A separate emergency kill switch may be reconsidered during hosted 3A.4F, but only if real operational evidence
+requires it.
 
 ## 20. Versioning
 
-| Identity                     | Recommendation                                  | Why                                                                                                                                                                                 |
-| ---------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CONTINUITY_RULES_VERSION`   | **unchanged `3a.1`**                            | Shot criteria do not change. Bumping it would make **every** Shot run stale for nothing                                                                                             |
-| `SEQUENCE_RULES_VERSION`     | **new `3a.4`**                                  | Cut criteria construction is new and versioned on its own                                                                                                                           |
-| Gemini analyzer (Shot modes) | **unchanged `3`**                               | The analyzer version is in the automatic Shot QA identity. Bumping it would queue one new paid Shot run per output on every automatic Project, though Shot behaviour did not change |
-| Sequence analyzer version    | **new, mode-scoped `gemini-sequence-1`**        | Recorded as the transition run's `analyzer_version`. The worker's `analyzer_version_mismatch` guard compares per subject kind                                                       |
-| Prompt                       | **new `continuity-gemini-transition-v1`**       | A new instruction and sided-evidence contract; the Shot prompts are unchanged                                                                                                       |
-| Rubric                       | **new `sequence-rubric-1`** for transition runs | Cut meanings of `warn` / `n_a` (§11); Shot `continuity-rubric-1` unchanged                                                                                                          |
-| `ANALYSIS_SCHEMA_VERSION`    | **unchanged `2`**                               | The evidence and finding shape is unchanged (§10)                                                                                                                                   |
-| Analysis input snapshot      | **version 2 for transition inputs only**        | A transition subject replaces `attemptId` / `subjectAssetId`, and media gain `window`. Shot snapshots stay version 1, byte-identical, so their keys do not move                     |
-| Sampling / window policy     | **new `cut-edge-static-v1`**                    | Window length, rate, audio stripping and edge stills                                                                                                                                |
-| Calibration                  | **new `sequence-calibration-v1`**               | Independent of `temporal-calibration-v2`                                                                                                                                            |
+| Identity                     | Recommendation                                  | Why                                                                                                                                                                                                                                                           |
+| ---------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CONTINUITY_RULES_VERSION`   | **unchanged `3a.1`**                            | Shot criteria do not change. Bumping it would make **every** Shot run stale for nothing                                                                                                                                                                       |
+| `SEQUENCE_RULES_VERSION`     | **new `3a.4`**                                  | Cut criteria construction is new and versioned on its own                                                                                                                                                                                                     |
+| Gemini analyzer (Shot modes) | **unchanged `3`**                               | The analyzer version is in the automatic Shot QA identity. Bumping it would queue one new paid Shot run per output on every automatic Project, though Shot behaviour did not change                                                                           |
+| Sequence analyzer version    | **new, mode-scoped `gemini-sequence-1`**        | Recorded as the transition run's `analyzer_version`. Needs the mode-aware version contract (§14): the worker's `analyzer_version_mismatch` guard compares against the job's mode version. A `gemini-sequence-1` job never runs under another sequence version |
+| Prompt                       | **new `continuity-gemini-transition-v1`**       | A new instruction and sided-evidence contract; the Shot prompts are unchanged                                                                                                                                                                                 |
+| Rubric                       | **new `sequence-rubric-1`** for transition runs | Cut meanings of `warn` / `n_a` (§11); Shot `continuity-rubric-1` unchanged                                                                                                                                                                                    |
+| `ANALYSIS_SCHEMA_VERSION`    | **unchanged `2`**                               | The evidence and finding shape is unchanged (§10). The analyzer response does not gain `n_a`; Prism assigns `n_a` at planning                                                                                                                                 |
+| Analysis input snapshot      | **version 2 for transition inputs only**        | A transition subject replaces `attemptId` / `subjectAssetId`, and media gain `window`. Shot snapshots stay version 1, byte-identical, so their keys do not move                                                                                               |
+| Sampling / window policy     | **new `cut-edge-static-v1`**                    | Window length, rate, audio stripping and edge stills                                                                                                                                                                                                          |
+| Calibration                  | **new `sequence-calibration-v1`**               | Independent of `temporal-calibration-v2`                                                                                                                                                                                                                      |
 
 **Relationship to 3A.3:** purely additive. `video_temporal`, its calibration, prompts, schema, the analyzer v3
 identity and `VIDEO_CAPABILITIES` are untouched. The within-Shot capability stays calibrated, and the cross-cut
@@ -658,30 +831,41 @@ capability is separately identifiable.
 the human cut-intent operation. 3A.4 adds no trimming UI, transitions (dissolves), multitrack, export or NLE
 behaviour.
 
-## 21. Open questions
+## 21. Owner decisions and implementation details
 
-| #   | Question                                                                                                                                                                         | Proposed default                                |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| Q1  | Does `direct_video_allowed` cover bounded cut-edge windows of any edit-pinned Shot output, including a non-selected delivery version? (needs owner sign-off; UI wording changes) | Yes, with exact disclosure                      |
-| Q2  | Should cut intent be a column on `episode_edit_items` (recommended) or its own table?                                                                                            | Column                                          |
-| Q3  | Is a separate server switch for sequence semantic QA wanted, beyond the calibration constant?                                                                                    | No, until hosted acceptance                     |
-| Q4  | W = 2000 ms and 4 fps, or measure 1.5 / 3 s in calibration first?                                                                                                                | Calibrate 2 s; record alternatives              |
-| Q5  | Should semantic still-pair checks for placeholder cuts exist (planning-grade), or stay with the Sequence Board?                                                                  | Stay unchecked in 3A.4                          |
-| Q6  | Retention of cut-edge Assets that no run references                                                                                                                              | Keep; a later hygiene task                      |
-| Q7  | Final public names: `sequence_transition` mode, `cross_cut` capability                                                                                                           | As proposed, pending provider-capability review |
+### Owner decisions (resolved 2026-10-29)
+
+| #   | Decision                                                                                                                                                                                                                                 |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Q1  | **Reuse `direct_video_allowed`**, deliberately broadened to cover audio-free cut-edge windows of edit-pinned Shot outputs, which may not be the selected master. 0045 is not edited. The permission alone never starts sequence QA (§19) |
+| Q2  | **Cut intent lives in the Episode Edit's item representation** (incoming intent on the right-hand item), bound to its predecessor item id; adjacency changes clear or invalidate it transactionally (§12)                                |
+| Q3  | **No extra server switch.** The existing `PRISM_STUDIO_GEMINI_DIRECT_VIDEO` plus the capability default, calibration, consent, policy and spend gates. A kill switch is reconsidered in 3A.4F only on operational evidence               |
+| Q4  | **`cut-edge-static-v1` = 2,000 ms per side at 4 fps.** Calibration tests its sufficiency; a change becomes `cut-edge-static-v2` (§6)                                                                                                     |
+| Q5  | **Placeholder cuts get no semantic analysis in 3A.4.** Deterministic facts display; semantic criteria stay `unchecked`; still comparison stays the Sequence Board's job (§3)                                                             |
+| Q6  | **Retain cut-edge Assets; no garbage collector in 3A.4.** They are derived only during explicit semantic preparation for the selected batch, and deduplicated deterministically. Orphan cleanup is a later hygiene task (§7)             |
+| Q7  | **Internal names accepted:** mode `sequence_transition`, capability umbrella `cross_cut`. UI copy says "Sequence Continuity" / "cut continuity" (§8, §9)                                                                                 |
+
+### Implementation details to validate (not owner decisions)
+
+- The exact 0046 CHECK / FK design for the subject invariants, and the transition run-numbering SQL (3A.4C).
+- The exact incoming-cut-intent column shape (payload `fromItemId` or a companion predecessor column) (3A.4C).
+- The name and signature of the mode-aware analysis version method (3A.4D).
+- That frame-accurate `extractWindow` re-encoding produces clips within the bounds of §6 for real Shot outputs (3A.4D).
+- That the cost estimates in §17 hold for real cut requests (measured in 3A.4E).
+- The settle window length in practice, about 10 minutes (3A.4F).
 
 ## 22. Implementation slices
 
 Each slice is separately reviewed and gated. None has started.
 
-| Slice     | Scope                                                                                                                                                                                                                                                                                                            | Migration           | Paid / live calls           |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------- |
-| **3A.4A** | **Cut domain + deterministic projection:** `CutTransition` from the Episode Edit, side truth, edge windows, subject / criteria / reference fingerprints, cut criteria, deterministic findings, `assessTransition` status, shared `describeTransition` (the Sequence Board output is unchanged). Pure, plus tests | none                | 0                           |
-| **3A.4B** | **Supervisor UI (deterministic):** the Episode route, cut rows, filters, counts, the Episode Edit cut markers, Sequence Board ↔ Supervisor links; memory E2E                                                                                                                                                     | none                | 0                           |
-| **3A.4C** | **Persistence + human intent:** 0046 (run `subject_kind`, transition subjects table, cut intent column, explicit grants), repositories, the Shot-query `subject_kind` filters, cut-intent edit operations, overrides on transition findings; RLS / worker-role proofs; hosted apply as its own gate              | **0046**            | 0                           |
-| **3A.4D** | **Semantic cut analyzer:** `extractWindow`, cut-edge derivations, the `sequence_transition` mode in the plan / prompt / validation (sided-evidence rules), Mock + Gemini adapter behind the fake transport, manual batch submission with disclosure; `cross_cut` declared **nowhere in production**              | none                | 0                           |
-| **3A.4E** | **Calibration:** `sequence-calibration-v1` fixtures + harness, the input hash, pre-registered acceptance; then a **separately authorised** live gate; accepted families recorded                                                                                                                                 | none                | only in the authorised gate |
-| **3A.4F** | **Automatic orchestration + hosted acceptance:** sequence policy (0047), settling, waves, batch caps, the budget sum, reconciliation triggers; hosted verification; final acceptance                                                                                                                             | **0047** (proposed) | 0 unless authorised         |
+| Slice     | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Migration           | Paid / live calls           |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------- |
+| **3A.4A** | **Cut domain + deterministic projection:** `CutTransition` from the Episode Edit, side truth, edge windows, subject / criteria / reference fingerprints, cut criteria, deterministic findings, `assessTransition` status, shared `describeTransition` (the Sequence Board output is unchanged). Pure, plus tests                                                                                                                                                                                                                                                                                                                                     | none                | 0                           |
+| **3A.4B** | **Supervisor UI (deterministic):** the Episode route, cut rows, filters, counts, the Episode Edit cut markers, Sequence Board ↔ Supervisor links; memory E2E                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | none                | 0                           |
+| **3A.4C** | **Persistence + human intent:** 0046 (run / job `subject_kind` with database subject invariants, the transition subjects table, predecessor-bound incoming cut intent, explicit grants), repositories, transition run numbering, cut-intent edit operations (adjacency changes clear intent transactionally), overrides on transition findings; RLS / worker-role proofs; hosted apply as its own gate. **Acceptance criterion: every Shot-oriented query is audited and constrained to `subject_kind = 'attempt'`, and tests prove transition rows never appear as Shot QA, affect the latest Shot run, Shot numbering or automatic Shot coverage** | **0046**            | 0                           |
+| **3A.4D** | **Semantic cut analyzer:** first the mode-scoped analysis version contract and worker guard (§14); then `extractWindow`, batch-bounded cut-edge derivations, the `sequence_transition` mode in the plan / prompt / validation (sided-evidence rules, Prism-assigned `n_a`), Mock + Gemini adapter behind the fake transport, manual batch submission with the exact disclosure; `cross_cut` declared **nowhere in production**                                                                                                                                                                                                                       | none                | 0                           |
+| **3A.4E** | **Calibration:** `sequence-calibration-v1` fixtures + harness, the input hash, pre-registered acceptance; then a **separately authorised** live gate; accepted families recorded                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | none                | only in the authorised gate |
+| **3A.4F** | **Automatic orchestration + hosted acceptance:** sequence policy (0047: `sequence_semantic_mode` default `off`, batch cap), cut-local settling, waves, batch caps, the budget sum, reconciliation triggers; hosted verification; final acceptance                                                                                                                                                                                                                                                                                                                                                                                                    | **0047** (proposed) | 0 unless authorised         |
 
 3A.4A and 3A.4B deliver value (free, deterministic cut review in edit order) before any schema change. Semantic cut
 QA cannot appear in production before 3A.4E accepts a family.
