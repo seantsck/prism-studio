@@ -116,7 +116,8 @@ export function autoQaState(args: {
   });
   // the automatic semantic identity: the existing job idempotency key with a STABLE nonce (no time involved). It names
   // the analyzer VERSION and (3A.3) whether the full video is covered, so new temporal coverage for unchanged truth
-  // (a v2 analyzer, or the owner newly allowing full video) is due once, without calling the older run stale.
+  // (a newer analyzer version, e.g. Gemini v3, or the owner newly allowing full video) is due once, without calling
+  // the older run stale.
   const temporal = provider
     ? plansDirectVideo({
         inputs,

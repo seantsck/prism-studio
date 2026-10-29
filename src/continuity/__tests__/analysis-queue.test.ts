@@ -362,6 +362,38 @@ media("continuity analysis jobs (memory store, real ffmpeg, fake provider transp
       expect(trail).toMatch(/http=503 overloaded; transport_calls=1\/6; retry_ordinal=1; next_attempt_at=/);
     });
 
+    it("version guard: a job frozen for Gemini v2 is never sent by a v3 worker (fails before any request)", async () => {
+      const ctx = await setup();
+      const g = gemini(answerAll("pass"));
+      const v2 = Object.assign(Object.create(g.provider) as GeminiAnalysisProvider, { version: "2" });
+      const { job } = await submit(ctx, v2);
+      expect(job.inputSnapshot.analyzerVersion).toBe("2");
+      const { w } = makeWorker(ctx.h, g.provider); // the upgraded worker runs v3
+      await w.tick();
+      expect(g.transport.calls).toBe(0);
+      const after = (await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!;
+      expect(after.status).toBe("failed");
+      expect(after.lastErrorCode).toBe("analyzer_version_mismatch");
+      expect(after.lastErrorCategory).toBe("config");
+      expect(after.transportCalls).toBe(0);
+    });
+
+    it("version guard: a v2 job durably requeued after a 503 is not resumed with the v3 request contract", async () => {
+      const ctx = await setup();
+      const g = gemini(() => ({ kind: "error", error: new GeminiTransportError("overloaded", 503, "503") }));
+      const v2 = Object.assign(Object.create(g.provider) as GeminiAnalysisProvider, { version: "2" });
+      const { job } = await submit(ctx, v2);
+      await makeWorker(ctx.h, v2, PAID, live).w.tick(); // the old worker: one 503, requeued
+      expect(g.transport.calls).toBe(1);
+      expect((await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!.status).toBe("queued");
+      ctx.h.clock.advance(20_000);
+      await makeWorker(ctx.h, g.provider, PAID, live).w.tick(); // after the upgrade
+      expect(g.transport.calls).toBe(1); // nothing further was sent
+      expect((await ctx.h.repo.mediaQa.getAnalysisJob(job.id))!.lastErrorCode).toBe(
+        "analyzer_version_mismatch",
+      );
+    });
+
     it("429 follows the same durable semantics and honours a longer Retry-After", async () => {
       const ctx = await setup();
       const g = gemini((req, n) =>

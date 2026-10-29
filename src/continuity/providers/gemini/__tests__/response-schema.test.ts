@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ctx, makeInput, mediaFor } from "@/continuity/analysis/__tests__/fixtures";
 import { AnalysisBatchError } from "@/continuity/analysis/provider";
-import { responseJsonSchemaFor } from "@/domain/continuity/analysis/schema";
+import { responseJsonSchemaFor, validateBatchResponse } from "@/domain/continuity/analysis/schema";
 import { GeminiAnalysisProvider } from "../analyzer";
 import { readGeminiConfig } from "../config";
 import { FakeGeminiTransport, answerAll, type FakeStep } from "../fake-transport";
@@ -88,6 +88,56 @@ describe("Gemini response schema: compact and batch-aware", () => {
   });
 });
 
+describe("direct-video: what the compact schema no longer encodes, local validation still rejects", () => {
+  const vb = {
+    criterionKeys: ["c1"],
+    referenceInputIds: [],
+    outputInputIds: ["video"],
+    mode: "direct_video" as const,
+  };
+  const vmedia = [
+    {
+      inputId: "video",
+      kind: "video" as const,
+      role: "output_video" as const,
+      label: "v",
+      assetId: "a",
+      checksum: "x",
+      mime: "video/mp4",
+      width: 640,
+      height: 360,
+      byteSize: 1,
+      durationMs: 2000,
+      atMs: null,
+    },
+  ];
+  const ev = { input: "video", timestampMs: 500, endMs: null, observation: "Seen." };
+  const a = (over: Record<string, unknown> = {}) => ({
+    criterionId: "c1",
+    result: "pass",
+    confidence: 0.5,
+    summary: "s",
+    evidence: [ev],
+    contradictions: [],
+    limitations: [],
+    ...over,
+  });
+  const ok = (criteria: unknown[]) => validateBatchResponse(JSON.stringify({ criteria }), vb, vmedia).ok;
+
+  it("a valid one-criterion video answer passes (control)", () => expect(ok([a()])).toBe(true));
+  for (const [name, criteria] of [
+    ["confidence below 0", [a({ confidence: -0.1 })]],
+    ["confidence above 1", [a({ confidence: 1.01 })]],
+    ["more than 8 evidence items", [a({ evidence: Array.from({ length: 9 }, () => ev) })]],
+    ["more than 6 contradictions", [a({ contradictions: Array.from({ length: 7 }, (_, i) => `c${i}`) })]],
+    ["more than 6 limitations", [a({ limitations: Array.from({ length: 7 }, (_, i) => `l${i}`) })]],
+    ["a duplicate criterion id", [a(), a()]],
+    ["an unknown criterion id", [a({ criterionId: "other" })]],
+    ["an unexpected key", [a({ score: 3 })]],
+  ] as const)
+    it(`rejects ${name}`, () => expect(ok([...criteria])).toBe(false));
+});
+
 describe("the analyzer sends the compact schema, and local validation stays stricter than it", () => {
   const input = makeInput();
   const batch = input.plan.batches[0]!;
@@ -149,6 +199,22 @@ describe("the analyzer sends the compact schema, and local validation stays stri
       expect((err as AnalysisBatchError).category).toBe("schema_invalid");
     });
   }
+
+  it("the schema-CORRECTION request carries the same compact batch-aware schema as the first request", async () => {
+    const { sent, provider } = capture(
+      (() => {
+        let n = 0;
+        return (r: GeminiRequest): FakeStep =>
+          n++ === 0 ? { kind: "text", text: "{ not json" } : answerAll()(r);
+      })(),
+    );
+    const out = await provider.analyzeBatch({ batch, input, media: mediaFor(input), ctx: ctx() });
+    expect(out.correctionUsed).toBe(true);
+    expect(sent).toHaveLength(2);
+    const expected = geminiResponseJsonSchema(batch.mode, batch.criterionKeys.length);
+    expect(sent[0]!.responseJsonSchema).toEqual(expected);
+    expect(sent[1]!.responseJsonSchema).toEqual(expected);
+  });
 
   it("more criteria than were sent is rejected locally (the schema count is an aid, not the check)", async () => {
     const { provider } = capture(() => ({

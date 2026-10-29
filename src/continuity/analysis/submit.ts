@@ -54,7 +54,8 @@ export function plansDirectVideo(args: {
 
 /**
  * Stable per (attempt, subject, criteria, references, analyzer + version, model, rubric) + a client nonce. The
- * analyzer VERSION is part of it (a v2 analyzer is new coverage for the same truth); 3A.3 adds the coverage flag
+ * analyzer VERSION is part of it (a newer analyzer version, e.g. Gemini v3, is new coverage for the same truth, and a
+ * job of an older version never covers it); 3A.3 adds the coverage flag
  * `temporal` ONLY when the analysis plans the full video, so every image-only key is exactly what it was in 3A.2.
  */
 export function analysisIdempotencyKey(

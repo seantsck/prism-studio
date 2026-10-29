@@ -41,9 +41,19 @@ resumes at the first incomplete batch and never re-sends a completed image or vi
 | **Gemini** | **First direct-video provider**                                  | The official docs list video input with timestamp-oriented understanding (MP4/WebM, inline for small clips, Files API for larger ones); static sampling defaults to 1 fps and a custom rate is set per video part (`videoMetadata.fps`, range (0, 24]) |
 | **OpenAI** | **None** (`modes()` = `image_set`, `videoCapabilities()` = `[]`) | The GPT-6 model pages list video input as **Not supported**. The OpenAI Videos _generation_ endpoint is not video understanding. An OpenAI run judges still-image criteria; temporal criteria stay unchecked                                           |
 
-The Gemini analyzer is now **version 3**. It was 1 (image only), then 2 (temporal), and 3 adds the compact,
-batch-aware Gemini response schema after v2's was refused with HTTP 400. The version is part of the analysis job
-identity, so an older run of unchanged truth does not suppress a v3 run.
+The Gemini analyzer is now **version 3**:
+
+- **v1** was the image-only analyzer.
+- **v2** added temporal analysis. Its Gemini constrained-output contract was invalid: Gemini refused its response
+  schema with HTTP 400, so it never produced a calibration finding.
+- **v3** keeps v2's temporal semantics (same prompt, normalized schema and capabilities) and fixes the provider
+  schema to be compact and batch-aware.
+
+The version is part of the analysis job identity, so an older run of unchanged truth does not suppress a v3 run. A v3
+run is new analysis coverage; it does not make an older run stale, because freshness follows the frozen Shot truth.
+The worker also executes a job **only with the analyzer version it was frozen for**. A job queued or durably requeued
+under v2 fails `analyzer_version_mismatch` before anything is sent; it is never sent with v3 request semantics while
+labelled v2.
 
 ## Who must say yes (no single switch is enough)
 
@@ -356,6 +366,10 @@ codes: 0 pass, 2 refused (nothing sent), 3 sent but not a pass.
 
 **A live calibration must first pass this smoke.** A basic connectivity smoke is not enough: it passed before the
 third attempt.
+
+The smoke deliberately does **not** take the calibration's quota and billing flags (RPM / TPM / RPD, billing,
+tier, spend cap). It is one request under a hard $0.05 cap, and its job is to diagnose the request contract. The
+48-request calibration still requires the full operator readiness gate.
 
 ### Live calibration gate (needs separate authorisation)
 

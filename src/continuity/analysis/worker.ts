@@ -196,6 +196,18 @@ export class ContinuityAnalysisWorker {
     if (job.status === "cancel_requested") {
       return fail("cancelled", "cancelled", "Analysis cancelled.", null, true);
     }
+    // ── version guard: a job is executed only by the analyzer VERSION it was frozen for ──
+    // The version names the request contract (e.g. Gemini v3 = the compact response schema). A job queued under an
+    // older version (still waiting, or durably requeued after a 429/503) must not be sent with newer request
+    // semantics while its run says otherwise: it fails before anything is sent, and a new analysis is planned for
+    // the current version.
+    if (job.inputSnapshot.analyzerVersion !== provider.version) {
+      return fail(
+        "config",
+        "analyzer_version_mismatch",
+        `This analysis was planned for ${job.analyzer} v${job.inputSnapshot.analyzerVersion}, but this worker runs v${provider.version}. Nothing was sent; start a new analysis.`,
+      );
+    }
 
     // ── spend gate at execution time (paid analyzers only) ──
     if (provider.kind === "model") {
