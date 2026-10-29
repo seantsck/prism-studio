@@ -61,6 +61,12 @@ const ISOLATED_3A2 = "zzzzzzzzzzzzzzzzzzzzzz-automatic-qa.spec.ts";
 const ISOLATED_3A3 = "zzzzzzzzzzzzzzzzzzzzzzz-temporal-video-qa.spec.ts";
 
 /**
+ * The Phase 3A.4B Continuity Supervisor spec gets its own memory server: it creates the Episode's edit (persistent for
+ * the life of a store, one per Episode) and reorders it, which no other spec may see.
+ */
+const ISOLATED_3A4B = "zzzzzzzzzzzzzzzzzzzzzzzz-continuity-supervisor.spec.ts";
+
+/**
  * TEST SERVERS ONLY. Playwright's request client reuses keep-alive sockets; at Node's default idle-close boundary
  * (5 s + 1 s buffer) the server could close a socket while `page.request` was reusing it, giving ECONNRESET before
  * the request reached the app. Longer than the longest test (20 min), so each test's request context closes first.
@@ -75,7 +81,7 @@ export default defineConfig({
   projects: [
     {
       name: "memory",
-      testIgnore: ["supabase-*.spec.ts", ISOLATED_2H, ISOLATED_2I, ISOLATED_3A2, ISOLATED_3A3],
+      testIgnore: ["supabase-*.spec.ts", ISOLATED_2H, ISOLATED_2I, ISOLATED_3A2, ISOLATED_3A3, ISOLATED_3A4B],
       use: { baseURL: "http://localhost:3102" },
     },
     {
@@ -97,6 +103,11 @@ export default defineConfig({
       name: "memory-3a3-isolated",
       testMatch: ISOLATED_3A3,
       use: { baseURL: "http://localhost:3106" },
+    },
+    {
+      name: "memory-3a4b-isolated",
+      testMatch: ISOLATED_3A4B,
+      use: { baseURL: "http://localhost:3107" },
     },
   ],
   // Started in order: the first builds; the others serve the same build from separate processes (separate stores).
@@ -143,6 +154,13 @@ export default defineConfig({
         PRISM_STUDIO_GEMINI_DIRECT_VIDEO: "1",
         PRISM_STUDIO_MAX_ANALYSIS_USD_PER_RUN: "0.50",
       },
+    },
+    {
+      command: `npx next start -p 3107 ${KEEP_ALIVE}`,
+      url: "http://localhost:3107",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: memoryEnv(3107),
     },
   ],
 });

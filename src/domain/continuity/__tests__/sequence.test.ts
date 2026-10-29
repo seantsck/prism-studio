@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   assignLook,
@@ -6,14 +5,13 @@ import {
   lockFor,
   yumekoIvory,
 } from "@/domain/__tests__/character-continuity-fixtures";
-import { seed, shotByCode } from "@/domain/__tests__/helpers";
+import { shotByCode } from "@/domain/__tests__/helpers";
 import { attachViews, locationOf, viewFor } from "@/domain/__tests__/location-view-fixtures";
 import { attach, draftFor, newUploadAsset } from "@/domain/__tests__/production-frame-fixtures";
 import { criteriaFingerprint } from "@/domain/continuity/criteria";
 import { CONTINUITY_RULES_VERSION, type ContinuityCriterion } from "@/domain/continuity/model";
 import {
   assessTransition,
-  buildEpisodeCuts,
   CUT_EDGE_POLICY,
   cutIntentEffective,
   cutReferenceFingerprint,
@@ -38,18 +36,11 @@ import {
   type EffectiveCutFinding,
   type TransitionRun,
 } from "@/domain/continuity/sequence";
-import { DEFAULT_EDIT_RATE, type EditRate } from "@/domain/edit/edit-rate";
-import type { AttemptMediaFacts } from "@/domain/edit/eligibility";
-import type { EditItem, EpisodeEdit, VisualSource } from "@/domain/edit/model";
+import type { EditItem, VisualSource } from "@/domain/edit/model";
 import { buildEpisodeEditView } from "@/domain/edit/view";
 import type { ProductionFrame } from "@/domain/production-frame";
-import {
-  generationAttemptSchema,
-  type Asset,
-  type GenerationAttempt,
-  type ProjectData,
-} from "@/domain/schemas";
 import { buildShotSequence } from "@/domain/shot-sequence";
+import { clip, cutsOf, editOf, item, videoItem, world, type World } from "./cut-fixtures";
 
 /**
  * Phase 3A.4A: the cut domain over the persisted Episode Edit. Pure and in memory: seed data, no repository, provider,
@@ -57,126 +48,6 @@ import { buildShotSequence } from "@/domain/shot-sequence";
  */
 
 // ───────────────────────── fixtures ─────────────────────────
-
-let n = 0;
-function videoAsset(data: ProjectData, durationMs: number): Asset {
-  const base = newUploadAsset(data.project.id, { label: `cut-clip-${++n}` });
-  const asset: Asset = {
-    ...base,
-    type: "video",
-    purpose: "generation_output",
-    mime: "video/mp4",
-    durationMs,
-  };
-  data.assets.push(asset);
-  return asset;
-}
-
-function addAttempt(data: ProjectData, code: string, o: { approved?: boolean } = {}): GenerationAttempt {
-  const shotId = shotByCode(data, code).id;
-  if (o.approved) for (const a of data.attempts) if (a.shotId === shotId) a.approved = false;
-  const attempt = generationAttemptSchema.parse({
-    id: randomUUID(),
-    projectId: data.project.id,
-    shotId,
-    attemptNumber: 500 + ++n,
-    provider: "mock",
-    model: "mock-video-1",
-    modality: "video",
-    prompt: "",
-    negativePrompt: "",
-    packageSnapshot: {},
-    packageFingerprint: `fp-cut-${n}`,
-    modelSettings: {},
-    inputAssetIds: [],
-    outputAssetId: null,
-    costUsd: 0,
-    durationMs: null,
-    status: "succeeded",
-    reviewStatus: o.approved ? "approved" : "unreviewed",
-    rejectionReason: "",
-    notes: "",
-    approved: o.approved ?? false,
-    request: { purpose: "shot_output" },
-    createdAt: new Date(Date.UTC(2026, 9, 1, 0, n)).toISOString(),
-  });
-  data.attempts.push(attempt);
-  return attempt;
-}
-
-interface World {
-  data: ProjectData;
-  media: Map<string, AttemptMediaFacts>;
-}
-
-function world(): World {
-  return { data: seed(), media: new Map() };
-}
-
-/** A clip of Shot `code`: an attempt and its primary output of `durationMs`. */
-function clip(w: World, code: string, durationMs = 6000, o: { approved?: boolean } = {}) {
-  const attempt = addAttempt(w.data, code, o);
-  const asset = videoAsset(w.data, durationMs);
-  w.media.set(attempt.id, {
-    attemptId: attempt.id,
-    outputs: [{ assetId: asset.id, role: "primary" }],
-    deliveryVersions: [],
-    deliveryAssetId: null,
-  });
-  return { attempt, asset };
-}
-
-function videoItem(
-  w: World,
-  code: string,
-  o: { inMs?: number; outMs?: number; durationMs?: number } = {},
-): EditItem {
-  const { attempt, asset } = clip(w, code, o.durationMs ?? 6000);
-  return item(w.data, code, {
-    kind: "video",
-    attemptId: attempt.id,
-    assetId: asset.id,
-    sourceInMs: o.inMs ?? 0,
-    sourceOutMs: o.outMs ?? 5000,
-  });
-}
-
-function item(data: ProjectData, code: string, visual: VisualSource): EditItem {
-  return {
-    id: randomUUID(),
-    shotId: shotByCode(data, code).id,
-    visual,
-    sourceAudio: "muted",
-    performance: [],
-    performanceBasis: null,
-  };
-}
-
-function editOf(
-  w: World,
-  items: EditItem[],
-  o: { rate?: EditRate; revision?: number; id?: string } = {},
-): EpisodeEdit {
-  return {
-    id: o.id ?? "edit-1",
-    projectId: w.data.project.id,
-    episodeId: w.data.episodes[0].id,
-    editRate: o.rate ?? DEFAULT_EDIT_RATE,
-    revision: o.revision ?? 0,
-    items,
-  };
-}
-
-const cutsOf = (
-  w: World,
-  edit: EpisodeEdit,
-  shotQa?: Map<string, "critical_mismatch" | "no_blocking_mismatch">,
-) =>
-  buildEpisodeCuts({
-    data: w.data,
-    view: buildEpisodeEditView(w.data, edit, { attempts: w.media, bestPointers: [] }),
-    shotQa,
-  });
 
 const finding = (cut: CutTransition, key: string) => {
   const f = cut.findings.find((x) => x.criterionKey === key);

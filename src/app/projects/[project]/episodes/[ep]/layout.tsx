@@ -12,6 +12,7 @@ const TABS = [
   ["sequence", "Sequence"],
   ["animatic", "Animatic"],
   ["edit", "Edit"],
+  ["continuity", "Continuity"],
   ["assets", "Assets"],
   ["generations", "Generations"],
 ] as const;

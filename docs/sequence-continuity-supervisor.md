@@ -1,10 +1,11 @@
 # Sequence Continuity Supervisor (Phase 3A.4)
 
-**Status: architecture accepted; 3A.4A implemented; 3A.4B–F pending (2026-10-29).** The owner reviewed this design
-and accepted it with fixes, and those fixes are applied below. The owner decisions are recorded in
+**Status: architecture accepted; 3A.4A–B implemented; 3A.4C–F pending (2026-10-29).** The owner reviewed this
+design and accepted it with fixes, and those fixes are applied below. The owner decisions are recorded in
 [§21](#21-owner-decisions-and-implementation-details). 3A.4A (the pure cut domain and deterministic projection,
-[§22](#3a4a-implementation-notes)) exists. There is still no UI, persistence, migration, provider mode, provider call or
-calibration for 3A.4. Each implementation slice ([§22](#22-implementation-slices)) is its own gate.
+[§22](#3a4a-implementation-notes)) and 3A.4B (the deterministic Supervisor UI, [§22](#3a4b-implementation-notes))
+exist. There is still no persistence, migration, provider mode, provider call, media derivation or calibration for
+3A.4. Each implementation slice ([§22](#22-implementation-slices)) is its own gate.
 
 **Question it answers:** _does this cut work as continuity?_ In other words, does Shot B continue Shot A correctly at
 the cut that actually exists in the Episode Edit, as opposed to each Shot satisfying its own truth?
@@ -860,7 +861,7 @@ behaviour.
 
 ## 22. Implementation slices
 
-Each slice is separately reviewed and gated. 3A.4A is implemented; 3A.4B–F have not started.
+Each slice is separately reviewed and gated. 3A.4A and 3A.4B are implemented; 3A.4C–F have not started.
 
 | Slice     | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Migration           | Paid / live calls           |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------- |
@@ -933,6 +934,47 @@ declared-truth comparison). Both are pure.
 - **Not built in 3A.4A:** UI, persistence, migrations, provider mode or capability, mode-scoped versions, media
   extraction and orchestration. `CONTINUITY_RULES_VERSION`, Shot criteria, Shot fingerprints and the provider contract
   are unchanged.
+
+### 3A.4B implementation notes
+
+- **Route:** `/projects/<project>/episodes/<ep>/continuity` (an Episode tab, "Continuity"). The read
+  (`src/server/sequence-continuity-page.ts`) is exactly the Episode Edit page's: the persisted edit
+  (`getEpisodeEditRepo().getForEpisode`), its media facts (`loadEditMediaFacts`), then `buildEpisodeEditView` and
+  `buildEpisodeCuts`. The display model (`src/components/views/sequence-continuity-model.ts`) is pure and re-derives
+  no cut logic. A page visit writes nothing.
+- **No edit / no cuts / error:** without a persisted edit the page says "Sequence Continuity needs a persisted Episode
+  Edit because the edit determines the actual cuts." and links to the Episode Edit and the Sequence Board: cuts are
+  never invented from Shot order and no edit is created. An edit with 0 or 1 item says "This edit has no cuts to
+  review yet." A read failure is reported, never replaced by a fallback.
+- **Status:** every cut is assessed with `run: null`, because no transition run is stored before 3A.4C. A normal cut
+  reads "No sequence QA yet"; only a current `cut:source_integrity` failure reads "Critical continuity break". The
+  deterministic warnings are shown as findings ("Needs attention", first), whatever the state; the Warnings filter and
+  count use the findings, never the state.
+- **Counts and filters:** cuts, critical breaks, cuts with deterministic warnings, semantic criteria unchecked,
+  Scene boundaries and deterministic-only cuts (no clip on a side). There is no score. Reviewed / stale / intentional
+  counts are stated as unavailable. The client-local filters (All, Critical, Warnings, Unchecked, Scene boundaries,
+  Media blocked) only hide server-rendered rows by their own data flags; "Unchecked" counts important applicable
+  semantic criteria only, never `n_a`.
+- **Previews:** the PINNED sources through the private asset route: a muted clip for a video side, the still for a
+  placeholder, a placeholder box for no picture. The edge window and the last / first displayed frame are shown as
+  the 3A.4A descriptors (text, computed source times). No edge-frame media is derived, and nothing is called the
+  exact edge frame; exact cut-edge media remains 3A.4D.
+- **Shot QA:** the optional current Shot QA state is NOT loaded in 3A.4B, so `cut:shot_qa` is absent. The only
+  existing producer of a pinned attempt's Shot QA state is the Shot QA page's per-attempt read (`loadAttemptMedia`:
+  runs, jobs, policy and automation state per attempt), which that page pairs with its automatic-QA reconciler; 3A.4B
+  keeps the Supervisor to the Episode Edit's own read path instead. Each video side links to its pinned attempt's
+  Shot QA page (`/projects/<slug>/generations/<attemptId>/continuity`). (In memory mode the media-QA repository that
+  `loadEditMediaFacts` already uses for the Episode Edit page starts the demo's idle inline worker process-wide, as
+  before; the Supervisor submits no job, so that worker has nothing to do.)
+- **Episode Edit markers:** between adjacent items of the PERSISTED edit, a small link to the cut's Supervisor anchor
+  (`cut-<leftItemId>-<rightItemId>`), built from the same cut projection (`cut-marker-model.ts`). It shows a fail tone
+  for a current source-integrity failure, a warn tone for deterministic warnings, else neutral, never a pass, with the
+  issue count and an accessible label. A proposal has no markers.
+- **Sequence Board:** an always-visible "Continuity Supervisor" link (the Supervisor's no-edit state is truthful, so a
+  conditional link would only add an edit read to the board). The board's ordering, facts, golden output and sync are
+  unchanged; the subtitle now says "planned Shot order". The Supervisor links back to the board.
+- **Not built in 3A.4B:** transition-run or cut-intent persistence, migrations, semantic analysis, provider mode or
+  capability, media derivation and automatic reconciliation.
 
 ## 23. Out of scope for 3A.4
 

@@ -19,7 +19,7 @@ import {
   type ShotSequenceTransition,
   type TransitionFact,
 } from "@/domain/shot-sequence";
-import { shotPath } from "@/lib/paths";
+import { episodePath, shotPath } from "@/lib/paths";
 import { assetUrl, cn } from "@/lib/utils";
 import { syncSequenceContinuityLinks } from "@/server/sequence-actions";
 
@@ -686,11 +686,21 @@ export function SequenceView({
     <div>
       <PageHeader
         title={`Sequence — ${episode.title}`}
-        subtitle="Canonical stills in cut order: do these Shots cut together? Derived from Shot Prep; nothing is generated or analysed here."
+        subtitle="Canonical stills in the planned Shot order: do these Shots cut together? Derived from Shot Prep; nothing is generated or analysed here."
         actions={
-          <Badge tone={seq.summary.missingProductionFrames === 0 ? "pass" : "warn"}>
-            {seq.summary.currentProductionFrames}/{seq.summary.shots} current Production Frames
-          </Badge>
+          <>
+            <Link
+              href={episodePath(data.project.slug, episode.slug, "/continuity")}
+              className="text-[11.5px] text-accent hover:underline"
+              data-testid="sequence-continuity-link"
+              title="The actual cuts of the persisted Episode Edit (deterministic review)"
+            >
+              Continuity Supervisor: review the Episode Edit&apos;s cuts →
+            </Link>
+            <Badge tone={seq.summary.missingProductionFrames === 0 ? "pass" : "warn"}>
+              {seq.summary.currentProductionFrames}/{seq.summary.shots} current Production Frames
+            </Badge>
+          </>
         }
       />
       <div className="space-y-5 p-4 sm:p-6">
