@@ -150,6 +150,11 @@ export interface CutReference {
   ref: string;
   assetId: string | null;
   checksum: string | null;
+  /**
+   * The applicable semantic criteria of this cut that could use the reference (sorted). A cut keeps only references
+   * with at least one; empty only on a side's candidate list, before the cut's criteria are known.
+   */
+  usedBy: string[];
 }
 
 export interface CutSide {
@@ -177,6 +182,7 @@ export interface CutSide {
   currentness: { stale: boolean; reasons: string[]; replacement: ReplacementReason | null };
   window: EdgeWindowDescriptor | null;
   still: EdgeStillDescriptor | null;
+  /** the references this cut's applicable semantic criteria could use (`referencesForCut`), in canonical order */
   references: CutReference[];
   /** the Shot's prop names, for criterion titles */
   propNames: Map<string, string>;
@@ -234,6 +240,7 @@ function currentnessOf(view: ItemView): CutSide["currentness"] {
   return { stale: reasons.length > 0, reasons, replacement: view.replacement?.reason ?? null };
 }
 
+/** A side's CANDIDATE references; `referencesForCut` keeps the ones the cut's applicable criteria could use. */
 function referencesOf(
   data: ProjectData,
   ctx: ShotContext,
@@ -252,6 +259,7 @@ function referencesOf(
         ref: c.assignment.characterId,
         assetId: null,
         checksum: ap.lock.lockFingerprint,
+        usedBy: [],
       });
       continue;
     }
@@ -262,9 +270,17 @@ function referencesOf(
         ref: c.assignment.characterId,
         assetId: id,
         checksum: checksum(id),
+        usedBy: [],
       });
     for (const id of ap.look?.referenceAssetIds ?? [])
-      refs.push({ side, role: "look", ref: c.assignment.characterId, assetId: id, checksum: checksum(id) });
+      refs.push({
+        side,
+        role: "look",
+        ref: c.assignment.characterId,
+        assetId: id,
+        checksum: checksum(id),
+        usedBy: [],
+      });
   }
   if (ctx.selectedLocationView)
     refs.push({
@@ -273,6 +289,7 @@ function referencesOf(
       ref: ctx.selectedLocationView.id,
       assetId: ctx.selectedLocationView.assetId,
       checksum: ctx.selectedLocationView.assetChecksum,
+      usedBy: [],
     });
   if (picture.kind === "video") {
     // the Production Frame the clip was GENERATED FROM (frozen in its package), never today's selection
@@ -285,9 +302,54 @@ function referencesOf(
         ref: pf.frameId,
         assetId: pf.assetId,
         checksum: pf.checksum,
+        usedBy: [],
       });
   }
   return refs;
+}
+
+/** The semantic criteria a Location View image could inform: where things are and how the place is lit. */
+const LOCATION_VIEW_USES = ["cut:axis", "cut:geography", "cut:lighting", "cut:object_continuity"];
+
+/** Canonical reference order: never ProjectData insertion order. */
+const compareReferences = (x: CutReference, y: CutReference) => {
+  const key = (r: CutReference) => [r.side, r.role, r.ref, r.assetId ?? "", r.checksum ?? ""];
+  const a = key(x);
+  const b = key(y);
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+  return 0;
+};
+
+/**
+ * The references this cut's judgment depends on: a side's candidates, kept only when a currently APPLICABLE semantic
+ * criterion could use them, so an unused reference never stales the cut. A Lock serves the shared Character's
+ * appearance and wardrobe, an identity image the appearance, a Look image the wardrobe; a Location View serves the
+ * place-bound families. The Production Frame a clip was generated from is general visual provenance of that side: any
+ * applicable semantic criterion may use it. Deterministic criteria use no reference (they are recomputed on read).
+ */
+export function referencesForCut(
+  criteria: readonly CutCriterion[],
+  candidates: readonly CutReference[],
+): CutReference[] {
+  const applicable = criteria
+    .filter((c) => c.handler !== "deterministic" && c.applicability === "applies")
+    .map((c) => c.key);
+  const uses = (r: CutReference): string[] => {
+    if (r.role === "character_lock") return [`cut:character_appearance:${r.ref}`, `cut:wardrobe:${r.ref}`];
+    if (r.role === "identity") return [`cut:character_appearance:${r.ref}`];
+    if (r.role === "look") return [`cut:wardrobe:${r.ref}`];
+    if (r.role === "location_view") return LOCATION_VIEW_USES;
+    return applicable;
+  };
+  return candidates
+    .map((r) => ({
+      ...r,
+      usedBy: uses(r)
+        .filter((k) => applicable.includes(k))
+        .sort(),
+    }))
+    .filter((r) => r.usedBy.length > 0)
+    .sort(compareReferences);
 }
 
 function sideOf(
@@ -648,9 +710,13 @@ function buildCriteria(left: CutSide, right: CutSide, crossesScene: boolean, fac
     );
   }
 
+  // only a field declared on BOTH sides is comparable: one side's screen direction and the other's facing direction
+  // prove nothing (the shared facts only ever describe comparable fields)
+  const both = (x: string, y: string) => x !== "" && y !== "";
   const direction = facts.filter((f) => f.category === "screen_direction");
-  const dirDeclared = (t: TransitionTruthSide) =>
-    t.continuity.screenDirection || t.continuity.facingDirection;
+  const directionComparable =
+    both(a.continuity.screenDirection, b.continuity.screenDirection) ||
+    both(a.continuity.facingDirection, b.continuity.facingDirection);
   add(
     det(
       "cut:declared_direction",
@@ -664,8 +730,8 @@ function buildCriteria(left: CutSide, right: CutSide, crossesScene: boolean, fac
     ),
     crossesScene
       ? naFinding
-      : !dirDeclared(a) || !dirDeclared(b)
-        ? { result: "n_a", side: null, reason: "Direction is not declared on both sides." }
+      : !directionComparable
+        ? { result: "n_a", side: null, reason: "No comparable direction field is declared on both sides." }
         : direction.length
           ? { result: "warn", side: "both", reason: direction.map((f) => f.message).join(" ") }
           : { result: "pass", side: "both", reason: "Same declared direction." },
@@ -675,8 +741,10 @@ function buildCriteria(left: CutSide, right: CutSide, crossesScene: boolean, fac
   const lighting = declaredDiffers(left.declaredExtra.lighting, right.declaredExtra.lighting)
     ? [`Lighting changes: ${left.declaredExtra.lighting} → ${right.declaredExtra.lighting}`]
     : [];
-  const timeDeclared = (t: TransitionTruthSide, x: CutSide) =>
-    t.continuity.weather || t.continuity.timeOfDay || x.declaredExtra.lighting;
+  const timeComparable =
+    both(a.continuity.timeOfDay, b.continuity.timeOfDay) ||
+    both(a.continuity.weather, b.continuity.weather) ||
+    both(left.declaredExtra.lighting, right.declaredExtra.lighting);
   add(
     det(
       "cut:declared_time",
@@ -690,13 +758,21 @@ function buildCriteria(left: CutSide, right: CutSide, crossesScene: boolean, fac
     ),
     crossesScene
       ? naFinding
-      : !timeDeclared(a, left) || !timeDeclared(b, right)
-        ? { result: "n_a", side: null, reason: "Time / weather / lighting is not declared on both sides." }
+      : !timeComparable
+        ? {
+            result: "n_a",
+            side: null,
+            reason: "No comparable time of day, weather or lighting field is declared on both sides.",
+          }
         : time.length || lighting.length
           ? { result: "warn", side: "both", reason: [...time.map((f) => f.message), ...lighting].join(" ") }
-          : { result: "pass", side: "both", reason: "Same declared time, weather and lighting." },
+          : { result: "pass", side: "both", reason: "Same declared value in every comparable field." },
   );
 
+  // the assigned prop sets are explicit and comparable whenever either side assigns one; free text only when both
+  // sides declare it
+  const propSetComparable = left.declaredExtra.propIds.length > 0 || right.declaredExtra.propIds.length > 0;
+  const propTextComparable = both(left.declaredExtra.props, right.declaredExtra.props);
   const propSetDiffers = left.declaredExtra.propIds.join("|") !== right.declaredExtra.propIds.join("|");
   const propText = declaredDiffers(left.declaredExtra.props, right.declaredExtra.props);
   const propNames = (x: CutSide) =>
@@ -714,20 +790,22 @@ function buildCriteria(left: CutSide, right: CutSide, crossesScene: boolean, fac
     ),
     crossesScene
       ? naFinding
-      : propSetDiffers || propText
-        ? {
-            result: "warn",
-            side: "both",
-            reason: [
-              propSetDiffers ? `Props ${propNames(left)} → ${propNames(right)}.` : "",
-              propText
-                ? `Prop continuity changes: ${left.declaredExtra.props} → ${right.declaredExtra.props}.`
-                : "",
-            ]
-              .filter(Boolean)
-              .join(" "),
-          }
-        : { result: "pass", side: "both", reason: "Same declared props." },
+      : !propSetComparable && !propTextComparable
+        ? { result: "n_a", side: null, reason: "No comparable prop declaration on both sides." }
+        : propSetDiffers || propText
+          ? {
+              result: "warn",
+              side: "both",
+              reason: [
+                propSetDiffers ? `Props ${propNames(left)} → ${propNames(right)}.` : "",
+                propText
+                  ? `Prop continuity changes: ${left.declaredExtra.props} → ${right.declaredExtra.props}.`
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(" "),
+            }
+          : { result: "pass", side: "both", reason: "Same declared props." },
   );
 
   // ── semantic cross-cut criteria: defined, never judged here ──
@@ -924,6 +1002,9 @@ export function buildEpisodeCuts({ data, view, shotQa }: CutInput): CutTransitio
         message: `Exit ${left.declaredExtra.exitPoint || "not declared"} → entry ${right.declaredExtra.entryPoint || "not declared"}`,
       });
     const { criteria, findings } = buildCriteria(left, right, crossesScene, facts);
+    // the candidates become the references the cut's applicable criteria could actually use
+    left.references = referencesForCut(criteria, left.references);
+    right.references = referencesForCut(criteria, right.references);
     const reasons: string[] = [];
     for (const [s, side] of [
       ["left", left],
@@ -987,21 +1068,38 @@ export interface TransitionRunTruth {
   rulesVersion: string;
 }
 
+/**
+ * The edit-fact criteria: the pinned picture, its integrity and currentness, linked Shot QA and the stored link. They
+ * describe the edit, not the continuity truth a semantic judgment is made against, and are recomputed on every read,
+ * so they are NOT part of the criteria fingerprint: a currentness change, supplied Shot QA or a re-linked Shot never
+ * stales a semantic run (the assessment still shows them, live).
+ */
+export const EDIT_FACT_CRITERIA: readonly string[] = [
+  "cut:picture",
+  "cut:source_integrity",
+  "cut:source_currentness",
+  "cut:shot_qa",
+  "cut:link",
+];
+
+/** The continuity truth a semantic run is judged against: declared-truth and semantic criteria, never edit facts. */
 export function cutCriteriaFingerprint(criteria: readonly CutCriterion[]): string {
   return fingerprint([
     "cut-criteria-v1",
     SEQUENCE_RULES_VERSION,
-    criteria.map((c) => [
-      c.key,
-      c.category,
-      c.severity,
-      c.expected,
-      c.sourceRef,
-      c.handler,
-      c.family,
-      c.applicability,
-      c.intentCoverable,
-    ]),
+    criteria
+      .filter((c) => !EDIT_FACT_CRITERIA.includes(c.key))
+      .map((c) => [
+        c.key,
+        c.category,
+        c.severity,
+        c.expected,
+        c.sourceRef,
+        c.handler,
+        c.family,
+        c.applicability,
+        c.intentCoverable,
+      ]),
   ]);
 }
 
@@ -1011,7 +1109,7 @@ export function cutReferenceFingerprint(
 ): string {
   return fingerprint([
     "cut-references-v1",
-    [...left, ...right].map((r) => [r.side, r.role, r.ref, r.assetId, r.checksum]),
+    [...left, ...right].sort(compareReferences).map((r) => [r.side, r.role, r.ref, r.assetId, r.checksum]),
   ]);
 }
 
@@ -1128,7 +1226,10 @@ export const TRANSITION_STATE_LABELS: Record<TransitionState, string> = {
   no_blocking_mismatch: "No blocking mismatch found",
 };
 
-/** A finding of a transition run with its EFFECTIVE result (human overrides already applied by the caller). */
+/**
+ * A finding with its EFFECTIVE result (human overrides already applied by the caller). In a run, only `criterionKey`
+ * and `result` are read: the category, severity and coverability always come from the cut's CURRENT criterion.
+ */
 export interface EffectiveCutFinding {
   criterionKey: string;
   category: ContinuityCategory;
@@ -1145,6 +1246,8 @@ export interface TransitionRun {
 
 export interface TransitionAssessment {
   state: TransitionState;
+  /** the composed findings the state was derived from, one per current criterion (`effectiveTransitionFindings`) */
+  findings: EffectiveCutFinding[];
   label: string;
   freshness: TransitionFreshness | null;
   intentEffective: boolean;
@@ -1157,13 +1260,44 @@ export interface TransitionAssessment {
   };
 }
 
+/**
+ * The cut's findings as an assessment reads them, one per CURRENT criterion, merged by criterion key:
+ *   - deterministic criteria: always the cut's current projection, recomputed on read (never a run's frozen value);
+ *   - analyzer / manual criteria: the current run's effective result when it has one, otherwise the projection's
+ *     `unchecked` / `n_a`. Missing analysis is never a pass, so a failed or incomplete run stays unchecked;
+ *   - `n_a` is Prism's decision and is never replaced by a run;
+ *   - run findings for criteria the cut no longer has are ignored.
+ * Pass `run: null` when there is no CURRENT run (none, stale or another cut's).
+ */
+export function effectiveTransitionFindings(
+  cut: Pick<CutTransition, "criteria" | "findings">,
+  run: Pick<TransitionRun, "findings"> | null,
+): EffectiveCutFinding[] {
+  const projected = new Map(cut.findings.map((f) => [f.criterionKey, f.result]));
+  const analyzed = new Map((run?.findings ?? []).map((f) => [f.criterionKey, f.result]));
+  return cut.criteria.map((c) => {
+    const fromRun =
+      c.handler !== "deterministic" && c.applicability === "applies" ? analyzed.get(c.key) : undefined;
+    return {
+      criterionKey: c.key,
+      category: c.category,
+      severity: c.severity,
+      result: fromRun ?? projected.get(c.key) ?? "unchecked",
+      intentCoverable: c.intentCoverable,
+    };
+  });
+}
+
 const covered = (f: EffectiveCutFinding, intent: CutIntent | null) =>
   !!intent && f.intentCoverable && (intent.scope.length === 0 || intent.scope.includes(f.category));
 
 /**
  * The cut's advisory state, in precedence order. A live deterministic source-integrity failure leads even without a
  * run (the one case where a deterministic fact leads). Otherwise: no run → stale → critical break → running → needs
- * review → unchecked → intentional accepted → no blocking mismatch.
+ * review → unchecked → intentional accepted → no blocking mismatch. Without a current run the state is "No sequence
+ * QA yet" whatever the deterministic warnings (they stay visible as findings); with one, the composed findings
+ * (current deterministic projection + the run's semantic results) decide, so a deterministic warning that appears
+ * after the run makes the cut "Needs review".
  */
 export function assessTransition(args: {
   cut: CutTransition;
@@ -1175,7 +1309,7 @@ export function assessTransition(args: {
   const intent = effective ? args.intent! : null;
   const integrity = cut.findings.find((f) => f.criterionKey === "cut:source_integrity")?.result === "fail";
   const freshness = run ? transitionFreshness(run.truth, cut) : null;
-  const findings = run && freshness?.status === "current" ? run.findings : [];
+  const findings = effectiveTransitionFindings(cut, run && freshness?.status === "current" ? run : null);
   const open = findings.filter((f) => (f.result === "fail" || f.result === "warn") && !covered(f, intent));
   const counts = {
     criticalFailures: open.filter((f) => f.result === "fail" && f.severity === "critical").length,
@@ -1189,6 +1323,7 @@ export function assessTransition(args: {
   const out = (state: TransitionState): TransitionAssessment => ({
     state,
     label: TRANSITION_STATE_LABELS[state],
+    findings,
     freshness,
     intentEffective: effective,
     counts,

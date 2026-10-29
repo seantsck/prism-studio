@@ -16,12 +16,16 @@ import {
   buildEpisodeCuts,
   CUT_EDGE_POLICY,
   cutIntentEffective,
+  cutReferenceFingerprint,
+  EDIT_FACT_CRITERIA,
   editOrderInfo,
+  effectiveTransitionFindings,
   firstDisplayedFrameMs,
   lastDisplayedFrameMs,
   leftEdgeWindow,
   NOT_CALIBRATED,
   PLACEHOLDER_REASON,
+  referencesForCut,
   rightEdgeWindow,
   SCENE_CHANGE_REASON,
   SEMANTIC_CUT_FAMILIES,
@@ -29,6 +33,7 @@ import {
   transitionFreshness,
   transitionKey,
   type CutIntent,
+  type CutReference,
   type CutTransition,
   type EffectiveCutFinding,
   type TransitionRun,
@@ -713,51 +718,88 @@ describe("applicability is Prism's: across a Scene boundary, scene-continuity cr
 
 // ───────────────────────── assessment ─────────────────────────
 
-describe("assessTransition: advisory states in precedence order", () => {
-  function cutPair() {
-    const w = world();
-    const a = videoItem(w, "2A");
-    const b = videoItem(w, "2B");
-    const [cut] = cutsOf(w, editOf(w, [a, b]));
-    return { w, a, b, cut };
-  }
-  const f = (
-    key: string,
-    result: EffectiveCutFinding["result"],
-    o: Partial<EffectiveCutFinding> = {},
-  ): EffectiveCutFinding => ({
-    criterionKey: key,
-    category: "screen_direction",
-    severity: "major",
-    result,
-    intentCoverable: true,
-    ...o,
-  });
-  const run = (
-    cut: CutTransition,
-    findings: EffectiveCutFinding[],
-    status: TransitionRun["analysisStatus"] = "complete",
-  ): TransitionRun => ({
+/** A semantic run of `cut` that answered every applicable analyzer criterion with PASS, except `results`. */
+function semanticRun(
+  cut: CutTransition,
+  results: Record<string, EffectiveCutFinding["result"]> = {},
+  status: TransitionRun["analysisStatus"] = "complete",
+): TransitionRun {
+  return {
     truth: cut.truth,
     analysisStatus: status,
-    findings,
-  });
-  const intentFor = (cut: CutTransition, o: Partial<CutIntent> = {}): CutIntent => ({
-    fromItemId: cut.address.leftItemId,
-    kinds: ["time_jump"],
-    scope: [],
-    note: "Deliberate time jump.",
-    declaredBy: null,
-    declaredAt: "2026-10-29T00:00:00.000Z",
-    ...o,
+    findings: cut.criteria
+      .filter((c) => c.handler === "analyzer" && c.applicability === "applies")
+      .map((c) => ({
+        criterionKey: c.key,
+        category: c.category,
+        severity: c.severity,
+        result: results[c.key] ?? "pass",
+        intentCoverable: c.intentCoverable,
+      })),
+  };
+}
+
+/** 2B → 2C: inside Scene 2, no deterministic warning at all (the clean baseline). */
+function cutPair() {
+  const w = world();
+  const a = videoItem(w, "2B");
+  const b = videoItem(w, "2C");
+  const [cut] = cutsOf(w, editOf(w, [a, b]));
+  return { w, a, b, cut };
+}
+
+/** 2B → 2E with Yumeko under the same Lock on both sides: her appearance is a critical semantic criterion. */
+function lockedPair() {
+  const w = world();
+  const { ivory } = yumekoIvory(w.data, "2B");
+  assignLook(w.data, "2E", "Yumeko", ivory);
+  const lock = lockFor(w.data, "Yumeko", ivory, { name: "Ivory v1" });
+  attachLocks(
+    w.data,
+    [lock],
+    [
+      { code: "2B", lock },
+      { code: "2E", lock },
+    ],
+  );
+  const a = videoItem(w, "2B");
+  const b = videoItem(w, "2E");
+  const [cut] = cutsOf(w, editOf(w, [a, b]));
+  const appearance = `cut:character_appearance:${w.data.characters.find((c) => c.name === "Yumeko")!.id}`;
+  return { w, a, b, cut, appearance };
+}
+
+const intentFor = (cut: CutTransition, o: Partial<CutIntent> = {}): CutIntent => ({
+  fromItemId: cut.address.leftItemId,
+  kinds: ["time_jump"],
+  scope: [],
+  note: "Deliberate time jump.",
+  declaredBy: null,
+  declaredAt: "2026-10-29T00:00:00.000Z",
+  ...o,
+});
+
+describe("assessTransition: advisory states in precedence order", () => {
+  it("the clean baseline has no deterministic warning", () => {
+    const { cut } = cutPair();
+    expect(cut.findings.filter((f) => f.result === "warn" || f.result === "fail")).toEqual([]);
   });
 
-  it("no run: No sequence QA yet", () => {
+  it("no run: No sequence QA yet, even with deterministic WARNs, which stay visible", () => {
     const { cut } = cutPair();
     expect(assessTransition({ cut, run: null })).toMatchObject({
       state: "no_sequence_qa",
       label: "No sequence QA yet",
     });
+    const w = world();
+    // 2A → 2B: declared screen direction changes
+    const [warned] = cutsOf(w, editOf(w, [videoItem(w, "2A"), videoItem(w, "2B")]));
+    const a = assessTransition({ cut: warned, run: null });
+    expect(a.state).toBe("no_sequence_qa");
+    expect(a.findings).toContainEqual(
+      expect.objectContaining({ criterionKey: "cut:declared_direction", result: "warn" }),
+    );
+    expect(a.counts.warnings).toBe(1);
   });
 
   it("a deterministic source-integrity FAIL is a critical break even without a run", () => {
@@ -772,52 +814,52 @@ describe("assessTransition: advisory states in precedence order", () => {
   });
 
   it("stale beats a recorded critical failure (an old finding is not evidence about the current cut)", () => {
-    const { w, a, b, cut } = cutPair();
-    const old = run(cut, [f("cut:axis", "fail", { severity: "critical" })]);
+    const { w, a, b, cut, appearance } = lockedPair();
+    expect(criterion(cut, appearance).severity).toBe("critical");
+    const old = semanticRun(cut, { [appearance]: "fail" });
     const [trimmed] = cutsOf(w, editOf(w, [withTrim(a, 0, 4000), b]));
     expect(assessTransition({ cut: trimmed, run: old })).toMatchObject({ state: "sequence_stale" });
     expect(assessTransition({ cut, run: old }).state).toBe("critical_break");
   });
 
   it("critical break beats running; running beats needs review", () => {
-    const { cut } = cutPair();
-    expect(
-      assessTransition({ cut, run: run(cut, [f("x", "fail", { severity: "critical" })], "running") }).state,
-    ).toBe("critical_break");
-    expect(assessTransition({ cut, run: run(cut, [f("x", "warn")], "queued") }).state).toBe(
+    const { cut, appearance } = lockedPair();
+    expect(assessTransition({ cut, run: semanticRun(cut, { [appearance]: "fail" }, "running") }).state).toBe(
+      "critical_break",
+    );
+    expect(assessTransition({ cut, run: semanticRun(cut, { "cut:axis": "warn" }, "queued") }).state).toBe(
       "analysis_running",
     );
   });
 
   it("needs review on any uncovered FAIL / WARN; unchecked only when nothing fails and an important criterion is unchecked", () => {
     const { cut } = cutPair();
-    expect(assessTransition({ cut, run: run(cut, [f("x", "warn", { severity: "minor" })]) }).state).toBe(
+    expect(assessTransition({ cut, run: semanticRun(cut, { "cut:lighting": "warn" }) }).state).toBe(
       "needs_review",
     );
-    expect(assessTransition({ cut, run: run(cut, [f("x", "fail")]) }).state).toBe("needs_review");
-    expect(assessTransition({ cut, run: run(cut, [f("x", "unchecked"), f("y", "pass")]) })).toMatchObject({
+    expect(assessTransition({ cut, run: semanticRun(cut, { "cut:axis": "fail" }) }).state).toBe(
+      "needs_review",
+    );
+    expect(assessTransition({ cut, run: semanticRun(cut, { "cut:axis": "unchecked" }) })).toMatchObject({
       state: "unchecked_transition",
       label: "Unchecked transition",
     });
-    expect(
-      assessTransition({ cut, run: run(cut, [f("x", "unchecked", { severity: "minor" }), f("y", "pass")]) })
-        .state,
-    ).toBe("no_blocking_mismatch");
+    // an unchecked MINOR criterion is not important
+    expect(assessTransition({ cut, run: semanticRun(cut, { "cut:lighting": "unchecked" }) }).state).toBe(
+      "no_blocking_mismatch",
+    );
   });
 
   it("no blocking mismatch is never called a pass, an approval or perfect continuity", () => {
     const { cut } = cutPair();
-    const a = assessTransition({ cut, run: run(cut, [f("x", "pass"), f("y", "n_a")]) });
+    const a = assessTransition({ cut, run: semanticRun(cut) });
     expect(a).toMatchObject({ state: "no_blocking_mismatch", label: "No blocking mismatch found" });
     expect(a.label).not.toMatch(/pass|approv|perfect/i);
   });
 
   it("intent covers in-scope deviations: every remaining FAIL / WARN covered → Intentional discontinuity accepted", () => {
     const { cut } = cutPair();
-    const r = run(cut, [
-      f("cut:lighting", "warn", { category: "lighting" }),
-      f("cut:declared_time", "fail", { category: "time_of_day" }),
-    ]);
+    const r = semanticRun(cut, { "cut:lighting": "warn", "cut:axis": "fail" });
     expect(assessTransition({ cut, run: r }).state).toBe("needs_review");
     const all = assessTransition({ cut, run: r, intent: intentFor(cut) });
     expect(all).toMatchObject({
@@ -829,24 +871,31 @@ describe("assessTransition: advisory states in precedence order", () => {
     expect(assessTransition({ cut, run: r, intent: intentFor(cut, { scope: ["lighting"] }) }).state).toBe(
       "needs_review",
     );
-    // an uncoverable (edit-fact) warning is never covered
-    const editFact = run(cut, [
-      f("cut:source_currentness", "warn", { category: "other", intentCoverable: false }),
-    ]);
-    expect(assessTransition({ cut, run: editFact, intent: intentFor(cut) }).state).toBe("needs_review");
     // the findings themselves are untouched
-    expect(r.findings.map((x) => x.result)).toEqual(["warn", "fail"]);
+    expect(r.findings.filter((x) => x.result !== "pass").map((x) => x.result)).toEqual(["fail", "warn"]);
+  });
+
+  it("an edit-fact WARN is never covered by intent", () => {
+    const { w, a, b } = cutPair();
+    clip(w, "2C", 6000, { approved: true }); // 2C's approval moves away from the pinned clip
+    const [cut] = cutsOf(w, editOf(w, [a, b]));
+    expect(finding(cut, "cut:source_currentness").result).toBe("warn");
+    expect(assessTransition({ cut, run: semanticRun(cut), intent: intentFor(cut) })).toMatchObject({
+      state: "needs_review",
+      intentEffective: true,
+      counts: { warnings: 1, coveredByIntent: 0 },
+    });
   });
 
   it("intent is predecessor-bound: A → B intent never covers C → B; trims keep it; adjacency changes void it", () => {
     const { w, a, b, cut } = cutPair();
     const intent = intentFor(cut);
     expect(cutIntentEffective(intent, cut.address)).toBe(true);
-    const c = videoItem(w, "2C");
+    const c = videoItem(w, "2D");
     const [, cb] = cutsOf(w, editOf(w, [a, c, b]));
     expect(cb.address.rightItemId).toBe(b.id);
     expect(cutIntentEffective(intent, cb.address)).toBe(false);
-    const r = run(cb, [f("cut:lighting", "warn", { category: "lighting" })]);
+    const r = semanticRun(cb, { "cut:lighting": "warn" });
     expect(assessTransition({ cut: cb, run: r, intent })).toMatchObject({
       state: "needs_review",
       intentEffective: false,
@@ -854,6 +903,336 @@ describe("assessTransition: advisory states in precedence order", () => {
     // a trim keeps the same address, so the same intent still applies
     const [trimmed] = cutsOf(w, editOf(w, [withTrim(a, 0, 4200), b]));
     expect(cutIntentEffective(intent, trimmed.address)).toBe(true);
+  });
+});
+
+describe("a current run is composed with the cut's CURRENT deterministic findings", () => {
+  it("a currentness WARN that appears after a clean run makes the cut Needs review (the run stays current)", () => {
+    const { w, a, b, cut } = cutPair();
+    const r = semanticRun(cut);
+    expect(assessTransition({ cut, run: r }).state).toBe("no_blocking_mismatch");
+    clip(w, "2C", 6000, { approved: true });
+    const [now] = cutsOf(w, editOf(w, [a, b]));
+    expect(transitionFreshness(r.truth, now).status).toBe("current");
+    const assessed = assessTransition({ cut: now, run: r });
+    expect(assessed.state).toBe("needs_review");
+    expect(assessed.findings).toContainEqual(
+      expect.objectContaining({ criterionKey: "cut:source_currentness", result: "warn" }),
+    );
+  });
+
+  it("a changed stored link after a clean run: the run stays current and cut:link WARN makes it Needs review", () => {
+    const { w, a, b, cut } = cutPair();
+    const r = semanticRun(cut);
+    shotByCode(w.data, "2C").continuity.previousShotId = null;
+    const [now] = cutsOf(w, editOf(w, [a, b]));
+    expect(transitionFreshness(r.truth, now).status).toBe("current");
+    expect(finding(now, "cut:link").result).toBe("warn");
+    expect(assessTransition({ cut: now, run: r }).state).toBe("needs_review");
+  });
+
+  it("current Shot QA after a clean run: supplying it never stales the run, and its WARN appears", () => {
+    const { w, a, b, cut } = cutPair();
+    const r = semanticRun(cut);
+    const qa = new Map([[(b.visual as { attemptId: string }).attemptId, "critical_mismatch" as const]]);
+    const [now] = cutsOf(w, editOf(w, [a, b]), qa);
+    expect(now.truth).toEqual(cut.truth);
+    const assessed = assessTransition({ cut: now, run: r });
+    expect(assessed.state).toBe("needs_review");
+    expect(assessed.findings).toContainEqual(
+      expect.objectContaining({ criterionKey: "cut:shot_qa", result: "warn" }),
+    );
+  });
+
+  it("edit facts are outside the criteria fingerprint; declared truth is inside it", () => {
+    expect(EDIT_FACT_CRITERIA).toEqual([
+      "cut:picture",
+      "cut:source_integrity",
+      "cut:source_currentness",
+      "cut:shot_qa",
+      "cut:link",
+    ]);
+    const { w, a, b, cut } = cutPair();
+    shotByCode(w.data, "2C").continuity.timeOfDay = "Dawn";
+    const [now] = cutsOf(w, editOf(w, [a, b]));
+    expect(transitionFreshness(cut.truth, now).reasons).toEqual([
+      "The continuity truth of this cut changed.",
+    ]);
+  });
+
+  it("a run's frozen deterministic value never replaces the live one; vanished criteria are ignored", () => {
+    const w = world();
+    const [cut] = cutsOf(w, editOf(w, [videoItem(w, "2A"), videoItem(w, "2B")]));
+    const r = semanticRun(cut);
+    r.findings.push(
+      {
+        criterionKey: "cut:declared_direction",
+        category: "screen_direction",
+        severity: "major",
+        result: "pass",
+        intentCoverable: true,
+      },
+      {
+        criterionKey: "cut:gone",
+        category: "other",
+        severity: "critical",
+        result: "fail",
+        intentCoverable: false,
+      },
+    );
+    const merged = effectiveTransitionFindings(cut, r);
+    expect(merged.map((f) => f.criterionKey)).toEqual(cut.criteria.map((c) => c.key));
+    expect(merged.find((f) => f.criterionKey === "cut:declared_direction")?.result).toBe("warn");
+    expect(assessTransition({ cut, run: r }).state).toBe("needs_review");
+  });
+
+  it("an n_a criterion stays n_a whatever a run says (applicability is Prism's)", () => {
+    const w = world();
+    const [cut] = cutsOf(w, editOf(w, [videoItem(w, "2E"), videoItem(w, "3A")]));
+    const r = semanticRun(cut);
+    r.findings.push({
+      criterionKey: "cut:axis",
+      category: "camera",
+      severity: "major",
+      result: "fail",
+      intentCoverable: true,
+    });
+    expect(effectiveTransitionFindings(cut, r).find((f) => f.criterionKey === "cut:axis")?.result).toBe(
+      "n_a",
+    );
+  });
+
+  it("a failed run with no findings is never clean: important semantic criteria stay unchecked", () => {
+    const { cut } = cutPair();
+    const failed: TransitionRun = { truth: cut.truth, analysisStatus: "failed", findings: [] };
+    const a = assessTransition({ cut, run: failed });
+    expect(a.state).toBe("unchecked_transition");
+    expect(a.counts.importantUnchecked).toBeGreaterThan(0);
+    expect(a.findings.find((f) => f.criterionKey === "cut:axis")?.result).toBe("unchecked");
+    // partial: only the minor criteria answered, still unchecked
+    const partial: TransitionRun = {
+      ...failed,
+      findings: semanticRun(cut).findings.filter((f) => f.severity === "minor"),
+    };
+    expect(assessTransition({ cut, run: partial }).state).toBe("unchecked_transition");
+  });
+});
+
+// ───────────────────────── reference relevance ─────────────────────────
+
+describe("the reference fingerprint holds only references an applicable criterion could use", () => {
+  const yumeko = (w: World) => w.data.characters.find((c) => c.name === "Yumeko")!;
+  const rechecksum = (w: World, ids: string[]) => {
+    for (const id of ids) w.data.assets.find((x) => x.id === id)!.checksum = "f".repeat(64);
+  };
+
+  it("a one-sided Character's references never stale the cut; a shared Character's do", () => {
+    const w = world();
+    const items = [videoItem(w, "2A"), videoItem(w, "2B"), videoItem(w, "2E")];
+    // 2A → 2B: Yumeko enters (one-sided); 2B → 2E: Yumeko on both sides
+    const [oneSided, sharedCut] = cutsOf(w, editOf(w, items));
+    expect(oneSided.info).toContainEqual({ kind: "character_presence", message: "Yumeko enters" });
+    expect([...oneSided.left.references, ...oneSided.right.references]).toEqual([]);
+    const ids = sharedCut.right.references.filter((r) => r.role === "identity").map((r) => r.assetId!);
+    expect(ids.length).toBeGreaterThan(0);
+    for (const r of sharedCut.right.references)
+      expect(r.usedBy).toEqual([`cut:character_appearance:${yumeko(w).id}`]);
+
+    rechecksum(w, ids);
+    const [oneSidedAfter, sharedAfter] = cutsOf(w, editOf(w, items));
+    expect(oneSidedAfter.truth.referenceFingerprint).toBe(oneSided.truth.referenceFingerprint);
+    expect(transitionFreshness(oneSided.truth, oneSidedAfter).status).toBe("current");
+    expect(sharedAfter.truth.referenceFingerprint).not.toBe(sharedCut.truth.referenceFingerprint);
+    expect(transitionFreshness(sharedCut.truth, sharedAfter).reasons).toEqual([
+      "A reference of this cut changed.",
+    ]);
+  });
+
+  it("a Location View image change stales a cut inside a Scene, never one across a Scene boundary", () => {
+    const w = world();
+    const img = (label: string) => {
+      const a = newUploadAsset(w.data.project.id, { label, width: 1200, height: 900 });
+      a.purpose = "location_ref";
+      w.data.assets.push(a);
+      return a;
+    };
+    const canopy = locationOf(w.data, "2A");
+    const wide = viewFor(w.data, canopy.id, img("wide"), { name: "Canopy Wide", kind: "establishing" });
+    const lobby = viewFor(w.data, locationOf(w.data, "3A").id, img("lobby"), {
+      name: "Lobby",
+      kind: "establishing",
+    });
+    attachViews(
+      w.data,
+      [wide, lobby],
+      [
+        { shotId: shotByCode(w.data, "2D").id, view: wide },
+        { shotId: shotByCode(w.data, "2E").id, view: wide },
+        { shotId: shotByCode(w.data, "3A").id, view: lobby },
+      ],
+    );
+    const items = [videoItem(w, "2D"), videoItem(w, "2E"), videoItem(w, "3A")];
+    const [inside, across] = cutsOf(w, editOf(w, items));
+    expect(across.crossesScene).toBe(true);
+    expect(inside.right.references.map((r) => r.role)).toContain("location_view");
+    expect(across.right.references.map((r) => r.role)).not.toContain("location_view");
+
+    // the same Views, re-imaged
+    wide.assetChecksum = "a".repeat(64);
+    lobby.assetChecksum = "b".repeat(64);
+    const [insideAfter, acrossAfter] = cutsOf(w, editOf(w, items));
+    expect(insideAfter.truth.referenceFingerprint).not.toBe(inside.truth.referenceFingerprint);
+    expect(acrossAfter.truth.referenceFingerprint).toBe(across.truth.referenceFingerprint);
+    expect(transitionFreshness(across.truth, acrossAfter).status).toBe("current");
+  });
+
+  it("a Lock serves the shared Character's appearance and wardrobe", () => {
+    const { cut, appearance } = lockedPair();
+    const lockRef = cut.left.references.find((r) => r.role === "character_lock")!;
+    expect(lockRef.usedBy).toEqual(
+      [appearance, appearance.replace("character_appearance", "wardrobe")].sort(),
+    );
+  });
+
+  it("the Production Frame a clip came from is general provenance: kept while any semantic criterion applies", () => {
+    const pf: CutReference = {
+      side: "left",
+      role: "production_frame",
+      ref: "pf-1",
+      assetId: "asset-pf",
+      checksum: "c".repeat(64),
+      usedBy: [],
+    };
+    const w = world();
+    const [inside] = cutsOf(w, editOf(w, [videoItem(w, "2B"), videoItem(w, "2C")]));
+    const applicable = inside.criteria
+      .filter((c) => c.handler === "analyzer" && c.applicability === "applies")
+      .map((c) => c.key)
+      .sort();
+    expect(referencesForCut(inside.criteria, [pf])).toEqual([{ ...pf, usedBy: applicable }]);
+    // across a Scene with no shared Character every semantic criterion is n_a: nothing could use it
+    const [across] = cutsOf(w, editOf(w, [videoItem(w, "1C"), videoItem(w, "2A")]));
+    expect(across.crossesScene).toBe(true);
+    expect(across.criteria.filter((c) => c.handler === "analyzer" && c.applicability === "applies")).toEqual(
+      [],
+    );
+    expect(referencesForCut(across.criteria, [pf])).toEqual([]);
+  });
+
+  it("reference order is canonical: never ProjectData insertion order", () => {
+    const w = world();
+    const items = [videoItem(w, "2B"), videoItem(w, "2E")];
+    const [cut] = cutsOf(w, editOf(w, items));
+    expect(cut.right.references.filter((r) => r.role === "identity").length).toBeGreaterThan(1);
+    w.data.identityRefs = [...w.data.identityRefs].reverse();
+    const [reordered] = cutsOf(w, editOf(w, items));
+    expect(reordered.truth.referenceFingerprint).toBe(cut.truth.referenceFingerprint);
+    const refs = [...cut.left.references, ...cut.right.references];
+    expect(cutReferenceFingerprint([...refs].reverse(), [])).toBe(cutReferenceFingerprint(refs, []));
+  });
+});
+
+// ───────────────────────── comparable declarations ─────────────────────────
+
+describe("declared criteria compare only fields declared on BOTH sides", () => {
+  const pair = (setup: (w: World) => void, codes: [string, string] = ["4A", "4B"]) => {
+    const w = world();
+    setup(w);
+    return cutsOf(w, editOf(w, [videoItem(w, codes[0]), videoItem(w, codes[1])]))[0];
+  };
+  const spatial = (w: World, code: string, screen: string, facing: string) => {
+    shotByCode(w.data, code).spatial.screenDirection = screen;
+    shotByCode(w.data, code).spatial.facingDirection = facing;
+  };
+  const time = (w: World, code: string, o: { timeOfDay?: string; weather?: string; lighting?: string }) => {
+    const c = shotByCode(w.data, code).continuity;
+    c.timeOfDay = o.timeOfDay ?? "";
+    c.weather = o.weather ?? "";
+    c.lighting = o.lighting ?? "";
+  };
+  const props = (w: World, code: string, propIds: string[], text: string) => {
+    shotByCode(w.data, code).propIds = propIds;
+    shotByCode(w.data, code).continuity.props = text;
+  };
+
+  it("direction: screen on one side and facing on the other is n_a, never a pass", () => {
+    const mixed = pair((w) => {
+      spatial(w, "4A", "left to right", "");
+      spatial(w, "4B", "", "screen right");
+    });
+    expect(finding(mixed, "cut:declared_direction")).toMatchObject({
+      result: "n_a",
+      reason: "No comparable direction field is declared on both sides.",
+    });
+    const same = pair((w) => {
+      spatial(w, "4A", "left to right", "");
+      spatial(w, "4B", "Left to right", "screen right");
+    });
+    expect(finding(same, "cut:declared_direction").result).toBe("pass");
+    const differs = pair((w) => {
+      spatial(w, "4A", "left to right", "");
+      spatial(w, "4B", "right to left", "");
+    });
+    expect(finding(differs, "cut:declared_direction").result).toBe("warn");
+  });
+
+  it("time: weather on one side and lighting on the other is n_a, never a pass", () => {
+    const mixed = pair((w) => {
+      time(w, "4A", { weather: "Rain" });
+      time(w, "4B", { lighting: "Hard key from the window" });
+    });
+    expect(finding(mixed, "cut:declared_time")).toMatchObject({
+      result: "n_a",
+      reason: "No comparable time of day, weather or lighting field is declared on both sides.",
+    });
+    const same = pair((w) => {
+      time(w, "4A", { timeOfDay: "Night", weather: "Rain" });
+      time(w, "4B", { timeOfDay: "night", lighting: "Neon" });
+    });
+    expect(finding(same, "cut:declared_time")).toMatchObject({
+      result: "pass",
+      reason: "Same declared value in every comparable field.",
+    });
+    const differs = pair((w) => {
+      time(w, "4A", { weather: "Rain" });
+      time(w, "4B", { weather: "Clear" });
+    });
+    expect(finding(differs, "cut:declared_time").result).toBe("warn");
+    expect(finding(differs, "cut:declared_time").reason).toContain("Weather changes: Rain → Clear");
+  });
+
+  it("props: an assigned prop set is comparable on its own; free text only when both sides declare it", () => {
+    const w0 = world();
+    const prop = w0.data.props[0];
+    expect(prop).toBeDefined();
+    const nothing = pair((w) => {
+      props(w, "4A", [], "");
+      props(w, "4B", [], "");
+    });
+    expect(finding(nothing, "cut:declared_props")).toMatchObject({
+      result: "n_a",
+      reason: "No comparable prop declaration on both sides.",
+    });
+    const oneText = pair((w) => {
+      props(w, "4A", [], "Glass half full");
+      props(w, "4B", [], "");
+    });
+    expect(finding(oneText, "cut:declared_props").result).toBe("n_a");
+    const samePropSet = pair((w) => {
+      props(w, "4A", [w.data.props[0].id], "");
+      props(w, "4B", [w.data.props[0].id], "");
+    });
+    expect(finding(samePropSet, "cut:declared_props").result).toBe("pass");
+    const appears = pair((w) => {
+      props(w, "4A", [], "");
+      props(w, "4B", [w.data.props[0].id], "");
+    });
+    expect(finding(appears, "cut:declared_props").result).toBe("warn");
+    const textDiffers = pair((w) => {
+      props(w, "4A", [], "Glass half full");
+      props(w, "4B", [], "Glass empty");
+    });
+    expect(finding(textDiffers, "cut:declared_props").result).toBe("warn");
   });
 });
 

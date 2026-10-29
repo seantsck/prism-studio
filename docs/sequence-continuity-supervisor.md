@@ -438,7 +438,10 @@ A transition run is **stale** when any of these differ from the frozen values, a
 | `SEQUENCE_RULES_VERSION`                                                                                                                                                      | `rules_version`             | Criteria construction changed           |
 
 **Not stale:** a change anywhere else in the Episode, the global edit revision, a reorder elsewhere, audio placements,
-`source_audio`, cut intent, overrides, or a new analyzer version (that is new **coverage**, the 3A.3 rule).
+`source_audio`, cut intent, overrides, or a new analyzer version (that is new **coverage**, the 3A.3 rule). Nor are
+the cut's edit facts (pinned picture, source integrity / currentness, linked Shot QA, the stored previous-Shot link):
+they are recomputed on every read and composed into the assessment live, so they never need a stale run to appear.
+The reference set is **criterion-relevant**: only references a currently applicable semantic criterion could use.
 
 **Trim sensitivity:** windows are computed from the trims, so changing A's out-point or B's in-point changes
 `subject_fingerprint` and makes the cut stale. A's **in-point** matters only when A is shorter than W (the window then
@@ -898,6 +901,35 @@ declared-truth comparison). Both are pure.
   boundary.
 - **Intent:** `CutIntent` and `cutIntentEffective` (the predecessor binding) are types and pure logic only, with no
   persistence. Edit facts (`cut:picture`, source, Shot QA, link) are never covered by intent.
+- **Comparable declarations:** a declared criterion compares only fields declared on **both** sides.
+  `cut:declared_direction` compares screen direction and facing direction separately; `cut:declared_time` compares
+  time of day, weather and lighting separately. With no comparable field the result is `n_a` (one side's weather and
+  the other's lighting prove nothing), any comparable difference is a `warn`, and all comparable fields equal is a
+  `pass`. `cut:declared_props` compares the assigned prop sets whenever either side assigns one (they are explicit),
+  and the free-text prop notes only when both sides declare them; with neither it is `n_a`. The Sequence Board is
+  unchanged: this is cut-domain logic over the shared facts.
+- **Assessment composition (`effectiveTransitionFindings`):** the assessment reads one finding per **current**
+  criterion, merged by key. Deterministic criteria always take the cut's current projection, recomputed on read,
+  never a run's frozen value. Analyzer criteria take the current run's effective result (overrides applied by the
+  caller) when it has one, and otherwise keep the projection's `unchecked` / `n_a`. A run never replaces Prism's
+  `n_a`, and run findings for criteria the cut no longer has are ignored. So missing analysis is never a pass: a
+  failed or incomplete current run leaves its important semantic criteria `unchecked`, and the cut reads "Unchecked
+  transition" unless a higher state applies. No ninth state was added; 3A.4B can show the run failure separately.
+- **Status before and after a run (accepted for 3A.4B):** before any semantic run, a cut reads "No sequence QA yet"
+  even with deterministic warnings, which stay visible as findings; only a deterministic `cut:source_integrity`
+  fail reads "Critical continuity break". Once a current run exists, the assessment combines the current
+  deterministic projection with the run's semantic results, so a deterministic warning (for example a currentness
+  change, a re-linked Shot or a critical Shot QA mismatch arriving after the run) makes the cut "Needs review".
+- **Criteria fingerprint:** it covers the declared-truth and semantic criteria, not the edit facts
+  (`EDIT_FACT_CRITERIA`: `cut:picture`, `cut:source_integrity`, `cut:source_currentness`, `cut:shot_qa`, `cut:link`).
+  Those are recomputed on read, so supplying Shot QA, a newer approval or a re-linked Shot never stales a run.
+- **Reference fingerprint (`referencesForCut`):** each side's references are candidates, kept only when a currently
+  applicable semantic criterion could use them (`usedBy`). A Lock serves the shared Character's
+  `cut:character_appearance:<id>` and `cut:wardrobe:<id>`, an identity image the appearance and a Look image the
+  wardrobe. A Location View serves axis, geography, lighting and object continuity. A one-sided Character's
+  references and, across a Scene boundary, the Location View, are therefore never in it. The Production Frame a clip
+  was generated from is general visual provenance of that side: it stays while any semantic criterion applies. The
+  order is canonical (side, role, ref, Asset, checksum), never ProjectData insertion order.
 - **Not built in 3A.4A:** UI, persistence, migrations, provider mode or capability, mode-scoped versions, media
   extraction and orchestration. `CONTINUITY_RULES_VERSION`, Shot criteria, Shot fingerprints and the provider contract
   are unchanged.
