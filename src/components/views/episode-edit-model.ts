@@ -1,3 +1,4 @@
+import { buildEpisodeCuts } from "@/domain/continuity/sequence";
 import { formatDuration, formatSeconds } from "@/domain/duration";
 import { editRateLabel, type EditRate } from "@/domain/edit/edit-rate";
 import { VIDEO_SOURCE_VIOLATION_TEXT, type EditMediaFacts } from "@/domain/edit/eligibility";
@@ -19,6 +20,7 @@ import {
 import { buildPlaybackPlan, type PlaybackPlan } from "@/domain/edit/playback";
 import type { ProjectData } from "@/domain/schemas";
 import { assetUrl } from "@/lib/utils";
+import { cutMarker, type CutMarkerVM } from "./cut-marker-model";
 import { addableShots, itemEditor, type AddableShotVM, type ItemEditorVM } from "./episode-edit-editor-model";
 
 /**
@@ -92,6 +94,11 @@ export interface RowVM {
   lineage: { picture: LinkVM[]; audio: LinkVM[][] };
   /** 2I.1D: the editing controls' choices (persisted edit only) */
   editor?: ItemEditorVM;
+  /**
+   * 3A.4B: the cut INTO this item from the previous one (persisted edit only, never the first item, never a proposal),
+   * linking to its Continuity Supervisor row.
+   */
+  incomingCut?: CutMarkerVM;
 }
 
 export interface RunVM {
@@ -164,7 +171,7 @@ const PLACEHOLDER_VIOLATION: Record<string, string> = {
 const violationText = (v: string) =>
   VIDEO_SOURCE_VIOLATION_TEXT[v as keyof typeof VIDEO_SOURCE_VIOLATION_TEXT] ?? PLACEHOLDER_VIOLATION[v] ?? v;
 
-function picture(data: ProjectData, item: EditItem, media: EditMediaFacts): PictureVM {
+export function picture(data: ProjectData, item: EditItem, media: EditMediaFacts): PictureVM {
   const v = item.visual;
   const base = {
     kind: v.kind,
@@ -344,7 +351,7 @@ function lineage(data: ProjectData, item: EditItem, media: EditMediaFacts): RowV
   };
 }
 
-function runsOf(data: ProjectData, view: EpisodeEditView): RunVM[] {
+export function runsOf(data: ProjectData, view: EpisodeEditView): RunVM[] {
   const count = new Map<string, number>();
   for (const r of view.sceneRuns) count.set(r.sceneId, (count.get(r.sceneId) ?? 0) + 1);
   return view.sceneRuns.map((r) => {
@@ -530,14 +537,18 @@ function itemBadges(iv: ItemView): { badges: BadgeVM[]; problems: string[] } {
 export function editPage(data: ProjectData, edit: EpisodeEdit, media: EditMediaFacts): EditPageVM {
   const view = buildEpisodeEditView(data, edit, media);
   const runs = runsOf(data, view);
+  // 3A.4B: the same cut projection the Continuity Supervisor shows (cut i joins item i and item i + 1)
+  const cuts = buildEpisodeCuts({ data, view });
   const rows = view.items.map<RowVM>((iv) => {
     const { badges, problems } = itemBadges(iv);
+    const incoming = iv.index > 0 ? cuts[iv.index - 1] : undefined;
     return {
       ...row(data, view, runs, iv, media, iv.item.id),
       badges,
       problems,
       notes: [],
       editor: itemEditor(data, edit, iv, media),
+      ...(incoming ? { incomingCut: cutMarker(incoming) } : {}),
     };
   });
   const badges: BadgeVM[] = [];

@@ -32,11 +32,15 @@ export function getRegistry(): ModelRegistry {
 /**
  * Generation persistence for the CURRENT user. Memory mode: the in-process service. Supabase mode: the same
  * SQL the worker uses, but inside an RLS transaction for the verified session, so Postgres enforces ownership.
+ * In memory mode the default also starts the demo's in-process generation worker; a pure READ passes
+ * `{ startInlineWorker: false }` so visiting a page never begins queued generation work.
  */
-export async function getGenerationRepo(): Promise<GenerationRepository> {
+export async function getGenerationRepo(
+  opts: { startInlineWorker?: boolean } = {},
+): Promise<GenerationRepository> {
   if (persistenceMode() === "memory") {
     const repo = (await getRepo()) as MemoryRepository;
-    ensureInlineWorker(repo.generation);
+    if (opts.startInlineWorker !== false) ensureInlineWorker(repo.generation);
     return repo.generation;
   }
   const user = await requireUser();

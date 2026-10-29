@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Fragment } from "react";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button, Empty, PageHeader } from "@/components/ui";
 import type { Episode, ProjectData } from "@/domain/schemas";
@@ -6,6 +7,7 @@ import type { EpisodeEditPage } from "@/server/episode-edit-page";
 import { createEpisodeEdit } from "@/server/episode-edit-actions";
 import { AddShotPanel, ItemEditor, ItemOrderControls, type EditTarget } from "./episode-edit-controls";
 import { EditPlayer } from "./episode-edit-player";
+import type { CutMarkerVM } from "./cut-marker-model";
 import type { BadgeVM, RowVM, RunVM, SummaryVM } from "./episode-edit-model";
 
 /**
@@ -33,7 +35,11 @@ export function EpisodeEditView({
       <Link href={`${base}/sequence`} className="text-accent hover:underline">
         Sequence Board
       </Link>{" "}
-      is the planned Shot order.
+      is the planned Shot order; the{" "}
+      <Link href={`${base}/continuity`} className="text-accent hover:underline">
+        Continuity Supervisor
+      </Link>{" "}
+      reviews this edit&apos;s actual cuts.
     </>
   );
 
@@ -135,7 +141,7 @@ export function EpisodeEditView({
         {/* keyed on the revision: a saved change rebuilds playback from the new edit (paused at 0) */}
         <EditPlayer key={page.revision} playback={page.playback} />
         <Runs runs={page.runs} />
-        <Rows rows={page.rows} target={target} />
+        <Rows rows={page.rows} target={target} continuity={`${base}/continuity`} />
         <AddShotPanel target={target} addable={page.addable} items={page.rows.length} />
       </div>
     </div>
@@ -188,14 +194,45 @@ function Runs({ runs }: { runs: RunVM[] }) {
   );
 }
 
-function Rows({ rows, target }: { rows: RowVM[]; target?: EditTarget }) {
+function Rows({ rows, target, continuity }: { rows: RowVM[]; target?: EditTarget; continuity?: string }) {
   if (rows.length === 0) return <Empty>No Shots in this Episode yet.</Empty>;
   return (
     <ol className="space-y-2">
       {rows.map((r) => (
-        <Row key={r.key} row={r} target={target} />
+        <Fragment key={r.key}>
+          {/* 3A.4B: the persisted edit's cut INTO this item (a proposal has none: its cuts are not authoritative) */}
+          {continuity && r.incomingCut ? <CutMarker marker={r.incomingCut} href={continuity} /> : null}
+          <Row row={r} target={target} />
+        </Fragment>
       ))}
     </ol>
+  );
+}
+
+const MARKER_TONE: Record<CutMarkerVM["tone"], string> = {
+  fail: "border-fail/50 text-fail",
+  warn: "border-warn/50 text-warn",
+  neutral: "border-line2 text-faint",
+};
+
+/** A minimal link to the cut's Continuity Supervisor row: never a pass (no semantic run exists). */
+function CutMarker({ marker, href }: { marker: CutMarkerVM; href: string }) {
+  return (
+    <li className="-my-1 flex justify-center" data-testid="cut-marker-row">
+      <Link
+        href={`${href}#${marker.anchor}`}
+        data-testid="cut-marker"
+        data-anchor={marker.anchor}
+        data-tone={marker.tone}
+        aria-label={marker.label}
+        title={marker.label}
+        className={`inline-flex items-center gap-1 rounded-full border px-2 py-px text-[10.5px] hover:text-accent ${MARKER_TONE[marker.tone]}`}
+      >
+        <span aria-hidden>{marker.tone === "fail" ? "✕" : marker.tone === "warn" ? "⚠" : "•"}</span>
+        <span>cut</span>
+        {marker.issues ? <span className="font-mono">{marker.issues}</span> : null}
+      </Link>
+    </li>
   );
 }
 

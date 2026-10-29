@@ -12,7 +12,9 @@ import { getMediaQaRepo } from "./media-qa";
  *   per succeeded Shot-output attempt of the Episode's Shots (and of any attempt the edit pins): its outputs, its
  *   `slot = 'delivery'` versions with their parents, and its selected delivery master;
  *   per candidate set of those Shots: the current Best (advisory only).
- * Read only: nothing here writes, selects, approves or follows anything.
+ * Read only: nothing here writes, selects, approves or follows anything, and it never starts a memory-mode inline
+ * worker (generation or continuity analysis: every repository is obtained read-only), so a page that reads it cannot
+ * begin queued work.
  */
 export async function loadEditMediaFacts(
   data: ProjectData,
@@ -27,9 +29,9 @@ export async function loadEditMediaFacts(
   if (attempts.length === 0 && shotIds.size === 0) return { attempts: new Map(), bestPointers: [] };
 
   const [generation, mediaQa, candidates] = await Promise.all([
-    getGenerationRepo(),
-    getMediaQaRepo(),
-    getCandidateRepo(),
+    getGenerationRepo({ startInlineWorker: false }),
+    getMediaQaRepo({ startInlineWorker: false }),
+    getCandidateRepo({ startInlineWorker: false }),
   ]);
   const [deliveries, sets] = await Promise.all([
     mediaQa.listProjectDeliveries(data.project.id),

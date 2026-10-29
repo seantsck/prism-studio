@@ -11,11 +11,14 @@ import { getRepo } from "./repo";
 
 /**
  * Candidate sets and human generation reviews for the CURRENT user (RLS-bound in Supabase mode). These
- * tables are user-domain only: no worker credential can reach them.
+ * tables are user-domain only: no worker credential can reach them. `{ startInlineWorker: false }`: a pure read that
+ * does not start the memory-mode generation worker.
  */
-export async function getCandidateRepo(): Promise<CandidateRepository> {
+export async function getCandidateRepo(
+  opts: { startInlineWorker?: boolean } = {},
+): Promise<CandidateRepository> {
   if (persistenceMode() === "memory") {
-    await getGenerationRepo(); // starts the inline demo worker, like every generation path
+    await getGenerationRepo(opts); // starts the inline demo worker, like every generation path (unless read-only)
     return ((await getRepo()) as MemoryRepository).candidates;
   }
   const user = await requireUser();

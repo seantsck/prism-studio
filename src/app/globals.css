@@ -114,3 +114,12 @@ details > summary::-webkit-details-marker {
 [data-seq-filter="issues"] [data-sortable-item]:not(:has([data-issue="true"])) {
   display: none;
 }
+
+/* Phase 3A.4B: Continuity Supervisor filters (client-local). A filtered-out cut row is hidden; nothing is stored. */
+[data-cut-filter="critical"] [data-testid="cut-row"]:not([data-has-fail="true"]),
+[data-cut-filter="warnings"] [data-testid="cut-row"]:not([data-has-warn="true"]),
+[data-cut-filter="unchecked"] [data-testid="cut-row"]:not([data-has-unchecked="true"]),
+[data-cut-filter="scene"] [data-testid="cut-row"]:not([data-crosses-scene="true"]),
+[data-cut-filter="media_blocked"] [data-testid="cut-row"]:not([data-media-eligible="false"]) {
+  display: none;
+}
