@@ -112,10 +112,11 @@ const attemptRunSql = (runId: string, n: number, extra = "") =>
      ${extra ? `, ${extra.split("=")[0]}` : ""})
    values ('${runId}', '${P}', '${ATT}', ${n}, '${ASSET}', 'mock', '1', 'mock', '3a.1', 'pf', 'sf', 'cf', 'rf'
      ${extra ? `, ${extra.split("=")[1]}` : ""})`;
-const transitionRunSql = (runId: string, n: number) =>
+const transitionRunSql = (runId: string, n: number, status = "complete") =>
   `insert into continuity_runs (id, project_id, subject_kind, run_number, analyzer, analyzer_version, analyzer_kind,
-     rules_version, package_fingerprint, subject_fingerprint, criteria_fingerprint, reference_fingerprint)
-   values ('${runId}', '${P}', 'transition', ${n}, 'deterministic', '3a.4', 'deterministic', '3a.4', 'pk', 'sf', 'cf', 'rf')`;
+     rules_version, analysis_status, package_fingerprint, subject_fingerprint, criteria_fingerprint, reference_fingerprint)
+   values ('${runId}', '${P}', 'transition', ${n}, 'deterministic', '3a.4', 'deterministic', '3a.4', '${status}', 'pk',
+     'sf', 'cf', 'rf')`;
 const subjectSql = (runId: string, n: number, key = sha(`key-${runId}`)) =>
   `insert into continuity_transition_subjects (run_id, project_id, edit_id, episode_id, edit_revision, transition_key,
      run_number, left_item_id, right_item_id, left_shot_id, right_shot_id, left_side, right_side, crosses_scene)
@@ -627,7 +628,6 @@ try {
   const shotRuns0 = await qa.listAttemptRuns(ATT);
   const latest0 = await qa.listLatestProjectRuns(P);
   const jobs0 = await qa.listAttemptAnalysisJobs(ATT);
-  const active0 = await qa.listActiveProjectAnalysisJobs(P);
   check(
     "listAttemptRuns returns attempt runs only",
     shotRuns0.length === 1 &&
@@ -648,23 +648,36 @@ try {
     String(next.run.runNumber),
   );
   check(
-    "attempt analysis jobs never include a transition job",
-    jobs0.every((j) => j.attemptId === ATT) && jobs0.length === 1,
+    "a Shot's analysis jobs never include a transition job",
+    jobs0.length === 1 && jobs0.every((j) => j.subjectKind === "attempt" && j.attemptId === ATT),
     String(jobs0.length),
-  );
-  check(
-    "active project analysis jobs (Shot list) never include a transition job",
-    active0.every((j) => j.attemptId !== null),
   );
   const T3 = id();
   await ownerCommit([
-    [transitionRunSql(T3, 1), []],
+    [transitionRunSql(T3, 1, "queued"), []],
     [subjectSql(T3, 1), []],
     [job(T3, "transition", null), []],
   ]);
   const transitionJob = (await q("select id from continuity_analysis_jobs where run_id = $1", [T3])).rows[0]
     .id;
-  check("getAnalysisJob never returns a transition job", (await qa.getAnalysisJob(transitionJob)) === null);
+  const active0 = await qa.listActiveProjectAnalysisJobs(P);
+  check(
+    "the Project's active analysis jobs include BOTH kinds (Shot and sequence QA share maxActivePerProject)",
+    active0.some((j) => j.subjectKind === "attempt" && j.attemptId === ATT) &&
+      active0.some((j) => j.subjectKind === "transition" && j.attemptId === null),
+    active0.map((j) => j.subjectKind).join(","),
+  );
+  const tj = await qa.getAnalysisJob(transitionJob);
+  check(
+    "getAnalysisJob returns a transition job as such (attemptId null, never the string 'null')",
+    tj?.subjectKind === "transition" && tj.attemptId === null,
+    JSON.stringify({ subjectKind: tj?.subjectKind, attemptId: tj?.attemptId }),
+  );
+  const aj = await qa.getAnalysisJob(jobs0[0]!.id);
+  check(
+    "getAnalysisJob still returns an attempt job as such",
+    aj?.subjectKind === "attempt" && aj.attemptId === ATT,
+  );
   const auto = await qa.ensureAutomaticRun(attemptNewRun(), [], `auto-${sha(id()).slice(0, 24)}`);
   check(
     "automatic Shot coverage is never satisfied by a transition run (creates an attempt run)",
@@ -678,6 +691,35 @@ try {
     claimed.map((c) => c.job.runId).join(","),
   );
   for (const c of claimed)
+    await q(
+      "update continuity_analysis_jobs set status = 'queued', lease_owner = null, lease_token = null, lease_expires_at = null where id = $1",
+      [c.job.id],
+    );
+  const cancelled = await qa.requestAnalysisCancel(transitionJob, NOW());
+  const t3Run = (await q("select analysis_status, analysis_error from continuity_runs where id = $1", [T3]))
+    .rows[0];
+  const t3Events = (
+    await q("select from_status, to_status from continuity_analysis_events where job_id = $1", [
+      transitionJob,
+    ])
+  ).rows;
+  check(
+    "cancelling a queued transition job: job cancelled, its run failed, the normal event recorded",
+    cancelled?.status === "cancelled" &&
+      cancelled.subjectKind === "transition" &&
+      t3Run.analysis_status === "failed" &&
+      /cancelled before it started/i.test(t3Run.analysis_error) &&
+      t3Events.length === 1 &&
+      t3Events[0].from_status === "queued" &&
+      t3Events[0].to_status === "cancelled",
+    JSON.stringify({ status: cancelled?.status, run: t3Run.analysis_status, events: t3Events }),
+  );
+  const reclaimed = await workerStore.claim({ workerId: "db-sc", now: NOW(), leaseMs: 1000, limit: 50 });
+  check(
+    "after cancellation the Shot worker still never claims a transition job",
+    !reclaimed.some((c) => c.job.runId === T3 || c.job.runId === T1),
+  );
+  for (const c of reclaimed)
     await q(
       "update continuity_analysis_jobs set status = 'queued', lease_owner = null, lease_token = null, lease_expires_at = null where id = $1",
       [c.job.id],

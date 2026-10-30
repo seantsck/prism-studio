@@ -14,6 +14,7 @@ import {
   type AnalysisCost,
   type AnalysisEvent,
   type AnalysisJob,
+  type AttemptAnalysisJob,
   type NewAnalysisRun,
   type AnalysisStatus,
   type AssetDerivation,
@@ -185,11 +186,35 @@ const mapOverride = (r: Row): ContinuityOverride => ({
   createdAt: iso(r.created_at)!,
 });
 
-export const mapAnalysisJob = (r: Row): AnalysisJob => ({
+/**
+ * Phase 3A.4C: the subject comes from the `subject_kind` discriminator, never from the nullability of `attempt_id`, and
+ * a row whose kind and attempt disagree is refused rather than mapped (a transition job never becomes attempt "null").
+ */
+export function mapAnalysisJob(r: Row): AnalysisJob {
+  const base = mapAnalysisJobBase(r);
+  if (r.subject_kind === "attempt") {
+    if (r.attempt_id == null)
+      throw new Error(`Analysis job ${base.id} is an attempt job without an attempt.`);
+    return { ...base, subjectKind: "attempt", attemptId: String(r.attempt_id) };
+  }
+  if (r.subject_kind === "transition") {
+    if (r.attempt_id != null) throw new Error(`Analysis job ${base.id} is a transition job with an attempt.`);
+    return { ...base, subjectKind: "transition", attemptId: null };
+  }
+  throw new Error(`Analysis job ${base.id} has an unknown subject kind.`);
+}
+
+/** A Shot path's job: refuses any other subject kind. */
+export function mapAttemptAnalysisJob(r: Row): AttemptAnalysisJob {
+  const job = mapAnalysisJob(r);
+  if (job.subjectKind !== "attempt") throw new Error(`Analysis job ${job.id} is not an attempt job.`);
+  return job;
+}
+
+const mapAnalysisJobBase = (r: Row): Omit<AnalysisJob, "subjectKind" | "attemptId"> => ({
   id: String(r.id),
   projectId: String(r.project_id),
   runId: String(r.run_id),
-  attemptId: String(r.attempt_id),
   analyzer: String(r.analyzer),
   model: String(r.model),
   status: r.status as AnalysisJob["status"],
@@ -879,10 +904,11 @@ export class PostgresMediaQaData implements MediaQaRepository {
         );
         return {
           run: (await this.views(c, run.rows))[0]!,
-          job: mapAnalysisJob(replay.rows[0]),
+          job: mapAttemptAnalysisJob(replay.rows[0]),
           duplicate: true,
         };
       }
+      // every subject kind counts: an active transition job takes one of the same Project slots (3A.4 architecture)
       const open = await c.query(
         `select count(*)::int as n from continuity_analysis_jobs where project_id = $1 and status in (${activeList})`,
         [r.projectId],
@@ -1009,16 +1035,14 @@ export class PostgresMediaQaData implements MediaQaRepository {
          values ($1, $2, $3, $4, null, 'queued', 'Submitted by user')`,
         [r.projectId, job.id, run.id, r.now],
       );
-      return { run: (await this.views(c, [run]))[0]!, job: mapAnalysisJob(job), duplicate: false };
+      return { run: (await this.views(c, [run]))[0]!, job: mapAttemptAnalysisJob(job), duplicate: false };
     });
   }
 
   async getAnalysisJob(jobId: string) {
     return this.tx(async (c) => {
-      const r = await c.query(
-        "select * from continuity_analysis_jobs where id = $1 and subject_kind = 'attempt'",
-        [jobId],
-      );
+      // generic: either subject kind
+      const r = await c.query("select * from continuity_analysis_jobs where id = $1", [jobId]);
       return r.rows[0] ? mapAnalysisJob(r.rows[0]) : null;
     });
   }
@@ -1029,14 +1053,15 @@ export class PostgresMediaQaData implements MediaQaRepository {
         "select * from continuity_analysis_jobs where subject_kind = 'attempt' and attempt_id = $1 order by created_at desc",
         [attemptId],
       );
-      return r.rows.map(mapAnalysisJob);
+      return r.rows.map(mapAttemptAnalysisJob);
     });
   }
 
   async listActiveProjectAnalysisJobs(projectId: string) {
     return this.tx(async (c) => {
       const r = await c.query(
-        `select * from continuity_analysis_jobs where project_id = $1 and subject_kind = 'attempt' and status in (${activeList})`,
+        // every subject kind: Shot and sequence QA share the Project's active-job limit
+        `select * from continuity_analysis_jobs where project_id = $1 and status in (${activeList})`,
         [projectId],
       );
       return r.rows.map(mapAnalysisJob);
@@ -1074,7 +1099,8 @@ export class PostgresMediaQaData implements MediaQaRepository {
     return this.tx(async (c) => {
       const cur = (
         await c.query(
-          "select * from continuity_analysis_jobs where id = $1 and subject_kind = 'attempt' for update",
+          // generic: either subject kind follows the same cancellation lifecycle
+          "select * from continuity_analysis_jobs where id = $1 for update",
           [jobId],
         )
       ).rows[0];

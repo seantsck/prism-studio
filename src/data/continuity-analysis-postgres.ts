@@ -4,7 +4,7 @@ import {
   assertAnalysisTransition,
   isAnalysisTerminal,
 } from "@/domain/continuity/analysis/job-state";
-import { mapAnalysisJob } from "./media-qa-postgres";
+import { mapAnalysisJob, mapAttemptAnalysisJob } from "./media-qa-postgres";
 import {
   AnalysisLeaseLostError,
   type AnalysisJob,
@@ -88,7 +88,7 @@ export class PostgresAnalysisWorkerStore implements AnalysisWorkerStore {
           [opts.workerId, opts.now, opts.leaseMs, opts.limit],
         )
       ).rows;
-      return rows.map((r) => ({ job: mapAnalysisJob(r) }));
+      return rows.map((r) => ({ job: mapAttemptAnalysisJob(r) }));
     });
   }
 

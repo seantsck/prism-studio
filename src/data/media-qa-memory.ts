@@ -20,6 +20,7 @@ import {
   type AnalysisCost,
   type AnalysisEvent,
   type AnalysisJob,
+  type AttemptAnalysisJob,
   type AnalysisJobPatch,
   type AnalysisStatus,
   type AnalysisWorkerStore,
@@ -480,12 +481,16 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
 
   async createAnalysisRunWithJob(input: NewAnalysisRun) {
     const replay = [...this.jobs.values()].find(
-      (j) => j.projectId === input.run.projectId && j.idempotencyKey === input.job.idempotencyKey,
+      (j): j is AttemptAnalysisJob =>
+        j.subjectKind === "attempt" &&
+        j.projectId === input.run.projectId &&
+        j.idempotencyKey === input.job.idempotencyKey,
     );
     if (replay) {
       const view = await this.getRun(replay.runId);
       return { run: view!, job: clone(replay), duplicate: true };
     }
+    // every subject kind counts: an active transition job takes one of the same Project slots (3A.4 architecture)
     const active = [...this.jobs.values()].filter(
       (j) => j.projectId === input.run.projectId && ANALYSIS_ACTIVE.includes(j.status),
     ).length;
@@ -497,10 +502,11 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
     }
     const run = await this.createRun(input.run, input.findings);
     const now = input.run.now;
-    const job: AnalysisJob = {
+    const job: AttemptAnalysisJob = {
       id: randomUUID(),
       projectId: run.run.projectId,
       runId: run.run.id,
+      subjectKind: "attempt",
       attemptId: run.run.attemptId,
       analyzer: input.job.analyzer,
       model: input.job.model,
@@ -558,18 +564,20 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
   }
 
   async getAnalysisJob(jobId: string) {
+    // generic: either subject kind
     const j = this.jobs.get(jobId);
     return j ? clone(j) : null;
   }
 
   async listAttemptAnalysisJobs(attemptId: string) {
     return [...this.jobs.values()]
-      .filter((j) => j.attemptId === attemptId)
+      .filter((j): j is AttemptAnalysisJob => j.subjectKind === "attempt" && j.attemptId === attemptId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .map(clone);
   }
 
   async listActiveProjectAnalysisJobs(projectId: string) {
+    // every subject kind: Shot and sequence QA share the Project's active-job limit
     return [...this.jobs.values()]
       .filter((j) => j.projectId === projectId && ANALYSIS_ACTIVE.includes(j.status))
       .map(clone);
@@ -594,7 +602,7 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
       job.cancelledAt = now;
       job.cancelRequestedAt = now;
       job.leaseToken = null;
-      await this.setAnalysisStatus(job.runId, "failed", now, "Analysis cancelled before it started.");
+      this.failRun(job.runId, now, "Analysis cancelled before it started.");
       this.addEvent(job, from, "cancelled", "Cancelled before it started", now);
     } else {
       assertAnalysisTransition(job.status, "cancel_requested");
@@ -604,6 +612,15 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
     }
     job.updatedAt = now;
     return clone(job);
+  }
+
+  /** a queued job's run of EITHER subject kind fails when the job is cancelled (Postgres updates it by id) */
+  private failRun(runId: string, now: string, error: string) {
+    const r = this.runs.find((x) => x.id === runId) ?? this.transitionRuns.find((x) => x.id === runId);
+    if (!r) return;
+    r.analysisStatus = "failed";
+    r.analysisError = error;
+    r.completedAt = now;
   }
 
   async automationReady() {
@@ -657,7 +674,9 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
     const nowMs = Date.parse(opts.now);
     const due = [...this.jobs.values()]
       .filter(
-        (j) =>
+        (j): j is AttemptAnalysisJob =>
+          // 3A.4C: this worker executes Shot (attempt) jobs; a transition job waits for its 3A.4D executor
+          j.subjectKind === "attempt" &&
           ANALYSIS_ACTIVE.includes(j.status) &&
           Date.parse(j.nextRunAt) <= nowMs &&
           (j.leaseToken == null || (j.leaseExpiresAt != null && Date.parse(j.leaseExpiresAt) <= nowMs)),

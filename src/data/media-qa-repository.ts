@@ -245,11 +245,16 @@ export type NewFinding = Omit<ContinuityFinding, "id" | "runId" | "projectId" | 
 
 // ───────────────────────── analysis jobs (Phase 2D) ─────────────────────────
 
-export interface AnalysisJob {
+/**
+ * Phase 3A.4C: a job's subject is discriminated by `subjectKind`, exactly as `continuity_analysis_jobs.subject_kind`
+ * (migration 0046). Generic job bookkeeping (lookup, the Project's active jobs that share `maxActivePerProject`,
+ * cancellation, spend) returns `AnalysisJob`; Shot paths (submission, a Shot's job history, the current worker claim)
+ * return `AttemptAnalysisJob`. No transition job is created or executed before 3A.4D.
+ */
+interface AnalysisJobBase {
   id: string;
   projectId: string;
   runId: string;
-  attemptId: string;
   analyzer: string;
   model: string;
   status: AnalysisJobStatus;
@@ -287,6 +292,18 @@ export interface AnalysisJob {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface AttemptAnalysisJob extends AnalysisJobBase {
+  subjectKind: "attempt";
+  attemptId: string;
+}
+
+export interface TransitionAnalysisJob extends AnalysisJobBase {
+  subjectKind: "transition";
+  attemptId: null;
+}
+
+export type AnalysisJob = AttemptAnalysisJob | TransitionAnalysisJob;
 
 export interface AnalysisCost {
   id: string;
@@ -395,7 +412,8 @@ export interface FinalizeAnalysisFailure {
 }
 
 export interface ClaimedAnalysisJob {
-  job: AnalysisJob;
+  /** 3A.4C: the worker executes Shot (attempt) jobs only; a transition job waits for its 3A.4D executor */
+  job: AttemptAnalysisJob;
 }
 
 export interface InputAssetRef {
@@ -545,13 +563,17 @@ export interface MediaQaRepository {
    */
   createAnalysisRunWithJob(
     input: NewAnalysisRun,
-  ): Promise<{ run: ContinuityRunView; job: AnalysisJob; duplicate: boolean }>;
+  ): Promise<{ run: ContinuityRunView; job: AttemptAnalysisJob; duplicate: boolean }>;
+  /** any subject kind */
   getAnalysisJob(jobId: string): Promise<AnalysisJob | null>;
-  listAttemptAnalysisJobs(attemptId: string): Promise<AnalysisJob[]>;
+  /** a Shot's job history: attempt jobs only */
+  listAttemptAnalysisJobs(attemptId: string): Promise<AttemptAnalysisJob[]>;
+  /** every active job of the Project, of ANY subject kind: Shot and sequence QA share `maxActivePerProject` */
   listActiveProjectAnalysisJobs(projectId: string): Promise<AnalysisJob[]>;
   listAnalysisCosts(runId: string): Promise<AnalysisCost[]>;
   listAnalysisEvents(jobId: string): Promise<AnalysisEvent[]>;
   /** queued → cancelled locally; otherwise cancel_requested (the worker stops before the next request). */
+  /** any subject kind (the existing queued → cancelled / running → cancel_requested lifecycle) */
   requestAnalysisCancel(jobId: string, now: string): Promise<AnalysisJob | null>;
   /** Analysis spend since a time: actual where known, otherwise the estimate ceiling (never under-counted). */
   analysisSpentSince(projectId: string | null, sinceIso: string): Promise<number>;
