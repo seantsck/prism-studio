@@ -85,6 +85,11 @@ export const ANALYZER_CAPABILITIES = [
   "video_temporal",
   "lip_sync",
   "audio",
+  /**
+   * 3A.4D, INTERNAL: the analyzer can execute a `sequence_transition` (cut) request. It is never proof that a semantic
+   * cut family may be judged: each family is separately calibration-gated (`acceptedCrossCutFamilies`).
+   */
+  "cross_cut",
 ] as const;
 export type AnalyzerCapability = (typeof ANALYZER_CAPABILITIES)[number];
 

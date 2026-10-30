@@ -29,8 +29,12 @@ import {
 import {
   GEMINI_ANALYZER_ID,
   GEMINI_ANALYZER_VERSION,
+  GEMINI_CROSS_CUT_ACCEPTED_FAMILIES,
+  GEMINI_CROSS_CUT_CALIBRATED,
+  GEMINI_CROSS_CUT_CALIBRATION_VERSION,
   GEMINI_MODELS,
   GEMINI_PRICING,
+  GEMINI_SEQUENCE_ANALYSIS_VERSION,
   type GeminiConfig,
 } from "./config";
 import { geminiResponseJsonSchema } from "./response-schema";
@@ -79,6 +83,12 @@ export interface GeminiProviderOptions {
   config: GeminiConfig;
   transport: GeminiTransport;
   pricing?: PricingTable;
+  /**
+   * TESTS ONLY (fake transport): the semantic cut families to treat as accepted, so the sequence request constructor
+   * can be exercised end to end. The registry never passes it: production uses `GEMINI_CROSS_CUT_ACCEPTED_FAMILIES`
+   * (empty in 3A.4D) and its calibration identity.
+   */
+  testCrossCutCalibration?: { version: string; acceptedFamilies: readonly string[] };
 }
 
 /**
@@ -131,16 +141,33 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
   private readonly cfg: GeminiConfig;
   private readonly transport: GeminiTransport;
   private readonly pricingTable: PricingTable;
+  private readonly calibration: { version: string; acceptedFamilies: readonly string[] };
 
   constructor(opts: GeminiProviderOptions) {
     this.cfg = opts.config;
     this.model = opts.config.model;
     this.transport = opts.transport;
     this.pricingTable = opts.pricing ?? GEMINI_PRICING;
+    this.calibration = opts.testCrossCutCalibration ?? {
+      version: GEMINI_CROSS_CUT_CALIBRATION_VERSION,
+      acceptedFamilies: GEMINI_CROSS_CUT_CALIBRATED ? GEMINI_CROSS_CUT_ACCEPTED_FAMILIES : [],
+    };
   }
 
-  capabilities() {
-    return IMAGE_CAPABILITIES;
+  /** Shot modes share v3; the cut contract has its own version (`gemini-sequence-1`). */
+  analysisVersion(mode: AnalysisMode): string | null {
+    return mode === "sequence_transition" ? GEMINI_SEQUENCE_ANALYSIS_VERSION : this.version;
+  }
+  crossCutCalibration() {
+    return { version: this.calibration.version, acceptedFamilies: [...this.calibration.acceptedFamilies] };
+  }
+
+  /**
+   * Image capabilities, plus the internal `cross_cut` (it can execute the cut CONTRACT) whenever sequence media may be
+   * sent here. `cross_cut` never plans a family by itself: each family needs calibration acceptance.
+   */
+  capabilities(): readonly AnalyzerCapability[] {
+    return this.directVideoAvailable() ? [...IMAGE_CAPABILITIES, "cross_cut"] : IMAGE_CAPABILITIES;
   }
   /** The server gate AND a model whose verified record accepts video input. */
   private directVideoAvailable(): boolean {
@@ -149,8 +176,9 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
       Boolean(GEMINI_MODELS.find((m) => m.id === this.model)?.inputs.includes("video"))
     );
   }
+  /** Cut-edge clips are bounded video: the sequence mode needs the same server video gate as direct video. */
   modes(): readonly AnalysisMode[] {
-    return this.directVideoAvailable() ? ["image_set", "direct_video"] : ["image_set"];
+    return this.directVideoAvailable() ? ["image_set", "direct_video", "sequence_transition"] : ["image_set"];
   }
   videoCapabilities() {
     return this.directVideoAvailable() ? VIDEO_CAPABILITIES : [];
@@ -165,6 +193,7 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
       capabilities: this.capabilities(),
       modes: this.modes(),
       videoCapabilities: this.videoCapabilities(),
+      crossCutFamilies: this.calibration.acceptedFamilies,
     };
   }
 
@@ -262,7 +291,7 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
       if (!m)
         throw new AnalysisBatchError("invalid_input", "missing_media", `Input ${p.inputId} was not loaded.`);
       const isVideo = m.mime.startsWith("video/");
-      if (isVideo && batch.mode !== "direct_video")
+      if (isVideo && batch.mode !== "direct_video" && batch.mode !== "sequence_transition")
         throw new AnalysisBatchError(
           "invalid_input",
           "video_not_planned",

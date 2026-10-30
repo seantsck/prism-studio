@@ -105,11 +105,11 @@ test("rows are the edit's actual cuts, in edit order, and say No sequence QA yet
   await page.goto(`${EP}/continuity`);
   await expect(page.getByTestId("continuity-supervisor")).toBeVisible();
   await expect(page.getByRole("heading", { name: /^Continuity Supervisor — / })).toBeVisible();
-  await expect(page.getByText("semantic cross-cut analysis is not enabled yet")).toBeVisible();
+  await expect(page.getByText("Sequence Continuity review is manual", { exact: false })).toBeVisible();
   const titles = await page.getByTestId("cut-title").allTextContents();
   expect(titles).toEqual(codes.slice(1).map((c, i) => `${codes[i]} → ${c}`));
   await expect(page.getByTestId("count-cuts")).toContainText("13");
-  await expect(page.getByTestId("continuity-runs-unavailable")).toContainText("unavailable");
+  await expect(page.getByTestId("continuity-runs-note")).toContainText("Nothing runs on page load");
 
   // the state is the no-run state; the warning is a finding, shown first
   const cut = row(page, "1B → 1C");
@@ -150,7 +150,9 @@ test("semantic criteria are unchecked (not analysed); across a Scene boundary th
   const inside = row(page, "1B → 1C");
   await inside.getByTestId("cut-semantic").locator("summary").click();
   const semantic = inside.getByTestId("cut-semantic");
-  await expect(semantic).toContainText("Semantic sequence analysis is not available yet");
+  await expect(semantic).toContainText(
+    "Sequence Continuity criteria stay unchecked until a review of this cut runs",
+  );
   await expect(semantic.locator('[data-testid="cut-finding"][data-key="cut:axis"]')).toHaveAttribute(
     "data-result",
     "unchecked",

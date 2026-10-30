@@ -114,6 +114,11 @@ export interface MediaProcessor {
   extractFrames(bytes: Uint8Array, atMs: number[]): Promise<FrameOutput[]>;
   cropVideo(bytes: Uint8Array, rect: PixelRect): Promise<MediaOutput>;
   trimVideo(bytes: Uint8Array, durationMs: number): Promise<MediaOutput>;
+  /**
+   * 3A.4D: the exact window [startMs, endMs) of a video, decoded and RE-ENCODED (never stream-copied from an earlier
+   * keyframe), audio stripped, with fixed encoder settings. Refuses invalid bounds. Used for cut-edge clips.
+   */
+  extractWindow(bytes: Uint8Array, startMs: number, endMs: number): Promise<MediaOutput>;
   scaleVideo(bytes: Uint8Array, width: number, height: number): Promise<MediaOutput>;
   /** Scales a still image to exactly width×height (PNG out). Used to bound analyzer inputs; originals are kept. */
   scaleImage(bytes: Uint8Array, width: number, height: number): Promise<MediaOutput>;

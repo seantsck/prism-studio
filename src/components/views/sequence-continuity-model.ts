@@ -8,8 +8,12 @@ import {
   type CutFinding,
   type CutSide,
   type CutTransition,
+  type TransitionRun,
   type TransitionState,
 } from "@/domain/continuity/sequence";
+import type { SequenceReviewDisclosure } from "@/continuity/sequence-review";
+import type { TransitionRunView } from "@/data/media-qa-repository";
+import { assetUrl } from "@/lib/utils";
 import { SEVERITY_LABELS } from "@/domain/continuity/status";
 import type { EditMediaFacts } from "@/domain/edit/eligibility";
 import type { EpisodeEdit } from "@/domain/edit/model";
@@ -38,14 +42,14 @@ import { picture, runsOf, type PictureVM, type RunVM, type Tone } from "./episod
 
 /** Shown only on a cut with a generated-clip side: a placeholder still never gets temporal edge media. */
 export const EDGE_MEDIA_NOTE =
-  "For generated clips, exact cut-edge media will be available when cut-edge derivation is implemented.";
+  "Exact cut-edge media (2 s per side, audio stripped, plus the exact edge frames) is derived only when you confirm a Sequence Continuity review of this cut.";
 export const SEMANTIC_NOTE =
-  "Semantic sequence analysis is not available yet: these cross-cut criteria are listed so you can see what is not checked. Nothing was analysed.";
+  "Sequence Continuity criteria stay unchecked until a review of this cut runs. A family an analyzer has not been calibrated for stays unchecked.";
 export const NO_EDIT_MESSAGE =
   "Sequence Continuity needs a persisted Episode Edit because the edit determines the actual cuts.";
 export const NO_CUTS_MESSAGE = "This edit has no cuts to review yet.";
-export const RUNS_UNAVAILABLE =
-  "Reviewed, stale and intentional counts are unavailable: transition runs and cut intent are not stored yet.";
+export const RUNS_NOTE =
+  "Sequence Continuity reviews run only when you select cuts and confirm the disclosure. Nothing runs on page load or edit changes.";
 
 export interface FindingVM {
   key: string;
@@ -59,6 +63,35 @@ export interface FindingVM {
   sourceRef: string;
   /** "deterministic" | "analyzer" | "manual" (deterministic findings are never called a model result) */
   handler: CutCriterion["handler"];
+  /** 3A.4D: the result comes from the CURRENT Sequence Continuity run (null = projection) and whose analyzer */
+  analyzed?: { analyzer: string; mock: boolean } | null;
+  /** 3A.4D: a declared intent covers this warn / fail (the stored result is unchanged) */
+  intentional?: boolean;
+  evidence?: EvidenceVM[];
+}
+
+/** 3A.4D: one sided evidence item with Prism's time mapping (clip-local → source → edit time). */
+export interface EvidenceVM {
+  input: string;
+  side: "left" | "right" | null;
+  /** "left clip at 1.200 s → source 3.200 s → edit 7.700 s" */
+  where: string;
+  observation: string;
+}
+
+/** 3A.4D: one Sequence Continuity run of this cut (newest first). */
+export interface RunHistoryVM {
+  runNumber: number;
+  status: string;
+  analyzer: string;
+  model: string;
+  mock: boolean;
+  freshness: "current" | "stale";
+  staleReasons: string[];
+  error: string;
+  createdAt: string;
+  /** the exact derived edge media the run used (private asset route) */
+  edgeMedia: Array<{ inputId: string; url: string | null; mediaType: "video" | "image" }>;
 }
 
 export interface SideVM {
@@ -135,6 +168,9 @@ export interface CutRowVM {
   hasClipEdge: boolean;
   /** 3A.4C: the declared intent (null = none). It never changes the state or a finding. */
   intent: CutIntentVM | null;
+  /** 3A.4D: the cut's address, for selecting it for a manual Sequence Continuity review */
+  transitionKey: string;
+  runs: RunHistoryVM[];
   flags: { hasFail: boolean; hasWarn: boolean; hasUnchecked: boolean };
 }
 
@@ -166,6 +202,10 @@ export type ContinuityPageVM =
       summary: SummaryCountsVM;
       filterCounts: Record<CutFilter, number>;
       info: string[];
+      /** 3A.4D: the exact disclosure of the cuts selected for review (GET only: derives nothing) */
+      review: { disclosure: SequenceReviewDisclosure; nonce: string } | null;
+      analyzers: Array<{ id: string; label: string }>;
+      selectedAnalyzer: string | null;
     };
 
 export const supervisorLinks = (data: ProjectData, episode: Episode): SupervisorLinks => ({
@@ -291,6 +331,109 @@ function topIssue(cut: CutTransition, rows: FindingVM[], semanticUnchecked: Find
   return null;
 }
 
+/** 3A.4D: a stored transition run as the assessment reads it (human overrides applied: latest override wins). */
+export function transitionRunOf(v: TransitionRunView): TransitionRun {
+  return {
+    truth: {
+      transitionKey: v.subject.transitionKey,
+      leftSubjectFingerprint: v.subject.leftSide.subjectFingerprint,
+      rightSubjectFingerprint: v.subject.rightSide.subjectFingerprint,
+      subjectFingerprint: v.run.subjectFingerprint,
+      criteriaFingerprint: v.run.criteriaFingerprint,
+      referenceFingerprint: v.run.referenceFingerprint,
+      rulesVersion: v.run.rulesVersion,
+    },
+    analysisStatus: v.run.analysisStatus,
+    findings: v.findings.map(({ finding, overrides }) => ({
+      criterionKey: finding.criterionKey,
+      category: finding.category,
+      severity: finding.severity,
+      result: overrides[0]?.result ?? finding.result,
+      intentCoverable: false,
+    })),
+  };
+}
+
+const RUN_STATUS: Record<string, string> = {
+  queued: "Queued",
+  running: "Running",
+  complete: "Complete",
+  failed: "Failed",
+};
+
+/** Prism's projection of one evidence item: clip-local -> parent source -> edit time (never a rewrite of the answer). */
+function evidenceVM(
+  item: { input?: unknown; atMs?: unknown; endMs?: unknown; observation?: unknown },
+  run: TransitionRunView,
+  view: EpisodeEditView,
+  cut: CutTransition,
+): EvidenceVM {
+  const input = String(item.input ?? "");
+  const side =
+    input.startsWith("left:") || input.startsWith("ref:left:")
+      ? ("left" as const)
+      : input.startsWith("right:") || input.startsWith("ref:right:")
+        ? ("right" as const)
+        : null;
+  const at = typeof item.atMs === "number" ? item.atMs : null;
+  const end = typeof item.endMs === "number" ? item.endMs : null;
+  const frozen = side === "left" ? run.subject.leftSide : side === "right" ? run.subject.rightSide : null;
+  const live = side === "left" ? cut.left : side === "right" ? cut.right : null;
+  const p = frozen?.picture;
+  const editAt = (sourceMs: number) => {
+    if (!live || !p || p.kind !== "video") return null;
+    const start = view.items[live.index]?.timing.startMs;
+    return start == null ? null : start + (sourceMs - p.sourceInMs);
+  };
+  const chain = (localMs: number | null, still: boolean) => {
+    const source = still
+      ? (frozen?.still?.atMs ?? null)
+      : frozen?.window && localMs != null
+        ? frozen.window.startMs + localMs
+        : null;
+    const edit = source != null ? editAt(source) : null;
+    return [
+      !still && localMs != null ? `clip ${secs(localMs)}` : null,
+      source != null ? `source ${secs(source)}` : null,
+      edit != null ? `edit ${secs(edit)}` : null,
+    ]
+      .filter(Boolean)
+      .join(" → ");
+  };
+  const where = input.endsWith(":clip")
+    ? `${side} edge clip ${chain(at, false)}${end != null ? ` until ${chain(end, false)}` : ""}`
+    : input === "left:last" || input === "right:first"
+      ? `${side} ${input === "left:last" ? "last" : "first"} displayed frame (${chain(null, true)})`
+      : `${side ?? ""} reference ${input}`.trim();
+  return { input, side, where, observation: String(item.observation ?? "") };
+}
+
+function runHistoryVM(data: ProjectData, cut: CutTransition, v: TransitionRunView): RunHistoryVM {
+  const fresh = assessTransition({ cut, run: transitionRunOf(v) }).freshness;
+  const manifest = v.run.externalManifest?.entries ?? [];
+  return {
+    runNumber: v.run.runNumber,
+    status: RUN_STATUS[v.run.analysisStatus] ?? v.run.analysisStatus,
+    analyzer: v.run.analyzer,
+    model: v.run.model ?? "",
+    mock: v.run.analyzerKind === "mock",
+    freshness: fresh?.status === "current" ? "current" : "stale",
+    staleReasons: fresh?.reasons ?? [],
+    error: v.run.analysisError,
+    createdAt: v.run.createdAt,
+    edgeMedia: manifest
+      .filter((e) => e.sent && e.kind !== "reference")
+      .map((e) => {
+        const a = data.assets.find((x) => x.id === e.assetId) ?? null;
+        return {
+          inputId: e.inputId,
+          url: assetUrl(a),
+          mediaType: e.kind === "video" ? ("video" as const) : ("image" as const),
+        };
+      }),
+  };
+}
+
 function cutRow(
   data: ProjectData,
   episode: Episode,
@@ -298,14 +441,59 @@ function cutRow(
   media: EditMediaFacts,
   runs: RunVM[],
   cut: CutTransition,
+  history: readonly TransitionRunView[] = [],
 ): CutRowVM {
-  const pairs = cut.criteria.map((c) => ({
-    c,
-    vm: findingVM(
+  const declared = view.items[cut.index + 1]?.item.incomingCutIntent ?? null;
+  const latest = history[0] ?? null;
+  const assessment = assessTransition({
+    cut,
+    run: latest ? transitionRunOf(latest) : null,
+    intent: declared,
+  });
+  const current = latest != null && assessment.freshness?.status === "current";
+  const effective = new Map(assessment.findings.map((f) => [f.criterionKey, f.result]));
+  const intentOn = assessment.intentEffective && declared != null;
+  const pairs = cut.criteria.map((c) => {
+    const base = findingVM(
       c,
       cut.findings.find((f) => f.criterionKey === c.key)!,
-    ),
-  }));
+    );
+    if (c.handler === "deterministic" || c.applicability !== "applies" || !latest) return { c, vm: base };
+    const stored = latest.findings.find((f) => f.finding.criterionKey === c.key)?.finding ?? null;
+    if (!current)
+      return { c, vm: { ...base, reason: `${base.reason} (the latest Sequence Continuity run is stale)` } };
+    if (latest.run.analysisStatus !== "complete")
+      return {
+        c,
+        vm: {
+          ...base,
+          reason:
+            latest.run.analysisStatus === "failed"
+              ? `Sequence Continuity run failed: ${latest.run.analysisError || "no result"}. Stays unchecked.`
+              : "Sequence Continuity review in progress.",
+        },
+      };
+    const result = effective.get(c.key) ?? base.result;
+    const items = (stored?.evidence as { items?: unknown[] } | undefined)?.items ?? [];
+    const coverable =
+      intentOn && c.intentCoverable && (declared!.scope.length === 0 || declared!.scope.includes(c.category));
+    const analyzed = stored?.resultSource === "analyzer";
+    return {
+      c,
+      vm: {
+        ...base,
+        result,
+        resultLabel: RESULT_LABELS[result],
+        tone: RESULT_TONE[result],
+        reason: analyzed ? stored!.actual || base.reason : stored?.notes || base.reason,
+        analyzed: analyzed
+          ? { analyzer: latest.run.analyzer, mock: latest.run.analyzerKind === "mock" }
+          : null,
+        intentional: coverable && (result === "warn" || result === "fail"),
+        evidence: items.map((it) => evidenceVM(it as Record<string, unknown>, latest, view, cut)),
+      },
+    };
+  });
   const deterministic = pairs.filter((p) => p.c.handler === "deterministic").map((p) => p.vm);
   const semantic = pairs.filter((p) => p.c.handler !== "deterministic").map((p) => p.vm);
   // an important applicable semantic criterion still unchecked (Prism's n_a never counts)
@@ -320,10 +508,6 @@ function cutRow(
     .map((p) => p.vm);
   const semanticUnchecked = semantic.filter((f) => f.result === "unchecked").length;
   const attention = deterministic.filter((f) => f.result === "fail" || f.result === "warn");
-  const declared = view.items[cut.index + 1]?.item.incomingCutIntent ?? null;
-  // no transition run is stored yet: with or without intent the state is the no-run state (intent only reinterprets
-  // the findings of an evaluated run, 3A.4A precedence)
-  const assessment = assessTransition({ cut, run: null, intent: declared });
   const left = sideVM(data, episode, view, media, runs, cut.left, "left");
   const right = sideVM(data, episode, view, media, runs, cut.right, "right");
   return {
@@ -363,6 +547,8 @@ function cutRow(
           raw: declared,
         }
       : null,
+    transitionKey: cut.transitionKey,
+    runs: history.map((v) => runHistoryVM(data, cut, v)),
     flags: {
       hasFail: deterministic.some((f) => f.result === "fail"),
       hasWarn: deterministic.some((f) => f.result === "warn"),
@@ -377,11 +563,18 @@ export function continuityPage(args: {
   episode: Episode;
   edit: EpisodeEdit;
   media: EditMediaFacts;
+  /** 3A.4D: stored transition runs per transition key, newest first (read-only) */
+  transitionRuns?: ReadonlyMap<string, readonly TransitionRunView[]>;
+  review?: { disclosure: SequenceReviewDisclosure; nonce: string } | null;
+  analyzers?: Array<{ id: string; label: string }>;
+  selectedAnalyzer?: string | null;
 }): Extract<ContinuityPageVM, { state: "edit" }> {
   const { data, episode, edit, media } = args;
   const view = buildEpisodeEditView(data, edit, media);
   const runs = runsOf(data, view);
-  const rows = buildEpisodeCuts({ data, view }).map((cut) => cutRow(data, episode, view, media, runs, cut));
+  const rows = buildEpisodeCuts({ data, view }).map((cut) =>
+    cutRow(data, episode, view, media, runs, cut, args.transitionRuns?.get(cut.transitionKey) ?? []),
+  );
   const orderInfo = editOrderInfo(view);
   return {
     state: "edit",
@@ -407,5 +600,8 @@ export function continuityPage(args: {
       media_blocked: rows.filter((r) => !r.mediaEligible).length,
     },
     info: orderInfo ? [orderInfo.message] : [],
+    review: args.review ?? null,
+    analyzers: args.analyzers ?? [],
+    selectedAnalyzer: args.selectedAnalyzer ?? null,
   };
 }

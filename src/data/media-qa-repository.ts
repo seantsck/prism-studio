@@ -214,6 +214,19 @@ export interface NewTransitionRun {
   findings: NewFinding[];
   createdBy: string | null;
   now: string;
+  /** 3A.4D semantic transition runs: the frozen plan, manifest and request identity (absent on deterministic runs) */
+  analysisPlan?: ContinuityAnalysisPlan | null;
+  externalManifest?: ExternalMediaManifest | null;
+  promptVersion?: string | null;
+  rubricVersion?: string | null;
+  model?: string | null;
+}
+
+/** 3A.4D: a transition run + its frozen subject + findings + ONE queued sequence job, written atomically. */
+export interface NewTransitionAnalysisRun {
+  run: NewTransitionRun;
+  job: NewAnalysisRun["job"];
+  limits: { maxActivePerProject: number };
 }
 
 export type NewRun = Omit<
@@ -412,8 +425,8 @@ export interface FinalizeAnalysisFailure {
 }
 
 export interface ClaimedAnalysisJob {
-  /** 3A.4C: the worker executes Shot (attempt) jobs only; a transition job waits for its 3A.4D executor */
-  job: AttemptAnalysisJob;
+  /** 3A.4D: either subject kind; the worker derives the job's ONE execution mode from its frozen input */
+  job: AnalysisJob;
 }
 
 export interface InputAssetRef {
@@ -519,6 +532,13 @@ export interface MediaQaRepository {
    * unless the live edit still has the two items adjacent, left → right, with the frozen Shots and transition key.
    */
   createTransitionRun(input: NewTransitionRun): Promise<TransitionRunView>;
+  /**
+   * 3A.4D: freezes run + subject + findings + queued sequence job + estimated cost + first event in ONE unit, with the
+   * same adjacency refusal as `createTransitionRun`, the shared Project active-job limit and idempotent replay by key.
+   */
+  createTransitionRunWithJob(
+    input: NewTransitionAnalysisRun,
+  ): Promise<{ run: TransitionRunView; job: TransitionAnalysisJob; duplicate: boolean }>;
   getTransitionRun(runId: string): Promise<TransitionRunView | null>;
   /** One cut's history, newest first. */
   listTransitionRuns(projectId: string, transitionKey: string): Promise<TransitionRunView[]>;

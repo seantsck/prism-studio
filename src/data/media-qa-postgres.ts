@@ -28,6 +28,7 @@ import {
   type NewDerivation,
   type NewFinding,
   type NewRun,
+  type NewTransitionAnalysisRun,
   type NewTransitionRun,
   type TransitionContinuityRun,
   type TransitionRunView,
@@ -639,7 +640,97 @@ export class PostgresMediaQaData implements MediaQaRepository {
   }
 
   async createTransitionRun(input: NewTransitionRun): Promise<TransitionRunView> {
+    return this.tx(
+      async (c) => (await this.transitionViews(c, [await this.insertTransitionRun(c, input)]))[0]!,
+    );
+  }
+
+  /** 3A.4D: run + subject + findings + queued sequence job + estimated cost + first event, in ONE transaction. */
+  async createTransitionRunWithJob(input: NewTransitionAnalysisRun) {
     return this.tx(async (c) => {
+      const r = input.run;
+      const project = await c.query("select id from projects where id = $1 for update", [r.projectId]);
+      if (project.rowCount === 0) throw new MediaQaError("not_found", "That project no longer exists.");
+      const replay = await c.query(
+        "select * from continuity_analysis_jobs where project_id = $1 and subject_kind = 'transition' and idempotency_key = $2",
+        [r.projectId, input.job.idempotencyKey],
+      );
+      if (replay.rows[0]) {
+        const run = await c.query(
+          "select * from continuity_runs where id = $1 and subject_kind = 'transition'",
+          [replay.rows[0].run_id],
+        );
+        const job = mapAnalysisJob(replay.rows[0]);
+        if (job.subjectKind !== "transition")
+          throw new Error("A transition replay found a non-transition job.");
+        return { run: (await this.transitionViews(c, run.rows))[0]!, job, duplicate: true };
+      }
+      // the SAME shared Project limit as Shot QA: an active Shot job takes a slot from a sequence submission
+      const open = await c.query(
+        `select count(*)::int as n from continuity_analysis_jobs where project_id = $1 and status in (${activeList})`,
+        [r.projectId],
+      );
+      if (open.rows[0].n >= input.limits.maxActivePerProject) {
+        throw new MediaQaError(
+          "invalid",
+          `This project already has ${open.rows[0].n} analyses in progress (limit ${input.limits.maxActivePerProject}).`,
+        );
+      }
+      const run = await this.insertTransitionRun(c, r);
+      const jobRow = (
+        await c.query(
+          `insert into continuity_analysis_jobs
+             (project_id, subject_kind, run_id, attempt_id, analyzer, model, status, input_snapshot, input_asset_ids,
+              idempotency_key, next_run_at, max_attempts, batches_total, estimated_cost_usd, created_by, created_at)
+           values ($1, 'transition', $2, null, $3, $4, 'queued', $5::jsonb, $6::uuid[], $7, $8, $9, $10, $11, $12, $8)
+           returning *`,
+          [
+            r.projectId,
+            run.id,
+            input.job.analyzer,
+            input.job.model,
+            JSON.stringify(input.job.snapshot),
+            input.job.inputAssetIds,
+            input.job.idempotencyKey,
+            r.now,
+            input.job.maxAttempts,
+            input.job.snapshot.plan.batches.length,
+            input.job.estimate.maxUsd,
+            r.createdBy,
+          ],
+        )
+      ).rows[0] as Row;
+      await c.query(
+        `insert into continuity_analysis_costs
+           (project_id, run_id, job_id, analyzer, model, kind, amount_usd, expected_usd, usage, pricing_version, recorded_at)
+         values ($1, $2, $3, $4, $5, 'estimated', $6, $7, $8::jsonb, $9, $10)`,
+        [
+          r.projectId,
+          run.id,
+          jobRow.id,
+          input.job.analyzer,
+          input.job.model,
+          input.job.estimate.maxUsd,
+          input.job.estimate.expectedUsd,
+          JSON.stringify(input.job.estimate.usage),
+          input.job.estimate.pricingVersion,
+          r.now,
+        ],
+      );
+      await c.query(
+        `insert into continuity_analysis_events (project_id, job_id, run_id, at, from_status, to_status, note)
+         values ($1, $2, $3, $4, null, 'queued', 'Sequence review submitted by user')`,
+        [r.projectId, jobRow.id, run.id, r.now],
+      );
+      const job = mapAnalysisJob(jobRow);
+      if (job.subjectKind !== "transition") throw new Error("A transition job was not recorded as one.");
+      return { run: (await this.transitionViews(c, [run]))[0]!, job, duplicate: false };
+    });
+  }
+
+  /** The frozen run + subject + findings of one cut, inside the caller's transaction (adjacency checked here). */
+  private async insertTransitionRun(c: PoolClient, input: NewTransitionRun): Promise<Row> {
+    {
       const s = input.subject;
       // the live cut: the edit row is held FOR SHARE (an edit mutation takes it FOR UPDATE), so the adjacency
       // validated here is the adjacency at commit
@@ -686,9 +777,10 @@ export class PostgresMediaQaData implements MediaQaRepository {
              (project_id, subject_kind, attempt_id, run_number, subject_asset_id, original_asset_id, analyzer,
               analyzer_version, analyzer_kind, rules_version, analysis_status, package_fingerprint,
               subject_fingerprint, criteria_fingerprint, reference_fingerprint, reference_set, created_by, created_at,
-              completed_at)
+              completed_at, analysis_plan, external_manifest, prompt_version, rubric_version, model)
            values ($1, 'transition', null, $2, null, null, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13,
-                   $14, case when $7 in ('complete', 'failed') then $14::timestamptz end)
+                   $14, case when $7 in ('complete', 'failed') then $14::timestamptz end, $15::jsonb, $16::jsonb,
+                   $17, $18, $19)
            returning *`,
           [
             input.projectId,
@@ -706,6 +798,11 @@ export class PostgresMediaQaData implements MediaQaRepository {
             JSON.stringify(input.referenceSet),
             input.createdBy,
             input.now,
+            input.analysisPlan ? JSON.stringify(input.analysisPlan) : null,
+            input.externalManifest ? JSON.stringify(input.externalManifest) : null,
+            input.promptVersion ?? null,
+            input.rubricVersion ?? null,
+            input.model ?? null,
           ],
         )
       ).rows[0] as Row;
@@ -734,8 +831,8 @@ export class PostgresMediaQaData implements MediaQaRepository {
         ],
       );
       await this.insertFindings(c, input.projectId, String(run.id), input.findings, input.now);
-      return (await this.transitionViews(c, [run]))[0]!;
-    });
+      return run;
+    }
   }
 
   async getTransitionRun(runId: string) {

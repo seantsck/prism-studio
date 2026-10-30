@@ -20,7 +20,7 @@ import { EpisodeEditError, type EditOp } from "../src/data/episode-edit-reposito
 import { PostgresMediaQaData } from "../src/data/media-qa-postgres";
 import { MediaQaError, type NewRun } from "../src/data/media-qa-repository";
 import { AdminRepository, rlsPreamble } from "../src/data/postgres-repository";
-import { recordTransitionRun } from "../src/continuity/sequence-runs";
+import { newTransitionRun, recordTransitionRun } from "../src/continuity/sequence-runs";
 import { buildEpisodeCuts } from "../src/domain/continuity/sequence";
 import type { EpisodeEdit } from "../src/domain/edit/model";
 import { buildEpisodeEditView } from "../src/domain/edit/view";
@@ -579,6 +579,144 @@ try {
       .join(" | "),
   );
 
+  // ── 3A.4D: run + subject + findings + queued sequence job + estimate + event, atomically ──
+  const plan = {
+    version: 1 as const,
+    analyzer: "mock-continuity",
+    model: "mock",
+    items: [],
+    batches: [],
+    manifest: {
+      version: 1 as const,
+      analyzer: "mock-continuity",
+      model: "mock",
+      entries: [],
+      criteriaSent: 0,
+    },
+    budget: {
+      maxReferencesPerBatch: 6,
+      maxOutputImagesPerBatch: 5,
+      maxCriteriaPerBatch: 8,
+      maxImageBytes: 1,
+      maxImageDimension: 1,
+    },
+    fingerprint: "db-sc",
+  };
+  const KEY = sha(`db-sc-seq-${id()}`);
+  const withJob = (e: EpisodeEdit, maxActive = 50, key = KEY) => {
+    const view = buildEpisodeEditView(data, e, media);
+    const cut = buildEpisodeCuts({ data, view })[0]!;
+    return qa.createTransitionRunWithJob({
+      run: {
+        ...newTransitionRun({ cut, view, userId: dev.id, now: NOW() }),
+        analyzer: "mock-continuity",
+        analyzerVersion: "mock-sequence-1",
+        analyzerKind: "mock",
+        analysisStatus: "queued",
+        analysisPlan: plan,
+        externalManifest: plan.manifest,
+        promptVersion: "continuity-gemini-transition-v1",
+        rubricVersion: "sequence-rubric-1",
+        model: "mock",
+      },
+      job: {
+        idempotencyKey: key,
+        analyzer: "mock-continuity",
+        model: "mock",
+        snapshot: { version: 1, subjectKind: "transition", runKey: "db-sc", plan } as never,
+        inputAssetIds: [ASSET2],
+        maxAttempts: 3,
+        estimate: { maxUsd: 0, expectedUsd: 0, usage: {}, pricingVersion: "free" },
+      },
+      limits: { maxActivePerProject: maxActive },
+    });
+  };
+  const seq = await withJob(edit0);
+  const seqRows = (
+    await q(
+      `select (select count(*)::int from continuity_analysis_costs where job_id = $1 and kind = 'estimated') as costs,
+              (select count(*)::int from continuity_analysis_events where job_id = $1 and to_status = 'queued') as events,
+              (select subject_kind from continuity_analysis_jobs where id = $1) as kind,
+              (select attempt_id from continuity_analysis_jobs where id = $1) as attempt,
+              (select prompt_version from continuity_runs where id = $2) as prompt`,
+      [seq.job.id, seq.run.run.id],
+    )
+  ).rows[0];
+  check(
+    "3A.4D createTransitionRunWithJob: transition run #5 + subject + queued transition job + estimate + event, atomically",
+    !seq.duplicate &&
+      seq.run.run.runNumber === 5 &&
+      seq.run.run.analysisStatus === "queued" &&
+      seq.job.subjectKind === "transition" &&
+      seq.job.attemptId === null &&
+      seqRows.kind === "transition" &&
+      seqRows.attempt === null &&
+      seqRows.costs === 1 &&
+      seqRows.events === 1 &&
+      seqRows.prompt === "continuity-gemini-transition-v1",
+    JSON.stringify({ n: seq.run.run.runNumber, ...seqRows }),
+  );
+  const replayed = await withJob(edit0);
+  check(
+    "3A.4D createTransitionRunWithJob: the same idempotency key replays (no second run or job)",
+    replayed.duplicate &&
+      replayed.job.id === seq.job.id &&
+      (await qa.listTransitionRuns(P, ab!.transitionKey)).length === 5,
+  );
+  // the REAL worker login executes a transition job with the grants 0022-0046 already gave it (no new grant): it reads
+  // the job and the Assets its inputs name, and moves the run; it still cannot read the transition subject table
+  if (process.env.PRISM_STUDIO_CONTINUITY_DB_URL) {
+    const wpool = new pg.Pool({
+      connectionString: process.env.PRISM_STUDIO_CONTINUITY_DB_URL,
+      ssl: { rejectUnauthorized: false },
+      max: 2,
+    });
+    try {
+      const wstore = new PostgresAnalysisWorkerStore(wpool);
+      const who = (await wpool.query("select current_user as u")).rows[0].u;
+      const job = (
+        await wpool.query("select subject_kind, input_snapshot from continuity_analysis_jobs where id = $1", [
+          seq.job.id,
+        ])
+      ).rows[0];
+      const ref = await wstore.findInputAsset(seq.job.id, ASSET2);
+      await wstore.startRun(seq.run.run.id);
+      const status = (await q("select analysis_status from continuity_runs where id = $1", [seq.run.run.id]))
+        .rows[0];
+      const denied = await wpool.query("select count(*) from continuity_transition_subjects").then(
+        () => "allowed",
+        (e: Error) => e.message,
+      );
+      check(
+        "3A.4D: the real continuity-worker login reads a transition job + its input Asset and starts its run (no new grant), never the subject table",
+        who === "prism_continuity_worker" &&
+          job?.subject_kind === "transition" &&
+          ref?.assetId === ASSET2 &&
+          status.analysis_status === "running" &&
+          /permission denied/.test(denied),
+        JSON.stringify({
+          who,
+          kind: job?.subject_kind,
+          ref: ref?.assetId ?? null,
+          status: status.analysis_status,
+          denied,
+        }),
+      );
+    } finally {
+      await wpool.end();
+    }
+  }
+  const activeNow = (await qa.listActiveProjectAnalysisJobs(P)).length;
+  const limited = await withJob(edit0, activeNow, sha(`db-sc-limit-${id()}`)).then(
+    () => "ok",
+    (e: unknown) => (e instanceof MediaQaError ? e.code : String(e)),
+  );
+  check(
+    "3A.4D createTransitionRunWithJob: the shared Project active limit applies (Shot + sequence jobs counted)",
+    limited === "invalid",
+    limited,
+  );
+
   // refusal when adjacency changed; history survives edit changes and edit deletion
   const reordered = await edits.apply({
     editId: edit0.id,
@@ -609,7 +747,7 @@ try {
   );
   check(
     "deleting the live edit keeps every transition run WITH its subject (historical ids, no cascade)",
-    JSON.stringify(kept?.subject) === JSON.stringify(r1.subject) && keptSubjects === 6,
+    JSON.stringify(kept?.subject) === JSON.stringify(r1.subject) && keptSubjects === 7,
     String(keptSubjects),
   );
   const fks = (
@@ -686,9 +824,9 @@ try {
   const workerStore = new PostgresAnalysisWorkerStore(pool);
   const claimed = await workerStore.claim({ workerId: "db-sc", now: NOW(), leaseMs: 1000, limit: 50 });
   check(
-    "the Shot analysis worker never claims a transition job",
-    !claimed.some((c) => c.job.runId === T3),
-    claimed.map((c) => c.job.runId).join(","),
+    "3A.4D: the mode-aware worker claims a queued transition job from the SAME queue, as a transition job",
+    claimed.some((c) => c.job.runId === T3 && c.job.subjectKind === "transition" && c.job.attemptId === null),
+    claimed.map((c) => `${c.job.subjectKind}:${c.job.runId}`).join(","),
   );
   for (const c of claimed)
     await q(
@@ -715,10 +853,7 @@ try {
     JSON.stringify({ status: cancelled?.status, run: t3Run.analysis_status, events: t3Events }),
   );
   const reclaimed = await workerStore.claim({ workerId: "db-sc", now: NOW(), leaseMs: 1000, limit: 50 });
-  check(
-    "after cancellation the Shot worker still never claims a transition job",
-    !reclaimed.some((c) => c.job.runId === T3 || c.job.runId === T1),
-  );
+  check("a cancelled transition job is never claimed again", !reclaimed.some((c) => c.job.runId === T3));
   for (const c of reclaimed)
     await q(
       "update continuity_analysis_jobs set status = 'queued', lease_owner = null, lease_token = null, lease_expires_at = null where id = $1",

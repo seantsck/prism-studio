@@ -122,7 +122,7 @@ function assetFor(args: {
   };
 }
 
-async function derive(args: {
+export async function derive(args: {
   deps: DeliveryDeps;
   parent: Asset;
   parentChecksum: string;

@@ -6,6 +6,7 @@ import {
   PROMPT_VERSIONS,
   RUBRIC_VERSION,
   type AnalysisMedia,
+  type AttemptContinuityAnalysisInput,
   type ContinuityAnalysisInput,
 } from "@/domain/continuity/analysis/types";
 import type { MediaBytes } from "../provider";
@@ -101,11 +102,11 @@ export const PLANNER: PlannerAnalyzer = {
 };
 
 export function makeInput(
-  over: Partial<ContinuityAnalysisInput> = {},
+  over: Partial<AttemptContinuityAnalysisInput> = {},
   planner: PlannerAnalyzer = PLANNER,
   /** 3A.3: the Project's full-video permission (default false, as in production). */
   planOpts: { directVideoAllowed?: boolean } = {},
-): ContinuityAnalysisInput {
+): AttemptContinuityAnalysisInput {
   const plan = buildAnalysisPlan({
     analyzer: planner,
     criteria: CRITERIA,
