@@ -84,6 +84,8 @@ const expectedTables = [
   "episode_edit_audio_placements",
   // Phase 3A.2: one owner-controlled Shot QA automation policy per Project
   "project_qa_policies",
+  // Phase 3A.4C: the frozen subject of a transition (cut) continuity run
+  "continuity_transition_subjects",
 ];
 const tables = (await rows("select tablename, rowsecurity from pg_tables where schemaname='public'")).filter(
   (t) => t.tablename !== "prism_migrations",
@@ -141,6 +143,12 @@ const must = {
     "episode_edit_items_asset_idx",
     "episode_edit_audio_placements_take_idx",
     "continuity_runs_automation_key",
+    // 0046 (Phase 3A.4C)
+    "continuity_runs_id_project_kind_key",
+    "continuity_runs_project_kind_idx",
+    "continuity_transition_subjects_pkey",
+    "continuity_transition_subjects_edit_idx",
+    "continuity_transition_subjects_number_key",
   ],
   triggers: [
     "dialogue_locked_guard",
@@ -181,6 +189,12 @@ const must = {
     "episode_edit_items_updated",
     "episode_edit_items_source_check",
     "episode_edit_audio_placements_check",
+    // 0046 (Phase 3A.4C): frozen subjects, exactly one per transition run, predecessor-bound cut intent at commit
+    "continuity_analysis_jobs_guard",
+    "continuity_transition_subjects_guard",
+    "continuity_runs_subject_check",
+    "continuity_transition_subjects_run_check",
+    "episode_edit_items_cut_intent_check",
   ],
 };
 const missingIdx = must.indexes.filter((i) => !idx.some((x) => x.indexname === i));
@@ -191,7 +205,7 @@ const fn = await rows(
 
 // ── column-level + storage + migration-ledger checks ──
 const columns = await rows(
-  "select table_name, column_name from information_schema.columns where table_schema='public' and table_name in ('assets','shots','performance_takes','storyboard_frames','generation_attempts','dialogue_lines','shot_reference_assets','generation_jobs','generation_outputs','generation_costs','project_bibles','continuity_runs','continuity_analysis_jobs','project_qa_policies')",
+  "select table_name, column_name from information_schema.columns where table_schema='public' and table_name in ('assets','shots','performance_takes','storyboard_frames','generation_attempts','dialogue_lines','shot_reference_assets','generation_jobs','generation_outputs','generation_costs','project_bibles','continuity_runs','continuity_analysis_jobs','project_qa_policies','episode_edit_items')",
 );
 const hasCol = (t, c) => columns.some((x) => x.table_name === t && x.column_name === c);
 const columnProblems = [
@@ -220,6 +234,10 @@ const columnProblems = [
     ["continuity_runs", "automation_key"],
     // 0045 (Phase 3A.3): explicit full-video consent for temporal Shot QA
     ["project_qa_policies", "direct_video_allowed"],
+    // 0046 (Phase 3A.4C): subject kinds and persisted cut intent
+    ["continuity_runs", "subject_kind"],
+    ["continuity_analysis_jobs", "subject_kind"],
+    ["episode_edit_items", "incoming_cut_intent"],
     ["continuity_analysis_jobs", "lease_token"],
     ["continuity_analysis_jobs", "provider_state"],
     ["generation_jobs", "lease_token"],

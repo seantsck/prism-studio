@@ -27,7 +27,13 @@ import {
   type NewDerivation,
   type NewFinding,
   type NewRun,
+  type NewTransitionRun,
+  type TransitionContinuityRun,
+  type TransitionRunView,
+  type TransitionSubject,
 } from "./media-qa-repository";
+import type { PersistedCutSide } from "@/domain/continuity/sequence";
+import { transitionRunRefusal } from "./transition-runs";
 
 const NOT_MIGRATED =
   "Automatic Shot QA needs database migration 0044, which is not applied to this database yet.";
@@ -112,6 +118,40 @@ const mapRun = (r: Row): ContinuityRun => ({
   finalizedAt: iso(r.finalized_at),
   finalizedBy: r.finalized_by ? String(r.finalized_by) : null,
   finalizeNote: String(r.finalize_note ?? ""),
+});
+
+const mapTransitionRun = (r: Row): TransitionContinuityRun => ({
+  ...mapRun(r),
+  subjectKind: "transition",
+  attemptId: null,
+  subjectAssetId: null,
+  originalAssetId: null,
+});
+
+const persistedSide = (v: unknown, which: "left" | "right"): PersistedCutSide => {
+  const side = v as PersistedCutSide | null;
+  if (!side || typeof side !== "object" || side.version !== "cut-side-snapshot-v1" || side.side !== which)
+    throw new Error(`Malformed persisted ${which} cut side.`);
+  return side;
+};
+
+const mapTransitionSubject = (r: Row): TransitionSubject => ({
+  runId: String(r.run_id),
+  projectId: String(r.project_id),
+  editId: String(r.edit_id),
+  episodeId: String(r.episode_id),
+  editRevision: Number(r.edit_revision),
+  transitionKey: String(r.transition_key),
+  runNumber: Number(r.run_number),
+  leftItemId: String(r.left_item_id),
+  rightItemId: String(r.right_item_id),
+  leftShotId: String(r.left_shot_id),
+  rightShotId: String(r.right_shot_id),
+  leftSide: persistedSide(r.left_side, "left"),
+  rightSide: persistedSide(r.right_side, "right"),
+  crossesScene: Boolean(r.crosses_scene),
+  createdBy: r.created_by ? String(r.created_by) : null,
+  createdAt: iso(r.created_at)!,
 });
 
 const mapFinding = (r: Row): ContinuityFinding => ({
@@ -307,6 +347,12 @@ export class PostgresMediaQaData implements MediaQaRepository {
         [assetId],
       );
       if (runs.rowCount) out.push("a continuity review was run against it");
+      // 3A.4C: a transition run has no single subject Asset; its analysis job names its inputs
+      const transitionJobs = await c.query(
+        "select 1 from continuity_analysis_jobs where subject_kind = 'transition' and $1 = any (input_asset_ids) limit 1",
+        [assetId],
+      );
+      if (transitionJobs.rowCount) out.push("a sequence continuity analysis of a cut reads it");
       return out;
     });
   }
@@ -433,7 +479,7 @@ export class PostgresMediaQaData implements MediaQaRepository {
         ]);
         if (lock.rowCount === 0) throw new MediaQaError("not_found", "That attempt no longer exists.");
         const existing = await c.query(
-          "select * from continuity_runs where project_id = $1 and automation_key = $2",
+          "select * from continuity_runs where project_id = $1 and subject_kind = 'attempt' and automation_key = $2",
           [input.projectId, automationKey],
         );
         if (existing.rows[0]) return { run: (await this.views(c, existing.rows))[0]!, created: false };
@@ -445,7 +491,7 @@ export class PostgresMediaQaData implements MediaQaRepository {
         // a concurrent caller committed the same automatic run first: return it
         const again = await this.tx(async (c) => {
           const r = await c.query(
-            "select * from continuity_runs where project_id = $1 and automation_key = $2",
+            "select * from continuity_runs where project_id = $1 and subject_kind = 'attempt' and automation_key = $2",
             [input.projectId, automationKey],
           );
           return (await this.views(c, r.rows))[0] ?? null;
@@ -469,16 +515,16 @@ export class PostgresMediaQaData implements MediaQaRepository {
     ]);
     if (lock.rowCount === 0) throw new MediaQaError("not_found", "That attempt no longer exists.");
     const n = await c.query(
-      "select coalesce(max(run_number), 0) + 1 as n from continuity_runs where attempt_id = $1",
+      "select coalesce(max(run_number), 0) + 1 as n from continuity_runs where subject_kind = 'attempt' and attempt_id = $1",
       [input.attemptId],
     );
     const r = await c.query(
       `insert into continuity_runs
-           (project_id, attempt_id, run_number, subject_asset_id, original_asset_id, analyzer, analyzer_version,
+           (project_id, subject_kind, attempt_id, run_number, subject_asset_id, original_asset_id, analyzer, analyzer_version,
             analyzer_kind, rules_version, analysis_status, package_fingerprint, subject_fingerprint,
             criteria_fingerprint, reference_fingerprint, reference_set, created_by, created_at,
             analysis_plan, external_manifest, prompt_version, rubric_version, model${automationKey ? ", automation_key" : ""})
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17,
+         values ($1, 'attempt', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17,
                  $18::jsonb, $19::jsonb, $20, $21, $22${automationKey ? ", $23" : ""})
          returning *`,
       [
@@ -508,6 +554,17 @@ export class PostgresMediaQaData implements MediaQaRepository {
       ],
     );
     const run = r.rows[0] as Row;
+    await this.insertFindings(c, input.projectId, String(run.id), findings, input.now);
+    return (await this.views(c, [run]))[0]!;
+  }
+
+  private async insertFindings(
+    c: PoolClient,
+    projectId: string,
+    runId: string,
+    findings: NewFinding[],
+    now: string,
+  ) {
     for (const f of findings) {
       await c.query(
         `insert into continuity_findings
@@ -515,8 +572,8 @@ export class PostgresMediaQaData implements MediaQaRepository {
               result_source, confidence, notes, evidence, position, created_at)
            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16)`,
         [
-          input.projectId,
-          run.id,
+          projectId,
+          runId,
           f.criterionKey,
           f.category,
           f.severity,
@@ -530,16 +587,172 @@ export class PostgresMediaQaData implements MediaQaRepository {
           f.notes,
           JSON.stringify(f.evidence),
           f.position,
-          input.now,
+          now,
         ],
       );
     }
-    return (await this.views(c, [run]))[0]!;
+  }
+
+  // ───────────────────────── transition runs (3A.4C) ─────────────────────────
+
+  private async transitionViews(c: PoolClient, runRows: Row[]): Promise<TransitionRunView[]> {
+    if (runRows.length === 0) return [];
+    const views = await this.views(c, runRows);
+    const subjects = await c.query(
+      "select * from continuity_transition_subjects where run_id = any($1::uuid[])",
+      [runRows.map((r) => String(r.id))],
+    );
+    return views.map((v, i) => {
+      const subject = subjects.rows.find((x) => String(x.run_id) === v.run.id);
+      if (!subject) throw new Error(`Transition run ${v.run.id} has no subject (database invariant broken).`);
+      return {
+        run: mapTransitionRun(runRows[i]!),
+        subject: mapTransitionSubject(subject),
+        findings: v.findings,
+      };
+    });
+  }
+
+  async createTransitionRun(input: NewTransitionRun): Promise<TransitionRunView> {
+    return this.tx(async (c) => {
+      const s = input.subject;
+      // the live cut: the edit row is held FOR SHARE (an edit mutation takes it FOR UPDATE), so the adjacency
+      // validated here is the adjacency at commit
+      const edit = await c.query(
+        "select id, project_id, episode_id, revision from episode_edits where id = $1 for share",
+        [s.editId],
+      );
+      const items = edit.rows[0]
+        ? (
+            await c.query("select id, shot_id from episode_edit_items where edit_id = $1 order by position", [
+              s.editId,
+            ])
+          ).rows
+        : [];
+      const refusal = transitionRunRefusal(
+        edit.rows[0]
+          ? {
+              id: String(edit.rows[0].id),
+              projectId: String(edit.rows[0].project_id),
+              episodeId: String(edit.rows[0].episode_id),
+              revision: Number(edit.rows[0].revision),
+              items: items.map((r) => ({ id: String(r.id), shotId: String(r.shot_id) })),
+            }
+          : null,
+        input,
+      );
+      if (refusal) throw refusal;
+      // numbering per (project, transition key): serialised by a transaction-scoped advisory lock on that key
+      await c.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        `prism:transition-run:${input.projectId}:${s.transitionKey}`,
+      ]);
+      const n = Number(
+        (
+          await c.query(
+            `select coalesce(max(run_number), 0) + 1 as n from continuity_transition_subjects
+             where project_id = $1 and transition_key = $2`,
+            [input.projectId, s.transitionKey],
+          )
+        ).rows[0].n,
+      );
+      const run = (
+        await c.query(
+          `insert into continuity_runs
+             (project_id, subject_kind, attempt_id, run_number, subject_asset_id, original_asset_id, analyzer,
+              analyzer_version, analyzer_kind, rules_version, analysis_status, package_fingerprint,
+              subject_fingerprint, criteria_fingerprint, reference_fingerprint, reference_set, created_by, created_at,
+              completed_at)
+           values ($1, 'transition', null, $2, null, null, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13,
+                   $14, case when $7 in ('complete', 'failed') then $14::timestamptz end)
+           returning *`,
+          [
+            input.projectId,
+            n,
+            input.analyzer,
+            input.analyzerVersion,
+            input.analyzerKind,
+            input.rulesVersion,
+            input.analysisStatus,
+            // a cut has no generation package: its package identity is its address
+            s.transitionKey,
+            input.subjectFingerprint,
+            input.criteriaFingerprint,
+            input.referenceFingerprint,
+            JSON.stringify(input.referenceSet),
+            input.createdBy,
+            input.now,
+          ],
+        )
+      ).rows[0] as Row;
+      await c.query(
+        `insert into continuity_transition_subjects
+           (run_id, project_id, edit_id, episode_id, edit_revision, transition_key, run_number, left_item_id,
+            right_item_id, left_shot_id, right_shot_id, left_side, right_side, crosses_scene, created_by, created_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14, $15, $16)`,
+        [
+          run.id,
+          input.projectId,
+          s.editId,
+          s.episodeId,
+          s.editRevision,
+          s.transitionKey,
+          n,
+          s.leftItemId,
+          s.rightItemId,
+          s.leftShotId,
+          s.rightShotId,
+          JSON.stringify(s.leftSide),
+          JSON.stringify(s.rightSide),
+          s.crossesScene,
+          input.createdBy,
+          input.now,
+        ],
+      );
+      await this.insertFindings(c, input.projectId, String(run.id), input.findings, input.now);
+      return (await this.transitionViews(c, [run]))[0]!;
+    });
+  }
+
+  async getTransitionRun(runId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query("select * from continuity_runs where id = $1 and subject_kind = 'transition'", [
+        runId,
+      ]);
+      return (await this.transitionViews(c, r.rows))[0] ?? null;
+    });
+  }
+
+  async listTransitionRuns(projectId: string, transitionKey: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        `select r.* from continuity_runs r
+           join continuity_transition_subjects s on s.run_id = r.id
+         where r.project_id = $1 and r.subject_kind = 'transition' and s.transition_key = $2
+         order by s.run_number desc`,
+        [projectId, transitionKey],
+      );
+      return this.transitionViews(c, r.rows);
+    });
+  }
+
+  async listLatestEditTransitionRuns(projectId: string, editId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        `select distinct on (s.transition_key) r.* from continuity_runs r
+           join continuity_transition_subjects s on s.run_id = r.id
+         where r.project_id = $1 and r.subject_kind = 'transition' and s.edit_id = $2
+         order by s.transition_key, s.run_number desc`,
+        [projectId, editId],
+      );
+      return this.transitionViews(c, r.rows);
+    });
   }
 
   async getRun(runId: string) {
     return this.tx(async (c) => {
-      const r = await c.query("select * from continuity_runs where id = $1", [runId]);
+      const r = await c.query("select * from continuity_runs where id = $1 and subject_kind = 'attempt'", [
+        runId,
+      ]);
       return (await this.views(c, r.rows))[0] ?? null;
     });
   }
@@ -547,7 +760,7 @@ export class PostgresMediaQaData implements MediaQaRepository {
   async listAttemptRuns(attemptId: string) {
     return this.tx(async (c) => {
       const r = await c.query(
-        "select * from continuity_runs where attempt_id = $1 order by run_number desc",
+        "select * from continuity_runs where subject_kind = 'attempt' and attempt_id = $1 order by run_number desc",
         [attemptId],
       );
       return this.views(c, r.rows);
@@ -558,7 +771,7 @@ export class PostgresMediaQaData implements MediaQaRepository {
     return this.tx(async (c) => {
       const r = await c.query(
         `select distinct on (attempt_id) * from continuity_runs
-         where project_id = $1 order by attempt_id, run_number desc`,
+         where project_id = $1 and subject_kind = 'attempt' order by attempt_id, run_number desc`,
         [projectId],
       );
       return this.views(c, r.rows);
@@ -570,7 +783,7 @@ export class PostgresMediaQaData implements MediaQaRepository {
       const r = await c.query(
         `update continuity_runs set analysis_status = $2, analysis_error = $3,
            completed_at = case when $2 in ('complete', 'failed') then $4::timestamptz else completed_at end
-         where id = $1 returning *`,
+         where id = $1 and subject_kind = 'attempt' returning *`,
         [runId, status, error, now],
       );
       return r.rows[0] ? mapRun(r.rows[0]) : null;
@@ -579,9 +792,10 @@ export class PostgresMediaQaData implements MediaQaRepository {
 
   async applyAnalysis(runId: string, results: Parameters<MediaQaRepository["applyAnalysis"]>[1]) {
     await this.tx(async (c) => {
-      const run = await c.query("select analysis_status from continuity_runs where id = $1 for update", [
-        runId,
-      ]);
+      const run = await c.query(
+        "select analysis_status from continuity_runs where id = $1 and subject_kind = 'attempt' for update",
+        [runId],
+      );
       if (run.rowCount === 0) throw new MediaQaError("not_found", "That QA run no longer exists.");
       if (run.rows[0].analysis_status === "complete") {
         throw new MediaQaError(
@@ -626,9 +840,10 @@ export class PostgresMediaQaData implements MediaQaRepository {
 
   async finalizeRun(runId: string, input: { by: string | null; note: string; now: string }) {
     return this.tx(async (c) => {
-      const cur = await c.query("select analysis_status from continuity_runs where id = $1 for update", [
-        runId,
-      ]);
+      const cur = await c.query(
+        "select analysis_status from continuity_runs where id = $1 and subject_kind = 'attempt' for update",
+        [runId],
+      );
       if (cur.rowCount === 0) return null;
       if (!["complete", "failed"].includes(cur.rows[0].analysis_status)) {
         throw new MediaQaError(
@@ -654,11 +869,14 @@ export class PostgresMediaQaData implements MediaQaRepository {
       if (project.rowCount === 0) throw new MediaQaError("not_found", "That project no longer exists.");
 
       const replay = await c.query(
-        "select * from continuity_analysis_jobs where project_id = $1 and idempotency_key = $2",
+        "select * from continuity_analysis_jobs where project_id = $1 and subject_kind = 'attempt' and idempotency_key = $2",
         [r.projectId, input.job.idempotencyKey],
       );
       if (replay.rows[0]) {
-        const run = await c.query("select * from continuity_runs where id = $1", [replay.rows[0].run_id]);
+        const run = await c.query(
+          "select * from continuity_runs where id = $1 and subject_kind = 'attempt'",
+          [replay.rows[0].run_id],
+        );
         return {
           run: (await this.views(c, run.rows))[0]!,
           job: mapAnalysisJob(replay.rows[0]),
@@ -681,17 +899,17 @@ export class PostgresMediaQaData implements MediaQaRepository {
       ]);
       if (lock.rowCount === 0) throw new MediaQaError("not_found", "That attempt no longer exists.");
       const n = await c.query(
-        "select coalesce(max(run_number), 0) + 1 as n from continuity_runs where attempt_id = $1",
+        "select coalesce(max(run_number), 0) + 1 as n from continuity_runs where subject_kind = 'attempt' and attempt_id = $1",
         [r.attemptId],
       );
       const run = (
         await c.query(
           `insert into continuity_runs
-             (project_id, attempt_id, run_number, subject_asset_id, original_asset_id, analyzer, analyzer_version,
+             (project_id, subject_kind, attempt_id, run_number, subject_asset_id, original_asset_id, analyzer, analyzer_version,
               analyzer_kind, rules_version, analysis_status, package_fingerprint, subject_fingerprint,
               criteria_fingerprint, reference_fingerprint, reference_set, created_by, created_at,
               analysis_plan, external_manifest, prompt_version, rubric_version, model)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'queued', $10, $11, $12, $13, $14::jsonb, $15, $16,
+           values ($1, 'attempt', $2, $3, $4, $5, $6, $7, $8, $9, 'queued', $10, $11, $12, $13, $14::jsonb, $15, $16,
                    $17::jsonb, $18::jsonb, $19, $20, $21)
            returning *`,
           [
@@ -748,9 +966,9 @@ export class PostgresMediaQaData implements MediaQaRepository {
       const job = (
         await c.query(
           `insert into continuity_analysis_jobs
-             (project_id, run_id, attempt_id, analyzer, model, status, input_snapshot, input_asset_ids,
+             (project_id, subject_kind, run_id, attempt_id, analyzer, model, status, input_snapshot, input_asset_ids,
               idempotency_key, next_run_at, max_attempts, batches_total, estimated_cost_usd, created_by, created_at)
-           values ($1, $2, $3, $4, $5, 'queued', $6::jsonb, $7::uuid[], $8, $9, $10, $11, $12, $13, $9)
+           values ($1, 'attempt', $2, $3, $4, $5, 'queued', $6::jsonb, $7::uuid[], $8, $9, $10, $11, $12, $13, $9)
            returning *`,
           [
             r.projectId,
@@ -797,7 +1015,10 @@ export class PostgresMediaQaData implements MediaQaRepository {
 
   async getAnalysisJob(jobId: string) {
     return this.tx(async (c) => {
-      const r = await c.query("select * from continuity_analysis_jobs where id = $1", [jobId]);
+      const r = await c.query(
+        "select * from continuity_analysis_jobs where id = $1 and subject_kind = 'attempt'",
+        [jobId],
+      );
       return r.rows[0] ? mapAnalysisJob(r.rows[0]) : null;
     });
   }
@@ -805,7 +1026,7 @@ export class PostgresMediaQaData implements MediaQaRepository {
   async listAttemptAnalysisJobs(attemptId: string) {
     return this.tx(async (c) => {
       const r = await c.query(
-        "select * from continuity_analysis_jobs where attempt_id = $1 order by created_at desc",
+        "select * from continuity_analysis_jobs where subject_kind = 'attempt' and attempt_id = $1 order by created_at desc",
         [attemptId],
       );
       return r.rows.map(mapAnalysisJob);
@@ -815,7 +1036,7 @@ export class PostgresMediaQaData implements MediaQaRepository {
   async listActiveProjectAnalysisJobs(projectId: string) {
     return this.tx(async (c) => {
       const r = await c.query(
-        `select * from continuity_analysis_jobs where project_id = $1 and status in (${activeList})`,
+        `select * from continuity_analysis_jobs where project_id = $1 and subject_kind = 'attempt' and status in (${activeList})`,
         [projectId],
       );
       return r.rows.map(mapAnalysisJob);
@@ -851,8 +1072,12 @@ export class PostgresMediaQaData implements MediaQaRepository {
 
   async requestAnalysisCancel(jobId: string, now: string) {
     return this.tx(async (c) => {
-      const cur = (await c.query("select * from continuity_analysis_jobs where id = $1 for update", [jobId]))
-        .rows[0];
+      const cur = (
+        await c.query(
+          "select * from continuity_analysis_jobs where id = $1 and subject_kind = 'attempt' for update",
+          [jobId],
+        )
+      ).rows[0];
       if (!cur) return null;
       const job = mapAnalysisJob(cur);
       if (["succeeded", "failed", "cancelled", "cancel_requested"].includes(job.status)) return job;

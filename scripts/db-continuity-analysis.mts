@@ -361,6 +361,15 @@ try {
     "worker connection is the dedicated role (not SET ROLE)",
     who.rows[0]?.u === "prism_continuity_worker" && who.rows[0]?.s === "prism_continuity_worker",
   );
+  // Phase 3A.4C (0046): the worker gains nothing: no transition subject, no subject kind beyond its column grants
+  if ((await pool.query("select to_regclass('public.continuity_transition_subjects') as t")).rows[0].t) {
+    const subjects = await sqlAs(wpool, "select count(*) from continuity_transition_subjects");
+    check(
+      "the worker (real login) cannot read transition subjects (0046)",
+      /permission denied/.test(subjects.error),
+      subjects.error,
+    );
+  }
   const now0 = new Date();
   const [c1, c2] = await Promise.all([
     worker.claim({ workerId: "w1", now: now0.toISOString(), leaseMs: 30_000, limit: 5 }),

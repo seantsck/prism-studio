@@ -1,11 +1,13 @@
 # Sequence Continuity Supervisor (Phase 3A.4)
 
-**Status: architecture accepted; 3A.4A–B implemented; 3A.4C–F pending (2026-10-29).** The owner reviewed this
+**Status: architecture accepted; 3A.4A–C implemented; 3A.4D–F pending (2026-10-29).** The owner reviewed this
 design and accepted it with fixes, and those fixes are applied below. The owner decisions are recorded in
 [§21](#21-owner-decisions-and-implementation-details). 3A.4A (the pure cut domain and deterministic projection,
-[§22](#3a4a-implementation-notes)) and 3A.4B (the deterministic Supervisor UI, [§22](#3a4b-implementation-notes))
-exist. There is still no persistence, migration, provider mode, provider call, media derivation or calibration for
-3A.4. Each implementation slice ([§22](#22-implementation-slices)) is its own gate.
+[§22](#3a4a-implementation-notes)), 3A.4B (the deterministic Supervisor UI, [§22](#3a4b-implementation-notes)) and
+3A.4C (migration 0046: transition persistence and predecessor-bound cut intent, [§22](#3a4c-implementation-notes))
+exist. 0046 is verified on a disposable local database only and is **not applied to hosted**. There is still no
+semantic transition analysis, provider mode, provider call, media derivation or calibration for 3A.4. Each
+implementation slice ([§22](#22-implementation-slices)) is its own gate.
 
 **Question it answers:** _does this cut work as continuity?_ In other words, does Shot B continue Shot A correctly at
 the cut that actually exists in the Episode Edit, as opposed to each Shot satisfying its own truth?
@@ -531,8 +533,10 @@ them.**
    freezes it. The worker's column grants are unchanged (it needs neither field).
 3. **New table `continuity_transition_subjects`** (1:1 with a transition run):
    - `run_id` (unique, FK `(run_id, project_id)` → runs, on delete cascade), `project_id`;
-   - `edit_id` (FK `(edit_id, project_id)` → `episode_edits`, on delete cascade), `episode_id`, `edit_revision`
-     (audit only), `transition_key`, `run_number`;
+   - `edit_id`, `episode_id`, `edit_revision` (audit only), `transition_key`, `run_number`. **3A.4C correction:**
+     `edit_id` is NOT a cascading key to `episode_edits` (deleting the live edit would delete the subject and leave
+     its run without one, breaking the exactly-one invariant); like the item / Shot ids it is recorded history, see
+     [3A.4C notes](#3a4c-implementation-notes);
    - `left_item_id`, `right_item_id`, `left_shot_id`, `right_shot_id`;
    - `left_side jsonb`, `right_side jsonb` (kind, attempt, Asset, parent checksum, window, edge-still Asset);
    - `crosses_scene`, `created_at`, `created_by`;
@@ -861,7 +865,7 @@ behaviour.
 
 ## 22. Implementation slices
 
-Each slice is separately reviewed and gated. 3A.4A and 3A.4B are implemented; 3A.4C–F have not started.
+Each slice is separately reviewed and gated. 3A.4A, 3A.4B and 3A.4C are implemented; 3A.4D–F have not started.
 
 | Slice     | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Migration           | Paid / live calls           |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------- |
@@ -984,6 +988,89 @@ declared-truth comparison). Both are pure.
   work keeps the default and still starts its worker (`src/server/__tests__/read-only-repos.test.ts` proves both).
 - **Not built in 3A.4B:** transition-run or cut-intent persistence, migrations, semantic analysis, provider mode or
   capability, media derivation and automatic reconciliation.
+
+### 3A.4C implementation notes
+
+Migration `0046_sequence_continuity_persistence.sql` (forward-only, one transaction through the migration runner;
+**not applied to hosted** in 3A.4C). Verified on a disposable local PostgreSQL 17 with the real `db:*` scripts
+([local-supabase](local-supabase.md#disposable-local-database-unapplied-migrations)).
+
+- **Subject kind.** `continuity_runs.subject_kind` and `continuity_analysis_jobs.subject_kind`
+  (`'attempt' | 'transition'`, `not null default 'attempt'`): every existing row is `attempt` and is otherwise
+  byte-for-byte unchanged (proved: runs, findings, overrides, jobs, costs and events snapshotted at 0045 and compared
+  after 0046). `attempt_id` / `subject_asset_id` became nullable, with CHECK `continuity_runs_subject_shape`: an
+  attempt run has its attempt and subject Asset; a transition run has neither, nor an original Asset. Jobs:
+  `continuity_analysis_jobs_subject_shape` (attempt job names its attempt, a transition job does not). The kind-aware
+  key `continuity_runs (id, project_id, subject_kind)` is referenced by the job (`continuity_analysis_jobs_run_kind_fkey`)
+  and by the subject, so an attempt job can never point at a transition run nor the reverse.
+- **Guards.** `guard_continuity_run` keeps every field 0021 / 0022 / 0044 froze (project, attempt, run number,
+  subject / original Asset, analyzer, version, kind, rules version, the package / subject / criteria / reference
+  fingerprints, reference set, analysis plan, external manifest, prompt, rubric, model, automation key) and adds
+  `subject_kind`; `guard_continuity_analysis_job` keeps its 0022 fields and adds `subject_kind`. All 29 are tested.
+- **`continuity_transition_subjects`** (1:1 with a transition run): `run_id` (primary key), `project_id`, constant
+  `subject_kind = 'transition'`, `edit_id`, `episode_id`, `edit_revision` (audit), `transition_key` (64 hex),
+  `run_number`, `left_item_id`, `right_item_id`, `left_shot_id`, `right_shot_id`, `left_side` / `right_side`
+  (objects: `PersistedCutSide`, `cut-side-snapshot-v1`: the pinned picture, edge window and edge-still DESCRIPTORS, the
+  side's subject fingerprint, usability and references; no derived edge Asset exists), `crosses_scene`,
+  `created_by`, `created_at`. Keys: `(run_id, project_id, subject_kind)` → runs **on delete cascade** (a subject goes
+  with its run, never the reverse), `project_id` → projects, `unique (project_id, transition_key, run_number)`. The
+  edit / Episode / item / Shot ids are **historical identifiers, not keys**: the repository validates them against the
+  live edit when the run is created (edit exists in the Project and Episode, the two items adjacent left → right,
+  their Shots, the transition key of that address); afterwards a reorder, an item removal or deleting the edit never
+  rewrites or removes the history. Immutable (update trigger; no UPDATE / DELETE grant).
+- **Exactly one subject, at commit.** Deferrable constraint triggers (`continuity_runs_subject_check`,
+  `continuity_transition_subjects_run_check`): a transition run has exactly one subject carrying its own run number;
+  an attempt run has none (structurally impossible already). A run and its subject are written in one unit.
+- **Numbering.** Per `(project, transition_key)`, stored on the subject; the run's `run_number` equals it. Postgres
+  serialises allocation with a transaction-scoped advisory lock on that key (and holds the edit row `FOR SHARE`, so
+  the adjacency checked is the adjacency at commit); concurrent creations get distinct sequential numbers (tested).
+  Shot numbering (`unique (attempt_id, run_number)`) is untouched.
+- **Grants.** Explicit (post-0045 policy): `authenticated` SELECT and INSERT only, owner RLS policies for both; no
+  UPDATE / DELETE; nothing for `anon`, `prism_generation_worker` or `prism_continuity_worker`. Existing run / finding /
+  override / job owner policies and the continuity worker's column grants are unchanged.
+- **Shot-query isolation.** Every Shot query over runs and jobs constrains `subject_kind = 'attempt'`: `getRun`,
+  `listAttemptRuns`, `listLatestProjectRuns` (distinct on attempt), both Shot run-number allocators, the automation-key
+  lookups, `setAnalysisStatus`, `applyAnalysis`, `finalizeRun`, the job replay, `getAnalysisJob`,
+  `listAttemptAnalysisJobs`, `listActiveProjectAnalysisJobs`, `requestAnalysisCancel`, and the analysis worker's
+  `claim` (it executes Shot jobs only; a transition job waits for 3A.4D). Deliberately generic: the Project's
+  active-job limit (one shared quota), the spend total, `assetPins`, and operator status counts. The TypeScript Shot
+  types stay attempt-only (`ContinuityRun`, `AnalysisJob`: non-null attempt / subject Asset);
+  `TransitionContinuityRun` / `TransitionRunView` are separate. Memory keeps transition runs in their own collection.
+- **Asset pins.** An Asset named in a transition job's `input_asset_ids` is in use ("a sequence continuity analysis
+  of a cut reads it"); attempt runs keep pinning their subject / original Asset; Shot job reference inputs stay as
+  before.
+- **Repository API (structurally ready, not used by any page).** `createTransitionRun`, `getTransitionRun`,
+  `listTransitionRuns(project, key)`, `listLatestEditTransitionRuns(project, edit)`, memory and Postgres with the same
+  refusals (`src/data/transition-runs.ts`). `recordTransitionRun` (`src/continuity/sequence-runs.ts`) rebuilds the cut
+  from the re-read edit and refuses when its subject / criteria / reference fingerprints or rules differ from what was
+  reviewed (no silent refresh); it freezes the deterministic projection as findings. Nothing in 3A.4C creates a
+  transition run from the UI; the Supervisor still computes deterministic QA on read.
+- **Cut intent persisted.** `episode_edit_items.incoming_cut_intent jsonb null` on the RIGHT item: `{fromItemId,
+kinds, scope, note, declaredBy, declaredAt}` (the 3A.4A type, now `src/domain/continuity/cut-intent.ts`, shared by
+  the Episode Edit model and the cut domain). CHECK `episode_cut_intent_valid` (immutable; `false`, never NULL, for a
+  missing field, since a CHECK passes on NULL): object, known keys only, a uuid `fromItemId`, 1–10 distinct known
+  kinds, distinct known categories, a trimmed note of 1–2,000 characters, `declaredBy` null or uuid, ISO `declaredAt`.
+  Deferred constraint trigger `episode_edit_items_cut_intent_check`: at commit, every intent names the item at
+  `position - 1` and the first item has none, evaluated on the final order after any renumbering.
+- **Intent operations.** `set_cut_intent` (right item, the predecessor the person reviewed, kinds, scope, note; the
+  repository re-reads the edit and refuses a different predecessor as a conflict; `declaredBy` / `declaredAt` come from
+  the authenticated user and the server's clock) and `clear_cut_intent`. Both are ordinary edit changes: expected
+  revision, one transaction, revision +1, a stale revision writes nothing.
+- **Invalidation.** After applying a unit's ops, `applyEditOps` clears every intent whose predecessor changed (reorder,
+  add, remove, moved first), in the same unit, never retargeting it; the database rule is the final barrier.
+  Intent survives trims, source changes, hold, clip audio, performance changes and reruns. Moving an item away and
+  back does not restore a cleared intent.
+- **Intent is not freshness.** It is not part of any fingerprint (tested), never covers an edit fact (3A.4A
+  `intentCoverable`), and, with no transition run stored, never changes a cut's state: it shows as "This cut is
+  deliberate" with its kinds, scope and note, never as "Intentional discontinuity accepted".
+- **Supervisor.** Each cut row shows the declared intent (or none) and a compact form to declare / update or remove it:
+  the Supervisor's only write. A proposal has no intent. The Episode Edit stores and reads intent; it has no intent
+  panel.
+- **Deployment order.** The 3A.4C application queries `subject_kind` / `incoming_cut_intent`: it must not run against
+  a database without 0046 (apply 0046 at the hosted gate before using this build against hosted).
+- **Not built in 3A.4C:** semantic cross-cut analysis, the `sequence_transition` provider mode and `cross_cut`
+  capability, mode-scoped provider versions, media derivation, calibration, automatic reconciliation, migration 0047,
+  hosted application.
 
 ## 23. Out of scope for 3A.4
 

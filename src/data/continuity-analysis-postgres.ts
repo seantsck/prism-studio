@@ -71,7 +71,8 @@ export class PostgresAnalysisWorkerStore implements AnalysisWorkerStore {
         await c.query(
           `with due as (
              select id from continuity_analysis_jobs
-             where status in (${active}) and next_run_at <= $2::timestamptz
+             -- 3A.4C: this worker executes Shot (attempt) jobs; a transition job waits for its 3A.4D executor
+             where subject_kind = 'attempt' and status in (${active}) and next_run_at <= $2::timestamptz
                and (lease_token is null or lease_expires_at <= $2::timestamptz)
              order by next_run_at asc
              limit $4

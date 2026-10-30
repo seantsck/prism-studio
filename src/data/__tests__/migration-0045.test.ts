@@ -12,12 +12,13 @@ const sql = readFileSync(`${DIR}/0045_project_qa_direct_video.sql`, "utf8");
 const code = sql.replace(/--.*$/gm, ""); // statements only, no comments
 
 describe("migration 0045 — full-video consent for temporal Shot QA", () => {
-  it("is the latest migration, follows 0044, and leaves the applied 0044 byte-for-byte unchanged", () => {
+  it("follows 0044, leaves the applied 0044 byte-for-byte unchanged, and is itself unchanged since it was applied", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe("0045_project_qa_direct_video.sql");
-    expect(files.at(-2)).toBe("0044_shot_qa_automation.sql");
+    expect(files[files.indexOf("0045_project_qa_direct_video.sql") - 1]).toBe("0044_shot_qa_automation.sql");
+    // the ledger checksum of the hosted application (docs/migration-policy.md)
+    expect(checksumOf(sql)).toBe("44cc9360b867cc1d30b5fa8d758eca311f56b01d3485bb100d235c87d265d325");
     expect(checksumOf(readFileSync(`${DIR}/0044_shot_qa_automation.sql`, "utf8"))).toBe(
       "31abe729026e1c89b9590d9167b2d608b1747de4bae72fdf7bcdb7961b72dcd7",
     );

@@ -72,16 +72,39 @@ export function safeTarget(url) {
   }
 }
 
-export function assertProjectRef(url, what = "SUPABASE_DB_URL") {
+/**
+ * A DISPOSABLE LOCAL database (Phase 3A.4C verification of an unapplied migration without touching hosted): only when
+ * `PRISM_STUDIO_DISPOSABLE_DB=1` is set explicitly AND the host is loopback AND the database name starts with
+ * `prism_disposable`. Anything else must name the dedicated project. See docs/local-supabase.md.
+ */
+export function disposableLocalTarget(url, env = process.env) {
+  if (env.PRISM_STUDIO_DISPOSABLE_DB !== "1" || !url) return false;
+  try {
+    const u = new URL(url);
+    return (
+      ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname) &&
+      /^\/prism_disposable[a-z0-9_]*$/.test(u.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function assertProjectRef(url, what = "SUPABASE_DB_URL", env = process.env) {
   if (!url) throw new Error(`${what} is not set`);
+  if (disposableLocalTarget(url, env)) return;
   if (!url.includes(PRISM_STUDIO_REF))
     throw new Error(`${what} does not target Prism Studio project ${PRISM_STUDIO_REF}; refusing.`);
 }
 
 /** Prints the target banner. Call before the first statement that can mutate anything. */
-export function printBanner({ mode, url, devOwner = null, log = console.log }) {
+export function printBanner({ mode, url, devOwner = null, log = console.log, env = process.env }) {
   log("──────────────────────────────────────────────");
-  log(`Target Supabase project: ${PRISM_STUDIO_REF}`);
+  log(
+    disposableLocalTarget(url, env)
+      ? "Target:                  DISPOSABLE LOCAL DATABASE (not Supabase)"
+      : `Target Supabase project: ${PRISM_STUDIO_REF}`,
+  );
   log(`Database host:           ${safeTarget(url)}`);
   log(`Mode:                    ${mode}`);
   log(`Dev owner:               ${devOwner ?? "N/A"}`);
@@ -102,7 +125,7 @@ export function installRedactingHandlers() {
 /** One call for scripts: guard + banner + redacting handlers. Returns the validated connection string. */
 export function startScript({ mode, devOwner = null, env = process.env }) {
   installRedactingHandlers();
-  assertProjectRef(env.SUPABASE_DB_URL);
-  printBanner({ mode, url: env.SUPABASE_DB_URL, devOwner });
+  assertProjectRef(env.SUPABASE_DB_URL, "SUPABASE_DB_URL", env);
+  printBanner({ mode, url: env.SUPABASE_DB_URL, devOwner, env });
   return env.SUPABASE_DB_URL;
 }

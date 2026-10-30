@@ -11,6 +11,7 @@ import type {
 } from "@/domain/continuity/analysis/types";
 import type { ProjectQaPolicy, QaPolicyInput } from "@/domain/continuity/automation";
 import type { ContinuityCategory, ContinuityResult, ContinuitySeverity } from "@/domain/continuity/model";
+import type { PersistedCutSide } from "@/domain/continuity/sequence";
 
 /**
  * Persistence contract for derived media (lineage + delivery masters) and continuity QA runs.
@@ -80,6 +81,10 @@ export interface AttemptDelivery {
 export const ANALYSIS_STATUSES = ["queued", "running", "complete", "failed"] as const;
 export type AnalysisStatus = (typeof ANALYSIS_STATUSES)[number];
 
+/**
+ * A Shot (ATTEMPT) continuity run: `subject_kind = 'attempt'` (0046), so its attempt and subject Asset are never null.
+ * Every Shot repository method returns only attempt runs; a transition run is a `TransitionContinuityRun`.
+ */
 export interface ContinuityRun {
   id: string;
   projectId: string;
@@ -148,6 +153,67 @@ export interface ContinuityOverride {
 export interface ContinuityRunView {
   run: ContinuityRun;
   findings: Array<{ finding: ContinuityFinding; overrides: ContinuityOverride[] }>;
+}
+
+// ───────────────────────── transition runs (Phase 3A.4C) ─────────────────────────
+
+/** A CUT's continuity run (`subject_kind = 'transition'`): no Shot attempt and no single subject Asset. */
+export type TransitionContinuityRun = Omit<
+  ContinuityRun,
+  "attemptId" | "subjectAssetId" | "originalAssetId"
+> & {
+  subjectKind: "transition";
+  attemptId: null;
+  subjectAssetId: null;
+  originalAssetId: null;
+};
+
+/**
+ * The frozen subject of a transition run (`continuity_transition_subjects`). The edit / Episode / item / Shot ids are
+ * HISTORICAL: validated against the live edit when the run was created, never rewritten or cascaded afterwards.
+ */
+export interface TransitionSubject {
+  runId: string;
+  projectId: string;
+  editId: string;
+  episodeId: string;
+  /** the edit's revision when the run was created (audit only, never part of freshness) */
+  editRevision: number;
+  transitionKey: string;
+  /** numbered per (project, transition key) */
+  runNumber: number;
+  leftItemId: string;
+  rightItemId: string;
+  leftShotId: string;
+  rightShotId: string;
+  leftSide: PersistedCutSide;
+  rightSide: PersistedCutSide;
+  crossesScene: boolean;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export interface TransitionRunView {
+  run: TransitionContinuityRun;
+  subject: TransitionSubject;
+  findings: ContinuityRunView["findings"];
+}
+
+export interface NewTransitionRun {
+  projectId: string;
+  analyzer: string;
+  analyzerVersion: string;
+  analyzerKind: ContinuityRun["analyzerKind"];
+  rulesVersion: string;
+  analysisStatus: AnalysisStatus;
+  subjectFingerprint: string;
+  criteriaFingerprint: string;
+  referenceFingerprint: string;
+  referenceSet: Record<string, unknown>;
+  subject: Omit<TransitionSubject, "runId" | "projectId" | "runNumber" | "createdBy" | "createdAt">;
+  findings: NewFinding[];
+  createdBy: string | null;
+  now: string;
 }
 
 export type NewRun = Omit<
@@ -429,6 +495,17 @@ export interface MediaQaRepository {
   listAttemptRuns(attemptId: string): Promise<ContinuityRunView[]>;
   /** The most recent run per attempt for a project (QA dashboard / shot list). */
   listLatestProjectRuns(projectId: string): Promise<ContinuityRunView[]>;
+  // ── transition runs (3A.4C: structurally ready; nothing in 3A.4C creates one from the UI) ──
+  /**
+   * Freezes a transition run and its subject in one unit, numbered per (project, transition key) under a lock. Refused
+   * unless the live edit still has the two items adjacent, left → right, with the frozen Shots and transition key.
+   */
+  createTransitionRun(input: NewTransitionRun): Promise<TransitionRunView>;
+  getTransitionRun(runId: string): Promise<TransitionRunView | null>;
+  /** One cut's history, newest first. */
+  listTransitionRuns(projectId: string, transitionKey: string): Promise<TransitionRunView[]>;
+  /** The newest run of every cut recorded against an edit (historical edit id). */
+  listLatestEditTransitionRuns(projectId: string, editId: string): Promise<TransitionRunView[]>;
   setAnalysisStatus(
     runId: string,
     status: AnalysisStatus,

@@ -1,3 +1,4 @@
+import { cutIntentProblem, type CutIntent } from "@/domain/continuity/cut-intent";
 import { isEditRate } from "@/domain/edit/edit-rate";
 import {
   placeholderViolations,
@@ -76,7 +77,18 @@ export interface PlannedEdit {
   visualChanged: Set<string>;
   /** Items whose placements are new or changed (added, set_performance, clear_performance). */
   performanceChanged: Set<string>;
+  /** 3A.4C: items whose incoming cut intent was cleared because their predecessor changed (never retargeted). */
+  intentCleared: Set<string>;
 }
+
+/** Who declares a cut intent, and when: the authenticated user and the server's clock, never the request. */
+export interface OpContext {
+  userId: string | null;
+  now: string;
+}
+
+export const CUT_INTENT_PREDECESSOR_CHANGED_MESSAGE =
+  "This cut changed since you opened it (another item is now before it). Nothing was saved; reload and review the cut again.";
 
 const uniq = (xs: Iterable<string>) => [...new Set(xs)];
 
@@ -188,6 +200,7 @@ export function applyEditOps(
   ops: readonly EditOp[],
   facts: EditSourceFacts,
   newId: () => string,
+  ctx: OpContext = { userId: null, now: new Date().toISOString() },
 ): PlannedEdit {
   let items: EditItem[] = structuredClone(current.items);
   const visualChanged = new Set<string>();
@@ -208,6 +221,7 @@ export function applyEditOps(
           sourceAudio: op.item.sourceAudio ?? "muted",
           performance: ordered(op.item.performance),
           performanceBasis: basisOf(op.item.performanceBasis),
+          incomingCutIntent: null,
         };
         items.splice(op.atPosition, 0, item);
         visualChanged.add(item.id);
@@ -307,9 +321,53 @@ export function applyEditOps(
         replace({ ...itemOf(items, op.itemId), performance: [] });
         performanceChanged.add(op.itemId);
         break;
+      case "set_cut_intent": {
+        const item = itemOf(items, op.itemId);
+        const index = items.indexOf(item);
+        if (index === 0)
+          throw new EpisodeEditError("invalid", "The first item of the edit has no incoming cut.");
+        if (items[index - 1]!.id !== op.expectedPredecessorId)
+          throw new EpisodeEditError("conflict", CUT_INTENT_PREDECESSOR_CHANGED_MESSAGE);
+        const intent: CutIntent = {
+          fromItemId: op.expectedPredecessorId,
+          kinds: [...op.kinds],
+          scope: [...op.scope],
+          note: op.note.trim(),
+          declaredBy: ctx.userId,
+          declaredAt: ctx.now,
+        };
+        const problem = cutIntentProblem(intent);
+        if (problem)
+          throw new EpisodeEditError(
+            "invalid",
+            problem === "kinds"
+              ? "Choose at least one kind of intentional discontinuity."
+              : problem === "note"
+                ? "Say why the cut is deliberate (up to 2,000 characters)."
+                : "That cut intent is not valid.",
+          );
+        replace({ ...item, incomingCutIntent: intent });
+        break;
+      }
+      case "clear_cut_intent": {
+        const item = itemOf(items, op.itemId);
+        if (!item.incomingCutIntent)
+          throw new EpisodeEditError("invalid", "This cut has no declared intent.");
+        replace({ ...item, incomingCutIntent: null });
+        break;
+      }
     }
   }
-  return { next: { ...current, items }, visualChanged, performanceChanged };
+  // 3A.4C: an intent is bound to the cut it was declared against. When an item's predecessor changed (reorder, add,
+  // remove, moved first) its intent no longer describes this cut: clear it in the same unit, never retarget it.
+  const intentCleared = new Set<string>();
+  items = items.map((item, index) => {
+    const intent = item.incomingCutIntent;
+    if (!intent || (index > 0 && items[index - 1]!.id === intent.fromItemId)) return item;
+    intentCleared.add(item.id);
+    return { ...item, incomingCutIntent: null };
+  });
+  return { next: { ...current, items }, visualChanged, performanceChanged, intentCleared };
 }
 
 const SHAPE_TEXT: Record<EditShapeViolation["code"], string> = {
@@ -344,6 +402,14 @@ export function assertEditValid(
       shape[0].code === "duplicate_shot" ? "conflict" : "invalid",
       SHAPE_TEXT[shape[0].code],
     );
+  // the database's final-state rule (0046), checked in code too so memory refuses what Postgres refuses
+  for (const [index, item] of plan.next.items.entries()) {
+    const intent = item.incomingCutIntent;
+    if (!intent) continue;
+    if (cutIntentProblem(intent)) throw new EpisodeEditError("invalid", "That cut intent is not valid.");
+    if (index === 0 || plan.next.items[index - 1]!.id !== intent.fromItemId)
+      throw new EpisodeEditError("invalid", "A cut intent must name the item immediately before it.");
+  }
 
   const clip: ClipSourceData = { ...facts.clip, project: { id: edit.projectId } };
   for (const item of plan.next.items) {

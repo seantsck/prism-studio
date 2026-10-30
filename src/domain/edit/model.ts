@@ -1,3 +1,4 @@
+import type { CutIntent } from "../continuity/cut-intent";
 import { isEditRate, type EditRate } from "./edit-rate";
 
 /**
@@ -70,6 +71,11 @@ export interface EditItem {
   sourceAudio: SourceAudio;
   performance: AudioPlacement[];
   performanceBasis: PlacementBasis | null;
+  /**
+   * Phase 3A.4C: a person's deliberate-discontinuity declaration for the cut INTO this item, bound to the predecessor
+   * it names (`fromItemId`). Absent / null = none. Never on the first item; cleared when the predecessor changes.
+   */
+  incomingCutIntent?: CutIntent | null;
 }
 
 export interface EpisodeEdit {

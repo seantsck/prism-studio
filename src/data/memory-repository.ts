@@ -38,6 +38,7 @@ export class MemoryRepository implements Repository {
     this.mediaQaService ??= new MemoryMediaQaService({
       all: () => [...this.projects.values()],
       ownerUserId: () => LOCAL_USER_ID,
+      edits: () => this.episodeEdits,
     });
     return this.mediaQaService;
   }

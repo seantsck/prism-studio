@@ -11,7 +11,9 @@ import {
   type ProjectQaPolicy,
   type QaPolicyInput,
 } from "@/domain/continuity/automation";
+import type { EpisodeEdit } from "@/domain/edit/model";
 import type { MemoryProjectsAccess } from "./generation-memory";
+import { transitionRunRefusal } from "./transition-runs";
 import {
   AnalysisLeaseLostError,
   MediaQaError,
@@ -37,6 +39,10 @@ import {
   type NewDerivation,
   type NewFinding,
   type NewRun,
+  type NewTransitionRun,
+  type TransitionContinuityRun,
+  type TransitionRunView,
+  type TransitionSubject,
 } from "./media-qa-repository";
 
 const clone = <T>(v: T): T => structuredClone(v);
@@ -56,8 +62,19 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
   private findings: ContinuityFinding[] = [];
   private overrides: ContinuityOverride[] = [];
   private qaPolicies = new Map<string, ProjectQaPolicy>();
+  /**
+   * 3A.4C transition runs and their frozen subjects: kept apart from `runs` (the attempt runs), so no Shot path can
+   * ever list, number, project or pin from them. Their findings live in `findings`, addressed by run id only.
+   */
+  private transitionRuns: TransitionContinuityRun[] = [];
+  private transitionSubjects: TransitionSubject[] = [];
 
-  constructor(private readonly access: MemoryProjectsAccess) {}
+  constructor(
+    private readonly access: MemoryProjectsAccess & {
+      /** the live Episode edits (3A.4C: a transition run is validated against the edit it names) */
+      edits?: () => { get(projectId: string, editId: string): Promise<EpisodeEdit | null> };
+    },
+  ) {}
 
   private assetById(id: string): Asset | null {
     for (const p of this.access.all()) {
@@ -251,6 +268,128 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
   async getRun(runId: string) {
     const r = this.runs.find((x) => x.id === runId);
     return r ? this.view(r) : null;
+  }
+
+  // ───────────────────────── transition runs (3A.4C) ─────────────────────────
+
+  private transitionView(run: TransitionContinuityRun): TransitionRunView {
+    const subject = this.transitionSubjects.find((s) => s.runId === run.id);
+    if (!subject) throw new Error(`Transition run ${run.id} has no subject (invariant broken).`);
+    const findings = this.findings
+      .filter((f) => f.runId === run.id)
+      .sort((a, b) => a.position - b.position)
+      .map((finding) => ({
+        finding: clone(finding),
+        overrides: this.overrides
+          .filter((o) => o.findingId === finding.id)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .map(clone),
+      }));
+    return { run: clone(run), subject: clone(subject), findings };
+  }
+
+  async createTransitionRun(input: NewTransitionRun): Promise<TransitionRunView> {
+    const s = input.subject;
+    const edit = (await this.access.edits?.().get(input.projectId, s.editId)) ?? null;
+    // ── synchronous from here: the adjacency checked is the adjacency written, and numbering cannot interleave ──
+    const refusal = transitionRunRefusal(
+      edit && {
+        id: edit.id,
+        projectId: edit.projectId,
+        episodeId: edit.episodeId,
+        revision: edit.revision,
+        items: edit.items.map((i) => ({ id: i.id, shotId: i.shotId })),
+      },
+      input,
+    );
+    if (refusal) throw refusal;
+    const runNumber =
+      Math.max(
+        0,
+        ...this.transitionSubjects
+          .filter((x) => x.projectId === input.projectId && x.transitionKey === s.transitionKey)
+          .map((x) => x.runNumber),
+      ) + 1;
+    const done = input.analysisStatus === "complete" || input.analysisStatus === "failed";
+    const run: TransitionContinuityRun = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      subjectKind: "transition",
+      attemptId: null,
+      subjectAssetId: null,
+      originalAssetId: null,
+      runNumber,
+      analyzer: input.analyzer,
+      analyzerVersion: input.analyzerVersion,
+      analyzerKind: input.analyzerKind,
+      rulesVersion: input.rulesVersion,
+      analysisStatus: input.analysisStatus,
+      analysisError: "",
+      // a cut has no generation package: its package identity is its address
+      packageFingerprint: s.transitionKey,
+      subjectFingerprint: input.subjectFingerprint,
+      criteriaFingerprint: input.criteriaFingerprint,
+      referenceFingerprint: input.referenceFingerprint,
+      referenceSet: clone(input.referenceSet),
+      analysisPlan: null,
+      externalManifest: null,
+      promptVersion: null,
+      rubricVersion: null,
+      model: null,
+      automationKey: null,
+      createdBy: input.createdBy,
+      createdAt: input.now,
+      completedAt: done ? input.now : null,
+      finalizedAt: null,
+      finalizedBy: null,
+      finalizeNote: "",
+    };
+    this.transitionRuns.push(run);
+    this.transitionSubjects.push({
+      ...clone(s),
+      runId: run.id,
+      projectId: input.projectId,
+      runNumber,
+      createdBy: input.createdBy,
+      createdAt: input.now,
+    });
+    for (const f of input.findings)
+      this.findings.push({
+        ...clone(f),
+        id: randomUUID(),
+        runId: run.id,
+        projectId: run.projectId,
+        createdAt: input.now,
+      });
+    return this.transitionView(run);
+  }
+
+  async getTransitionRun(runId: string) {
+    const r = this.transitionRuns.find((x) => x.id === runId);
+    return r ? this.transitionView(r) : null;
+  }
+
+  async listTransitionRuns(projectId: string, transitionKey: string) {
+    const ids = new Set(
+      this.transitionSubjects
+        .filter((s) => s.projectId === projectId && s.transitionKey === transitionKey)
+        .map((s) => s.runId),
+    );
+    return this.transitionRuns
+      .filter((r) => ids.has(r.id))
+      .sort((a, b) => b.runNumber - a.runNumber)
+      .map((r) => this.transitionView(r));
+  }
+
+  async listLatestEditTransitionRuns(projectId: string, editId: string) {
+    const latest = new Map<string, TransitionSubject>();
+    for (const s of this.transitionSubjects.filter((x) => x.projectId === projectId && x.editId === editId)) {
+      const cur = latest.get(s.transitionKey);
+      if (!cur || s.runNumber > cur.runNumber) latest.set(s.transitionKey, s);
+    }
+    return [...latest.values()]
+      .sort((a, b) => (a.transitionKey < b.transitionKey ? -1 : 1))
+      .map((s) => this.transitionView(this.transitionRuns.find((r) => r.id === s.runId)!));
   }
 
   async listAttemptRuns(attemptId: string) {
