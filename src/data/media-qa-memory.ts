@@ -11,13 +11,16 @@ import {
   type ProjectQaPolicy,
   type QaPolicyInput,
 } from "@/domain/continuity/automation";
+import type { EpisodeEdit } from "@/domain/edit/model";
 import type { MemoryProjectsAccess } from "./generation-memory";
+import { transitionRunRefusal } from "./transition-runs";
 import {
   AnalysisLeaseLostError,
   MediaQaError,
   type AnalysisCost,
   type AnalysisEvent,
   type AnalysisJob,
+  type AttemptAnalysisJob,
   type AnalysisJobPatch,
   type AnalysisStatus,
   type AnalysisWorkerStore,
@@ -37,6 +40,10 @@ import {
   type NewDerivation,
   type NewFinding,
   type NewRun,
+  type NewTransitionRun,
+  type TransitionContinuityRun,
+  type TransitionRunView,
+  type TransitionSubject,
 } from "./media-qa-repository";
 
 const clone = <T>(v: T): T => structuredClone(v);
@@ -56,8 +63,19 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
   private findings: ContinuityFinding[] = [];
   private overrides: ContinuityOverride[] = [];
   private qaPolicies = new Map<string, ProjectQaPolicy>();
+  /**
+   * 3A.4C transition runs and their frozen subjects: kept apart from `runs` (the attempt runs), so no Shot path can
+   * ever list, number, project or pin from them. Their findings live in `findings`, addressed by run id only.
+   */
+  private transitionRuns: TransitionContinuityRun[] = [];
+  private transitionSubjects: TransitionSubject[] = [];
 
-  constructor(private readonly access: MemoryProjectsAccess) {}
+  constructor(
+    private readonly access: MemoryProjectsAccess & {
+      /** the live Episode edits (3A.4C: a transition run is validated against the edit it names) */
+      edits?: () => { get(projectId: string, editId: string): Promise<EpisodeEdit | null> };
+    },
+  ) {}
 
   private assetById(id: string): Asset | null {
     for (const p of this.access.all()) {
@@ -253,6 +271,128 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
     return r ? this.view(r) : null;
   }
 
+  // ───────────────────────── transition runs (3A.4C) ─────────────────────────
+
+  private transitionView(run: TransitionContinuityRun): TransitionRunView {
+    const subject = this.transitionSubjects.find((s) => s.runId === run.id);
+    if (!subject) throw new Error(`Transition run ${run.id} has no subject (invariant broken).`);
+    const findings = this.findings
+      .filter((f) => f.runId === run.id)
+      .sort((a, b) => a.position - b.position)
+      .map((finding) => ({
+        finding: clone(finding),
+        overrides: this.overrides
+          .filter((o) => o.findingId === finding.id)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .map(clone),
+      }));
+    return { run: clone(run), subject: clone(subject), findings };
+  }
+
+  async createTransitionRun(input: NewTransitionRun): Promise<TransitionRunView> {
+    const s = input.subject;
+    const edit = (await this.access.edits?.().get(input.projectId, s.editId)) ?? null;
+    // ── synchronous from here: the adjacency checked is the adjacency written, and numbering cannot interleave ──
+    const refusal = transitionRunRefusal(
+      edit && {
+        id: edit.id,
+        projectId: edit.projectId,
+        episodeId: edit.episodeId,
+        revision: edit.revision,
+        items: edit.items.map((i) => ({ id: i.id, shotId: i.shotId })),
+      },
+      input,
+    );
+    if (refusal) throw refusal;
+    const runNumber =
+      Math.max(
+        0,
+        ...this.transitionSubjects
+          .filter((x) => x.projectId === input.projectId && x.transitionKey === s.transitionKey)
+          .map((x) => x.runNumber),
+      ) + 1;
+    const done = input.analysisStatus === "complete" || input.analysisStatus === "failed";
+    const run: TransitionContinuityRun = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      subjectKind: "transition",
+      attemptId: null,
+      subjectAssetId: null,
+      originalAssetId: null,
+      runNumber,
+      analyzer: input.analyzer,
+      analyzerVersion: input.analyzerVersion,
+      analyzerKind: input.analyzerKind,
+      rulesVersion: input.rulesVersion,
+      analysisStatus: input.analysisStatus,
+      analysisError: "",
+      // a cut has no generation package: its package identity is its address
+      packageFingerprint: s.transitionKey,
+      subjectFingerprint: input.subjectFingerprint,
+      criteriaFingerprint: input.criteriaFingerprint,
+      referenceFingerprint: input.referenceFingerprint,
+      referenceSet: clone(input.referenceSet),
+      analysisPlan: null,
+      externalManifest: null,
+      promptVersion: null,
+      rubricVersion: null,
+      model: null,
+      automationKey: null,
+      createdBy: input.createdBy,
+      createdAt: input.now,
+      completedAt: done ? input.now : null,
+      finalizedAt: null,
+      finalizedBy: null,
+      finalizeNote: "",
+    };
+    this.transitionRuns.push(run);
+    this.transitionSubjects.push({
+      ...clone(s),
+      runId: run.id,
+      projectId: input.projectId,
+      runNumber,
+      createdBy: input.createdBy,
+      createdAt: input.now,
+    });
+    for (const f of input.findings)
+      this.findings.push({
+        ...clone(f),
+        id: randomUUID(),
+        runId: run.id,
+        projectId: run.projectId,
+        createdAt: input.now,
+      });
+    return this.transitionView(run);
+  }
+
+  async getTransitionRun(runId: string) {
+    const r = this.transitionRuns.find((x) => x.id === runId);
+    return r ? this.transitionView(r) : null;
+  }
+
+  async listTransitionRuns(projectId: string, transitionKey: string) {
+    const ids = new Set(
+      this.transitionSubjects
+        .filter((s) => s.projectId === projectId && s.transitionKey === transitionKey)
+        .map((s) => s.runId),
+    );
+    return this.transitionRuns
+      .filter((r) => ids.has(r.id))
+      .sort((a, b) => b.runNumber - a.runNumber)
+      .map((r) => this.transitionView(r));
+  }
+
+  async listLatestEditTransitionRuns(projectId: string, editId: string) {
+    const latest = new Map<string, TransitionSubject>();
+    for (const s of this.transitionSubjects.filter((x) => x.projectId === projectId && x.editId === editId)) {
+      const cur = latest.get(s.transitionKey);
+      if (!cur || s.runNumber > cur.runNumber) latest.set(s.transitionKey, s);
+    }
+    return [...latest.values()]
+      .sort((a, b) => (a.transitionKey < b.transitionKey ? -1 : 1))
+      .map((s) => this.transitionView(this.transitionRuns.find((r) => r.id === s.runId)!));
+  }
+
   async listAttemptRuns(attemptId: string) {
     return this.runs
       .filter((r) => r.attemptId === attemptId)
@@ -341,12 +481,16 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
 
   async createAnalysisRunWithJob(input: NewAnalysisRun) {
     const replay = [...this.jobs.values()].find(
-      (j) => j.projectId === input.run.projectId && j.idempotencyKey === input.job.idempotencyKey,
+      (j): j is AttemptAnalysisJob =>
+        j.subjectKind === "attempt" &&
+        j.projectId === input.run.projectId &&
+        j.idempotencyKey === input.job.idempotencyKey,
     );
     if (replay) {
       const view = await this.getRun(replay.runId);
       return { run: view!, job: clone(replay), duplicate: true };
     }
+    // every subject kind counts: an active transition job takes one of the same Project slots (3A.4 architecture)
     const active = [...this.jobs.values()].filter(
       (j) => j.projectId === input.run.projectId && ANALYSIS_ACTIVE.includes(j.status),
     ).length;
@@ -358,10 +502,11 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
     }
     const run = await this.createRun(input.run, input.findings);
     const now = input.run.now;
-    const job: AnalysisJob = {
+    const job: AttemptAnalysisJob = {
       id: randomUUID(),
       projectId: run.run.projectId,
       runId: run.run.id,
+      subjectKind: "attempt",
       attemptId: run.run.attemptId,
       analyzer: input.job.analyzer,
       model: input.job.model,
@@ -419,18 +564,20 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
   }
 
   async getAnalysisJob(jobId: string) {
+    // generic: either subject kind
     const j = this.jobs.get(jobId);
     return j ? clone(j) : null;
   }
 
   async listAttemptAnalysisJobs(attemptId: string) {
     return [...this.jobs.values()]
-      .filter((j) => j.attemptId === attemptId)
+      .filter((j): j is AttemptAnalysisJob => j.subjectKind === "attempt" && j.attemptId === attemptId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .map(clone);
   }
 
   async listActiveProjectAnalysisJobs(projectId: string) {
+    // every subject kind: Shot and sequence QA share the Project's active-job limit
     return [...this.jobs.values()]
       .filter((j) => j.projectId === projectId && ANALYSIS_ACTIVE.includes(j.status))
       .map(clone);
@@ -455,7 +602,7 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
       job.cancelledAt = now;
       job.cancelRequestedAt = now;
       job.leaseToken = null;
-      await this.setAnalysisStatus(job.runId, "failed", now, "Analysis cancelled before it started.");
+      this.failRun(job.runId, now, "Analysis cancelled before it started.");
       this.addEvent(job, from, "cancelled", "Cancelled before it started", now);
     } else {
       assertAnalysisTransition(job.status, "cancel_requested");
@@ -465,6 +612,15 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
     }
     job.updatedAt = now;
     return clone(job);
+  }
+
+  /** a queued job's run of EITHER subject kind fails when the job is cancelled (Postgres updates it by id) */
+  private failRun(runId: string, now: string, error: string) {
+    const r = this.runs.find((x) => x.id === runId) ?? this.transitionRuns.find((x) => x.id === runId);
+    if (!r) return;
+    r.analysisStatus = "failed";
+    r.analysisError = error;
+    r.completedAt = now;
   }
 
   async automationReady() {
@@ -518,7 +674,9 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
     const nowMs = Date.parse(opts.now);
     const due = [...this.jobs.values()]
       .filter(
-        (j) =>
+        (j): j is AttemptAnalysisJob =>
+          // 3A.4C: this worker executes Shot (attempt) jobs; a transition job waits for its 3A.4D executor
+          j.subjectKind === "attempt" &&
           ANALYSIS_ACTIVE.includes(j.status) &&
           Date.parse(j.nextRunAt) <= nowMs &&
           (j.leaseToken == null || (j.leaseExpiresAt != null && Date.parse(j.leaseExpiresAt) <= nowMs)),

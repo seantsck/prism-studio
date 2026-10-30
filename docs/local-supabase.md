@@ -69,6 +69,30 @@ npm run db:seed -- --reset
 | Rollback            | `db:behavior` and the mutating parts of `db:rls` run inside transactions that roll back.                                                                       |
 | Memory e2e          | `playwright.config.ts` forces `PRISM_STUDIO_PERSISTENCE=memory` and an empty `SUPABASE_DB_URL`.                                                                |
 
+## Disposable local database (unapplied migrations)
+
+To verify a migration that must NOT touch hosted yet (Phase 3A.4C, 0046), the real `db:*` scripts can run against a
+throwaway local PostgreSQL. Every safety rail still applies; the ref guard admits a local target only when ALL of
+these hold: `PRISM_STUDIO_DISPOSABLE_DB=1` is set, the host is loopback (`127.0.0.1` / `localhost` / `::1`), and the
+database name starts with `prism_disposable` (`scripts/lib/safety.mjs` `disposableLocalTarget`; the banner says
+"DISPOSABLE LOCAL DATABASE").
+
+1. A local PostgreSQL 15+ with SSL on (the scripts connect with SSL) and scram auth on loopback.
+2. An env file outside git (e.g. `.env.disposable`) with `PRISM_STUDIO_DISPOSABLE_DB=1`,
+   `SUPABASE_DB_URL=postgresql://postgres:<pw>@127.0.0.1:<port>/prism_disposable_<name>`, a random
+   `PRISM_STUDIO_DEV_USER_ID` (+ email), `PRISM_STUDIO_PERSISTENCE=supabase`, local worker URLs
+   (`prism_generation_worker` / `prism_continuity_worker` with throwaway passwords on the same database) and
+   `PRISM_STUDIO_MOCK_STAGE_DELAY_MS=0`.
+3. `node --env-file=.env.disposable scripts/db-disposable.mjs reset` (drop + create the database, apply
+   `scripts/local-db/supabase-shim.sql`: the Supabase roles, `auth.users` / `auth.uid()`, minimal `storage` tables and
+   Supabase's legacy default privileges, and create the dev user), then `scripts/db-migrate.mjs` (the real runner),
+   `scripts/db-disposable.mjs roles` (local logins for the worker roles), `scripts/db-seed.mts`, and any verifier.
+   `scripts/local-db/backfill-0046.mjs before|after` proves 0046 rewrites no history.
+
+Limits: the shim is not Supabase (no PostgREST, no Storage API, no real Auth); `db:worker-role`'s generation
+end-to-end checks are wall-clock dependent and fail on loopback (identically before and after a migration);
+hosted acceptance is still its own gate.
+
 ## Signed-in browser tests
 
 `npm run test:e2e:supabase` builds the app and runs `e2e/supabase-auth.spec.ts` on port 3101 (memory-mode e2e uses 3102; the dev server owns 3100) against the real

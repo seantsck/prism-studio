@@ -135,6 +135,20 @@ worker role, 0 policies with `direct_video_allowed = true`; `db:validate` STRUCT
 67/67, `db:worker-role` 60/60 (REAL LOGIN), `db:continuity-analysis` 80/80, `db:media-qa` 39/39, narrow repository
 acceptance on a disposable Project 15/15, hosted browser E2E 40/40; counts and Storage back to baseline afterwards.
 
+**0046** (Phase 3A.4C, **NOT applied to hosted**; verified on a disposable local PostgreSQL only) adds
+`continuity_runs.subject_kind` / `continuity_analysis_jobs.subject_kind` (`attempt` | `transition`, default `attempt`
+for every existing row, otherwise unchanged; shape checks; a kind-aware run key the job references), re-creates both
+continuity guards with every field they froze before plus `subject_kind`, creates `continuity_transition_subjects`
+(the frozen 1:1 subject of a transition run; historical edit / item / Shot ids, not cascading keys; immutable; exactly
+one per transition run at commit; numbered per transition; **explicit grants**: `authenticated` SELECT + INSERT only,
+owner RLS, nothing for `anon` or either worker role), and adds `episode_edit_items.incoming_cut_intent` (validated JSON,
+predecessor-bound at commit) ([sequence-continuity-supervisor](sequence-continuity-supervisor.md#3a4c-implementation-notes)).
+Disposable gate: 0001–0045 apply unchanged through the Supabase shim; `--dry-run` rehearsal of 0046 rolled back; 0046
+applied; historical rows unchanged (backfill proof); `db:validate` STRUCTURE OK, `db:behavior` 61/61,
+`db:sequence-continuity` 70/70, `db:media-qa` 39/39, `db:continuity-analysis` 81/81, `db:episode-edits` 94/94,
+`db:worker-role` 57/63 (the 6 generation end-to-end timing checks fail identically at 0045 on the loopback harness).
+Read-only `db:migrate:check` on hosted: 0001–0045 ok, 0046 pending.
+
 ## Adding a migration
 
 1. Create `supabase/migrations/NNNN_name.sql` with the next number. Do not touch earlier files.

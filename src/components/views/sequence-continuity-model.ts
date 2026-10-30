@@ -1,4 +1,5 @@
-import { RESULT_LABELS, type ContinuityResult } from "@/domain/continuity/model";
+import { CUT_INTENT_KIND_LABELS, cutIntentEffective, type CutIntent } from "@/domain/continuity/cut-intent";
+import { CATEGORY_LABELS, RESULT_LABELS, type ContinuityResult } from "@/domain/continuity/model";
 import {
   assessTransition,
   buildEpisodeCuts,
@@ -92,6 +93,20 @@ export interface TopIssueVM {
   text: string;
 }
 
+/** 3A.4C: the person's declared intent for this cut (stored on the right item, bound to the left one). */
+export interface CutIntentVM {
+  /** effective for THIS predecessor (always, once persisted: a changed predecessor clears it) */
+  effective: boolean;
+  kinds: string[];
+  /** "Every continuity category" when the scope is empty */
+  scope: string[];
+  note: string;
+  declaredAt: string;
+  declaredBy: string | null;
+  /** the raw values, so the form can be prefilled */
+  raw: CutIntent;
+}
+
 export interface CutRowVM {
   anchor: string;
   index: number;
@@ -118,6 +133,8 @@ export interface CutRowVM {
   mediaReasons: string[];
   /** a side is a generated clip with edge descriptors: the exact-edge-media note applies */
   hasClipEdge: boolean;
+  /** 3A.4C: the declared intent (null = none). It never changes the state or a finding. */
+  intent: CutIntentVM | null;
   flags: { hasFail: boolean; hasWarn: boolean; hasUnchecked: boolean };
 }
 
@@ -142,6 +159,7 @@ export type ContinuityPageVM =
   | {
       state: "edit";
       links: SupervisorLinks;
+      projectSlug: string;
       editId: string;
       revision: number;
       rows: CutRowVM[];
@@ -302,7 +320,10 @@ function cutRow(
     .map((p) => p.vm);
   const semanticUnchecked = semantic.filter((f) => f.result === "unchecked").length;
   const attention = deterministic.filter((f) => f.result === "fail" || f.result === "warn");
-  const assessment = assessTransition({ cut, run: null });
+  const declared = view.items[cut.index + 1]?.item.incomingCutIntent ?? null;
+  // no transition run is stored yet: with or without intent the state is the no-run state (intent only reinterprets
+  // the findings of an evaluated run, 3A.4A precedence)
+  const assessment = assessTransition({ cut, run: null, intent: declared });
   const left = sideVM(data, episode, view, media, runs, cut.left, "left");
   const right = sideVM(data, episode, view, media, runs, cut.right, "right");
   return {
@@ -329,6 +350,19 @@ function cutRow(
     mediaEligible: cut.semantic.mediaEligible,
     mediaReasons: cut.semantic.reasons,
     hasClipEdge: left.edgeFrame !== null || right.edgeFrame !== null,
+    intent: declared
+      ? {
+          effective: cutIntentEffective(declared, cut.address),
+          kinds: declared.kinds.map((k) => CUT_INTENT_KIND_LABELS[k]),
+          scope: declared.scope.length
+            ? declared.scope.map((c) => CATEGORY_LABELS[c])
+            : ["Every continuity category"],
+          note: declared.note,
+          declaredAt: declared.declaredAt,
+          declaredBy: declared.declaredBy,
+          raw: declared,
+        }
+      : null,
     flags: {
       hasFail: deterministic.some((f) => f.result === "fail"),
       hasWarn: deterministic.some((f) => f.result === "warn"),
@@ -352,6 +386,7 @@ export function continuityPage(args: {
   return {
     state: "edit",
     links: supervisorLinks(data, episode),
+    projectSlug: data.project.slug,
     editId: edit.id,
     revision: edit.revision,
     rows,

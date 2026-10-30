@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import { parseCutIntent } from "@/domain/continuity/cut-intent";
 import type { AttemptMediaFacts } from "@/domain/edit/eligibility";
 import type { AudioPlacement, EditItem, EpisodeEdit, VisualSource } from "@/domain/edit/model";
 import type { Asset, GenerationAttempt } from "@/domain/schemas";
@@ -73,6 +74,8 @@ const mapItem = (r: Row, placements: Row[]): EditItem => {
     sourceAudio: r.source_audio === "included" ? "included" : "muted",
     performance: placements.filter((p) => String(p.item_id) === String(r.id)).map(mapPlacement),
     performanceBasis: basis ? { performance: basis.performance, timing: basis.timing } : null,
+    // 3A.4C: validated on read; malformed database state fails loudly instead of being dropped
+    incomingCutIntent: parseCutIntent(r.incoming_cut_intent),
   };
 };
 
@@ -319,8 +322,8 @@ export class PostgresEpisodeEditData implements EpisodeEditRepository {
       `insert into episode_edit_items
          (id, project_id, edit_id, episode_id, shot_id, position, visual_kind, attempt_id, asset_id, source_in_ms,
           source_out_ms, production_frame_id, storyboard_frame_id, duration_ms, performance_basis, source_audio,
-          placed_by, placed_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18)`,
+          placed_by, placed_at, incoming_cut_intent)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb)`,
       [
         item.id,
         edit.projectId,
@@ -340,6 +343,7 @@ export class PostgresEpisodeEditData implements EpisodeEditRepository {
         item.sourceAudio,
         userId,
         now,
+        item.incomingCutIntent ? JSON.stringify(item.incomingCutIntent) : null,
       ],
     );
     await this.insertPlacements(c, edit.projectId, item);
@@ -391,15 +395,19 @@ export class PostgresEpisodeEditData implements EpisodeEditRepository {
       if (
         prev.position !== position ||
         prev.item.sourceAudio !== item.sourceAudio ||
-        !same(prev.item.performanceBasis, item.performanceBasis)
+        !same(prev.item.performanceBasis, item.performanceBasis) ||
+        !same(prev.item.incomingCutIntent ?? null, item.incomingCutIntent ?? null)
       )
         await c.query(
-          "update episode_edit_items set position = $2, source_audio = $3, performance_basis = $4::jsonb where id = $1",
+          `update episode_edit_items set position = $2, source_audio = $3, performance_basis = $4::jsonb,
+             incoming_cut_intent = $5::jsonb
+           where id = $1`,
           [
             item.id,
             position,
             item.sourceAudio,
             item.performanceBasis ? JSON.stringify(item.performanceBasis) : null,
+            item.incomingCutIntent ? JSON.stringify(item.incomingCutIntent) : null,
           ],
         );
       if (performanceChanged) await this.insertPlacements(c, next.projectId, item);
@@ -423,7 +431,7 @@ export class PostgresEpisodeEditData implements EpisodeEditRepository {
       });
       const ops = addsOf(input.items);
       const facts = await this.loadFacts(c, editRefs(base, ops));
-      const plan = applyEditOps(base, ops, facts, randomUUID);
+      const plan = applyEditOps(base, ops, facts, randomUUID, { userId: input.userId, now: input.now });
       assertEditValid(plan, facts, base);
       await c.query(
         `insert into episode_edits (id, project_id, episode_id, edit_rate_num, edit_rate_den, created_by, created_at, updated_at)
@@ -462,7 +470,10 @@ export class PostgresEpisodeEditData implements EpisodeEditRepository {
       await this.lockEdit(c, input.projectId, input.editId, input.expectedRevision);
       const current = (await this.editsWhere(c, "id = $1", [input.editId]))[0]!;
       const facts = await this.loadFacts(c, editRefs(current, input.ops));
-      const plan = applyEditOps(current, input.ops, facts, randomUUID);
+      const plan = applyEditOps(current, input.ops, facts, randomUUID, {
+        userId: input.userId,
+        now: input.now,
+      });
       assertEditValid(plan, facts, current);
       await this.writeDifference(c, current, plan.next, input.userId, input.now);
       await c.query("update episode_edits set revision = revision + 1 where id = $1", [input.editId]);

@@ -1,7 +1,15 @@
 import Link from "next/link";
+import { ActionForm } from "@/components/action-form";
 import { ContinuityFilters } from "@/components/sequence/continuity-filters";
-import { Badge, Empty, PageHeader } from "@/components/ui";
+import { Badge, Button, Empty, PageHeader } from "@/components/ui";
+import {
+  CUT_INTENT_KIND_LABELS,
+  CUT_INTENT_KINDS,
+  CUT_INTENT_NOTE_MAX,
+} from "@/domain/continuity/cut-intent";
+import { CATEGORY_LABELS, CONTINUITY_CATEGORIES } from "@/domain/continuity/model";
 import type { Episode } from "@/domain/schemas";
+import { clearCutIntent, setCutIntent } from "@/server/episode-edit-actions";
 import {
   EDGE_MEDIA_NOTE,
   NO_CUTS_MESSAGE,
@@ -111,7 +119,11 @@ export function SequenceContinuityView({ episode, page }: { episode: Episode; pa
           <ContinuityFilters counts={page.filterCounts}>
             <ol className="space-y-3">
               {page.rows.map((r) => (
-                <CutRow key={r.anchor} row={r} />
+                <CutRow
+                  key={r.anchor}
+                  row={r}
+                  target={{ projectSlug: page.projectSlug, editId: page.editId, revision: page.revision }}
+                />
               ))}
             </ol>
           </ContinuityFilters>
@@ -165,7 +177,127 @@ function Count({
   );
 }
 
-function CutRow({ row }: { row: CutRowVM }) {
+interface IntentTarget {
+  projectSlug: string;
+  editId: string;
+  revision: number;
+}
+
+/** The fields every intent form sends: the edit at its revision and the cut (right item, reviewed predecessor). */
+function IntentFields({ target, row }: { target: IntentTarget; row: CutRowVM }) {
+  return (
+    <>
+      <input type="hidden" name="projectSlug" value={target.projectSlug} />
+      <input type="hidden" name="editId" value={target.editId} />
+      <input type="hidden" name="expectedRevision" value={target.revision} />
+      <input type="hidden" name="itemId" value={row.rightItemId} />
+      <input type="hidden" name="expectedPredecessorId" value={row.leftItemId} />
+    </>
+  );
+}
+
+/**
+ * 3A.4C: the person's declaration that this cut is deliberate. Editorial, not QA: it records intent, it never changes
+ * a finding, hides evidence or approves anything, and until a sequence analysis has run it does not change the state.
+ */
+function CutIntentPanel({ row, target }: { row: CutRowVM; target: IntentTarget }) {
+  const intent = row.intent;
+  return (
+    <section className="mt-2 border-t border-line pt-2 text-[11.5px]" data-testid="cut-intent">
+      <h3 className="text-[11px] font-semibold uppercase tracking-wide text-faint">
+        Intentional discontinuity
+      </h3>
+      {intent ? (
+        <div data-testid="cut-intent-declared" className="mt-1 space-y-0.5">
+          <p>
+            <Badge tone="accent">
+              <span data-testid="cut-intent-badge">This cut is deliberate</span>
+            </Badge>{" "}
+            <span data-testid="cut-intent-kinds">{intent.kinds.join(", ")}</span>
+            <span className="text-faint"> · scope: </span>
+            <span data-testid="cut-intent-scope">{intent.scope.join(", ")}</span>
+          </p>
+          <p className="text-muted" data-testid="cut-intent-note">
+            “{intent.note}”
+          </p>
+          <p className="text-faint">
+            Declared {intent.declaredAt.slice(0, 16).replace("T", " ")} UTC for this exact cut ({row.title}).
+            It is kept while these two items stay adjacent and cleared if the cut changes. It does not change
+            or hide any finding, and it is not a QA result.
+          </p>
+          <ActionForm action={clearCutIntent} successMessage="" className="inline">
+            <IntentFields target={target} row={row} />
+            <Button type="submit" size="sm" data-testid="cut-intent-clear">
+              Remove intent
+            </Button>
+          </ActionForm>
+        </div>
+      ) : (
+        <p className="mt-1 text-muted" data-testid="cut-intent-none">
+          No intent declared for this cut.
+        </p>
+      )}
+      <details className="mt-1" data-testid="cut-intent-editor">
+        <summary className="cursor-pointer text-accent">
+          {intent ? "Update the declared intent" : "This cut is deliberate…"}
+        </summary>
+        <ActionForm action={setCutIntent} successMessage="" className="mt-1 space-y-1.5">
+          <IntentFields target={target} row={row} />
+          <fieldset>
+            <legend className="text-faint">What kind of discontinuity (at least one)</legend>
+            <div className="flex flex-wrap gap-x-3">
+              {CUT_INTENT_KINDS.map((k) => (
+                <label key={k} className="inline-flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    name="kinds"
+                    value={k}
+                    defaultChecked={intent?.raw.kinds.includes(k)}
+                    data-testid={`cut-intent-kind-${k}`}
+                  />
+                  {CUT_INTENT_KIND_LABELS[k]}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend className="text-faint">Which continuity it concerns (none = every category)</legend>
+            <div className="flex flex-wrap gap-x-3">
+              {CONTINUITY_CATEGORIES.map((c) => (
+                <label key={c} className="inline-flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    name="scope"
+                    value={c}
+                    defaultChecked={intent?.raw.scope.includes(c)}
+                  />
+                  {CATEGORY_LABELS[c]}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <label className="block">
+            <span className="text-faint">Why it is deliberate</span>
+            <textarea
+              name="note"
+              required
+              maxLength={CUT_INTENT_NOTE_MAX}
+              defaultValue={intent?.raw.note ?? ""}
+              rows={2}
+              data-testid="cut-intent-note-input"
+              className="mt-0.5 block w-full rounded-[3px] border border-line2 bg-bg px-2 py-1"
+            />
+          </label>
+          <Button type="submit" size="sm" variant="primary" data-testid="cut-intent-submit">
+            Record intentional discontinuity
+          </Button>
+        </ActionForm>
+      </details>
+    </section>
+  );
+}
+
+function CutRow({ row, target }: { row: CutRowVM; target: IntentTarget }) {
   const issues = row.attention.length;
   return (
     <li
@@ -179,6 +311,7 @@ function CutRow({ row }: { row: CutRowVM }) {
       data-media-eligible={row.mediaEligible}
       data-left-item={row.leftItemId}
       data-right-item={row.rightItemId}
+      data-has-intent={row.intent !== null}
       aria-label={`Cut ${row.index + 1}: ${row.title}, ${row.stateLabel}${issues ? `, ${issues} deterministic issue${issues === 1 ? "" : "s"}` : ""}`}
       className="scroll-mt-4 border border-line bg-panel p-3 target:border-accent target:bg-accent/5"
     >
@@ -245,6 +378,7 @@ function CutRow({ row }: { row: CutRowVM }) {
           </ul>
         </section>
       ) : null}
+      <CutIntentPanel row={row} target={target} />
       <details className="mt-2 text-[11.5px]" data-testid="cut-checks">
         <summary className="cursor-pointer text-muted">
           Current deterministic checks ({row.checks.length})

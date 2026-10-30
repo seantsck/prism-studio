@@ -57,6 +57,8 @@
     "db:character-continuity": "tsx --env-file=.env.local scripts/db-character-continuity.mts",
     "db:episode-edits": "tsx --env-file=.env.local scripts/db-episode-edits.mts",
     "db:continuity-analysis": "tsx --env-file=.env.local scripts/db-continuity-analysis.mts",
+    "db:sequence-continuity": "tsx --env-file=.env.local scripts/db-sequence-continuity.mts",
+    "db:disposable": "node --env-file=.env.disposable scripts/db-disposable.mjs",
     "continuity:worker": "tsx --env-file=.env.local scripts/continuity-worker.mts",
     "continuity:pre-paid:check": "tsx --env-file=.env.local scripts/continuity-pre-paid-check.mts",
     "continuity:temporal:calibrate": "tsx --env-file=.env.local scripts/continuity-temporal-calibration.mts",

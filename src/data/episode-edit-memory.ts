@@ -176,7 +176,7 @@ export class MemoryEpisodeEditService implements EpisodeEditRepository {
     // ── synchronous from here: nothing interleaves ──
     if (this.live(input.projectId).some((e) => e.episodeId === input.episodeId))
       throw new EpisodeEditError("conflict", EDIT_EXISTS_MESSAGE);
-    const plan = applyEditOps(base, ops, facts, randomUUID);
+    const plan = applyEditOps(base, ops, facts, randomUUID, { userId: input.userId, now: input.now });
     assertEditValid(plan, facts, base);
     this.edits.set(base.id, clone(plan.next));
     return clone(plan.next);
@@ -191,7 +191,10 @@ export class MemoryEpisodeEditService implements EpisodeEditRepository {
     const current = this.requireEdit(input.projectId, input.editId);
     if (current.revision !== input.expectedRevision)
       throw new EpisodeEditError("conflict", EDIT_REVISION_CONFLICT_MESSAGE);
-    const plan = applyEditOps(current, input.ops, facts, randomUUID);
+    const plan = applyEditOps(current, input.ops, facts, randomUUID, {
+      userId: input.userId,
+      now: input.now,
+    });
     assertEditValid(plan, facts, current);
     const next: EpisodeEdit = { ...plan.next, revision: current.revision + 1 };
     this.edits.set(next.id, clone(next));

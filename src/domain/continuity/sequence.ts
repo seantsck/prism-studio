@@ -16,6 +16,7 @@ import {
 import { frozenShotTruth } from "./criteria";
 import type { ContinuityCategory, ContinuityResult, ContinuitySeverity, CriterionHandler } from "./model";
 import type { ShotQaState } from "./shot-qa";
+import { cutIntentEffective, type CutIntent } from "./cut-intent";
 
 /**
  * Phase 3A.4A: the CUT domain of the Sequence Continuity Supervisor (docs/sequence-continuity-supervisor.md). Pure:
@@ -1163,42 +1164,51 @@ export function transitionFreshness(
   return { status: reasons.length ? "stale" : "current", reasons };
 }
 
-// ───────────────────────── cut intent ─────────────────────────
-
-export const CUT_INTENT_KINDS = [
-  "jump_cut",
-  "montage",
-  "match_cut",
-  "time_jump",
-  "location_jump",
-  "dream_flashback",
-  "axis_break",
-  "lighting_transition",
-  "wardrobe_progression",
-  "other",
-] as const;
-export type CutIntentKind = (typeof CUT_INTENT_KINDS)[number];
+// ───────────────────────── persisted transition subject (3A.4C) ─────────────────────────
 
 /**
- * A person's statement that a cut is deliberately discontinuous. It lives (3A.4C) as incoming intent on the RIGHT item
- * and is bound to the predecessor it was declared against. It never changes criteria, results or evidence, and it is
- * not part of freshness: it only changes how covered findings are counted.
+ * One side of a cut exactly as a transition run freezes it (`continuity_transition_subjects.left_side / right_side`),
+ * taken from the 3A.4A side descriptors: the pinned picture (kind, attempt, Asset, checksum, trims), the evaluated
+ * edge window and computed edge still (DESCRIPTORS: no derived edge Asset exists yet), the side's subject
+ * fingerprint, its usability and the references its applicable criteria could use. A changed shape is a new version.
  */
-export interface CutIntent {
-  fromItemId: string;
-  kinds: CutIntentKind[];
-  /** affected categories; empty = every continuity category */
-  scope: ContinuityCategory[];
-  note: string;
-  declaredBy: string | null;
-  declaredAt: string;
+export interface PersistedCutSide {
+  version: "cut-side-snapshot-v1";
+  side: "left" | "right";
+  itemId: string;
+  shotId: string;
+  shotCode: string | null;
+  picture: CutPicture;
+  window: EdgeWindowDescriptor | null;
+  still: EdgeStillDescriptor | null;
+  /** `TransitionRunTruth.leftSubjectFingerprint` / `rightSubjectFingerprint` of the run */
+  subjectFingerprint: string;
+  usable: boolean;
+  references: CutReference[];
 }
 
-/** Effective only for the cut it was declared against: A → B intent never covers C → B. */
-export const cutIntentEffective = (
-  intent: CutIntent | null | undefined,
-  address: TransitionAddress,
-): boolean => !!intent && intent.fromItemId === address.leftItemId;
+export function persistedCutSide(cut: CutTransition, which: "left" | "right"): PersistedCutSide {
+  const side = which === "left" ? cut.left : cut.right;
+  return {
+    version: "cut-side-snapshot-v1",
+    side: which,
+    itemId: side.itemId,
+    shotId: side.shotId,
+    shotCode: side.shotCode,
+    picture: structuredClone(side.picture),
+    window: side.window ? { ...side.window } : null,
+    still: side.still ? { ...side.still } : null,
+    subjectFingerprint:
+      which === "left" ? cut.truth.leftSubjectFingerprint : cut.truth.rightSubjectFingerprint,
+    usable: side.usable,
+    references: side.references.map((r) => ({ ...r, usedBy: [...r.usedBy] })),
+  };
+}
+
+// ───────────────────────── cut intent ─────────────────────────
+
+// Defined in ./cut-intent (shared with the Episode Edit model since 3A.4C persists it); re-exported unchanged.
+export { CUT_INTENT_KINDS, cutIntentEffective, type CutIntent, type CutIntentKind } from "./cut-intent";
 
 // ───────────────────────── assessment ─────────────────────────
 

@@ -281,6 +281,16 @@ try {
     "cannot grant full-video consent",
     "update project_qa_policies set direct_video_allowed = true",
   );
+  // Phase 3A.4C (0046): no access to the frozen transition subjects, nor to the persisted cut intent's table
+  await mustFail("cannot read transition subjects", "select * from continuity_transition_subjects limit 1");
+  await mustFail(
+    "cannot write transition subjects",
+    "update continuity_transition_subjects set crosses_scene = true",
+  );
+  await mustFail(
+    "cannot read Episode Edit cut intent",
+    "select incoming_cut_intent from episode_edit_items limit 1",
+  );
   await mustFail("cannot alter projects", "update projects set title = title");
   await mustFail("cannot read project secrets/columns beyond id+owner", "select title from projects limit 1");
   await mustFail("cannot create tables", "create table prism_worker_probe (x int)");

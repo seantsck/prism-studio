@@ -11,6 +11,7 @@ import type {
 } from "@/domain/continuity/analysis/types";
 import type { ProjectQaPolicy, QaPolicyInput } from "@/domain/continuity/automation";
 import type { ContinuityCategory, ContinuityResult, ContinuitySeverity } from "@/domain/continuity/model";
+import type { PersistedCutSide } from "@/domain/continuity/sequence";
 
 /**
  * Persistence contract for derived media (lineage + delivery masters) and continuity QA runs.
@@ -80,6 +81,10 @@ export interface AttemptDelivery {
 export const ANALYSIS_STATUSES = ["queued", "running", "complete", "failed"] as const;
 export type AnalysisStatus = (typeof ANALYSIS_STATUSES)[number];
 
+/**
+ * A Shot (ATTEMPT) continuity run: `subject_kind = 'attempt'` (0046), so its attempt and subject Asset are never null.
+ * Every Shot repository method returns only attempt runs; a transition run is a `TransitionContinuityRun`.
+ */
 export interface ContinuityRun {
   id: string;
   projectId: string;
@@ -150,6 +155,67 @@ export interface ContinuityRunView {
   findings: Array<{ finding: ContinuityFinding; overrides: ContinuityOverride[] }>;
 }
 
+// ───────────────────────── transition runs (Phase 3A.4C) ─────────────────────────
+
+/** A CUT's continuity run (`subject_kind = 'transition'`): no Shot attempt and no single subject Asset. */
+export type TransitionContinuityRun = Omit<
+  ContinuityRun,
+  "attemptId" | "subjectAssetId" | "originalAssetId"
+> & {
+  subjectKind: "transition";
+  attemptId: null;
+  subjectAssetId: null;
+  originalAssetId: null;
+};
+
+/**
+ * The frozen subject of a transition run (`continuity_transition_subjects`). The edit / Episode / item / Shot ids are
+ * HISTORICAL: validated against the live edit when the run was created, never rewritten or cascaded afterwards.
+ */
+export interface TransitionSubject {
+  runId: string;
+  projectId: string;
+  editId: string;
+  episodeId: string;
+  /** the edit's revision when the run was created (audit only, never part of freshness) */
+  editRevision: number;
+  transitionKey: string;
+  /** numbered per (project, transition key) */
+  runNumber: number;
+  leftItemId: string;
+  rightItemId: string;
+  leftShotId: string;
+  rightShotId: string;
+  leftSide: PersistedCutSide;
+  rightSide: PersistedCutSide;
+  crossesScene: boolean;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export interface TransitionRunView {
+  run: TransitionContinuityRun;
+  subject: TransitionSubject;
+  findings: ContinuityRunView["findings"];
+}
+
+export interface NewTransitionRun {
+  projectId: string;
+  analyzer: string;
+  analyzerVersion: string;
+  analyzerKind: ContinuityRun["analyzerKind"];
+  rulesVersion: string;
+  analysisStatus: AnalysisStatus;
+  subjectFingerprint: string;
+  criteriaFingerprint: string;
+  referenceFingerprint: string;
+  referenceSet: Record<string, unknown>;
+  subject: Omit<TransitionSubject, "runId" | "projectId" | "runNumber" | "createdBy" | "createdAt">;
+  findings: NewFinding[];
+  createdBy: string | null;
+  now: string;
+}
+
 export type NewRun = Omit<
   ContinuityRun,
   | "id"
@@ -179,11 +245,16 @@ export type NewFinding = Omit<ContinuityFinding, "id" | "runId" | "projectId" | 
 
 // ───────────────────────── analysis jobs (Phase 2D) ─────────────────────────
 
-export interface AnalysisJob {
+/**
+ * Phase 3A.4C: a job's subject is discriminated by `subjectKind`, exactly as `continuity_analysis_jobs.subject_kind`
+ * (migration 0046). Generic job bookkeeping (lookup, the Project's active jobs that share `maxActivePerProject`,
+ * cancellation, spend) returns `AnalysisJob`; Shot paths (submission, a Shot's job history, the current worker claim)
+ * return `AttemptAnalysisJob`. No transition job is created or executed before 3A.4D.
+ */
+interface AnalysisJobBase {
   id: string;
   projectId: string;
   runId: string;
-  attemptId: string;
   analyzer: string;
   model: string;
   status: AnalysisJobStatus;
@@ -221,6 +292,18 @@ export interface AnalysisJob {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface AttemptAnalysisJob extends AnalysisJobBase {
+  subjectKind: "attempt";
+  attemptId: string;
+}
+
+export interface TransitionAnalysisJob extends AnalysisJobBase {
+  subjectKind: "transition";
+  attemptId: null;
+}
+
+export type AnalysisJob = AttemptAnalysisJob | TransitionAnalysisJob;
 
 export interface AnalysisCost {
   id: string;
@@ -329,7 +412,8 @@ export interface FinalizeAnalysisFailure {
 }
 
 export interface ClaimedAnalysisJob {
-  job: AnalysisJob;
+  /** 3A.4C: the worker executes Shot (attempt) jobs only; a transition job waits for its 3A.4D executor */
+  job: AttemptAnalysisJob;
 }
 
 export interface InputAssetRef {
@@ -429,6 +513,17 @@ export interface MediaQaRepository {
   listAttemptRuns(attemptId: string): Promise<ContinuityRunView[]>;
   /** The most recent run per attempt for a project (QA dashboard / shot list). */
   listLatestProjectRuns(projectId: string): Promise<ContinuityRunView[]>;
+  // ── transition runs (3A.4C: structurally ready; nothing in 3A.4C creates one from the UI) ──
+  /**
+   * Freezes a transition run and its subject in one unit, numbered per (project, transition key) under a lock. Refused
+   * unless the live edit still has the two items adjacent, left → right, with the frozen Shots and transition key.
+   */
+  createTransitionRun(input: NewTransitionRun): Promise<TransitionRunView>;
+  getTransitionRun(runId: string): Promise<TransitionRunView | null>;
+  /** One cut's history, newest first. */
+  listTransitionRuns(projectId: string, transitionKey: string): Promise<TransitionRunView[]>;
+  /** The newest run of every cut recorded against an edit (historical edit id). */
+  listLatestEditTransitionRuns(projectId: string, editId: string): Promise<TransitionRunView[]>;
   setAnalysisStatus(
     runId: string,
     status: AnalysisStatus,
@@ -468,13 +563,17 @@ export interface MediaQaRepository {
    */
   createAnalysisRunWithJob(
     input: NewAnalysisRun,
-  ): Promise<{ run: ContinuityRunView; job: AnalysisJob; duplicate: boolean }>;
+  ): Promise<{ run: ContinuityRunView; job: AttemptAnalysisJob; duplicate: boolean }>;
+  /** any subject kind */
   getAnalysisJob(jobId: string): Promise<AnalysisJob | null>;
-  listAttemptAnalysisJobs(attemptId: string): Promise<AnalysisJob[]>;
+  /** a Shot's job history: attempt jobs only */
+  listAttemptAnalysisJobs(attemptId: string): Promise<AttemptAnalysisJob[]>;
+  /** every active job of the Project, of ANY subject kind: Shot and sequence QA share `maxActivePerProject` */
   listActiveProjectAnalysisJobs(projectId: string): Promise<AnalysisJob[]>;
   listAnalysisCosts(runId: string): Promise<AnalysisCost[]>;
   listAnalysisEvents(jobId: string): Promise<AnalysisEvent[]>;
   /** queued → cancelled locally; otherwise cancel_requested (the worker stops before the next request). */
+  /** any subject kind (the existing queued → cancelled / running → cancel_requested lifecycle) */
   requestAnalysisCancel(jobId: string, now: string): Promise<AnalysisJob | null>;
   /** Analysis spend since a time: actual where known, otherwise the estimate ceiling (never under-counted). */
   analysisSpentSince(projectId: string | null, sinceIso: string): Promise<number>;

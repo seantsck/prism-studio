@@ -463,6 +463,80 @@ try {
         /null value in column "direct_video_allowed"/,
       );
     }
+    // ── 0046 (Phase 3A.4C): subject kinds, transition subjects, persisted cut intent ──
+    if (
+      (
+        await client.query(
+          "select 1 from information_schema.columns where table_name='continuity_runs' and column_name='subject_kind'",
+        )
+      ).rowCount
+    ) {
+      const transitionRun = (runId, extraCol = "", extraVal = "") =>
+        `insert into continuity_runs (id, project_id, subject_kind, run_number, analyzer, analyzer_version, analyzer_kind,
+           rules_version, package_fingerprint, subject_fingerprint, criteria_fingerprint, reference_fingerprint${extraCol})
+         values ('${runId}', '${P}', 'transition', 1, 'deterministic', '3a.4', 'deterministic', '3a.4', 'pk', 's', 'c', 'r'${extraVal})`;
+      await expectOk("runs / jobs (0046): subject_kind is 'attempt' by default and never null", async () => {
+        const r = await client.query(
+          `select table_name, column_default, is_nullable from information_schema.columns
+            where column_name = 'subject_kind' and table_name in ('continuity_runs', 'continuity_analysis_jobs')
+            order by table_name`,
+        );
+        return {
+          ok:
+            r.rows.length === 2 &&
+            r.rows.every((x) => x.is_nullable === "NO" && String(x.column_default).startsWith("'attempt'")),
+          msg: JSON.stringify(r.rows),
+        };
+      });
+      await expectError(
+        "runs (0046): a transition run cannot carry a Shot subject Asset",
+        transitionRun(
+          id(),
+          ", subject_asset_id",
+          `, (select id from assets where project_id = '${P}' limit 1)`,
+        ),
+        [],
+        /continuity_runs_subject_shape|violates/,
+      );
+      await expectError(
+        "runs (0046): a transition run without its frozen subject is refused at commit",
+        `${transitionRun(id())}; set constraints continuity_runs_subject_check immediate`,
+        undefined,
+        /exactly one transition subject/,
+      );
+      await expectOk(
+        "cut intent (0046): a missing field is invalid (false, never NULL: a CHECK passes on NULL)",
+        async () => {
+          const r = await client.query(
+            `select episode_cut_intent_valid($1::jsonb) as missing, episode_cut_intent_valid($2::jsonb) as ok`,
+            [
+              JSON.stringify({
+                fromItemId: id(),
+                kinds: ["montage"],
+                scope: [],
+                note: "x",
+                declaredAt: "2026-10-29T00:00:00Z",
+              }),
+              JSON.stringify({
+                fromItemId: id(),
+                kinds: ["montage"],
+                scope: [],
+                note: "x",
+                declaredBy: null,
+                declaredAt: "2026-10-29T00:00:00Z",
+              }),
+            ],
+          );
+          return { ok: r.rows[0].missing === false && r.rows[0].ok === true, msg: JSON.stringify(r.rows[0]) };
+        },
+      );
+    } else {
+      results.push([
+        "migration 0046 (sequence continuity persistence) is applied",
+        false,
+        "subject_kind does not exist",
+      ]);
+    }
     await expectOk(
       "qa policy: a fully explicit automatic policy is accepted (default mode is off)",
       async () => {

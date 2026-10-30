@@ -1,3 +1,5 @@
+import type { CutIntentKind } from "@/domain/continuity/cut-intent";
+import type { ContinuityCategory } from "@/domain/continuity/model";
 import type { EditRate } from "@/domain/edit/edit-rate";
 import type {
   AudioPlacement,
@@ -71,7 +73,20 @@ export type EditOp =
       placements: AudioPlacement[];
       performanceBasis: PlacementBasis | null;
     }
-  | { op: "clear_performance"; itemId: string };
+  | { op: "clear_performance"; itemId: string }
+  /**
+   * 3A.4C: declare the cut INTO `itemId` deliberate. `expectedPredecessorId` is the left item the person reviewed; it
+   * must still be the item before `itemId`. Who and when come from the server (`userId`, `now`), never the request.
+   */
+  | {
+      op: "set_cut_intent";
+      itemId: string;
+      expectedPredecessorId: string;
+      kinds: CutIntentKind[];
+      scope: ContinuityCategory[];
+      note: string;
+    }
+  | { op: "clear_cut_intent"; itemId: string };
 
 export interface CreateEpisodeEditInput {
   projectId: string;

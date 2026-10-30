@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertProjectRef, printBanner, redact, safeTarget } from "../safety.mjs";
+import { assertProjectRef, disposableLocalTarget, printBanner, redact, safeTarget } from "../safety.mjs";
 
 const env = {
   SUPABASE_DB_URL:
@@ -35,6 +35,30 @@ describe("script safety", () => {
     expect(() => assertProjectRef("postgresql://u:p@db.otherref.supabase.co/postgres")).toThrow(/refusing/);
     expect(() => assertProjectRef(undefined)).toThrow(/not set/);
     expect(() => assertProjectRef(env.SUPABASE_DB_URL)).not.toThrow();
+  });
+
+  it("a disposable local database only with the explicit opt-in, a loopback host and a prism_disposable name", () => {
+    const local = "postgresql://postgres:pw@127.0.0.1:55432/prism_disposable_3a4c";
+    const on = { PRISM_STUDIO_DISPOSABLE_DB: "1" };
+    expect(disposableLocalTarget(local, on)).toBe(true);
+    expect(() => assertProjectRef(local, "SUPABASE_DB_URL", on)).not.toThrow();
+    // without the opt-in, a local URL is refused like any other
+    expect(disposableLocalTarget(local, {})).toBe(false);
+    expect(() => assertProjectRef(local, "SUPABASE_DB_URL", {})).toThrow(/refusing/);
+    // a remote host or another database name never qualifies, even with the opt-in
+    for (const url of [
+      "postgresql://u:p@db.otherref.supabase.co:5432/prism_disposable",
+      "postgresql://u:p@10.0.0.5:5432/prism_disposable",
+      "postgresql://u:p@127.0.0.1:55432/postgres",
+      "postgresql://u:p@localhost.evil.example:5432/prism_disposable",
+    ]) {
+      expect(disposableLocalTarget(url, on), url).toBe(false);
+      expect(() => assertProjectRef(url, "SUPABASE_DB_URL", on), url).toThrow(/refusing/);
+    }
+    const lines: string[] = [];
+    printBanner({ mode: "validate", url: local, log: (l) => lines.push(l), env: on });
+    expect(lines.join(" ")).toContain("DISPOSABLE LOCAL DATABASE");
+    expect(lines.join(" ")).not.toContain("pw");
   });
 
   it("banner prints project, host, mode and owner but no secrets", () => {

@@ -7,6 +7,8 @@ import {
   type EditOp,
 } from "@/data/episode-edit-repository";
 import { buildShotContext } from "@/domain/context";
+import { CUT_INTENT_KINDS, type CutIntentKind } from "@/domain/continuity/cut-intent";
+import { CONTINUITY_CATEGORIES, type ContinuityCategory } from "@/domain/continuity/model";
 import { VIDEO_SOURCE_VIOLATION_TEXT } from "@/domain/edit/eligibility";
 import { computeShotParts } from "@/domain/fingerprint";
 import {
@@ -449,5 +451,49 @@ export async function setEditItemClipAudio(form: FormData): Promise<ActionResult
         "Clip audio updated.",
       ),
     { name: "setEditItemClipAudio" },
+  );
+}
+
+// ───────────────────────── 3A.4C: cut intent (the Continuity Supervisor's only write) ─────────────────────────
+
+/**
+ * Declares the cut INTO `itemId` deliberately discontinuous. `expectedPredecessorId` is the left item the person was
+ * looking at; the repository re-reads the edit and refuses when another item is now before `itemId`. Who and when are
+ * the signed-in user and the server's clock, never form fields. One revision, like every edit change.
+ */
+export async function setCutIntent(form: FormData): Promise<ActionResult> {
+  return runAction(
+    () =>
+      mutate(
+        form,
+        ({ item }) => {
+          const kinds = form.getAll("kinds").map(String);
+          const scope = form.getAll("scope").map(String);
+          if (kinds.some((k) => !(CUT_INTENT_KINDS as readonly string[]).includes(k)))
+            throw new UserFacingError("That kind of intentional discontinuity is not known.");
+          if (scope.some((c) => !(CONTINUITY_CATEGORIES as readonly string[]).includes(c)))
+            throw new UserFacingError("That continuity category is not known.");
+          return [
+            {
+              op: "set_cut_intent",
+              itemId: item().id,
+              expectedPredecessorId: str(form, "expectedPredecessorId"),
+              kinds: kinds as CutIntentKind[],
+              scope: scope as ContinuityCategory[],
+              note: String(form.get("note") ?? ""),
+            },
+          ];
+        },
+        "Intentional discontinuity recorded. It does not change or hide any finding.",
+      ),
+    { name: "setCutIntent" },
+  );
+}
+
+/** Removes the declared intent of the cut INTO `itemId` (only that item's). One revision. */
+export async function clearCutIntent(form: FormData): Promise<ActionResult> {
+  return runAction(
+    () => mutate(form, ({ item }) => [{ op: "clear_cut_intent", itemId: item().id }], "Cut intent removed."),
+    { name: "clearCutIntent" },
   );
 }

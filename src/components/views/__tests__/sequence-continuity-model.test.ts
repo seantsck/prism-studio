@@ -266,3 +266,45 @@ describe("Episode Edit incoming-cut markers", () => {
     expect(typeof cutMarker).toBe("function");
   });
 });
+
+describe("3A.4C: declared cut intent in the Supervisor", () => {
+  const declare = (e: EpisodeEdit, right: number): EpisodeEdit => ({
+    ...e,
+    items: e.items.map((it, i) =>
+      i === right
+        ? {
+            ...it,
+            incomingCutIntent: {
+              fromItemId: e.items[right - 1]!.id,
+              kinds: ["time_jump", "lighting_transition"],
+              scope: [],
+              note: "Hours later; the light changes on purpose.",
+              declaredBy: "11111111-2222-4333-8444-555555555555",
+              declaredAt: "2026-10-29T12:00:00.000Z",
+            },
+          }
+        : it,
+    ),
+  });
+
+  it("no intent: null; an effective intent is shown with kinds, scope and note, and the state is unchanged", () => {
+    const w = world();
+    const e = editOf(w, [videoItem(w, "2A"), videoItem(w, "2B"), videoItem(w, "2C")]);
+    const plain = page(w, e);
+    expect(plain.rows.map((r) => r.intent)).toEqual([null, null]);
+    const withIntent = page(w, declare(e, 1));
+    expect(withIntent.rows[0]!.intent).toMatchObject({
+      effective: true,
+      kinds: ["Time jump", "Lighting transition"],
+      scope: ["Every continuity category"],
+      note: "Hours later; the light changes on purpose.",
+    });
+    expect(withIntent.rows[1]!.intent).toBeNull();
+    // no semantic run exists: intent never fabricates "Intentional discontinuity accepted"
+    expect(withIntent.rows.map((r) => r.state)).toEqual(plain.rows.map((r) => r.state));
+    expect(withIntent.rows[0]!.stateLabel).toBe("No sequence QA yet");
+    // and findings are untouched (the declared direction WARN of 2A → 2B stays)
+    expect(withIntent.rows[0]!.attention).toEqual(plain.rows[0]!.attention);
+    expect(withIntent.projectSlug).toBe("ojousama");
+  });
+});

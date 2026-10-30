@@ -4,7 +4,7 @@ import {
   assertAnalysisTransition,
   isAnalysisTerminal,
 } from "@/domain/continuity/analysis/job-state";
-import { mapAnalysisJob } from "./media-qa-postgres";
+import { mapAnalysisJob, mapAttemptAnalysisJob } from "./media-qa-postgres";
 import {
   AnalysisLeaseLostError,
   type AnalysisJob,
@@ -71,7 +71,8 @@ export class PostgresAnalysisWorkerStore implements AnalysisWorkerStore {
         await c.query(
           `with due as (
              select id from continuity_analysis_jobs
-             where status in (${active}) and next_run_at <= $2::timestamptz
+             -- 3A.4C: this worker executes Shot (attempt) jobs; a transition job waits for its 3A.4D executor
+             where subject_kind = 'attempt' and status in (${active}) and next_run_at <= $2::timestamptz
                and (lease_token is null or lease_expires_at <= $2::timestamptz)
              order by next_run_at asc
              limit $4
@@ -87,7 +88,7 @@ export class PostgresAnalysisWorkerStore implements AnalysisWorkerStore {
           [opts.workerId, opts.now, opts.leaseMs, opts.limit],
         )
       ).rows;
-      return rows.map((r) => ({ job: mapAnalysisJob(r) }));
+      return rows.map((r) => ({ job: mapAttemptAnalysisJob(r) }));
     });
   }
 
