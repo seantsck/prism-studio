@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { analysisSpendBlockers, type AnalysisSpendPolicy } from "@/domain/continuity/analysis/cost";
 import { boundedDerivative } from "@/domain/continuity/analysis/plan";
+import {
+  CUT_EDGE_CLIP_LIMITS,
+  executionIdentity,
+  transitionInputProblem,
+} from "@/domain/continuity/analysis/sequence-plan";
 import { TEMPORAL_SAMPLING_V1 } from "@/domain/continuity/analysis/temporal";
 import {
   DEFAULT_MAX_CORRECTIONS,
@@ -196,16 +201,34 @@ export class ContinuityAnalysisWorker {
     if (job.status === "cancel_requested") {
       return fail("cancelled", "cancelled", "Analysis cancelled.", null, true);
     }
-    // ── version guard: a job is executed only by the analyzer VERSION it was frozen for ──
-    // The version names the request contract (e.g. Gemini v3 = the compact response schema). A job queued under an
-    // older version (still waiting, or durably requeued after a 429/503) must not be sent with newer request
-    // semantics while its run says otherwise: it fails before anything is sent, and a new analysis is planned for
-    // the current version.
-    if (job.inputSnapshot.analyzerVersion !== provider.version) {
+    // ── execution identity (3A.4D): ONE mode, derived from the frozen plan + subject, never inferred ──
+    // A Shot job carries only Shot batches, a transition job only sequence-transition batches, and the job row's subject
+    // kind must be the frozen input's. Anything else fails here: no media is loaded and no transport is touched.
+    const identity = executionIdentity(job.inputSnapshot);
+    if (!identity.ok) return fail("invalid_input", identity.code, identity.message);
+    // a transition input must also satisfy its frozen media contract (canonical sides, one of each edge input, edge
+    // metadata, bounds): a malformed snapshot fails here, before any media load or transport
+    if (job.inputSnapshot.subjectKind === "transition") {
+      const problem = transitionInputProblem(job.inputSnapshot);
+      if (problem) return fail("invalid_input", "sequence_input_invalid", `${problem} Nothing was sent.`);
+    }
+    if (identity.subject !== job.subjectKind) {
+      return fail(
+        "invalid_input",
+        "subject_mismatch",
+        "This analysis job's subject does not match its frozen input; nothing was sent.",
+      );
+    }
+    // ── version guard: a job is executed only by the analyzer version OF ITS MODE it was frozen for ──
+    // The version names the request contract (e.g. Gemini v3 = the compact response schema; gemini-sequence-1 = the cut
+    // contract). A job queued under another version (still waiting, or durably requeued after a 429/503) must not be
+    // sent with different request semantics while its run says otherwise: it fails before anything is sent.
+    const expectedVersion = provider.analysisVersion(identity.mode);
+    if (expectedVersion == null || job.inputSnapshot.analyzerVersion !== expectedVersion) {
       return fail(
         "config",
         "analyzer_version_mismatch",
-        `This analysis was planned for ${job.analyzer} v${job.inputSnapshot.analyzerVersion}, but this worker runs v${provider.version}. Nothing was sent; start a new analysis.`,
+        `This analysis was planned for ${job.analyzer} v${job.inputSnapshot.analyzerVersion}, but this worker runs ${expectedVersion == null ? "no contract for this mode" : `v${expectedVersion}`}. Nothing was sent; start a new analysis.`,
       );
     }
 
@@ -534,9 +557,14 @@ export class ContinuityAnalysisWorker {
     const bytes = await this.o.media.read(ref);
     if (!bytes) throw new Error(`Input ${m.inputId} is missing from storage.`);
     const format = sniffMediaFormat(bytes);
+    // 3A.4D: a cut-edge input (clip or exact edge still) must be EXACTLY the frozen derived Asset
+    if (m.edge && (!m.checksum || createHash("sha256").update(bytes).digest("hex") !== m.checksum))
+      throw new Error(`Input ${m.inputId} does not match its recorded checksum; nothing was sent.`);
     if (m.kind === "video") {
       if (format !== "mp4" && format !== "webm")
         throw new Error(`Input ${m.inputId} is not a supported video.`);
+      if (m.edge && bytes.length > CUT_EDGE_CLIP_LIMITS.maxBytes)
+        throw new Error(`Input ${m.inputId} exceeds the cut-edge clip size limit.`);
       if (bytes.length > MAX_VIDEO_BYTES)
         throw new Error(`Input ${m.inputId} exceeds the video analysis size limit.`);
       // 3A.3: the FULL video leaves Prism, so it must be exactly the frozen subject (infrastructure failure otherwise)

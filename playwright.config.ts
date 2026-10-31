@@ -69,6 +69,9 @@ const ISOLATED_3A4B = "zzzzzzzzzzzzzzzzzzzzzzzz-continuity-supervisor.spec.ts";
 /** The Phase 3A.4C cut-intent spec: its own memory server (it creates an edit, a mock clip and cut intents). */
 const ISOLATED_3A4C = "zzzzzzzzzzzzzzzzzzzzzzzzz-cut-intent.spec.ts";
 
+/** The Phase 3A.4D sequence-review spec: its own memory server (edit, two mock clips, consent, a transition run). */
+const ISOLATED_3A4D = "zzzzzzzzzzzzzzzzzzzzzzzzzz-sequence-review.spec.ts";
+
 /**
  * TEST SERVERS ONLY. Playwright's request client reuses keep-alive sockets; at Node's default idle-close boundary
  * (5 s + 1 s buffer) the server could close a socket while `page.request` was reusing it, giving ECONNRESET before
@@ -92,6 +95,7 @@ export default defineConfig({
         ISOLATED_3A3,
         ISOLATED_3A4B,
         ISOLATED_3A4C,
+        ISOLATED_3A4D,
       ],
       use: { baseURL: "http://localhost:3102" },
     },
@@ -124,6 +128,11 @@ export default defineConfig({
       name: "memory-3a4c-isolated",
       testMatch: ISOLATED_3A4C,
       use: { baseURL: "http://localhost:3108" },
+    },
+    {
+      name: "memory-3a4d-isolated",
+      testMatch: ISOLATED_3A4D,
+      use: { baseURL: "http://localhost:3109" },
     },
   ],
   // Started in order: the first builds; the others serve the same build from separate processes (separate stores).
@@ -184,6 +193,13 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 120_000,
       env: memoryEnv(3108),
+    },
+    {
+      command: `npx next start -p 3109 ${KEEP_ALIVE}`,
+      url: "http://localhost:3109",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: memoryEnv(3109),
     },
   ],
 });

@@ -27,6 +27,19 @@ export const GEMINI_ANALYZER_ID = "gemini";
  * request: the automatic path treats any existing job with its key as covered.
  */
 export const GEMINI_ANALYZER_VERSION = "3";
+/**
+ * 3A.4D: the version of Gemini's SEQUENCE-TRANSITION request contract (`continuity-gemini-transition-v1`, sided
+ * evidence, two edge clips + two edge stills). Mode-scoped: it never relabels a Shot job, and the Shot version never
+ * relabels a transition job. A future contract change is `gemini-sequence-2`, which cannot execute a frozen v1 job.
+ */
+export const GEMINI_SEQUENCE_ANALYSIS_VERSION = "gemini-sequence-1";
+/**
+ * 3A.4D: Prism trusts Gemini with NO semantic cut family yet. 3A.4E's calibration gate is the only thing that may
+ * accept a family; until then every production cut criterion stays unchecked ("has not passed calibration yet").
+ */
+export const GEMINI_CROSS_CUT_CALIBRATED = false;
+export const GEMINI_CROSS_CUT_ACCEPTED_FAMILIES: readonly string[] = Object.freeze([]);
+export const GEMINI_CROSS_CUT_CALIBRATION_VERSION = "gemini-cross-cut-uncalibrated";
 export const GEMINI_SDK = "@google/genai@2.29.0";
 export const GEMINI_DEFAULT_MODEL = "gemini-3.8-flash";
 

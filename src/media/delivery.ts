@@ -122,7 +122,7 @@ function assetFor(args: {
   };
 }
 
-async function derive(args: {
+export async function derive(args: {
   deps: DeliveryDeps;
   parent: Asset;
   parentChecksum: string;
@@ -130,7 +130,11 @@ async function derive(args: {
   operation: DerivationOperation;
   slot: string;
   parameters: Record<string, unknown>;
-  name: string;
+  /**
+   * The Asset's file name. A function receives the PRODUCED output (3A.4D: a cut-edge clip is MP4 or the WebM
+   * fallback, and its name must match). Never part of the derivation identity.
+   */
+  name: string | ((out: MediaOutput) => string);
   tags: string[];
   /** Produces the file. Only called when no derivation with this identity exists yet. */
   produce: () => Promise<MediaOutput>;
@@ -154,7 +158,7 @@ async function derive(args: {
     id,
     parent: args.parent,
     out,
-    name: args.name,
+    name: typeof args.name === "function" ? args.name(out) : args.name,
     tags: args.tags,
     metadata: {
       derivedFrom: args.parent.id,

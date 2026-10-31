@@ -40,7 +40,10 @@ import {
   type NewDerivation,
   type NewFinding,
   type NewRun,
+  type NewTransitionAnalysisBatch,
+  type NewTransitionAnalysisRun,
   type NewTransitionRun,
+  type TransitionAnalysisJob,
   type TransitionContinuityRun,
   type TransitionRunView,
   type TransitionSubject,
@@ -290,9 +293,159 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
   }
 
   async createTransitionRun(input: NewTransitionRun): Promise<TransitionRunView> {
+    const edit = (await this.access.edits?.().get(input.projectId, input.subject.editId)) ?? null;
+    return this.transitionView(this.insertTransitionRun(input, edit));
+  }
+
+  /** 3A.4D: one cut's run + job (a batch of one; the same all-or-none semantics). */
+  async createTransitionRunWithJob(input: NewTransitionAnalysisRun) {
+    const [out] = await this.createTransitionBatchWithJobs({ entries: [input], limits: input.limits });
+    return out!;
+  }
+
+  async findTransitionJobsByKeys(projectId: string, keys: string[]) {
+    return [...this.jobs.values()]
+      .filter(
+        (j): j is TransitionAnalysisJob =>
+          j.subjectKind === "transition" && j.projectId === projectId && keys.includes(j.idempotencyKey),
+      )
+      .map(clone);
+  }
+
+  /**
+   * 3A.4D: ONE confirmed manual batch, all or none. The edits are read first (the only awaits); from there everything is
+   * synchronous: replays resolved by key (no slot), the shared limit checked for the NEW jobs only, EVERY new entry's
+   * adjacency validated, and only then every run + job written. Results follow the input order.
+   */
+  async createTransitionBatchWithJobs(input: NewTransitionAnalysisBatch) {
+    const edits = new Map<string, EpisodeEdit | null>();
+    for (const e of input.entries)
+      if (!edits.has(e.run.subject.editId))
+        edits.set(
+          e.run.subject.editId,
+          (await this.access.edits?.().get(e.run.projectId, e.run.subject.editId)) ?? null,
+        );
+    // ── synchronous from here ──
+    const projectId = input.entries[0]?.run.projectId;
+    if (!projectId) return [];
+    if (input.entries.some((e) => e.run.projectId !== projectId))
+      throw new MediaQaError("invalid", "A sequence batch belongs to one Project.");
+    const existing = (key: string) =>
+      [...this.jobs.values()].find(
+        (j): j is TransitionAnalysisJob =>
+          j.subjectKind === "transition" && j.projectId === projectId && j.idempotencyKey === key,
+      );
+    const keys = input.entries.map((e) => e.job.idempotencyKey);
+    const fresh = input.entries.filter(
+      (e, i) => !existing(e.job.idempotencyKey) && keys.indexOf(e.job.idempotencyKey) === i,
+    );
+    if (fresh.length > 0) {
+      // the SAME shared Project limit as Shot QA, counted across both subject kinds
+      const open = [...this.jobs.values()].filter(
+        (j) => j.projectId === projectId && ANALYSIS_ACTIVE.includes(j.status),
+      ).length;
+      if (open + fresh.length > input.limits.maxActivePerProject)
+        throw new MediaQaError(
+          "invalid",
+          `This review needs ${fresh.length} analysis slot(s) but the project has ${Math.max(0, input.limits.maxActivePerProject - open)} free (${open} in progress, limit ${input.limits.maxActivePerProject}). Nothing was queued.`,
+        );
+    }
+    // all or none: every new entry must still be a live cut BEFORE anything is written
+    for (const e of fresh) {
+      const refusal = this.refusalOf(e.run, edits.get(e.run.subject.editId) ?? null);
+      if (refusal) throw refusal;
+    }
+    const created = new Map<string, TransitionAnalysisJob>();
+    for (const e of fresh) {
+      const run = this.insertTransitionRun(e.run, edits.get(e.run.subject.editId) ?? null);
+      created.set(e.job.idempotencyKey, this.insertTransitionJob(run, e));
+    }
+    return input.entries.map((e) => {
+      const made = created.get(e.job.idempotencyKey);
+      const job = made ?? existing(e.job.idempotencyKey)!;
+      const run = this.transitionRuns.find((x) => x.id === job.runId)!;
+      return { run: this.transitionView(run), job: clone(job), duplicate: !made };
+    });
+  }
+
+  private refusalOf(input: NewTransitionRun, edit: EpisodeEdit | null) {
+    return transitionRunRefusal(
+      edit && {
+        id: edit.id,
+        projectId: edit.projectId,
+        episodeId: edit.episodeId,
+        revision: edit.revision,
+        items: edit.items.map((i) => ({ id: i.id, shotId: i.shotId })),
+      },
+      input,
+    );
+  }
+
+  private insertTransitionJob(run: TransitionContinuityRun, input: NewTransitionAnalysisRun) {
+    const now = input.run.now;
+    const job: TransitionAnalysisJob = {
+      id: randomUUID(),
+      projectId: run.projectId,
+      runId: run.id,
+      subjectKind: "transition",
+      attemptId: null,
+      analyzer: input.job.analyzer,
+      model: input.job.model,
+      status: "queued",
+      inputSnapshot: clone(input.job.snapshot),
+      inputAssetIds: [...input.job.inputAssetIds],
+      idempotencyKey: input.job.idempotencyKey,
+      nextRunAt: now,
+      attemptCount: 0,
+      maxAttempts: input.job.maxAttempts,
+      leaseOwner: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      heartbeatAt: null,
+      providerState: "not_sent",
+      providerRef: null,
+      batchesTotal: input.job.snapshot.plan.batches.length,
+      batchesDone: 0,
+      correctionCount: 0,
+      transportCalls: 0,
+      batchResults: [],
+      estimatedCostUsd: input.job.estimate.maxUsd,
+      actualCostUsd: null,
+      providerFiles: [],
+      lastErrorCode: null,
+      lastErrorCategory: null,
+      lastErrorMessage: "",
+      cancelRequestedAt: null,
+      startedAt: null,
+      completedAt: null,
+      failedAt: null,
+      cancelledAt: null,
+      createdBy: input.run.createdBy,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.jobs.set(job.id, job);
+    this.costs.push({
+      id: randomUUID(),
+      projectId: job.projectId,
+      runId: job.runId,
+      jobId: job.id,
+      analyzer: job.analyzer,
+      model: job.model,
+      kind: "estimated",
+      amountUsd: input.job.estimate.maxUsd,
+      expectedUsd: input.job.estimate.expectedUsd,
+      currency: "USD",
+      usage: clone(input.job.estimate.usage),
+      pricingVersion: input.job.estimate.pricingVersion,
+      recordedAt: now,
+    });
+    this.addEvent(job, null, "queued", "Sequence review submitted by user", now);
+    return job;
+  }
+
+  private insertTransitionRun(input: NewTransitionRun, edit: EpisodeEdit | null): TransitionContinuityRun {
     const s = input.subject;
-    const edit = (await this.access.edits?.().get(input.projectId, s.editId)) ?? null;
-    // ── synchronous from here: the adjacency checked is the adjacency written, and numbering cannot interleave ──
     const refusal = transitionRunRefusal(
       edit && {
         id: edit.id,
@@ -332,11 +485,11 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
       criteriaFingerprint: input.criteriaFingerprint,
       referenceFingerprint: input.referenceFingerprint,
       referenceSet: clone(input.referenceSet),
-      analysisPlan: null,
-      externalManifest: null,
-      promptVersion: null,
-      rubricVersion: null,
-      model: null,
+      analysisPlan: input.analysisPlan ? clone(input.analysisPlan) : null,
+      externalManifest: input.externalManifest ? clone(input.externalManifest) : null,
+      promptVersion: input.promptVersion ?? null,
+      rubricVersion: input.rubricVersion ?? null,
+      model: input.model ?? null,
       automationKey: null,
       createdBy: input.createdBy,
       createdAt: input.now,
@@ -362,7 +515,7 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
         projectId: run.projectId,
         createdAt: input.now,
       });
-    return this.transitionView(run);
+    return run;
   }
 
   async getTransitionRun(runId: string) {
@@ -421,6 +574,23 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
   async applyAnalysis(runId: string, results: Parameters<MediaQaRepository["applyAnalysis"]>[1]) {
     const run = this.runs.find((x) => x.id === runId);
     if (!run) throw new MediaQaError("not_found", "That QA run no longer exists.");
+    this.applyResults(run, results);
+  }
+
+  /**
+   * 3A.4D: the worker executes jobs of EITHER subject kind, so its run lookups (start / apply / finish) find the job's
+   * run by id among attempt and transition runs, exactly as the Postgres worker store updates a run by id. The public
+   * Shot APIs above stay attempt-only.
+   */
+  private workerRun(runId: string) {
+    return this.runs.find((x) => x.id === runId) ?? this.transitionRuns.find((x) => x.id === runId) ?? null;
+  }
+
+  private applyResults(
+    run: { id: string; analysisStatus: AnalysisStatus },
+    results: Parameters<MediaQaRepository["applyAnalysis"]>[1],
+  ) {
+    const runId = run.id;
     if (run.analysisStatus === "complete") {
       throw new MediaQaError("run_closed", "A completed run is a frozen snapshot; start a new run instead.");
     }
@@ -674,9 +844,8 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
     const nowMs = Date.parse(opts.now);
     const due = [...this.jobs.values()]
       .filter(
-        (j): j is AttemptAnalysisJob =>
-          // 3A.4C: this worker executes Shot (attempt) jobs; a transition job waits for its 3A.4D executor
-          j.subjectKind === "attempt" &&
+        (j) =>
+          // 3A.4D: both subject kinds; the worker is mode-aware
           ANALYSIS_ACTIVE.includes(j.status) &&
           Date.parse(j.nextRunAt) <= nowMs &&
           (j.leaseToken == null || (j.leaseExpiresAt != null && Date.parse(j.leaseExpiresAt) <= nowMs)),
@@ -751,7 +920,7 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
   }
 
   async startRun(runId: string, now: string) {
-    const r = this.runs.find((x) => x.id === runId);
+    const r = this.workerRun(runId);
     if (r && r.analysisStatus === "queued") {
       r.analysisStatus = "running";
       void now;
@@ -800,11 +969,11 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
       // exactly one final result per job: a duplicate worker finishing late changes nothing
       return clone(job);
     }
-    const run = this.runs.find((r) => r.id === input.runId);
+    const run = this.workerRun(input.runId);
     if (!run || run.analysisStatus === "complete")
       throw new MediaQaError("run_closed", "The run is already complete.");
-    await this.applyAnalysis(
-      input.runId,
+    this.applyResults(
+      run,
       input.findings.map((f) => ({
         criterionKey: f.criterionKey,
         result: f.result,
@@ -820,7 +989,9 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
         },
       })),
     );
-    await this.setAnalysisStatus(input.runId, "complete", input.now);
+    run.analysisStatus = "complete";
+    run.analysisError = "";
+    run.completedAt = input.now;
     this.writeCost(job, input.cost, input.now);
     const from = job.status;
     assertAnalysisTransition(job.status, "succeeded");
@@ -844,7 +1015,7 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
     const from = job.status;
     const to = input.cancelled ? "cancelled" : "failed";
     assertAnalysisTransition(job.status, to);
-    await this.setAnalysisStatus(input.runId, "failed", input.now, input.errorMessage);
+    this.failRun(input.runId, input.now, input.errorMessage);
     if (input.cost && !this.costs.some((c) => c.jobId === job.id && c.kind !== "estimated")) {
       this.writeCost(job, input.cost, input.now);
       job.actualCostUsd = input.cost.kind === "actual" ? input.cost.amountUsd : null;

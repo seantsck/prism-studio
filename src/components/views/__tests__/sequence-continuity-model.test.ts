@@ -92,7 +92,7 @@ describe("Continuity Supervisor model: the persisted edit's actual cuts", () => 
     expect(JSON.stringify(row)).not.toMatch(/exact (last|first) frame/i);
     expect(row.hasClipEdge).toBe(true);
     expect(EDGE_MEDIA_NOTE).toBe(
-      "For generated clips, exact cut-edge media will be available when cut-edge derivation is implemented.",
+      "Exact cut-edge media (2 s per side, audio stripped, plus the exact edge frames) is derived only when you confirm a Sequence Continuity review of this cut.",
     );
     // links: Shot Prep, and the pinned attempt's existing Shot QA page
     expect(row.left.shotPrepUrl).toBe(
