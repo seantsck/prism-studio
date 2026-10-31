@@ -84,7 +84,7 @@ export interface GeminiProviderOptions {
   transport: GeminiTransport;
   pricing?: PricingTable;
   /**
-   * TESTS ONLY (fake transport): the semantic cut families to treat as accepted, so the sequence request constructor
+   * TESTS AND THE CALIBRATION HARNESS ONLY: the semantic cut families to treat as accepted, so the request constructor
    * can be exercised end to end. The registry never passes it: production uses `GEMINI_CROSS_CUT_ACCEPTED_FAMILIES`
    * (empty in 3A.4D) and its calibration identity.
    */

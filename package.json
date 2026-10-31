@@ -63,6 +63,8 @@
     "continuity:pre-paid:check": "tsx --env-file=.env.local scripts/continuity-pre-paid-check.mts",
     "continuity:temporal:calibrate": "tsx --env-file=.env.local scripts/continuity-temporal-calibration.mts",
     "continuity:temporal:smoke": "tsx --env-file=.env.local scripts/continuity-temporal-smoke.mts",
+    "continuity:sequence:calibrate": "tsx --env-file=.env.local scripts/continuity-sequence-calibration.mts",
+    "continuity:sequence:smoke": "tsx --env-file=.env.local scripts/continuity-sequence-smoke.mts",
     "continuity:pre-paid:check:openai": "tsx --env-file=.env.local scripts/continuity-pre-paid-check.mts --provider openai",
     "continuity:run:report": "tsx --env-file=.env.local scripts/continuity-run-report.mts",
     "continuity:fixture": "tsx --env-file=.env.local scripts/continuity-smoke-fixture.mts",
