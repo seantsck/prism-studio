@@ -11,8 +11,17 @@ import type { AnalyzerCapability, ContinuityCategory, ContinuitySeverity } from 
  * Prism-owned and never come back from a provider.
  */
 
-export const ANALYSIS_MODES = ["image_set", "direct_video"] as const;
+/**
+ * `sequence_transition` (Phase 3A.4D): one CUT of an Episode Edit, judged from bounded edge media of BOTH sides (the
+ * two cut-edge clips, the exact edge stills, sided references). Internal name only: the UI says "Sequence Continuity".
+ */
+export const ANALYSIS_MODES = ["image_set", "direct_video", "sequence_transition"] as const;
 export type AnalysisMode = (typeof ANALYSIS_MODES)[number];
+/** The modes of a Shot (attempt) analysis. A Shot job never carries a sequence batch, a transition job never these. */
+export const SHOT_ANALYSIS_MODES = ["image_set", "direct_video"] as const;
+export type ShotAnalysisMode = (typeof SHOT_ANALYSIS_MODES)[number];
+export const isShotAnalysisMode = (m: AnalysisMode): m is ShotAnalysisMode =>
+  (SHOT_ANALYSIS_MODES as readonly string[]).includes(m);
 
 /**
  * Versioned prompt/rubric identity: stored on every run so history stays interpretable. `video-v2` (Phase 3A.3) is the
@@ -22,18 +31,27 @@ export type AnalysisMode = (typeof ANALYSIS_MODES)[number];
 export const PROMPT_VERSIONS: Record<AnalysisMode, string> = {
   image_set: "continuity-gemini-image-v1",
   direct_video: "continuity-gemini-video-v2",
+  /** 3A.4D: LEFT and RIGHT of one cut, sided evidence (never `continuity-gemini-video-v2`). */
+  sequence_transition: "continuity-gemini-transition-v1",
 };
-/** OpenAI-adapter prompt identity (same rubric and schema; its own system instruction text). */
-export const OPENAI_PROMPT_VERSIONS: Record<AnalysisMode, string> = {
+/** OpenAI-adapter prompt identity (same rubric and schema; its own system instruction text). No sequence mode. */
+export const OPENAI_PROMPT_VERSIONS: Record<ShotAnalysisMode, string> = {
   image_set: "continuity-openai-image-v1",
   direct_video: "continuity-openai-video-v1",
 };
 
 /** The prompt version an analyzer uses for a mode. Stored on every batch/run so history stays interpretable. */
 export function promptVersionFor(analyzerId: string, mode: AnalysisMode): string {
-  return analyzerId === "openai" ? OPENAI_PROMPT_VERSIONS[mode] : PROMPT_VERSIONS[mode];
+  if (analyzerId === "openai") {
+    if (!isShotAnalysisMode(mode)) throw new Error("The OpenAI analyzer has no sequence-transition prompt.");
+    return OPENAI_PROMPT_VERSIONS[mode];
+  }
+  return PROMPT_VERSIONS[mode];
 }
+/** The Shot rubric. Unchanged by 3A.4D: a sequence job uses `SEQUENCE_RUBRIC_VERSION` instead. */
 export const RUBRIC_VERSION = "continuity-rubric-1";
+/** 3A.4D: the cut rubric (sided evidence, no editorial taste, expected truth supplied by Prism). */
+export const SEQUENCE_RUBRIC_VERSION = "sequence-rubric-1";
 /**
  * 2 (Phase 3A.3): direct-video evidence may carry an interval end (`endMs`) and is bounded by the clip duration.
  * Schema-1 snapshots/findings (no `endMs`) stay readable as they are; nothing historical is rewritten.
@@ -57,8 +75,32 @@ export interface AnalysisMedia {
   height: number | null;
   byteSize: number | null;
   durationMs: number | null;
-  /** Position in the output (frames only). */
+  /** Position in the output (frames only). For a cut-edge still: its exact source position in the parent clip. */
   atMs: number | null;
+  /**
+   * 3A.4D sequence media only: which side of the cut the input belongs to; an evidence item's side is derived from it.
+   * Input ids: `left:clip`, `right:clip`, `left:last`, `right:first`, `ref:left:<role>:<n>`, `ref:right:<role>:<n>`.
+   */
+  side?: "left" | "right";
+  /**
+   * 3A.4D cut-edge clips/stills: the frozen mapping clip-local time → parent source time → edit time. A clip-local
+   * instant t is source `startMs + t` and edit time `itemEditStartMs + (startMs + t − sourceInMs)`. A still has
+   * `startMs = endMs = atMs`. Ids and numbers only: never a URL.
+   */
+  edge?: {
+    policy: string;
+    parentAssetId: string;
+    parentChecksum: string;
+    startMs: number;
+    endMs: number;
+    sourceInMs: number;
+    itemEditStartMs: number;
+    /**
+     * Clips only: the transfer method the person CONFIRMED for this exact clip. A provider may not choose another
+     * (more persistent) method: a mismatch is refused locally before any upload or request.
+     */
+    transfer?: "inline" | "provider_file" | "not_sent";
+  };
 }
 
 export interface AnalysisCriterion {
@@ -70,6 +112,8 @@ export interface AnalysisCriterion {
   sourceRef: string;
   expected: string;
   capability: AnalyzerCapability;
+  /** 3A.4D cut criteria only: the semantic cross-cut family (each one independently calibration-gated). */
+  family?: string;
 }
 
 export type PlanItemStatus =
@@ -83,7 +127,9 @@ export type PlanItemStatus =
   /** Only a person can answer it. */
   | "manual"
   /** The analyzer could judge it, but the Project has not allowed the media it needs (full video): unchecked. */
-  | "not_allowed";
+  | "not_allowed"
+  /** 3A.4D: Prism decided the criterion does not apply to this cut (`n_a`): never sent, never answered. */
+  | "not_applicable";
 
 export interface PlanItem {
   criterionKey: string;
@@ -127,6 +173,10 @@ export interface ManifestEntry {
     | "direct_video_not_allowed"
     /** 3A.3: the video is outside Prism's temporal bounds (duration / size / format / unknown duration). */
     | "video_not_eligible"
+    /** 3A.4D: no semantic criterion of this cut may be analysed by this analyzer (no mode / not calibrated). */
+    | "sequence_not_calibrated"
+    /** 3A.4D: the Project has not allowed bounded cut-edge video to leave Prism (`direct_video_allowed`). */
+    | "sequence_video_not_allowed"
     | null;
 }
 
@@ -173,15 +223,31 @@ export interface ContinuityAnalysisPlan {
  * The frozen input of one analysis. Stored on the job and (as plan/manifest) on the run. Contains ids,
  * checksums and Prism-owned text only: never signed URLs, never bytes, never credentials.
  */
-export interface ContinuityAnalysisInput {
+interface ContinuityAnalysisInputBase {
   version: 1;
   runKey: string;
+  criteria: AnalysisCriterion[];
+  media: AnalysisMedia[];
+  framing: { productionAspectRatio: string | null };
+  analyzer: string;
+  /** the analyzer's version FOR THIS INPUT'S MODE (`provider.analysisVersion(mode)`) */
+  analyzerVersion: string;
+  model: string;
+  rubricVersion: string;
+  schemaVersion: number;
+  plan: ContinuityAnalysisPlan;
+}
+
+/**
+ * 3A.4D: the frozen input is discriminated by subject. A Shot input keeps exactly its pre-3A.4D shape (`subjectKind` is
+ * absent on every historical snapshot); a cut input carries the cut's frozen identity instead of an attempt.
+ */
+export interface AttemptContinuityAnalysisInput extends ContinuityAnalysisInputBase {
+  subjectKind?: "attempt";
   attemptId: string;
   /** The delivery master (or provider original) that is judged. */
   subjectAssetId: string;
   providerOriginalAssetId: string | null;
-  criteria: AnalysisCriterion[];
-  media: AnalysisMedia[];
   framing: {
     productionAspectRatio: string | null;
     deliveryWidth: number | null;
@@ -189,14 +255,41 @@ export interface ContinuityAnalysisInput {
     providerCanvas: string | null;
     strategy: string | null;
   };
-  analyzer: string;
-  analyzerVersion: string;
-  model: string;
-  promptVersions: Record<AnalysisMode, string>;
-  rubricVersion: string;
-  schemaVersion: number;
-  plan: ContinuityAnalysisPlan;
+  promptVersions: Record<ShotAnalysisMode, string>;
 }
+
+/** What a transition job freezes about its cut (never the live Episode Edit). */
+export interface FrozenTransitionIdentity {
+  transitionKey: string;
+  editId: string;
+  episodeId: string;
+  editRevision: number;
+  leftItemId: string;
+  rightItemId: string;
+  leftShotId: string;
+  rightShotId: string;
+  subjectFingerprint: string;
+  leftSubjectFingerprint: string;
+  rightSubjectFingerprint: string;
+  criteriaFingerprint: string;
+  referenceFingerprint: string;
+  rulesVersion: string;
+}
+
+export interface TransitionContinuityAnalysisInput extends ContinuityAnalysisInputBase {
+  subjectKind: "transition";
+  transition: FrozenTransitionIdentity;
+  /** the cut-edge policy the edge media were derived under (`cut-edge-static-v1`) */
+  edgePolicy: string;
+  /** the family-acceptance identity the plan was made under (which families the analyzer was trusted with) */
+  calibration: { version: string; acceptedFamilies: string[] };
+  promptVersions: { sequence_transition: string };
+}
+
+export type ContinuityAnalysisInput = AttemptContinuityAnalysisInput | TransitionContinuityAnalysisInput;
+
+export const isTransitionInput = (i: ContinuityAnalysisInput): i is TransitionContinuityAnalysisInput =>
+  i.subjectKind === "transition";
 
 // ───────────────────────── results ─────────────────────────
 

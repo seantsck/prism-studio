@@ -167,10 +167,12 @@ describe("memory analysis jobs: generic bookkeeping vs Shot paths", () => {
     await expect(submit(1)).rejects.toThrow(/already has 1 analyses in progress \(limit 1\)/);
   });
 
-  it("the current (3A.4C) worker claims the attempt job only; the transition job stays queued", async () => {
+  it("3A.4D: the mode-aware worker claims BOTH kinds (one shared queue); each keeps its own subject", async () => {
     const { qa } = memoryWithBothKinds();
     const claimed = await qa.claim({ workerId: "w", now: NOW, leaseMs: 1000, limit: 10 });
-    expect(claimed.map((c) => c.job.id)).toEqual(["job-a"]);
-    expect((await qa.getAnalysisJob("job-t"))!.status).toBe("queued");
+    expect(claimed.map((c) => [c.job.id, c.job.subjectKind]).sort()).toEqual([
+      ["job-a", "attempt"],
+      ["job-t", "transition"],
+    ]);
   });
 });

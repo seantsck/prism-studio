@@ -665,6 +665,54 @@ export class FfmpegMediaProcessor implements MediaProcessor {
     return this.conform(bytes, { crop: null, pad: null, trimMs: durationMs });
   }
 
+  /**
+   * 3A.4D cut-edge clip: decode the whole stream and keep exactly [startMs, endMs) with a `trim` filter (frame-accurate:
+   * no input seek, no stream copy from an earlier keyframe), timestamps reset to 0, audio dropped (`-an`), the fixed
+   * encoder profile, bit-exact flags and no metadata. Byte-identical output is only claimed for the same tool build.
+   */
+  async extractWindow(bytes: Uint8Array, startMs: number, endMs: number): Promise<MediaOutput> {
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs < 0 || endMs <= startMs) {
+      throw new MediaError("invalid_parameters", "A window needs 0 ≤ start < end (milliseconds).");
+    }
+    const format = this.checkInput(bytes);
+    return this.withDir(async (dir) => {
+      const inFile = path.join(dir, `in.${EXTENSION[format]}`);
+      await writeFile(inFile, bytes);
+      const info = await this.probeFile(inFile, format, bytes.length, dir);
+      if (info.kind !== "video") throw new MediaError("unsupported_media", "Only video has a time window.");
+      if (info.durationMs != null && startMs >= info.durationMs)
+        throw new MediaError("invalid_parameters", "The window starts after the end of the video.");
+      const profile = await this.videoProfile();
+      const out = path.join(dir, `out.${profile.ext}`);
+      await this.exec(
+        this.ffmpeg,
+        [
+          ...this.baseInput(format, inFile),
+          "-vf",
+          `trim=start=${this.seconds(startMs)}:end=${this.seconds(endMs)},setpts=PTS-STARTPTS`,
+          "-map",
+          "0:v:0",
+          ...profile.video,
+          "-an",
+          "-map_metadata",
+          "-1",
+          "-fflags",
+          "+bitexact",
+          "-flags:v",
+          "+bitexact",
+          "-threads",
+          "2",
+          "-fs",
+          String(this.limits.maxOutputBytes),
+          "-y",
+          out,
+        ],
+        { cwd: dir, timeoutMs: this.limits.timeoutMs },
+      );
+      return this.finish(dir, out, profile.ext, profile.mime, profile.ext);
+    });
+  }
+
   async scaleVideo(bytes: Uint8Array, width: number, height: number): Promise<MediaOutput> {
     if (
       !Number.isInteger(width) ||

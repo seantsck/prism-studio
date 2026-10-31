@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sequenceInputSide } from "./sequence-plan";
 import {
   FINDING_RESULTS,
   type AnalysisBatch,
@@ -185,9 +186,61 @@ export const ANALYSIS_RESPONSE_JSON_SCHEMA_VIDEO = {
   },
 } as const;
 
+/**
+ * 3A.4D sequence-transition answers: the same schema-2 evidence shape as direct video (moment + optional interval end),
+ * described for TWO clips, two stills and sided references. The bounds are checked per input by Prism, not here.
+ */
+export const ANALYSIS_RESPONSE_JSON_SCHEMA_SEQUENCE = {
+  ...ANALYSIS_RESPONSE_JSON_SCHEMA_VIDEO,
+  properties: {
+    criteria: {
+      ...ANALYSIS_RESPONSE_JSON_SCHEMA_VIDEO.properties.criteria,
+      items: {
+        ...ANALYSIS_RESPONSE_JSON_SCHEMA_VIDEO.properties.criteria.items,
+        properties: {
+          ...ANALYSIS_RESPONSE_JSON_SCHEMA_VIDEO.properties.criteria.items.properties,
+          evidence: {
+            type: "array",
+            maxItems: 8,
+            items: {
+              type: "object",
+              properties: {
+                input: {
+                  type: "string",
+                  description:
+                    "An inputId from DATA.inputs: left:clip, right:clip, left:last, right:first or a sided reference.",
+                },
+                timestampMs: {
+                  type: ["integer", "null"],
+                  minimum: 0,
+                  description:
+                    "For a clip: ms from the start of THAT clip (within its durationMs). For an edge still: null or its atMs. For a reference: null.",
+                },
+                endMs: {
+                  type: ["integer", "null"],
+                  minimum: 0,
+                  description:
+                    "Clips only: end of the observed interval in that clip, or null. Always null for a still.",
+                },
+                observation: { type: "string" },
+              },
+              required: ["input", "timestampMs", "endMs", "observation"],
+              additionalProperties: false,
+            },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
 /** The structured-output schema for a batch's mode. */
 export const responseJsonSchemaFor = (mode: AnalysisMode) =>
-  mode === "direct_video" ? ANALYSIS_RESPONSE_JSON_SCHEMA_VIDEO : ANALYSIS_RESPONSE_JSON_SCHEMA;
+  mode === "direct_video"
+    ? ANALYSIS_RESPONSE_JSON_SCHEMA_VIDEO
+    : mode === "sequence_transition"
+      ? ANALYSIS_RESPONSE_JSON_SCHEMA_SEQUENCE
+      : ANALYSIS_RESPONSE_JSON_SCHEMA;
 
 export type ValidationOutcome =
   { ok: true; findings: NormalizedFinding[]; missing: string[] } | { ok: false; errors: string[] };
@@ -215,7 +268,9 @@ export function validateBatchResponse(
   },
   media: AnalysisMedia[],
 ): ValidationOutcome {
-  const temporal = batch.mode === "direct_video";
+  const sequence = batch.mode === "sequence_transition";
+  // both direct video and sequence evidence use the schema-2 shape (moment + optional interval end)
+  const temporal = batch.mode === "direct_video" || sequence;
   if (raw == null || raw.trim() === "") return { ok: false, errors: ["The response was empty."] };
   if (raw.length > MAX_RESPONSE_CHARS)
     return { ok: false, errors: [`The response exceeded ${MAX_RESPONSE_CHARS} characters.`] };
@@ -259,7 +314,11 @@ export function validateBatchResponse(
         continue;
       }
       const m = allowedInputs.get(e.input);
-      const problem = temporal ? videoEvidenceProblem(e, m) : stillEvidenceProblem(e, m);
+      const problem = sequence
+        ? sequenceEvidenceProblem(e, m)
+        : temporal
+          ? videoEvidenceProblem(e, m)
+          : stillEvidenceProblem(e, m);
       if (problem) {
         errors.push(`${who}: ${problem}`);
         continue;
@@ -273,9 +332,26 @@ export function validateBatchResponse(
         source: sourceOf(m),
       });
     }
+    // 3A.4D: a cut judgement must rest on BOTH sides: at least one LEFT and one RIGHT edge input (its clip, with a
+    // time, or its exact edge still). A sided reference alone never counts; a one-sided judgement is invalid.
+    if (sequence && a.result !== "unchecked") {
+      const sided = (side: "left" | "right") =>
+        evidence.some((x) => {
+          const m = allowedInputs.get(x.input);
+          // the side comes from the CANONICAL input id, never from the redundant `side` field
+          return m != null && sequenceInputSide(x.input) === side && m.kind !== "reference";
+        });
+      const missing = (["left", "right"] as const).filter((s) => !sided(s));
+      if (missing.length > 0) {
+        errors.push(
+          `Answer for "${a.criterionId.slice(0, 40)}" is ${a.result} but cites no ${missing.join(" or ")} edge evidence: a cut judgement needs evidence from BOTH sides.`,
+        );
+        continue;
+      }
+    }
     // a temporal judgement must say WHERE in the clip it was observed
     if (
-      temporal &&
+      batch.mode === "direct_video" &&
       a.result !== "unchecked" &&
       !evidence.some((x) => x.source === "video" && x.atMs != null)
     ) {
@@ -322,6 +398,28 @@ function videoEvidenceProblem(
     if (e.endMs < e.timestampMs) return `endMs ${e.endMs} is before timestampMs ${e.timestampMs}.`;
     if (e.endMs > duration) return `endMs ${e.endMs} is after the end of the clip (${duration} ms).`;
   }
+  return null;
+}
+
+/**
+ * 3A.4D sequence evidence: a CLIP is bounded by ITS OWN duration (left and right are never validated against one
+ * shared duration); an exact edge STILL is one instant (timestamp null or its own position, never an interval); a
+ * sided reference has no time at all.
+ */
+function sequenceEvidenceProblem(
+  e: { timestampMs: number | null; endMs?: number | null },
+  m: AnalysisMedia | undefined,
+): string | null {
+  if (!m) return "evidence must cite an input of this request.";
+  if (m.kind === "video") return videoEvidenceProblem(e, m);
+  if (e.endMs != null)
+    return `"${m.inputId.slice(0, 40)}" is a still image: endMs must be null (no interval on a still).`;
+  if (m.kind === "reference")
+    return e.timestampMs == null
+      ? null
+      : `"${m.inputId.slice(0, 40)}" is a reference: timestampMs must be null.`;
+  if (e.timestampMs != null && e.timestampMs !== m.atMs)
+    return `edge still "${m.inputId.slice(0, 40)}" is the frame at ${m.atMs} ms: timestampMs must be null or ${m.atMs}.`;
   return null;
 }
 

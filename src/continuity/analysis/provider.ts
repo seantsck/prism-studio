@@ -67,7 +67,21 @@ export interface AnalysisContext {
 
 export interface ContinuityAnalysisProvider {
   readonly id: string;
+  /**
+   * The SHOT analysis version (image_set and direct_video share it). Kept for the Shot identities that already use it;
+   * no worker decision about a transition job ever reads it: use `analysisVersion(mode)`.
+   */
   readonly version: string;
+  /**
+   * 3A.4D: the request-contract version for ONE mode, frozen on every job of that mode and compared by the worker
+   * against the job's own mode. null = this analyzer has no contract for the mode (a job of it can never execute).
+   */
+  analysisVersion(mode: AnalysisMode): string | null;
+  /**
+   * 3A.4D: the semantic cut families this analyzer is TRUSTED with (calibration acceptance) and the identity of that
+   * decision. `cross_cut` says the analyzer can run the MODE; only a family listed here may be planned.
+   */
+  crossCutCalibration(): { version: string; acceptedFamilies: readonly string[] };
   readonly kind: "mock" | "model";
   readonly label: string;
   readonly model: string;

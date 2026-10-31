@@ -37,6 +37,11 @@ export interface PlannerAnalyzer {
   modes: readonly AnalysisMode[];
   /** Capabilities that need the whole video (temporal/audio). Only used when `direct_video` is enabled. */
   videoCapabilities: readonly AnalyzerCapability[];
+  /**
+   * 3A.4D: the semantic cut families this analyzer is TRUSTED with (calibration acceptance). Absent/empty = none: a
+   * cut criterion is then unsupported even when the analyzer declares `cross_cut`. Never read by the Shot planner.
+   */
+  crossCutFamilies?: readonly string[];
 }
 
 /** Capabilities that cannot be judged from stills. */

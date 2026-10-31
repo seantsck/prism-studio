@@ -92,6 +92,16 @@ export class OpenAIContinuityAnalyzer implements ContinuityAnalysisProvider {
   capabilities() {
     return IMAGE_CAPABILITIES;
   }
+  /**
+   * 3A.4D: OpenAI has NO sequence-transition contract (two-video cut analysis is never faked through stills here), so a
+   * transition job can never execute on it.
+   */
+  analysisVersion(mode: AnalysisMode): string | null {
+    return mode === "sequence_transition" ? null : this.version;
+  }
+  crossCutCalibration() {
+    return { version: "openai-no-sequence", acceptedFamilies: [] as string[] };
+  }
   /** Image-set only: direct video is not offered by this adapter. */
   modes(): readonly AnalysisMode[] {
     return ["image_set"];

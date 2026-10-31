@@ -1,13 +1,14 @@
 # Sequence Continuity Supervisor (Phase 3A.4)
 
-**Status: architecture accepted; 3A.4A–C implemented; 3A.4D–F pending (2026-10-29).** The owner reviewed this
-design and accepted it with fixes, and those fixes are applied below. The owner decisions are recorded in
-[§21](#21-owner-decisions-and-implementation-details). 3A.4A (the pure cut domain and deterministic projection,
-[§22](#3a4a-implementation-notes)), 3A.4B (the deterministic Supervisor UI, [§22](#3a4b-implementation-notes)) and
-3A.4C (migration 0046: transition persistence and predecessor-bound cut intent, [§22](#3a4c-implementation-notes))
-exist. 0046 is verified on a disposable local database only and is **not applied to hosted**. There is still no
-semantic transition analysis, provider mode, provider call, media derivation or calibration for 3A.4. Each
-implementation slice ([§22](#22-implementation-slices)) is its own gate.
+**Status: architecture accepted; 3A.4A–C merged; 3A.4D implemented (current); 3A.4E–F pending (2026-10-30).**
+The owner reviewed this design and accepted it with fixes, and those fixes are applied below. The owner decisions are
+recorded in [§21](#21-owner-decisions-and-implementation-details). 3A.4A (the pure cut domain and deterministic
+projection, [§22](#3a4a-implementation-notes)), 3A.4B (the deterministic Supervisor UI,
+[§22](#3a4b-implementation-notes)) and 3A.4C (migration 0046: transition persistence and predecessor-bound cut
+intent, [§22](#3a4c-implementation-notes)) are merged. **Hosted migration head is 0046** (accepted at its hosted gate,
+2026-10-30). 3A.4D ([§22](#3a4d-implementation-notes)) adds the semantic cross-cut pipeline with every production cut
+family **uncalibrated and OFF**: no live provider call and no calibration happen before 3A.4E. Each implementation
+slice ([§22](#22-implementation-slices)) is its own gate.
 
 **Question it answers:** _does this cut work as continuity?_ In other words, does Shot B continue Shot A correctly at
 the cut that actually exists in the Episode Edit, as opposed to each Shot satisfying its own truth?
@@ -865,16 +866,16 @@ behaviour.
 
 ## 22. Implementation slices
 
-Each slice is separately reviewed and gated. 3A.4A, 3A.4B and 3A.4C are implemented; 3A.4D–F have not started.
+Each slice is separately reviewed and gated. 3A.4A, 3A.4B and 3A.4C are merged; 3A.4D is implemented and awaiting merge; 3A.4E–F are pending.
 
-| Slice     | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Migration           | Paid / live calls           |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------- |
-| **3A.4A** | **Cut domain + deterministic projection:** `CutTransition` from the Episode Edit, side truth, edge windows, subject / criteria / reference fingerprints, cut criteria, deterministic findings, `assessTransition` status, shared `describeTransition` (the Sequence Board output is unchanged). Pure, plus tests                                                                                                                                                                                                                                                                                                                                     | none                | 0                           |
-| **3A.4B** | **Supervisor UI (deterministic):** the Episode route, cut rows, filters, counts, the Episode Edit cut markers, Sequence Board ↔ Supervisor links; memory E2E                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | none                | 0                           |
-| **3A.4C** | **Persistence + human intent:** 0046 (run / job `subject_kind` with database subject invariants, the transition subjects table, predecessor-bound incoming cut intent, explicit grants), repositories, transition run numbering, cut-intent edit operations (adjacency changes clear intent transactionally), overrides on transition findings; RLS / worker-role proofs; hosted apply as its own gate. **Acceptance criterion: every Shot-oriented query is audited and constrained to `subject_kind = 'attempt'`, and tests prove transition rows never appear as Shot QA, affect the latest Shot run, Shot numbering or automatic Shot coverage** | **0046**            | 0                           |
-| **3A.4D** | **Semantic cut analyzer:** first the mode-scoped analysis version contract and worker guard (§14); then `extractWindow`, batch-bounded cut-edge derivations, the `sequence_transition` mode in the plan / prompt / validation (sided-evidence rules, Prism-assigned `n_a`), Mock + Gemini adapter behind the fake transport, manual batch submission with the exact disclosure; `cross_cut` declared **nowhere in production**                                                                                                                                                                                                                       | none                | 0                           |
-| **3A.4E** | **Calibration:** `sequence-calibration-v1` fixtures + harness, the input hash, pre-registered acceptance; then a **separately authorised** live gate; accepted families recorded                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | none                | only in the authorised gate |
-| **3A.4F** | **Automatic orchestration + hosted acceptance:** sequence policy (0047: `sequence_semantic_mode` default `off`, batch cap), cut-local settling, waves, batch caps, the budget sum, reconciliation triggers; hosted verification; final acceptance                                                                                                                                                                                                                                                                                                                                                                                                    | **0047** (proposed) | 0 unless authorised         |
+| Slice     | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Migration           | Paid / live calls           |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------- |
+| **3A.4A** | **Cut domain + deterministic projection:** `CutTransition` from the Episode Edit, side truth, edge windows, subject / criteria / reference fingerprints, cut criteria, deterministic findings, `assessTransition` status, shared `describeTransition` (the Sequence Board output is unchanged). Pure, plus tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | none                | 0                           |
+| **3A.4B** | **Supervisor UI (deterministic):** the Episode route, cut rows, filters, counts, the Episode Edit cut markers, Sequence Board ↔ Supervisor links; memory E2E                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | none                | 0                           |
+| **3A.4C** | **Persistence + human intent:** 0046 (run / job `subject_kind` with database subject invariants, the transition subjects table, predecessor-bound incoming cut intent, explicit grants), repositories, transition run numbering, cut-intent edit operations (adjacency changes clear intent transactionally), overrides on transition findings; RLS / worker-role proofs; hosted apply as its own gate. **Acceptance criterion: every Shot-oriented query is audited and constrained to `subject_kind = 'attempt'`, and tests prove transition rows never appear as Shot QA, affect the latest Shot run, Shot numbering or automatic Shot coverage**                                                                                                                                                             | **0046**            | 0                           |
+| **3A.4D** | **Semantic cut analyzer:** first the mode-scoped analysis version contract and worker guard (§14); then `extractWindow`, batch-bounded cut-edge derivations, the `sequence_transition` mode in the plan / prompt / validation (sided-evidence rules, Prism-assigned `n_a`), Mock + Gemini adapter behind the fake transport, manual batch submission with the exact disclosure. Gemini advertises the internal `sequence_transition` contract and `cross_cut` capability only when its direct-video gate is available, but `cross_cut` alone authorizes **no family**: the production accepted-family list is **empty** (`GEMINI_CROSS_CUT_CALIBRATED = false`), every production cut criterion stays uncalibrated / `unsupported`, and no production semantic cut judgment can run until 3A.4E accepts a family | none                | 0                           |
+| **3A.4E** | **Calibration:** `sequence-calibration-v1` fixtures + harness, the input hash, pre-registered acceptance; then a **separately authorised** live gate; accepted families recorded                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | none                | only in the authorised gate |
+| **3A.4F** | **Automatic orchestration + hosted acceptance:** sequence policy (0047: `sequence_semantic_mode` default `off`, batch cap), cut-local settling, waves, batch caps, the budget sum, reconciliation triggers; hosted verification; final acceptance                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | **0047** (proposed) | 0 unless authorised         |
 
 3A.4A and 3A.4B deliver value (free, deterministic cut review in edit order) before any schema change. Semantic cut
 QA cannot appear in production before 3A.4E accepts a family.
@@ -992,7 +993,8 @@ declared-truth comparison). Both are pure.
 ### 3A.4C implementation notes
 
 Migration `0046_sequence_continuity_persistence.sql` (forward-only, one transaction through the migration runner;
-**not applied to hosted** in 3A.4C). Verified on a disposable local PostgreSQL 17 with the real `db:*` scripts
+applied to hosted and accepted at its own gate after 3A.4C's review; hosted head 0046). Verified first on a
+disposable local PostgreSQL 17 with the real `db:*` scripts
 ([local-supabase](local-supabase.md#disposable-local-database-unapplied-migrations)).
 
 - **Subject kind.** `continuity_runs.subject_kind` and `continuity_analysis_jobs.subject_kind`
@@ -1067,10 +1069,96 @@ kinds, scope, note, declaredBy, declaredAt}` (the 3A.4A type, now `src/domain/co
   the Supervisor's only write. A proposal has no intent. The Episode Edit stores and reads intent; it has no intent
   panel.
 - **Deployment order.** The 3A.4C application queries `subject_kind` / `incoming_cut_intent`: it must not run against
-  a database without 0046 (apply 0046 at the hosted gate before using this build against hosted).
+  a database without 0046 (done: 0046 was applied and accepted at its hosted gate; hosted head 0046).
 - **Not built in 3A.4C:** semantic cross-cut analysis, the `sequence_transition` provider mode and `cross_cut`
   capability, mode-scoped provider versions, media derivation, calibration, automatic reconciliation, migration 0047,
   hosted application.
+
+### 3A.4D implementation notes
+
+Semantic cross-cut PIPELINE, no new migration (hosted stays 0046), no new grant, every production family OFF.
+
+- **Mode and capability.** `ANALYSIS_MODES` = `image_set | direct_video | sequence_transition` (internal name; the UI
+  says "Sequence Continuity"). `SHOT_ANALYSIS_MODES` keeps the Shot pair. `cross_cut` is an INTERNAL capability: the
+  analyzer can execute the cut contract. It never plans a family by itself.
+- **Mode-scoped version API.** `provider.analysisVersion(mode): string | null`. Gemini: `image_set` / `direct_video`
+  → `"3"` (unchanged), `sequence_transition` → `"gemini-sequence-1"`. Mock: `"2"` / `"mock-sequence-1"`. OpenAI:
+  no sequence contract (`null`; it never fakes two-video cut analysis through stills). The scalar `version` stays for
+  the Shot identities that already use it; no transition decision reads it. Shot idempotency keys are unchanged.
+- **Calibration state.** `provider.crossCutCalibration()` = `{ version, acceptedFamilies }`. Production Gemini:
+  `GEMINI_CROSS_CUT_CALIBRATED = false`, `GEMINI_CROSS_CUT_ACCEPTED_FAMILIES = []`, version
+  `gemini-cross-cut-uncalibrated`: every production cut criterion plans `unsupported` with "Sequence continuity for
+  this family has not passed calibration yet." A test-only constructor option exercises the Gemini request with the fake
+  transport; the registry never passes it. The MOCK analyzer trusts all families (labelled MOCK, free, sends nothing).
+- **Prompt, rubric, schema.** `continuity-gemini-transition-v1` (LEFT / RIGHT of one cut, expected truth from Prism, no
+  editorial taste, pass = no contradiction found and not an approval, no `n_a`), `sequence-rubric-1` (Shot jobs keep
+  `continuity-rubric-1`), `ANALYSIS_SCHEMA_VERSION` stays 2.
+- **Frozen input.** `ContinuityAnalysisInput = AttemptContinuityAnalysisInput | TransitionContinuityAnalysisInput`. A
+  transition input carries `subjectKind: "transition"`, the frozen cut identity (transition key, edit / Episode /
+  revision, left and right items and Shots, subject / left / right / criteria / reference fingerprints, rules version),
+  `edgePolicy`, `calibration` (version + accepted families), the sided media, the sequence plan, analyzer, version,
+  model, prompt, rubric and schema. Never the live Episode Edit, never a URL or bytes.
+- **Sided media ids.** `left:clip`, `right:clip`, `left:last`, `right:first`, `ref:left:<role>:<n>`,
+  `ref:right:<role>:<n>`. Edge media carry `edge { policy, parentAssetId, parentChecksum, startMs, endMs,
+sourceInMs, itemEditStartMs }`: clip-local → source → edit time is a Prism projection.
+- **Planner** (`buildSequencePlan`). Only the cut's semantic criteria; deterministic, manual and Prism `n_a` never
+  submitted. Order: mode + `cross_cut` → family accepted → `direct_video_allowed` → both sides' edge media within
+  bounds (MP4 / WebM, known duration ≤ 3 s, ≤ 20 MB, checksums) → planned with the criterion's own sided references.
+  Batches share identical inputs, capped per request. The manifest uses `sequence_not_calibrated` /
+  `sequence_video_not_allowed` omission reasons.
+- **Evidence.** Sequence answers use the schema-2 shape. A pass / warn / fail must cite a LEFT and a RIGHT edge input
+  (the side's clip with a time, or its exact edge still); a sided reference never counts. Each clip is bounded by ITS
+  OWN duration; a still is one instant (no interval); a reference has no time. One correction at most, then
+  `schema_invalid_after_correction`. Direct-video Shot evidence is unchanged (no two-sided rule).
+- **Edge derivation** (`ensureEdgeAssets`). `extractWindow(bytes, startMs, endMs)` decodes and re-encodes exactly the
+  window (`trim` filter, no stream copy, `-an`, fixed encoder, bit-exact flags). Clips are `trim` derivations keyed by
+  (parent checksum, start, end, audio stripped, policy, processor); stills are `frame_extract` derivations of the
+  PARENT clip at the computed source instant. Persisted Assets, reused by derivation key, recorded with
+  `attemptId: null` so Shot review-frame / delivery slots never see them. Child checksums are audit only and never
+  enter the subject fingerprint.
+- **Manual review flow.** Supervisor: tick cuts → "Prepare semantic review" is a GET that shows the exact disclosure
+  (analyzer, model, cuts; per side the item, Shot, pinned source and whether it is the current delivery master, edge
+  window and duration, exact edge frame, reference counts, transfer mode; audio "not sent"; worst-case cost) and
+  derives NOTHING. "Start Sequence Continuity review" (server action) re-reads the edit, refuses changed cut truth,
+  requires `direct_video_allowed` (and external-media consent for a model analyzer), checks the WHOLE batch's worst case
+  against the Project and global gates (at most 4 cuts per manual batch), and only then derives the selected cuts' edge
+  media and freezes run + subject + findings + job + estimate + event atomically (`createTransitionRunWithJob`).
+  Idempotency: sha256(transition truth | provider | sequence version | model | prompt | sequence rubric | edge policy |
+  calibration version | accepted families | nonce); one disclosure = one nonce, so a re-sent confirmation replays.
+- **Worker.** `executionIdentity(input)` derives the job's ONE mode from its frozen plan + subject (mixed or mismatched
+  modes refused locally); the version guard compares against `analysisVersion(jobMode)` before any media load or
+  transport. Only then does the claim return transition jobs (same queue, leases, fencing, retries, costs, events).
+  The worker reads the job, the Assets in `input_asset_ids` and execution state; proven on a disposable database with
+  the real `prism_continuity_worker` login, which still cannot read `continuity_transition_subjects`. No new grant.
+- **Supervisor projection.** Deterministic findings stay the live projection; semantic findings come from the CURRENT
+  run (overrides applied), with sided evidence and the time mapping; a stale run is shown stale and its semantic
+  criteria return to unchecked; a failed or incomplete run leaves them unchecked. Run history lists the exact edge media
+  each run used. Intent marks covered warn / fail findings in the projection; the stored result never changes.
+- **Technical-review invariants** (remediation of the first 3A.4D head):
+  - **All-or-none batch.** A confirmed manual batch persists every run + job or none. The shared active capacity
+    (both subject kinds) is checked BEFORE any derivation for the NEW jobs only (an exact replay of the same
+    confirmation takes no slot and needs no derivation), and again transactionally at commit
+    (`createTransitionBatchWithJobs`: Project row locked, replays resolved by key, `active + new <= limit`, then
+    every write). A later cut's invalid derived media queues none of the batch; derived Assets that were already
+    produced stay as reusable deterministic derivations (they are not rolled back, and nothing claims they are).
+  - **Cost twice.** The whole batch's worst case is checked before derivation and recomputed on the EXACT media
+    after it; above the confirmed ceiling (or any gate) nothing is queued and a fresh disclosure is required.
+  - **Exact transfer.** The disclosure shows each edge clip's transfer method (`inline`, temporary provider file, or
+    not sent for the mock), exact when the edge media already exist (a read-only lookup by derivation key) and
+    explicitly labelled an estimate otherwise. The confirmation carries the method; after derivation the method of the
+    ACTUAL bytes must equal it or nothing is queued or sent. The approved method is frozen on the clip
+    (`edge.transfer`) and the Gemini adapter refuses, before any upload or request, to send it any other way.
+  - **Current run.** The Supervisor assesses the NEWEST run whose frozen truth is CURRENT (history newest-first), not
+    blindly the latest: a cut returned to an earlier truth makes that run current again; a newer failed run of the
+    same current truth wins over an older success. Stale runs stay in the history.
+  - **Canonical sides.** `sequenceInputSide(inputId)` is the only side authority (validator, prompt, worker contract,
+    Supervisor). `transitionInputProblem` refuses, before any media load or transport, a frozen transition input
+    whose edge inputs are missing / duplicated / of the wrong kind / without edge metadata / out of bounds, or whose
+    redundant `side` contradicts its id.
+  - **Edge file names** follow the container actually encoded (MP4/H.264 or the WebM/VP9 fallback); the name is never
+    part of the derivation identity.
+- **Not in 3A.4D.** Live calls, calibration fixtures (3A.4E), automatic orchestration, waves, settle timing, sequence
+  policy columns and migration 0047 (3A.4F).
 
 ## 23. Out of scope for 3A.4
 

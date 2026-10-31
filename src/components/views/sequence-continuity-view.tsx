@@ -10,18 +10,22 @@ import {
 import { CATEGORY_LABELS, CONTINUITY_CATEGORIES } from "@/domain/continuity/model";
 import type { Episode } from "@/domain/schemas";
 import { clearCutIntent, setCutIntent } from "@/server/episode-edit-actions";
+import { startSequenceReview } from "@/server/sequence-review-actions";
 import {
   EDGE_MEDIA_NOTE,
   NO_CUTS_MESSAGE,
   NO_EDIT_MESSAGE,
-  RUNS_UNAVAILABLE,
+  RUNS_NOTE,
   SEMANTIC_NOTE,
   type ContinuityPageVM,
   type CutRowVM,
   type FindingVM,
+  type RunHistoryVM,
   type SideVM,
   type SupervisorLinks,
 } from "./sequence-continuity-model";
+
+const REVIEW_FORM = "sequence-review-select";
 
 /**
  * Phase 3A.4B Continuity Supervisor: the actual cuts of the persisted Episode Edit, deterministic review only. Advisory:
@@ -101,9 +105,38 @@ export function SequenceContinuityView({ episode, page }: { episode: Episode; pa
             id="semantic-media-blocked"
           />
         </dl>
-        <p className="text-[11px] text-faint" data-testid="continuity-runs-unavailable">
-          {RUNS_UNAVAILABLE}
+        <p className="text-[11px] text-faint" data-testid="continuity-runs-note">
+          {RUNS_NOTE}
         </p>
+        {page.rows.length > 0 && page.analyzers.length > 0 ? (
+          // a plain GET: selecting cuts only DISCLOSES what a review would do (nothing is derived or queued)
+          <form
+            id={REVIEW_FORM}
+            method="get"
+            className="flex flex-wrap items-center gap-2 border border-line bg-panel p-2 text-[11.5px]"
+            data-testid="sequence-review-select"
+          >
+            <span className="font-semibold">Sequence Continuity review</span>
+            <span className="text-faint">Tick cuts below, then</span>
+            <select
+              name="analyzer"
+              defaultValue={page.selectedAnalyzer ?? undefined}
+              aria-label="Sequence Continuity analyzer"
+              className="!w-auto"
+              data-testid="sequence-review-analyzer"
+            >
+              {page.analyzers.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.label}
+                </option>
+              ))}
+            </select>
+            <Button type="submit" data-testid="sequence-review-prepare">
+              Prepare semantic review
+            </Button>
+          </form>
+        ) : null}
+        {page.review ? <ReviewPanel page={page} episode={episode} /> : null}
         {page.info.length ? (
           <ul className="text-[11.5px] text-muted" data-testid="continuity-info">
             {page.info.map((i) => (
@@ -148,8 +181,8 @@ function Subtitle({ links }: { links: SupervisorLinks }) {
       >
         Sequence Board
       </Link>{" "}
-      is the planned Shot order. Deterministic cut review only: semantic cross-cut analysis is not enabled
-      yet. Advisory only.
+      is the planned Shot order. Deterministic checks are live; Sequence Continuity review is manual and each
+      cut family is calibration-gated. Advisory only.
     </>
   );
 }
@@ -316,6 +349,17 @@ function CutRow({ row, target }: { row: CutRowVM; target: IntentTarget }) {
       className="scroll-mt-4 border border-line bg-panel p-3 target:border-accent target:bg-accent/5"
     >
       <div className="flex flex-wrap items-baseline gap-2">
+        <label className="flex items-center gap-1 text-[11px] text-faint">
+          <input
+            type="checkbox"
+            form={REVIEW_FORM}
+            name="review"
+            value={row.transitionKey}
+            disabled={!row.mediaEligible}
+            data-testid="cut-review-select"
+            aria-label={`Select cut ${row.index + 1} for Sequence Continuity review`}
+          />
+        </label>
         <span className="font-mono text-[11px] text-muted">Cut {row.index + 1}</span>
         <h2 className="font-mono text-[13px] font-semibold" data-testid="cut-title">
           {row.title}
@@ -387,16 +431,17 @@ function CutRow({ row, target }: { row: CutRowVM; target: IntentTarget }) {
       </details>
       <details className="mt-1 text-[11.5px]" data-testid="cut-semantic">
         <summary className="cursor-pointer text-muted">
-          Semantic cut analysis — not available yet ({row.semantic.length} criteria)
+          Sequence Continuity ({row.semantic.length} criteria)
         </summary>
         <p className="mt-1 text-faint">{SEMANTIC_NOTE}</p>
         {!row.mediaEligible && row.mediaReasons.length ? (
           <p className="text-faint" data-testid="cut-media-reasons">
-            Media not eligible for a future analysis: {row.mediaReasons.join(" ")}
+            Media not eligible for Sequence Continuity: {row.mediaReasons.join(" ")}
           </p>
         ) : null}
         <Findings findings={row.semantic} />
       </details>
+      {row.runs.length ? <RunHistory runs={row.runs} /> : null}
     </li>
   );
 }
@@ -428,12 +473,201 @@ function Findings({ findings }: { findings: FindingVM[] }) {
           </Badge>
           <span className="font-medium">{f.title}</span>
           <span className="text-faint">{f.severity}</span>
+          {f.analyzed ? (
+            <Badge tone="info">
+              <span data-testid="cut-finding-analyzed">
+                {f.analyzed.mock ? "MOCK ANALYSIS" : f.analyzed.analyzer}
+              </span>
+            </Badge>
+          ) : null}
+          {f.intentional ? (
+            <Badge tone="accent">
+              <span data-testid="cut-finding-intentional">Covered by declared intent</span>
+            </Badge>
+          ) : null}
           <span className="w-full pl-1 text-muted" data-testid="cut-finding-reason">
             {f.reason}
           </span>
+          {f.evidence?.length ? (
+            <ul className="w-full pl-3 text-faint" data-testid="cut-finding-evidence">
+              {f.evidence.map((e, i) => (
+                <li key={i} data-side={e.side ?? ""} data-input={e.input}>
+                  {e.where}: {e.observation}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </li>
       ))}
     </ul>
+  );
+}
+
+/** 3A.4D: this cut's Sequence Continuity runs, newest first, with the exact derived edge media each one used. */
+function RunHistory({ runs }: { runs: RunHistoryVM[] }) {
+  return (
+    <details className="mt-1 text-[11.5px]" data-testid="cut-runs" open>
+      <summary className="cursor-pointer text-muted">Sequence Continuity runs ({runs.length})</summary>
+      <ol className="mt-1 space-y-2">
+        {runs.map((r) => (
+          <li
+            key={r.runNumber}
+            data-testid="cut-run"
+            data-status={r.status}
+            data-freshness={r.freshness}
+            className="border border-line2 p-2"
+          >
+            <div className="flex flex-wrap gap-2">
+              <span className="font-mono">Run {r.runNumber}</span>
+              <Badge>{r.status}</Badge>
+              <Badge tone={r.freshness === "current" ? "neutral" : "warn"}>
+                {r.freshness === "current" ? "Current" : "Stale"}
+              </Badge>
+              <span className="text-faint">
+                {r.mock ? "MOCK ANALYSIS" : r.analyzer} · {r.model}
+              </span>
+            </div>
+            {r.staleReasons.length ? <p className="text-warn">{r.staleReasons.join(" ")}</p> : null}
+            {r.error ? <p className="text-fail">{r.error}</p> : null}
+            {r.edgeMedia.length ? (
+              <div className="mt-1 flex flex-wrap gap-2" data-testid="cut-run-edge-media">
+                {r.edgeMedia.map((m) =>
+                  m.url ? (
+                    <figure key={m.inputId} className="w-[160px]">
+                      {m.mediaType === "video" ? (
+                        <video src={m.url} muted controls preload="metadata" className="w-full" />
+                      ) : (
+                        // eslint-disable-next-line @next/next/no-img-element -- private asset route
+                        <img src={m.url} alt={`Exact edge frame ${m.inputId}`} className="w-full" />
+                      )}
+                      <figcaption className="font-mono text-[10.5px] text-faint">{m.inputId}</figcaption>
+                    </figure>
+                  ) : null,
+                )}
+              </div>
+            ) : null}
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+const secs = (ms: number) => `${(ms / 1000).toFixed(3)} s`;
+
+/**
+ * 3A.4D: the EXACT disclosure of a manual Sequence Continuity review of the selected cuts, and its confirmation. The
+ * confirmation re-reads everything on the server; nothing on this page derives media or queues work.
+ */
+function ReviewPanel({
+  page,
+  episode,
+}: {
+  page: Extract<ContinuityPageVM, { state: "edit" }>;
+  episode: Episode;
+}) {
+  const r = page.review!;
+  const d = r.disclosure;
+  const blocked = d.blockers.length > 0;
+  return (
+    <section
+      className="space-y-2 border border-accent/60 bg-panel p-3 text-[11.5px]"
+      data-testid="sequence-review"
+    >
+      <h2 className="font-semibold">Sequence Continuity review: what would be sent</h2>
+      <ul className="text-muted">
+        <li>
+          Analyzer: <span data-testid="review-analyzer">{d.analyzer.label}</span> ({d.analyzer.model})
+          {d.analyzer.kind === "mock" ? " — MOCK: nothing leaves Prism, no cost" : ""}
+        </li>
+        <li>
+          Cuts: <span data-testid="review-cut-count">{d.cuts.length}</span> · Audio:{" "}
+          <span data-testid="review-audio">{d.audio}</span> · Worst-case cost:{" "}
+          <span data-testid="review-cost">
+            {d.totalMaxUsd == null ? "unknown" : `$${d.totalMaxUsd.toFixed(4)}`}
+          </span>
+        </li>
+      </ul>
+      <ol className="space-y-2">
+        {d.cuts.map((c) => (
+          <li key={c.transitionKey} className="border border-line2 p-2" data-testid="review-cut">
+            <div className="font-mono font-medium">{c.title}</div>
+            {[c.left, c.right].map((s, i) => (
+              <div key={i} data-testid={i === 0 ? "review-left" : "review-right"}>
+                <span className="text-faint">{i === 0 ? "Left (outgoing)" : "Right (incoming)"}:</span>{" "}
+                {s.shotCode} · item {s.itemId.slice(0, 8)} · source{" "}
+                {s.sourceAssetName ?? s.sourceAssetId ?? "none"}
+                {s.differsFromCurrentDelivery ? " (not the currently selected delivery master)" : ""}
+                {s.window
+                  ? ` · edge window ${secs(s.window.startMs)}–${secs(s.window.endMs)} (${secs(s.window.durationMs)})`
+                  : ""}
+                {s.still
+                  ? ` · ${s.still.frame === "last_displayed" ? "last" : "first"} displayed frame at ${secs(s.still.atMs)}`
+                  : ""}
+                {` · references: ${s.references.length ? s.references.map((x) => `${x.count} ${x.role.replace(/_/g, " ")}`).join(", ") : "none"}`}
+                <span data-testid="review-transfer" data-transfer={s.transfer} data-basis={s.transferBasis}>
+                  {` · transfer: ${s.transfer === "not_sent" ? "not sent" : s.transfer === "provider_file" ? "temporary provider file" : "inline"}`}
+                  {s.transfer !== "not_sent"
+                    ? s.transferBasis === "exact"
+                      ? ` (exact: ${s.clipBytes} bytes)`
+                      : " (estimated; verified against the exact clip before anything is sent)"
+                    : ""}
+                </span>
+              </div>
+            ))}
+            <div className="text-muted">
+              Criteria analysed: {c.planned.length}
+              {c.unavailable.length
+                ? ` · unavailable: ${c.unavailable.length} (${c.unavailable[0]!.reason})`
+                : ""}
+            </div>
+          </li>
+        ))}
+      </ol>
+      {blocked ? (
+        <ul className="text-fail" data-testid="review-blockers">
+          {d.blockers.map((b) => (
+            <li key={b}>✕ {b}</li>
+          ))}
+        </ul>
+      ) : (
+        <ActionForm
+          action={startSequenceReview}
+          successMessage="Sequence Continuity review queued"
+          className="space-y-1"
+        >
+          <input type="hidden" name="projectSlug" value={page.projectSlug} />
+          <input type="hidden" name="episodeId" value={episode.id} />
+          <input type="hidden" name="analyzer" value={d.analyzer.id} />
+          <input type="hidden" name="nonce" value={r.nonce} />
+          {d.cuts.map((c) => (
+            <input
+              key={c.transitionKey}
+              type="hidden"
+              name="cut"
+              value={[
+                c.transitionKey,
+                c.truth.subjectFingerprint,
+                c.truth.criteriaFingerprint,
+                c.truth.referenceFingerprint,
+                c.left.transfer,
+                c.right.transfer,
+              ].join("|")}
+            />
+          ))}
+          {d.totalMaxUsd != null ? (
+            <input type="hidden" name="confirmedMaxUsd" value={String(d.totalMaxUsd)} />
+          ) : null}
+          <label className="flex items-center gap-2">
+            <input type="checkbox" name="confirm" value="1" required data-testid="review-confirm" />I confirm
+            sending exactly this edge media (no audio) for these cuts, at this worst-case cost.
+          </label>
+          <Button type="submit" data-testid="review-submit">
+            Start Sequence Continuity review
+          </Button>
+        </ActionForm>
+      )}
+    </section>
   );
 }
 

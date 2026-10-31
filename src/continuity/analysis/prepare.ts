@@ -16,6 +16,7 @@ import {
   promptVersionFor,
   RUBRIC_VERSION,
   type AnalysisMedia,
+  type AttemptContinuityAnalysisInput,
   type ContinuityAnalysisInput,
 } from "@/domain/continuity/analysis/types";
 import { TEMPORAL_SAMPLING_V1 } from "@/domain/continuity/analysis/temporal";
@@ -113,7 +114,7 @@ export function buildAnalysisInput(args: {
   subject: Asset;
   /** 3A.3: the Project allows the full video for this path (default false: no video is planned). */
   directVideoAllowed?: boolean;
-}): ContinuityAnalysisInput {
+}): AttemptContinuityAnalysisInput {
   const { inputs, provider } = args;
   const plan = buildAnalysisPlan({
     analyzer: provider.plannerView(),
@@ -200,7 +201,7 @@ export function previewAnalysis(args: {
   now: Date;
   /** 3A.3: the Project's full-video permission for this path. */
   directVideoAllowed?: boolean;
-}): { preview: AnalysisPreview; input: ContinuityAnalysisInput } {
+}): { preview: AnalysisPreview; input: AttemptContinuityAnalysisInput } {
   let { output } = args;
   let framesPending = false;
   if (output.frames.length === 0 && !output.contactSheet) {
