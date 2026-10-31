@@ -1,7 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { analysisSpendBlockers, type AnalysisSpendPolicy } from "@/domain/continuity/analysis/cost";
 import { boundedDerivative } from "@/domain/continuity/analysis/plan";
-import { CUT_EDGE_CLIP_LIMITS, executionIdentity } from "@/domain/continuity/analysis/sequence-plan";
+import {
+  CUT_EDGE_CLIP_LIMITS,
+  executionIdentity,
+  transitionInputProblem,
+} from "@/domain/continuity/analysis/sequence-plan";
 import { TEMPORAL_SAMPLING_V1 } from "@/domain/continuity/analysis/temporal";
 import {
   DEFAULT_MAX_CORRECTIONS,
@@ -202,6 +206,12 @@ export class ContinuityAnalysisWorker {
     // kind must be the frozen input's. Anything else fails here: no media is loaded and no transport is touched.
     const identity = executionIdentity(job.inputSnapshot);
     if (!identity.ok) return fail("invalid_input", identity.code, identity.message);
+    // a transition input must also satisfy its frozen media contract (canonical sides, one of each edge input, edge
+    // metadata, bounds): a malformed snapshot fails here, before any media load or transport
+    if (job.inputSnapshot.subjectKind === "transition") {
+      const problem = transitionInputProblem(job.inputSnapshot);
+      if (problem) return fail("invalid_input", "sequence_input_invalid", `${problem} Nothing was sent.`);
+    }
     if (identity.subject !== job.subjectKind) {
       return fail(
         "invalid_input",

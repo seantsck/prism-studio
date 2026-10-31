@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sequenceInputSide } from "./sequence-plan";
 import {
   FINDING_RESULTS,
   type AnalysisBatch,
@@ -337,7 +338,8 @@ export function validateBatchResponse(
       const sided = (side: "left" | "right") =>
         evidence.some((x) => {
           const m = allowedInputs.get(x.input);
-          return m?.side === side && m.kind !== "reference";
+          // the side comes from the CANONICAL input id, never from the redundant `side` field
+          return m != null && sequenceInputSide(x.input) === side && m.kind !== "reference";
         });
       const missing = (["left", "right"] as const).filter((s) => !sided(s));
       if (missing.length > 0) {

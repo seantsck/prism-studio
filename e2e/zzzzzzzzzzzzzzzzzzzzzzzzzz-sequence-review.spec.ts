@@ -162,3 +162,52 @@ test("consent on → exact disclosure → confirm → mock review runs; findings
   await expect(page.getByTestId("continuity-revision")).toHaveText("Edit revision 2");
   expect(out).toEqual([]);
 });
+
+test("truth reversion: a trim makes the run stale; restoring the exact trim makes the SAME run current again", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const out = external(page);
+  await page.goto(`${EP}/edit`);
+  let editor = await openEditor(page, "2D");
+  const originalIn = await editor.getByTestId("trim-in").inputValue();
+  const originalOut = await editor.getByTestId("trim-out").inputValue();
+  await editor.getByTestId("trim-out").fill(String(Number(originalOut) - 0.5));
+  await editor.getByTestId("apply-trim").click();
+  await expectRevision(page, 3);
+
+  await page.goto(`${EP}/continuity`);
+  await expect(row(page).getByTestId("cut-state")).toHaveText("Sequence QA stale");
+  await expect(row(page).getByTestId("cut-run").first()).toHaveAttribute("data-freshness", "stale");
+  await expect(row(page).getByTestId("cut-finding-analyzed")).toHaveCount(0);
+
+  await page.goto(`${EP}/edit`);
+  editor = await openEditor(page, "2D");
+  await editor.getByTestId("trim-in").fill(originalIn);
+  await editor.getByTestId("trim-out").fill(originalOut);
+  await editor.getByTestId("apply-trim").click();
+  await expectRevision(page, 4);
+
+  await page.goto(`${EP}/continuity`);
+  await expect(row(page).getByTestId("cut-run")).toHaveCount(1); // no new run was created by either edit
+  await expect(row(page).getByTestId("cut-run").first()).toHaveAttribute("data-freshness", "current");
+  await expect(row(page).getByTestId("cut-state")).not.toHaveText("Sequence QA stale");
+  expect(await row(page).getByTestId("cut-finding-analyzed").count()).toBeGreaterThan(0);
+  expect(out).toEqual([]);
+});
+
+test("the disclosure carries the exact transfer method (mock: not sent) into the confirmation", async ({
+  page,
+}) => {
+  await page.goto(`${EP}/continuity`);
+  await row(page).getByTestId("cut-review-select").check();
+  await page.getByTestId("sequence-review-analyzer").selectOption("mock-continuity");
+  await page.getByTestId("sequence-review-prepare").click();
+  const transfers = page.getByTestId("review-transfer");
+  await expect(transfers).toHaveCount(2);
+  for (const t of await transfers.all()) await expect(t).toHaveAttribute("data-transfer", "not_sent");
+  const cut = await page.locator('input[name="cut"]').first().getAttribute("value");
+  expect(cut?.split("|").slice(-2)).toEqual(["not_sent", "not_sent"]);
+  // reading the disclosure again created nothing
+  await expect(row(page).getByTestId("cut-run")).toHaveCount(1);
+});

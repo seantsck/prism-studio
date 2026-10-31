@@ -8,10 +8,12 @@ import {
   type CutFinding,
   type CutSide,
   type CutTransition,
+  transitionFreshness,
   type TransitionRun,
   type TransitionState,
 } from "@/domain/continuity/sequence";
 import type { SequenceReviewDisclosure } from "@/continuity/sequence-review";
+import { sequenceInputSide } from "@/domain/continuity/analysis/sequence-plan";
 import type { TransitionRunView } from "@/data/media-qa-repository";
 import { assetUrl } from "@/lib/utils";
 import { SEVERITY_LABELS } from "@/domain/continuity/status";
@@ -369,12 +371,8 @@ function evidenceVM(
   cut: CutTransition,
 ): EvidenceVM {
   const input = String(item.input ?? "");
-  const side =
-    input.startsWith("left:") || input.startsWith("ref:left:")
-      ? ("left" as const)
-      : input.startsWith("right:") || input.startsWith("ref:right:")
-        ? ("right" as const)
-        : null;
+  // the same canonical authority the provider-answer validator uses: the input id, never a redundant field
+  const side = sequenceInputSide(input);
   const at = typeof item.atMs === "number" ? item.atMs : null;
   const end = typeof item.endMs === "number" ? item.endMs : null;
   const frozen = side === "left" ? run.subject.leftSide : side === "right" ? run.subject.rightSide : null;
@@ -444,7 +442,13 @@ function cutRow(
   history: readonly TransitionRunView[] = [],
 ): CutRowVM {
   const declared = view.items[cut.index + 1]?.item.incomingCutIntent ?? null;
-  const latest = history[0] ?? null;
+  // the NEWEST run whose frozen truth is CURRENT for this cut (history is newest-first): a cut returned to an earlier
+  // truth makes that earlier run current again. Not "newest successful": a newer failed run of the same current truth
+  // wins. With no current run, the newest run still drives the stale-history state.
+  const latest =
+    history.find((v) => transitionFreshness(transitionRunOf(v).truth, cut).status === "current") ??
+    history[0] ??
+    null;
   const assessment = assessTransition({
     cut,
     run: latest ? transitionRunOf(latest) : null,

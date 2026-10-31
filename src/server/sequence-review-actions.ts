@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import {
   SequenceReviewError,
   submitSequenceReview,
+  type EdgeTransfer,
   type SequenceSelection,
 } from "@/continuity/sequence-review";
 import { buildEpisodeEditView } from "@/domain/edit/view";
@@ -27,16 +28,22 @@ async function startSequenceReview_impl(form: FormData) {
   if (!episode) throw new UserFacingError("That Episode no longer exists.");
   const provider = getAnalysisProviders().get(String(form.get("analyzer") ?? ""));
   if (!provider) throw new UserFacingError("That analyzer is not available on this server.");
+  // what the person was shown and confirmed: the cut truth and the exact transfer method of each edge clip
+  const transferOf = (v: string | undefined): EdgeTransfer =>
+    v === "inline" || v === "provider_file" || v === "not_sent" ? v : "not_sent";
   const selections: SequenceSelection[] = form.getAll("cut").map((v) => {
-    const [transitionKey, subjectFingerprint, criteriaFingerprint, referenceFingerprint] =
+    const [transitionKey, subjectFingerprint, criteriaFingerprint, referenceFingerprint, left, right] =
       String(v).split("|");
     return {
       transitionKey: transitionKey ?? "",
       subjectFingerprint: subjectFingerprint ?? "",
       criteriaFingerprint: criteriaFingerprint ?? "",
       referenceFingerprint: referenceFingerprint ?? "",
+      transfer: { left: transferOf(left), right: transferOf(right) },
     };
   });
+  // the worst-case total the person confirmed: an UPPER bound only (the server's own gates still apply)
+  const ceiling = Number(form.get("confirmedMaxUsd"));
   const edit = await (await getEpisodeEditRepo()).getForEpisode(data.project.id, episode.id);
   if (!edit) throw new UserFacingError("This Episode has no persisted edit.");
   const pinned = edit.items.flatMap((i) => (i.visual.kind === "video" ? [i.visual.attemptId] : []));
@@ -55,6 +62,7 @@ async function startSequenceReview_impl(form: FormData) {
       paid: config.paid,
       deps: await getDeliveryDeps(userId),
       confirmed: form.get("confirm") === "1",
+      confirmedMaxUsd: form.get("confirmedMaxUsd") != null && Number.isFinite(ceiling) ? ceiling : null,
       nonce: String(form.get("nonce") ?? "") || crypto.randomUUID(),
       limits: config.limits,
     });

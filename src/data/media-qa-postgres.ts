@@ -28,7 +28,9 @@ import {
   type NewDerivation,
   type NewFinding,
   type NewRun,
+  type NewTransitionAnalysisBatch,
   type NewTransitionAnalysisRun,
+  type TransitionAnalysisJob,
   type NewTransitionRun,
   type TransitionContinuityRun,
   type TransitionRunView,
@@ -645,87 +647,139 @@ export class PostgresMediaQaData implements MediaQaRepository {
     );
   }
 
-  /** 3A.4D: run + subject + findings + queued sequence job + estimated cost + first event, in ONE transaction. */
+  /** 3A.4D: one cut's run + job (a batch of one; the same all-or-none semantics). */
   async createTransitionRunWithJob(input: NewTransitionAnalysisRun) {
+    const [out] = await this.createTransitionBatchWithJobs({ entries: [input], limits: input.limits });
+    return out!;
+  }
+
+  /**
+   * 3A.4D: ONE confirmed manual batch, all or none, in ONE transaction. The Project row is locked (the concurrency
+   * authority), existing jobs are resolved by idempotency key (replays never take a slot), the active count across BOTH
+   * subject kinds is recomputed, `active + new <= limit` is required, and only then is every new run + subject +
+   * findings + job + estimate + event written. Results follow the input order.
+   */
+  async createTransitionBatchWithJobs(input: NewTransitionAnalysisBatch) {
     return this.tx(async (c) => {
-      const r = input.run;
-      const project = await c.query("select id from projects where id = $1 for update", [r.projectId]);
+      const projectId = input.entries[0]?.run.projectId;
+      if (!projectId) return [];
+      if (input.entries.some((e) => e.run.projectId !== projectId))
+        throw new MediaQaError("invalid", "A sequence batch belongs to one Project.");
+      const project = await c.query("select id from projects where id = $1 for update", [projectId]);
       if (project.rowCount === 0) throw new MediaQaError("not_found", "That project no longer exists.");
-      const replay = await c.query(
-        "select * from continuity_analysis_jobs where project_id = $1 and subject_kind = 'transition' and idempotency_key = $2",
-        [r.projectId, input.job.idempotencyKey],
-      );
-      if (replay.rows[0]) {
-        const run = await c.query(
-          "select * from continuity_runs where id = $1 and subject_kind = 'transition'",
-          [replay.rows[0].run_id],
-        );
-        const job = mapAnalysisJob(replay.rows[0]);
-        if (job.subjectKind !== "transition")
-          throw new Error("A transition replay found a non-transition job.");
-        return { run: (await this.transitionViews(c, run.rows))[0]!, job, duplicate: true };
-      }
-      // the SAME shared Project limit as Shot QA: an active Shot job takes a slot from a sequence submission
-      const open = await c.query(
-        `select count(*)::int as n from continuity_analysis_jobs where project_id = $1 and status in (${activeList})`,
-        [r.projectId],
-      );
-      if (open.rows[0].n >= input.limits.maxActivePerProject) {
-        throw new MediaQaError(
-          "invalid",
-          `This project already has ${open.rows[0].n} analyses in progress (limit ${input.limits.maxActivePerProject}).`,
-        );
-      }
-      const run = await this.insertTransitionRun(c, r);
-      const jobRow = (
+      const keys = input.entries.map((e) => e.job.idempotencyKey);
+      const existing = (
         await c.query(
-          `insert into continuity_analysis_jobs
-             (project_id, subject_kind, run_id, attempt_id, analyzer, model, status, input_snapshot, input_asset_ids,
-              idempotency_key, next_run_at, max_attempts, batches_total, estimated_cost_usd, created_by, created_at)
-           values ($1, 'transition', $2, null, $3, $4, 'queued', $5::jsonb, $6::uuid[], $7, $8, $9, $10, $11, $12, $8)
-           returning *`,
-          [
-            r.projectId,
-            run.id,
-            input.job.analyzer,
-            input.job.model,
-            JSON.stringify(input.job.snapshot),
-            input.job.inputAssetIds,
-            input.job.idempotencyKey,
-            r.now,
-            input.job.maxAttempts,
-            input.job.snapshot.plan.batches.length,
-            input.job.estimate.maxUsd,
-            r.createdBy,
-          ],
+          "select * from continuity_analysis_jobs where project_id = $1 and subject_kind = 'transition' and idempotency_key = any($2::text[])",
+          [projectId, keys],
         )
-      ).rows[0] as Row;
+      ).rows as Row[];
+      const byKey = new Map(existing.map((r) => [String(r.idempotency_key), r]));
+      const fresh = input.entries.filter(
+        (e, i) => !byKey.has(e.job.idempotencyKey) && keys.indexOf(e.job.idempotencyKey) === i,
+      );
+      if (fresh.length > 0) {
+        // the SAME shared Project limit as Shot QA, counted across both subject kinds
+        const open = Number(
+          (
+            await c.query(
+              `select count(*)::int as n from continuity_analysis_jobs where project_id = $1 and status in (${activeList})`,
+              [projectId],
+            )
+          ).rows[0].n,
+        );
+        if (open + fresh.length > input.limits.maxActivePerProject)
+          throw new MediaQaError(
+            "invalid",
+            `This review needs ${fresh.length} analysis slot(s) but the project has ${Math.max(0, input.limits.maxActivePerProject - open)} free (${open} in progress, limit ${input.limits.maxActivePerProject}). Nothing was queued.`,
+          );
+      }
+      const created = new Map<string, { run: Row; job: Row }>();
+      for (const e of fresh) {
+        const run = await this.insertTransitionRun(c, e.run);
+        created.set(e.job.idempotencyKey, { run, job: await this.insertTransitionJob(c, run, e) });
+      }
+      const out: Array<{ run: TransitionRunView; job: TransitionAnalysisJob; duplicate: boolean }> = [];
+      for (const e of input.entries) {
+        const made = created.get(e.job.idempotencyKey);
+        const jobRow = made?.job ?? byKey.get(e.job.idempotencyKey)!;
+        const runRow =
+          made?.run ??
+          ((
+            await c.query("select * from continuity_runs where id = $1 and subject_kind = 'transition'", [
+              jobRow.run_id,
+            ])
+          ).rows[0] as Row);
+        const job = mapAnalysisJob(jobRow);
+        if (job.subjectKind !== "transition")
+          throw new Error("A transition batch found a non-transition job.");
+        out.push({ run: (await this.transitionViews(c, [runRow]))[0]!, job, duplicate: !made });
+      }
+      return out;
+    });
+  }
+
+  async findTransitionJobsByKeys(projectId: string, keys: string[]) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        "select * from continuity_analysis_jobs where project_id = $1 and subject_kind = 'transition' and idempotency_key = any($2::text[])",
+        [projectId, keys],
+      );
+      return r.rows
+        .map(mapAnalysisJob)
+        .filter((j): j is TransitionAnalysisJob => j.subjectKind === "transition");
+    });
+  }
+
+  /** One queued transition job + its estimated cost + its first event, inside the caller's transaction. */
+  private async insertTransitionJob(c: PoolClient, run: Row, input: NewTransitionAnalysisRun): Promise<Row> {
+    const r = input.run;
+    const jobRow = (
       await c.query(
-        `insert into continuity_analysis_costs
-           (project_id, run_id, job_id, analyzer, model, kind, amount_usd, expected_usd, usage, pricing_version, recorded_at)
-         values ($1, $2, $3, $4, $5, 'estimated', $6, $7, $8::jsonb, $9, $10)`,
+        `insert into continuity_analysis_jobs
+           (project_id, subject_kind, run_id, attempt_id, analyzer, model, status, input_snapshot, input_asset_ids,
+            idempotency_key, next_run_at, max_attempts, batches_total, estimated_cost_usd, created_by, created_at)
+         values ($1, 'transition', $2, null, $3, $4, 'queued', $5::jsonb, $6::uuid[], $7, $8, $9, $10, $11, $12, $8)
+         returning *`,
         [
           r.projectId,
           run.id,
-          jobRow.id,
           input.job.analyzer,
           input.job.model,
-          input.job.estimate.maxUsd,
-          input.job.estimate.expectedUsd,
-          JSON.stringify(input.job.estimate.usage),
-          input.job.estimate.pricingVersion,
+          JSON.stringify(input.job.snapshot),
+          input.job.inputAssetIds,
+          input.job.idempotencyKey,
           r.now,
+          input.job.maxAttempts,
+          input.job.snapshot.plan.batches.length,
+          input.job.estimate.maxUsd,
+          r.createdBy,
         ],
-      );
-      await c.query(
-        `insert into continuity_analysis_events (project_id, job_id, run_id, at, from_status, to_status, note)
-         values ($1, $2, $3, $4, null, 'queued', 'Sequence review submitted by user')`,
-        [r.projectId, jobRow.id, run.id, r.now],
-      );
-      const job = mapAnalysisJob(jobRow);
-      if (job.subjectKind !== "transition") throw new Error("A transition job was not recorded as one.");
-      return { run: (await this.transitionViews(c, [run]))[0]!, job, duplicate: false };
-    });
+      )
+    ).rows[0] as Row;
+    await c.query(
+      `insert into continuity_analysis_costs
+         (project_id, run_id, job_id, analyzer, model, kind, amount_usd, expected_usd, usage, pricing_version, recorded_at)
+       values ($1, $2, $3, $4, $5, 'estimated', $6, $7, $8::jsonb, $9, $10)`,
+      [
+        r.projectId,
+        run.id,
+        jobRow.id,
+        input.job.analyzer,
+        input.job.model,
+        input.job.estimate.maxUsd,
+        input.job.estimate.expectedUsd,
+        JSON.stringify(input.job.estimate.usage),
+        input.job.estimate.pricingVersion,
+        r.now,
+      ],
+    );
+    await c.query(
+      `insert into continuity_analysis_events (project_id, job_id, run_id, at, from_status, to_status, note)
+       values ($1, $2, $3, $4, null, 'queued', 'Sequence review submitted by user')`,
+      [r.projectId, jobRow.id, run.id, r.now],
+    );
+    return jobRow;
   }
 
   /** The frozen run + subject + findings of one cut, inside the caller's transaction (adjacency checked here). */

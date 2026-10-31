@@ -2,9 +2,13 @@ import { createHash } from "node:crypto";
 import { analysisSpendBlockers, type AnalysisSpendPolicy } from "@/domain/continuity/analysis/cost";
 import {
   buildSequencePlan,
+  sequenceInputSide,
   toSequenceCriterion,
+  transitionInputProblem,
   NOT_CALIBRATED_SEQUENCE_REASON,
 } from "@/domain/continuity/analysis/sequence-plan";
+import { derivationKey } from "@/domain/framing/conform";
+import type { MediaProcessor } from "@/media/types";
 import {
   ANALYSIS_SCHEMA_VERSION,
   DEFAULT_ANALYSIS_BUDGET,
@@ -25,6 +29,7 @@ import type { Asset, ProjectData } from "@/domain/schemas";
 import {
   MediaQaError,
   type DerivedAsset,
+  type MediaQaRepository,
   type TransitionAnalysisJob,
   type TransitionRunView,
 } from "@/data/media-qa-repository";
@@ -57,6 +62,8 @@ export class SequenceReviewError extends Error {
       | "not_allowed"
       | "nothing_to_analyse"
       | "cost_unknown"
+      | "cost_changed"
+      | "transfer_changed"
       | "budget_blocked"
       | "needs_ack"
       | "media"
@@ -271,6 +278,8 @@ export function sequenceIdempotencyKey(
 
 // ───────────────────────── disclosure (pure read: derives nothing) ─────────────────────────
 
+export type EdgeTransfer = "inline" | "provider_file" | "not_sent";
+
 export interface SideDisclosure {
   itemId: string;
   shotCode: string;
@@ -281,8 +290,11 @@ export interface SideDisclosure {
   window: { startMs: number; endMs: number; durationMs: number } | null;
   still: { atMs: number; frame: "last_displayed" | "first_displayed" } | null;
   references: Array<{ role: string; count: number }>;
-  transfer: "inline" | "provider_file" | "not_sent";
-  estimatedClipBytes: number | null;
+  /** how the edge clip would leave Prism; confirmed exactly and re-verified on the derived bytes before queueing */
+  transfer: EdgeTransfer;
+  /** "exact" = from the derived clip's real size; "estimated" = no derivation exists yet */
+  transferBasis: "exact" | "estimated";
+  clipBytes: number | null;
 }
 
 export interface CutDisclosure {
@@ -305,6 +317,17 @@ export interface SequenceReviewDisclosure {
   blockers: string[];
 }
 
+/** How ONE clip of this size would leave Prism with this analyzer (the worker's own rule). */
+export function clipTransfer(
+  provider: ContinuityAnalysisProvider,
+  bytes: number | null,
+  sends: boolean,
+): EdgeTransfer {
+  if (provider.kind === "mock" || !sends) return "not_sent";
+  if (bytes == null || !provider.videoTransfer) return "provider_file"; // the more persistent method when unknown
+  return provider.videoTransfer(bytes);
+}
+
 function sideDisclosure(
   side: CutSide,
   view: EpisodeEditView,
@@ -313,13 +336,14 @@ function sideDisclosure(
   media: AnalysisMedia[],
   which: "left" | "right",
   sends: boolean,
+  exact: boolean,
 ): SideDisclosure {
   const p = side.picture;
   const asset = p.kind === "video" ? data.assets.find((a) => a.id === p.assetId) : undefined;
   const iv = view.items[side.index];
   const clip = media.find((m) => m.inputId === `${which}:clip`);
   const refs = new Map<string, number>();
-  for (const m of media.filter((x) => x.kind === "reference" && x.side === which))
+  for (const m of media.filter((x) => x.kind === "reference" && sequenceInputSide(x.inputId) === which))
     refs.set(m.role, (refs.get(m.role) ?? 0) + 1);
   return {
     itemId: side.itemId,
@@ -333,17 +357,16 @@ function sideDisclosure(
       : null,
     still: side.still ? { atMs: side.still.atMs, frame: side.still.frame } : null,
     references: [...refs.entries()].map(([role, count]) => ({ role, count })),
-    transfer:
-      provider.kind === "mock" || !sends
-        ? "not_sent"
-        : clip?.byteSize != null && provider.videoTransfer
-          ? provider.videoTransfer(clip.byteSize)
-          : "inline",
-    estimatedClipBytes: clip?.byteSize ?? null,
+    transfer: clipTransfer(provider, clip?.byteSize ?? null, sends),
+    transferBasis: exact ? "exact" : "estimated",
+    clipBytes: clip?.byteSize ?? null,
   };
 }
 
-/** What a confirmation WOULD do, for exactly these cuts. Pure read: no Asset, derivation, run or job is created. */
+/**
+ * What a confirmation WOULD do, for exactly these cuts. Pure read: no Asset, derivation, run or job is created. When a
+ * cut's edge media were already derived (`edges`, looked up read-only), the disclosure uses their EXACT sizes.
+ */
 export function previewSequenceReview(args: {
   data: ProjectData;
   view: EpisodeEditView;
@@ -354,6 +377,7 @@ export function previewSequenceReview(args: {
   spentLast24hUsd: number;
   projectSpentLast24hUsd: number;
   now: Date;
+  edges?: ReadonlyMap<string, { left: EdgeAssets; right: EdgeAssets }>;
 }): SequenceReviewDisclosure {
   const { data, view, provider } = args;
   const cuts = buildEpisodeCuts({ data, view }).filter((c) => args.transitionKeys.includes(c.transitionKey));
@@ -364,13 +388,14 @@ export function previewSequenceReview(args: {
   const consent = consentProblem(args.qaPolicy, provider);
   if (consent) blockers.push(consent);
   const disclosed: CutDisclosure[] = cuts.map((cut) => {
+    const edge = args.edges?.get(cut.transitionKey) ?? null;
     const input = buildTransitionInput({
       cut,
       view,
       data,
       provider,
       directVideoAllowed: args.qaPolicy.directVideoAllowed,
-      edge: null,
+      edge,
       runKey: "preview",
     });
     const est = provider.estimate(input, args.now);
@@ -379,8 +404,8 @@ export function previewSequenceReview(args: {
       transitionKey: cut.transitionKey,
       title: `${cut.left.shotCode ?? "?"} → ${cut.right.shotCode ?? "?"}`,
       truth: cut.truth,
-      left: sideDisclosure(cut.left, view, data, provider, input.media, "left", sends),
-      right: sideDisclosure(cut.right, view, data, provider, input.media, "right", sends),
+      left: sideDisclosure(cut.left, view, data, provider, input.media, "left", sends, edge != null),
+      right: sideDisclosure(cut.right, view, data, provider, input.media, "right", sends, edge != null),
       planned: input.plan.items.filter((i) => i.status === "planned").map((i) => i.criterionKey),
       unavailable: input.plan.items
         .filter((i) => i.status === "unsupported" || i.status === "no_media" || i.status === "not_allowed")
@@ -443,10 +468,52 @@ function costBlockers(args: {
 
 // ───────────────────────── derivation (only after every gate) ─────────────────────────
 
+/** The derivation parameters of one side's edge clip and still: their identity (never the file name). */
+function edgeParameters(side: CutSide) {
+  return {
+    clip: {
+      startMs: side.window!.startMs,
+      endMs: side.window!.endMs,
+      audio: "stripped",
+      policy: CUT_EDGE_POLICY.id,
+    },
+    still: { atMs: side.still!.atMs, policy: CUT_EDGE_POLICY.id },
+  };
+}
+
+/**
+ * READ-ONLY: the already-derived edge Assets of a cut, by derivation key (no media work, nothing written), so a
+ * disclosure after a derivation shows the EXACT clip sizes and transfer methods. null = not both sides derived yet.
+ */
+export async function findEdgeAssets(args: {
+  cut: CutTransition;
+  processor: MediaProcessor;
+  qa: Pick<MediaQaRepository, "findDerivationByKey">;
+  projectId: string;
+}): Promise<{ left: EdgeAssets; right: EdgeAssets } | null> {
+  const identity = await args.processor.identity();
+  const processorVersion = `${identity.name}/${identity.adapterVersion}`;
+  const out: Partial<Record<"left" | "right", EdgeAssets>> = {};
+  for (const which of ["left", "right"] as const) {
+    const side = args.cut[which];
+    const p = side.picture;
+    if (p.kind !== "video" || !side.window || !side.still || !p.assetChecksum) return null;
+    const params = edgeParameters(side);
+    const key = (operation: string, parameters: Record<string, unknown>) =>
+      derivationKey({ parentChecksum: p.assetChecksum!, operation, parameters, processorVersion });
+    const clip = await args.qa.findDerivationByKey(args.projectId, key("trim", params.clip));
+    const still = await args.qa.findDerivationByKey(args.projectId, key("frame_extract", params.still));
+    if (!clip || !still) return null;
+    out[which] = { clip: clip.asset, still: still.asset };
+  }
+  return { left: out.left!, right: out.right! };
+}
+
 /**
  * The exact edge clip and edge still of one side, as ordinary persisted derived Assets (`trim` / `frame_extract`),
  * reused by derivation key. Both come from the PARENT pinned clip (the still is never taken from the lossy clip).
- * `attemptId: null` keeps them out of the Shot's own derivation slots (review frames, delivery).
+ * `attemptId: null` keeps them out of the Shot's own derivation slots (review frames, delivery). The file name follows
+ * the container actually encoded; it is never part of the identity.
  */
 export async function ensureEdgeAssets(args: {
   side: CutSide;
@@ -466,6 +533,7 @@ export async function ensureEdgeAssets(args: {
   let bytes: Uint8Array | null = null;
   const parentBytes = async () => (bytes ??= await readVerified(parent, deps.storage));
   const w = side.window;
+  const params = edgeParameters(side);
   const code = (side.shotCode ?? "shot").replace(/[^A-Za-z0-9_-]/g, "");
   const clip = await derive({
     deps,
@@ -474,8 +542,9 @@ export async function ensureEdgeAssets(args: {
     attemptId: null,
     operation: "trim",
     slot: `cut-edge:${which}:clip`,
-    parameters: { startMs: w.startMs, endMs: w.endMs, audio: "stripped", policy: CUT_EDGE_POLICY.id },
-    name: `${code}-cut-edge-${which}-${w.startMs}-${w.endMs}ms.mp4`,
+    parameters: params.clip,
+    // the extension of what was actually encoded (MP4/H.264, or the WebM/VP9 fallback): never assumed
+    name: (out) => `${code}-cut-edge-${which}-${w.startMs}-${w.endMs}ms.${out.extension}`,
     tags: ["cut-edge", "derived"],
     produce: async () => deps.processor.extractWindow(await parentBytes(), w.startMs, w.endMs),
   });
@@ -487,7 +556,7 @@ export async function ensureEdgeAssets(args: {
     attemptId: null,
     operation: "frame_extract",
     slot: `cut-edge:${which}:still`,
-    parameters: { atMs: at, policy: CUT_EDGE_POLICY.id },
+    parameters: params.still,
     name: `${code}-cut-edge-${which}-frame-${at}ms.png`,
     tags: ["cut-edge", "derived"],
     produce: async () => {
@@ -506,8 +575,19 @@ export interface SequenceSelection {
   subjectFingerprint: string;
   criteriaFingerprint: string;
   referenceFingerprint: string;
+  /** the transfer methods the person confirmed for the two edge clips */
+  transfer: { left: EdgeTransfer; right: EdgeTransfer };
 }
 
+type Submitted = { run: TransitionRunView; job: TransitionAnalysisJob; duplicate: boolean };
+
+/**
+ * One confirmed manual batch, ALL OR NONE. Before any derivation: changed cut truth, consent, plan, the whole batch's
+ * worst-case cost (also against the confirmed ceiling) and the shared active capacity for the NEW jobs (replays take no
+ * slot). After derivation, every frozen input is validated (media contract, exact transfer method as confirmed,
+ * recomputed cost) BEFORE one atomic batch write. A refusal after derivation queues nothing: the derived Assets remain
+ * as reusable deterministic derivations (they are not rolled back), and no run / job / cost / event exists.
+ */
 export async function submitSequenceReview(args: {
   data: ProjectData;
   /** `buildEpisodeEditView` of the edit as RE-READ now */
@@ -519,10 +599,12 @@ export async function submitSequenceReview(args: {
   deps: DeliveryDeps;
   /** the person confirmed the exact disclosure (media + cost) */
   confirmed: boolean;
+  /** the worst-case total the person confirmed (null = none disclosed: a model analyzer is then refused) */
+  confirmedMaxUsd: number | null;
   nonce: string;
   limits: { maxActivePerProject: number; maxJobAttempts: number };
   now?: Date;
-}): Promise<Array<{ run: TransitionRunView; job: TransitionAnalysisJob; duplicate: boolean }>> {
+}): Promise<Submitted[]> {
   const { data, view, provider, deps } = args;
   const now = args.now ?? deps.now?.() ?? new Date();
   if (args.selections.length === 0) throw new SequenceReviewError("no_selection", "Select at least one cut.");
@@ -551,31 +633,39 @@ export async function submitSequenceReview(args: {
     return cut;
   });
 
-  // 2–4. plan, consent and the whole batch's worst case: all BEFORE any media is derived
+  // 2. consent and plan
   const consent = consentProblem(args.qaPolicy, provider);
   if (consent) throw new SequenceReviewError("not_allowed", consent);
-  const previews = cuts.map((cut) =>
+  const build = (cut: CutTransition, edge: { left: EdgeAssets; right: EdgeAssets } | null, runKey: string) =>
     buildTransitionInput({
       cut,
       view,
       data,
       provider,
       directVideoAllowed: args.qaPolicy.directVideoAllowed,
-      edge: null,
-      runKey: "preview",
-    }),
-  );
+      edge,
+      runKey,
+    });
+  const previews = cuts.map((cut) => build(cut, null, "preview"));
   for (const [i, p] of previews.entries())
     if (p.plan.batches.length === 0)
       throw new SequenceReviewError(
         "nothing_to_analyse",
-        `${cuts[i]!.left.shotCode ?? "?"} → ${cuts[i]!.right.shotCode ?? "?"}: no cut criterion can be analysed by ${provider.label} (${p.plan.items.find((x) => x.mode === "sequence_transition")?.reason ?? NOT_CALIBRATED_SEQUENCE_REASON}). Nothing was derived or queued.`,
+        `${title(cuts[i]!)}: no cut criterion can be analysed by ${provider.label} (${p.plan.items.find((x) => x.mode === "sequence_transition")?.reason ?? NOT_CALIBRATED_SEQUENCE_REASON}). Nothing was derived or queued.`,
       );
-  const estimates = previews.map((p) => provider.estimate(p, now));
-  const total = estimates.every((e) => Number.isFinite(e.maxUsd))
-    ? estimates.reduce((n, e) => n + e.maxUsd, 0)
-    : null;
-  if (provider.kind === "model") {
+
+  // 3. the whole batch's worst case, before derivation (also against what the person confirmed)
+  const budget = async (inputs: TransitionContinuityAnalysisInput[], stage: string) => {
+    const estimates = inputs.map((p) => provider.estimate(p, now));
+    const total = estimates.every((e) => Number.isFinite(e.maxUsd))
+      ? estimates.reduce((n, e) => n + e.maxUsd, 0)
+      : null;
+    if (provider.kind !== "model") return estimates;
+    if (total == null || args.confirmedMaxUsd == null || total > args.confirmedMaxUsd + 1e-9)
+      throw new SequenceReviewError(
+        "cost_changed",
+        `${stage}: the worst-case cost (${total == null ? "unknown" : `$${total.toFixed(4)}`}) is not within the confirmed $${(args.confirmedMaxUsd ?? 0).toFixed(4)}. Nothing was queued; review the disclosure again.`,
+      );
     const since = new Date(now.getTime() - 24 * 3600_000).toISOString();
     const blockers = costBlockers({
       provider,
@@ -586,40 +676,83 @@ export async function submitSequenceReview(args: {
       projectSpentLast24hUsd: await deps.qa.analysisSpentSince(data.project.id, since),
     });
     if (blockers.length > 0) throw new SequenceReviewError("budget_blocked", blockers.join(" "));
-  }
+    return estimates;
+  };
+  await budget(previews, "Before preparing media");
 
-  // 5–6. derive the selected cuts' edge media ONLY now, then freeze and queue each cut
-  const out: Array<{ run: TransitionRunView; job: TransitionAnalysisJob; duplicate: boolean }> = [];
-  for (const cut of cuts) {
+  // 4. the shared active capacity for the NEW jobs only (an exact replay takes no slot), before derivation
+  const keys = cuts.map((cut, i) =>
+    sequenceIdempotencyKey(cut.truth, provider, previews[i]!.plan.batches[0]!.promptVersion, args.nonce),
+  );
+  const existing = await deps.qa.findTransitionJobsByKeys(data.project.id, keys);
+  const known = new Set(existing.map((j) => j.idempotencyKey));
+  const fresh = new Set(keys.filter((k) => !known.has(k)));
+  if (fresh.size === 0) {
+    // the SAME confirmation again: return the queued batch as it is (no derivation, no capacity)
+    return Promise.all(
+      keys.map(async (k) => {
+        const job = existing.find((j) => j.idempotencyKey === k)!;
+        return { run: (await deps.qa.getTransitionRun(job.runId))!, job, duplicate: true };
+      }),
+    );
+  }
+  const active = (await deps.qa.listActiveProjectAnalysisJobs(data.project.id)).length;
+  const free = Math.max(0, args.limits.maxActivePerProject - active);
+  if (fresh.size > free)
+    throw new SequenceReviewError(
+      "limit",
+      `This review needs ${fresh.size} analysis slot(s) but the project has ${free} free (${active} in progress, limit ${args.limits.maxActivePerProject}). Nothing was derived or queued.`,
+    );
+
+  // 5. derive (or reuse) every selected cut's exact edge media, then build and VALIDATE every frozen input
+  const finals: TransitionContinuityAnalysisInput[] = [];
+  for (const [i, cut] of cuts.entries()) {
     const left = await ensureEdgeAssets({ side: cut.left, which: "left", assets: data.assets, deps });
     const right = await ensureEdgeAssets({ side: cut.right, which: "right", assets: data.assets, deps });
-    const edge = {
-      left: { clip: left.clip.asset, still: left.still.asset },
-      right: { clip: right.clip.asset, still: right.still.asset },
-    };
-    const draft = buildTransitionInput({
+    const draft = build(
       cut,
-      view,
-      data,
-      provider,
-      directVideoAllowed: args.qaPolicy.directVideoAllowed,
-      edge,
-      runKey: "pending",
-    });
+      {
+        left: { clip: left.clip.asset, still: left.still.asset },
+        right: { clip: right.clip.asset, still: right.still.asset },
+      },
+      keys[i]!.slice(0, 16),
+    );
     if (draft.plan.batches.length === 0)
       throw new SequenceReviewError(
         "media",
-        `The derived edge media of ${cut.left.shotCode ?? "?"} → ${cut.right.shotCode ?? "?"} is outside the cut-edge bounds (${draft.plan.items.find((i) => i.status === "no_media")?.reason ?? "no batch"}). Nothing was queued for it.`,
+        `The exact edge media of ${title(cut)} is outside the cut-edge bounds (${draft.plan.items.find((x) => x.status === "no_media")?.reason ?? "no batch"}). Nothing was queued for this review.`,
       );
-    const key = sequenceIdempotencyKey(cut.truth, provider, draft.plan.batches[0]!.promptVersion, args.nonce);
-    const input = { ...draft, runKey: key.slice(0, 16) };
-    const estimate = provider.estimate(input, now);
-    const base = newTransitionRun({ cut, view, userId: deps.userId, now: now.toISOString() });
-    try {
-      out.push(
-        await deps.qa.createTransitionRunWithJob({
+    // the EXACT transfer method of each derived clip must be the one the person confirmed (frozen on the media)
+    const approved = args.selections[i]!.transfer;
+    for (const which of ["left", "right"] as const) {
+      const clip = draft.media.find((m) => m.inputId === `${which}:clip`)!;
+      const actual = clipTransfer(provider, clip.byteSize, true);
+      if (actual !== approved[which])
+        throw new SequenceReviewError(
+          "transfer_changed",
+          `The exact ${which} edge clip of ${title(cut)} (${clip.byteSize ?? "?"} bytes) would be sent as ${actual === "provider_file" ? "a temporary provider file" : actual === "inline" ? "inline data" : "nothing (not sent)"}, not as disclosed (${approved[which]}). Nothing was queued or sent; review the disclosure again (it now shows the exact media).`,
+        );
+      clip.edge = { ...clip.edge!, transfer: actual };
+    }
+    const problem = transitionInputProblem(draft);
+    if (problem) throw new SequenceReviewError("media", `${title(cut)}: ${problem} Nothing was queued.`);
+    finals.push(draft);
+  }
+
+  // 6. the recomputed worst case of the EXACT media, again before anything is queued
+  const estimates = await budget(finals, "After preparing the exact media");
+
+  // 7. ONE atomic batch write: replays resolved, the shared limit re-checked, every run + job or none
+  try {
+    return await deps.qa.createTransitionBatchWithJobs({
+      limits: { maxActivePerProject: args.limits.maxActivePerProject },
+      entries: cuts.map((cut, i) => {
+        const input = finals[i]!;
+        const estimate = estimates[i]!;
+        return {
+          limits: { maxActivePerProject: args.limits.maxActivePerProject },
           run: {
-            ...base,
+            ...newTransitionRun({ cut, view, userId: deps.userId, now: now.toISOString() }),
             analyzer: provider.id,
             analyzerVersion: input.analyzerVersion,
             analyzerKind: provider.kind,
@@ -631,7 +764,7 @@ export async function submitSequenceReview(args: {
             model: provider.model,
           },
           job: {
-            idempotencyKey: key,
+            idempotencyKey: keys[i]!,
             analyzer: provider.id,
             model: provider.model,
             snapshot: input,
@@ -644,14 +777,14 @@ export async function submitSequenceReview(args: {
               pricingVersion: estimate.pricingVersion,
             },
           },
-          limits: { maxActivePerProject: args.limits.maxActivePerProject },
-        }),
-      );
-    } catch (err) {
-      if (err instanceof MediaQaError && err.code === "invalid")
-        throw new SequenceReviewError("limit", err.message);
-      throw err;
-    }
+        };
+      }),
+    });
+  } catch (err) {
+    if (err instanceof MediaQaError && err.code === "invalid")
+      throw new SequenceReviewError("limit", err.message);
+    throw err;
   }
-  return out;
 }
+
+const title = (cut: CutTransition) => `${cut.left.shotCode ?? "?"} → ${cut.right.shotCode ?? "?"}`;

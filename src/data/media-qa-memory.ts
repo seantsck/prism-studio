@@ -40,6 +40,7 @@ import {
   type NewDerivation,
   type NewFinding,
   type NewRun,
+  type NewTransitionAnalysisBatch,
   type NewTransitionAnalysisRun,
   type NewTransitionRun,
   type TransitionAnalysisJob,
@@ -296,33 +297,92 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
     return this.transitionView(this.insertTransitionRun(input, edit));
   }
 
-  /** 3A.4D: run + subject + findings + queued sequence job + estimated cost + first event, in ONE synchronous step. */
+  /** 3A.4D: one cut's run + job (a batch of one; the same all-or-none semantics). */
   async createTransitionRunWithJob(input: NewTransitionAnalysisRun) {
-    const r = input.run;
-    const edit = (await this.access.edits?.().get(r.projectId, r.subject.editId)) ?? null;
-    // ── synchronous from here: replay, the shared limit, adjacency and the writes cannot interleave ──
-    const replay = [...this.jobs.values()].find(
-      (j): j is TransitionAnalysisJob =>
-        j.subjectKind === "transition" &&
-        j.projectId === r.projectId &&
-        j.idempotencyKey === input.job.idempotencyKey,
-    );
-    if (replay) {
-      const run = this.transitionRuns.find((x) => x.id === replay.runId)!;
-      return { run: this.transitionView(run), job: clone(replay), duplicate: true };
-    }
-    // the SAME shared Project limit as Shot QA: an active Shot job takes a slot from a sequence submission
-    const active = [...this.jobs.values()].filter(
-      (j) => j.projectId === r.projectId && ANALYSIS_ACTIVE.includes(j.status),
-    ).length;
-    if (active >= input.limits.maxActivePerProject) {
-      throw new MediaQaError(
-        "invalid",
-        `This project already has ${active} analyses in progress (limit ${input.limits.maxActivePerProject}).`,
+    const [out] = await this.createTransitionBatchWithJobs({ entries: [input], limits: input.limits });
+    return out!;
+  }
+
+  async findTransitionJobsByKeys(projectId: string, keys: string[]) {
+    return [...this.jobs.values()]
+      .filter(
+        (j): j is TransitionAnalysisJob =>
+          j.subjectKind === "transition" && j.projectId === projectId && keys.includes(j.idempotencyKey),
+      )
+      .map(clone);
+  }
+
+  /**
+   * 3A.4D: ONE confirmed manual batch, all or none. The edits are read first (the only awaits); from there everything is
+   * synchronous: replays resolved by key (no slot), the shared limit checked for the NEW jobs only, EVERY new entry's
+   * adjacency validated, and only then every run + job written. Results follow the input order.
+   */
+  async createTransitionBatchWithJobs(input: NewTransitionAnalysisBatch) {
+    const edits = new Map<string, EpisodeEdit | null>();
+    for (const e of input.entries)
+      if (!edits.has(e.run.subject.editId))
+        edits.set(
+          e.run.subject.editId,
+          (await this.access.edits?.().get(e.run.projectId, e.run.subject.editId)) ?? null,
+        );
+    // ── synchronous from here ──
+    const projectId = input.entries[0]?.run.projectId;
+    if (!projectId) return [];
+    if (input.entries.some((e) => e.run.projectId !== projectId))
+      throw new MediaQaError("invalid", "A sequence batch belongs to one Project.");
+    const existing = (key: string) =>
+      [...this.jobs.values()].find(
+        (j): j is TransitionAnalysisJob =>
+          j.subjectKind === "transition" && j.projectId === projectId && j.idempotencyKey === key,
       );
+    const keys = input.entries.map((e) => e.job.idempotencyKey);
+    const fresh = input.entries.filter(
+      (e, i) => !existing(e.job.idempotencyKey) && keys.indexOf(e.job.idempotencyKey) === i,
+    );
+    if (fresh.length > 0) {
+      // the SAME shared Project limit as Shot QA, counted across both subject kinds
+      const open = [...this.jobs.values()].filter(
+        (j) => j.projectId === projectId && ANALYSIS_ACTIVE.includes(j.status),
+      ).length;
+      if (open + fresh.length > input.limits.maxActivePerProject)
+        throw new MediaQaError(
+          "invalid",
+          `This review needs ${fresh.length} analysis slot(s) but the project has ${Math.max(0, input.limits.maxActivePerProject - open)} free (${open} in progress, limit ${input.limits.maxActivePerProject}). Nothing was queued.`,
+        );
     }
-    const run = this.insertTransitionRun(r, edit);
-    const now = r.now;
+    // all or none: every new entry must still be a live cut BEFORE anything is written
+    for (const e of fresh) {
+      const refusal = this.refusalOf(e.run, edits.get(e.run.subject.editId) ?? null);
+      if (refusal) throw refusal;
+    }
+    const created = new Map<string, TransitionAnalysisJob>();
+    for (const e of fresh) {
+      const run = this.insertTransitionRun(e.run, edits.get(e.run.subject.editId) ?? null);
+      created.set(e.job.idempotencyKey, this.insertTransitionJob(run, e));
+    }
+    return input.entries.map((e) => {
+      const made = created.get(e.job.idempotencyKey);
+      const job = made ?? existing(e.job.idempotencyKey)!;
+      const run = this.transitionRuns.find((x) => x.id === job.runId)!;
+      return { run: this.transitionView(run), job: clone(job), duplicate: !made };
+    });
+  }
+
+  private refusalOf(input: NewTransitionRun, edit: EpisodeEdit | null) {
+    return transitionRunRefusal(
+      edit && {
+        id: edit.id,
+        projectId: edit.projectId,
+        episodeId: edit.episodeId,
+        revision: edit.revision,
+        items: edit.items.map((i) => ({ id: i.id, shotId: i.shotId })),
+      },
+      input,
+    );
+  }
+
+  private insertTransitionJob(run: TransitionContinuityRun, input: NewTransitionAnalysisRun) {
+    const now = input.run.now;
     const job: TransitionAnalysisJob = {
       id: randomUUID(),
       projectId: run.projectId,
@@ -360,7 +420,7 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
       completedAt: null,
       failedAt: null,
       cancelledAt: null,
-      createdBy: r.createdBy,
+      createdBy: input.run.createdBy,
       createdAt: now,
       updatedAt: now,
     };
@@ -381,7 +441,7 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
       recordedAt: now,
     });
     this.addEvent(job, null, "queued", "Sequence review submitted by user", now);
-    return { run: this.transitionView(run), job: clone(job), duplicate: false };
+    return job;
   }
 
   private insertTransitionRun(input: NewTransitionRun, edit: EpisodeEdit | null): TransitionContinuityRun {

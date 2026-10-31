@@ -3,6 +3,8 @@ import {
   buildSequencePlan,
   executionIdentity,
   NOT_CALIBRATED_SEQUENCE_REASON,
+  sequenceInputSide,
+  transitionInputProblem,
 } from "@/domain/continuity/analysis/sequence-plan";
 import { buildPrompt, SYSTEM_INSTRUCTION_TRANSITION_V1 } from "@/domain/continuity/analysis/prompt";
 import { validateBatchResponse } from "@/domain/continuity/analysis/schema";
@@ -344,6 +346,49 @@ describe("sequence prompt", () => {
   });
 });
 
+describe("canonical side authority (input id, never the redundant field)", () => {
+  it("sequenceInputSide", () => {
+    expect(sequenceInputSide("left:clip")).toBe("left");
+    expect(sequenceInputSide("left:last")).toBe("left");
+    expect(sequenceInputSide("ref:left:look:1")).toBe("left");
+    expect(sequenceInputSide("right:clip")).toBe("right");
+    expect(sequenceInputSide("right:first")).toBe("right");
+    expect(sequenceInputSide("ref:right:identity:2")).toBe("right");
+    expect(sequenceInputSide("video")).toBeNull();
+    expect(sequenceInputSide("ref:look:1")).toBeNull();
+  });
+  it("the frozen input contract refuses a contradicting side, a bad prefix, a missing / duplicated edge input", () => {
+    expect(transitionInputProblem(input())).toBeNull();
+    const flip = (id: string, side: "left" | "right") => {
+      const i = input();
+      i.media = i.media.map((x) => (x.inputId === id ? { ...x, side } : x));
+      return transitionInputProblem(i);
+    };
+    expect(flip("left:clip", "right")).toMatch(/claims the right side/);
+    expect(flip("right:clip", "left")).toMatch(/claims the left side/);
+    const bad = input();
+    bad.media = bad.media.map((x) => (x.inputId === "ref:left:look:1" ? { ...x, inputId: "ref:look:1" } : x));
+    expect(transitionInputProblem(bad)).toMatch(/not a canonically sided/);
+    const missing = input();
+    missing.media = missing.media.filter((x) => x.inputId !== "right:first");
+    expect(transitionInputProblem(missing)).toMatch(/exactly one right:first/);
+    const twice = input();
+    twice.media = [...twice.media, twice.media[0]!];
+    expect(transitionInputProblem(twice)).toMatch(/exactly one left:clip/);
+    const kind = input();
+    kind.media = kind.media.map((x) => (x.inputId === "left:last" ? { ...x, kind: "video" as const } : x));
+    expect(transitionInputProblem(kind)).toMatch(/left:last must be output_frame/);
+  });
+  it("evidence sides come from the input id: a lying `side` field never makes evidence two-sided", () => {
+    const lying = MEDIA.map((x) => (x.inputId === "left:last" ? { ...x, side: "right" as const } : x));
+    const b = plan().batches.find((x) => x.criterionKeys.includes("cut:screen_direction"))!;
+    // left:clip + left:last (which claims "right") is still ONE-sided
+    expect(validateBatchResponse(answer([ev("left:clip", 10), ev("left:last", null)]), b, lying).ok).toBe(
+      false,
+    );
+  });
+});
+
 describe("execution identity", () => {
   it("transition input with only sequence batches; refuses Shot modes in a transition input", () => {
     expect(executionIdentity(input())).toMatchObject({ ok: true, subject: "transition" });
@@ -399,6 +444,21 @@ describe("Gemini sequence request (fake transport only)", () => {
     expect(r.textParts.join("\n")).toContain("LEFT SIDE");
     expect(r.textParts.join("\n")).toContain("ref:right:look:1");
   });
+  it("a clip whose approved transfer differs from what Gemini would do is refused before any upload/request", async () => {
+    const t = new FakeGeminiTransport([{ kind: "json", body: good }]);
+    const p = g(t);
+    const i = input(p, plan(p.plannerView()));
+    i.media = i.media.map((x) =>
+      x.inputId === "left:clip" ? { ...x, edge: { ...x.edge!, transfer: "provider_file" as const } } : x,
+    );
+    const b = i.plan.batches.find((x) => x.criterionKeys.includes("cut:wardrobe:c1"))!;
+    await expect(
+      p.analyzeBatch({ batch: b, input: i, media, ctx: { now: () => new Date(), sleep: async () => {} } }),
+    ).rejects.toMatchObject({ category: "local_policy_block", code: "transfer_not_approved" });
+    expect(t.calls).toBe(0);
+    expect(t.uploads).toEqual([]);
+  });
+
   it("one correction for a one-sided answer, then fails visibly", async () => {
     const oneSided = { criteria: [{ ...good.criteria[0], evidence: [ev("left:clip", 10)] }] };
     const t = new FakeGeminiTransport([

@@ -1134,6 +1134,29 @@ sourceInMs, itemEditStartMs }`: clip-local → source → edit time is a Prism p
   run (overrides applied), with sided evidence and the time mapping; a stale run is shown stale and its semantic
   criteria return to unchecked; a failed or incomplete run leaves them unchecked. Run history lists the exact edge media
   each run used. Intent marks covered warn / fail findings in the projection; the stored result never changes.
+- **Technical-review invariants** (remediation of the first 3A.4D head):
+  - **All-or-none batch.** A confirmed manual batch persists every run + job or none. The shared active capacity
+    (both subject kinds) is checked BEFORE any derivation for the NEW jobs only (an exact replay of the same
+    confirmation takes no slot and needs no derivation), and again transactionally at commit
+    (`createTransitionBatchWithJobs`: Project row locked, replays resolved by key, `active + new <= limit`, then
+    every write). A later cut's invalid derived media queues none of the batch; derived Assets that were already
+    produced stay as reusable deterministic derivations (they are not rolled back, and nothing claims they are).
+  - **Cost twice.** The whole batch's worst case is checked before derivation and recomputed on the EXACT media
+    after it; above the confirmed ceiling (or any gate) nothing is queued and a fresh disclosure is required.
+  - **Exact transfer.** The disclosure shows each edge clip's transfer method (`inline`, temporary provider file, or
+    not sent for the mock), exact when the edge media already exist (a read-only lookup by derivation key) and
+    explicitly labelled an estimate otherwise. The confirmation carries the method; after derivation the method of the
+    ACTUAL bytes must equal it or nothing is queued or sent. The approved method is frozen on the clip
+    (`edge.transfer`) and the Gemini adapter refuses, before any upload or request, to send it any other way.
+  - **Current run.** The Supervisor assesses the NEWEST run whose frozen truth is CURRENT (history newest-first), not
+    blindly the latest: a cut returned to an earlier truth makes that run current again; a newer failed run of the
+    same current truth wins over an older success. Stale runs stay in the history.
+  - **Canonical sides.** `sequenceInputSide(inputId)` is the only side authority (validator, prompt, worker contract,
+    Supervisor). `transitionInputProblem` refuses, before any media load or transport, a frozen transition input
+    whose edge inputs are missing / duplicated / of the wrong kind / without edge metadata / out of bounds, or whose
+    redundant `side` contradicts its id.
+  - **Edge file names** follow the container actually encoded (MP4/H.264 or the WebM/VP9 fallback); the name is never
+    part of the derivation identity.
 - **Not in 3A.4D.** Live calls, calibration fixtures (3A.4E), automatic orchestration, waves, settle timing, sequence
   policy columns and migration 0047 (3A.4F).
 

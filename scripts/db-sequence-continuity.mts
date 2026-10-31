@@ -717,6 +717,52 @@ try {
     limited,
   );
 
+  // ── 3A.4D review: a confirmed BATCH is all or none (two new jobs, one free slot → nothing written) ──
+  {
+    const view = buildEpisodeEditView(data, edit0, media);
+    const cut = buildEpisodeCuts({ data, view })[1]!;
+    const entry = (key: string) => ({
+      limits: { maxActivePerProject: 50 },
+      run: {
+        ...newTransitionRun({ cut, view, userId: dev.id, now: NOW() }),
+        analysisStatus: "queued" as const,
+      },
+      job: {
+        idempotencyKey: key,
+        analyzer: "mock-continuity",
+        model: "mock",
+        snapshot: { version: 1, subjectKind: "transition", runKey: "db-sc", plan } as never,
+        inputAssetIds: [],
+        maxAttempts: 3,
+        estimate: { maxUsd: 0, expectedUsd: 0, usage: {}, pricingVersion: "free" },
+      },
+    });
+    const count = async () =>
+      Number(
+        (await q("select count(*)::int as n from continuity_analysis_jobs where project_id = $1", [P]))
+          .rows[0].n,
+      );
+    const before = await count();
+    const runsBefore = (await qa.listTransitionRuns(P, cut.transitionKey)).length;
+    const active = (await qa.listActiveProjectAnalysisJobs(P)).length;
+    const refused = await qa
+      .createTransitionBatchWithJobs({
+        entries: [entry(sha(`b1-${id()}`)), entry(sha(`b2-${id()}`))],
+        limits: { maxActivePerProject: active + 1 },
+      })
+      .then(
+        () => "ok",
+        (e: unknown) => (e instanceof MediaQaError ? e.code : String(e)),
+      );
+    check(
+      "3A.4D batch: two new jobs against one free slot are refused WHOLE (no run, no job written)",
+      refused === "invalid" &&
+        (await count()) === before &&
+        (await qa.listTransitionRuns(P, cut.transitionKey)).length === runsBefore,
+      refused,
+    );
+  }
+
   // refusal when adjacency changed; history survives edit changes and edit deletion
   const reordered = await edits.apply({
     editId: edit0.id,

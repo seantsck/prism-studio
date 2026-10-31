@@ -1,3 +1,4 @@
+import { sequenceInputSide } from "./sequence-plan";
 import {
   OPENAI_PROMPT_VERSIONS,
   PROMPT_VERSIONS,
@@ -151,7 +152,7 @@ function buildSequencePrompt(args: {
     .filter((m): m is AnalysisMedia => Boolean(m));
   const ofSide = (side: "left" | "right") =>
     sent
-      .filter((m) => m.side === side)
+      .filter((m) => sequenceInputSide(m.inputId) === side)
       .sort((a, b) => rankOf(a) - rankOf(b) || a.inputId.localeCompare(b.inputId));
   const fps = batch.sampling?.fps ?? null;
   const data: PromptSpec["data"] = {
@@ -171,7 +172,7 @@ function buildSequencePrompt(args: {
     }),
     inputs: [...ofSide("left"), ...ofSide("right")].map((m) => ({
       inputId: m.inputId,
-      side: m.side,
+      side: sequenceInputSide(m.inputId) ?? undefined,
       role: m.kind === "reference" ? `reference:${m.role}` : m.kind === "video" ? "edge_clip" : "edge_frame",
       label: clip(m.label, 120),
       atMs: m.kind === "video" ? null : m.atMs,

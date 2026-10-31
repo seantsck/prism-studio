@@ -95,6 +95,11 @@ export interface AnalysisMedia {
     endMs: number;
     sourceInMs: number;
     itemEditStartMs: number;
+    /**
+     * Clips only: the transfer method the person CONFIRMED for this exact clip. A provider may not choose another
+     * (more persistent) method: a mismatch is refused locally before any upload or request.
+     */
+    transfer?: "inline" | "provider_file" | "not_sent";
   };
 }
 

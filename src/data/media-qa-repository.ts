@@ -229,6 +229,12 @@ export interface NewTransitionAnalysisRun {
   limits: { maxActivePerProject: number };
 }
 
+/** 3A.4D: ONE confirmed manual batch (all or none). */
+export interface NewTransitionAnalysisBatch {
+  entries: NewTransitionAnalysisRun[];
+  limits: { maxActivePerProject: number };
+}
+
 export type NewRun = Omit<
   ContinuityRun,
   | "id"
@@ -539,6 +545,15 @@ export interface MediaQaRepository {
   createTransitionRunWithJob(
     input: NewTransitionAnalysisRun,
   ): Promise<{ run: TransitionRunView; job: TransitionAnalysisJob; duplicate: boolean }>;
+  /**
+   * 3A.4D: a whole confirmed batch in ONE unit: replays resolved by idempotency key (they take no slot), the shared
+   * active limit checked for the NEW jobs only, then every new run + job written, or none. Results follow input order.
+   */
+  createTransitionBatchWithJobs(
+    input: NewTransitionAnalysisBatch,
+  ): Promise<Array<{ run: TransitionRunView; job: TransitionAnalysisJob; duplicate: boolean }>>;
+  /** 3A.4D: the existing transition jobs with these idempotency keys (any status). */
+  findTransitionJobsByKeys(projectId: string, keys: string[]): Promise<TransitionAnalysisJob[]>;
   getTransitionRun(runId: string): Promise<TransitionRunView | null>;
   /** One cut's history, newest first. */
   listTransitionRuns(projectId: string, transitionKey: string): Promise<TransitionRunView[]>;

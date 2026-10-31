@@ -605,7 +605,14 @@ function ReviewPanel({
                   ? ` · ${s.still.frame === "last_displayed" ? "last" : "first"} displayed frame at ${secs(s.still.atMs)}`
                   : ""}
                 {` · references: ${s.references.length ? s.references.map((x) => `${x.count} ${x.role.replace(/_/g, " ")}`).join(", ") : "none"}`}
-                {` · transfer: ${s.transfer === "not_sent" ? "not sent" : s.transfer === "provider_file" ? "temporary provider file" : "inline"}`}
+                <span data-testid="review-transfer" data-transfer={s.transfer} data-basis={s.transferBasis}>
+                  {` · transfer: ${s.transfer === "not_sent" ? "not sent" : s.transfer === "provider_file" ? "temporary provider file" : "inline"}`}
+                  {s.transfer !== "not_sent"
+                    ? s.transferBasis === "exact"
+                      ? ` (exact: ${s.clipBytes} bytes)`
+                      : " (estimated; verified against the exact clip before anything is sent)"
+                    : ""}
+                </span>
               </div>
             ))}
             <div className="text-muted">
@@ -643,9 +650,14 @@ function ReviewPanel({
                 c.truth.subjectFingerprint,
                 c.truth.criteriaFingerprint,
                 c.truth.referenceFingerprint,
+                c.left.transfer,
+                c.right.transfer,
               ].join("|")}
             />
           ))}
+          {d.totalMaxUsd != null ? (
+            <input type="hidden" name="confirmedMaxUsd" value={String(d.totalMaxUsd)} />
+          ) : null}
           <label className="flex items-center gap-2">
             <input type="checkbox" name="confirm" value="1" required data-testid="review-confirm" />I confirm
             sending exactly this edge media (no audio) for these cuts, at this worst-case cost.

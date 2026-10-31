@@ -280,6 +280,7 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
     media: Map<string, MediaBytes>,
     ctx: AnalysisContext,
     batch: AnalysisBatch,
+    approvedTransfer: ReadonlyMap<string, string> = new Map(),
   ): Promise<GeminiPart[]> {
     const parts: GeminiPart[] = [];
     for (const p of spec.parts) {
@@ -296,6 +297,15 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
           "invalid_input",
           "video_not_planned",
           "A still-image batch cannot send video.",
+        );
+      // 3A.4D: a cut-edge clip leaves Prism ONLY by the transfer method the person confirmed for that exact clip;
+      // a provider never silently picks another (more persistent) one. Refused before any upload or request.
+      const approved = approvedTransfer.get(p.inputId ?? "");
+      if (isVideo && approved !== undefined && approved !== this.videoTransfer(m.bytes.length))
+        throw new AnalysisBatchError(
+          "local_policy_block",
+          "transfer_not_approved",
+          `Input ${p.inputId} would be sent as ${this.videoTransfer(m.bytes.length)}, but ${approved} was confirmed; nothing was sent.`,
         );
       const videoFps = isVideo ? batch.sampling?.fps : undefined;
       if (isVideo && !videoFps)
@@ -439,7 +449,13 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
       media: input.media,
       framing: { productionAspectRatio: input.framing.productionAspectRatio },
     });
-    const userTurn: GeminiTurn = { role: "user", parts: await this.toParts(spec, args.media, ctx, batch) };
+    const approved = new Map(
+      input.media.flatMap((m) => (m.edge?.transfer ? [[m.inputId, m.edge.transfer] as const] : [])),
+    );
+    const userTurn: GeminiTurn = {
+      role: "user",
+      parts: await this.toParts(spec, args.media, ctx, batch, approved),
+    };
     const calls: UsageCall[] = [];
 
     const first = await this.call(

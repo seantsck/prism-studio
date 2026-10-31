@@ -16,6 +16,7 @@ import {
   type ManifestEntry,
   type PlanItem,
   type ShotAnalysisMode,
+  type TransitionContinuityAnalysisInput,
 } from "./types";
 
 /**
@@ -158,7 +159,11 @@ export function buildSequencePlan(input: SequencePlanInput): ContinuityAnalysisP
     }
     const ranked = input.media
       .filter((m) => m.kind === "reference" && (input.referenceUses[m.inputId] ?? []).includes(c.key))
-      .sort((a, b) => (a.side ?? "").localeCompare(b.side ?? "") || a.inputId.localeCompare(b.inputId));
+      .sort(
+        (a, b) =>
+          (sequenceInputSide(a.inputId) ?? "").localeCompare(sequenceInputSide(b.inputId) ?? "") ||
+          a.inputId.localeCompare(b.inputId),
+      );
     const refs = ranked.slice(0, budget.maxReferencesPerBatch);
     planned.push({ c: ac, refs, omitted: ranked.slice(budget.maxReferencesPerBatch) });
     items.push({
@@ -231,6 +236,61 @@ export function buildSequencePlan(input: SequencePlanInput): ContinuityAnalysisP
   };
   const body = { analyzer: analyzer.id, model: analyzer.model, items, batches, manifest, budget };
   return { version: 1, ...body, fingerprint: fingerprint(body) };
+}
+
+// ───────────────────────── canonical sides (one authority) ─────────────────────────
+
+/**
+ * The side of a sequence input, from its CANONICAL input id only: `left:clip`, `left:last`, `ref:left:…` are LEFT;
+ * `right:clip`, `right:first`, `ref:right:…` are RIGHT; anything else has no side. `AnalysisMedia.side` is redundant
+ * and never overrides this: the validator, the worker contract and the Supervisor all derive the side here.
+ */
+export function sequenceInputSide(inputId: string): "left" | "right" | null {
+  if (inputId === "left:clip" || inputId === "left:last" || inputId.startsWith("ref:left:")) return "left";
+  if (inputId === "right:clip" || inputId === "right:first" || inputId.startsWith("ref:right:"))
+    return "right";
+  return null;
+}
+
+const EDGE_KINDS: Record<(typeof EDGE_INPUT_IDS)[number], AnalysisMedia["kind"]> = {
+  "left:clip": "video",
+  "right:clip": "video",
+  "left:last": "output_frame",
+  "right:first": "output_frame",
+};
+
+/**
+ * The frozen media contract of a transition input, checked locally BEFORE any media load or transport (worker) and
+ * before a job is committed (submission). With planned batches it requires exactly one of each edge input, of the
+ * expected kind, with edge metadata under the input's edge policy, clips within `cut-edge-static-v1` bounds, and every
+ * input canonically sided; a redundant `side` that contradicts its id is refused. null = valid.
+ */
+export function transitionInputProblem(input: TransitionContinuityAnalysisInput): string | null {
+  for (const m of input.media) {
+    const canonical = sequenceInputSide(m.inputId);
+    if (!canonical) return `Input ${m.inputId} is not a canonically sided sequence input.`;
+    if (m.side != null && m.side !== canonical)
+      return `Input ${m.inputId} claims the ${m.side} side but its id is ${canonical}.`;
+  }
+  if (input.plan.batches.length === 0) return null;
+  for (const id of EDGE_INPUT_IDS) {
+    const found = input.media.filter((m) => m.inputId === id);
+    if (found.length !== 1) return `The sequence input needs exactly one ${id} (found ${found.length}).`;
+    const m = found[0]!;
+    if (m.kind !== EDGE_KINDS[id]) return `${id} must be ${EDGE_KINDS[id]}, not ${m.kind}.`;
+    if (!m.edge) return `${id} has no cut-edge metadata.`;
+    if (m.edge.policy !== input.edgePolicy)
+      return `${id} was derived under ${m.edge.policy}, not ${input.edgePolicy}.`;
+    if (!m.checksum) return `${id} has no recorded checksum.`;
+  }
+  for (const side of ["left", "right"] as const) {
+    const problem = edgeMediaProblem(input.media, side);
+    if (problem) return problem;
+  }
+  for (const m of input.media)
+    if (m.kind === "reference" && !m.inputId.startsWith(`ref:${sequenceInputSide(m.inputId)}:`))
+      return `Reference ${m.inputId} is not canonically sided.`;
+  return null;
 }
 
 // ───────────────────────── execution identity (worker) ─────────────────────────

@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { previewSequenceReview } from "@/continuity/sequence-review";
+import { findEdgeAssets, previewSequenceReview } from "@/continuity/sequence-review";
+import { buildEpisodeCuts } from "@/domain/continuity/sequence";
 import { EpisodeEditError } from "@/data/episode-edit-repository";
 import type { TransitionRunView } from "@/data/media-qa-repository";
 import { buildEpisodeEditView } from "@/domain/edit/view";
@@ -13,7 +14,7 @@ import {
 } from "@/components/views/sequence-continuity-model";
 import { loadEditMediaFacts } from "./episode-edit-media";
 import { getEpisodeEditRepo } from "./episode-edits";
-import { getAnalysisConfig, getMediaQaRepo, getPreviewProviders } from "./media-qa";
+import { getAnalysisConfig, getMediaProcessor, getMediaQaRepo, getPreviewProviders } from "./media-qa";
 
 /**
  * The Continuity Supervisor page's READ (Phase 3A.4B, extended by 3A.4D): the persisted edit and its media facts, the
@@ -52,10 +53,25 @@ export async function loadContinuityPage(
     if (query.review?.length && selectedAnalyzer) {
       const now = new Date();
       const since = new Date(now.getTime() - 24 * 3600_000).toISOString();
+      const view = buildEpisodeEditView(data, edit, media);
+      // read-only lookup of already-derived edge media (by derivation key): the disclosure is then EXACT
+      const edges = new Map<string, NonNullable<Awaited<ReturnType<typeof findEdgeAssets>>>>();
+      for (const cut of buildEpisodeCuts({ data, view }).filter((c) =>
+        query.review!.includes(c.transitionKey),
+      )) {
+        const found = await findEdgeAssets({
+          cut,
+          processor: getMediaProcessor(),
+          qa,
+          projectId: data.project.id,
+        }).catch(() => null); // no processor here: the disclosure stays an (explicitly labelled) estimate
+        if (found) edges.set(cut.transitionKey, found);
+      }
       review = {
         disclosure: previewSequenceReview({
           data,
-          view: buildEpisodeEditView(data, edit, media),
+          view,
+          edges,
           transitionKeys: query.review,
           provider: providers.get(selectedAnalyzer)!,
           qaPolicy: await qa.getQaPolicy(data.project.id),
