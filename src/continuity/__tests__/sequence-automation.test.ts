@@ -566,6 +566,30 @@ media("settling", () => {
   });
 });
 
+media("the fake analyzer speaks the sequence contract, as the E2E relies on", () => {
+  it("a queued wave's job validates through the real analyzer path", async () => {
+    const provider = gemini();
+    const s = await setup({ provider, policy: { analyzer: "gemini", maxTransitionsPerBatch: 1 } });
+    await s.reconcile();
+    const [job] = await s.jobs();
+    const input = job!.inputSnapshot as never as Parameters<typeof provider.analyzeBatch>[0]["input"];
+    const res = await provider.analyzeBatch({
+      batch: input.plan.batches[0]!,
+      input,
+      media: new Map(
+        input.media.map((m) => [m.inputId, { inputId: m.inputId, mime: m.mime ?? "image/png", bytes: WEBM }]),
+      ),
+      ctx: { now: () => new Date(), sleep: async () => undefined, canCorrect: () => false },
+    });
+    expect(res.correctionUsed).toBe(false);
+    expect(res.findings.length).toBeGreaterThan(0);
+    for (const f of res.findings) {
+      expect(f.evidence.map((e) => e.input)).toEqual(["left:last", "right:first"]);
+      expect(f.result).toBe("pass");
+    }
+  });
+});
+
 media("settle_unknown is visible and safe", () => {
   it("every required clock missing: reported, shown as blocked, and nothing is derived, run, queued or called", async () => {
     const calls = { n: 0 };

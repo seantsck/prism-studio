@@ -220,12 +220,19 @@ test("the results persist, eyeline stays unchecked, and repeat visits create not
   expect(await r.getByTestId("cut-finding-analyzed").count()).toBeGreaterThan(0);
   await expect(page.getByTestId("sequence-auto-covered")).toHaveText("2");
   await expect(page.getByTestId("sequence-auto-due")).toHaveText("0");
-  await r
-    .locator("details")
-    .first()
-    .evaluate((d) => ((d as HTMLDetailsElement).open = true));
-  const eyeline = r.locator('[data-criterion="cut:eyeline"]');
-  if (await eyeline.count()) await expect(eyeline.first()).not.toContainText("Pass");
+  // eyeline is on these cuts, is never analysed and stays unchecked, while an accepted family was analysed
+  const eyeline = page.getByTestId("cut-finding").filter({ hasText: "Eyeline match across the cut" });
+  expect(await eyeline.count()).toBeGreaterThan(0);
+  for (const f of await eyeline.all()) {
+    await expect(f.getByTestId("cut-finding-analyzed")).toHaveCount(0);
+    await expect(f.getByTestId("cut-finding-result")).toContainText(/unchecked/i);
+  }
+  await expect(
+    r
+      .getByTestId("cut-finding")
+      .filter({ hasText: "Screen direction across the cut" })
+      .getByTestId("cut-finding-analyzed"),
+  ).toHaveCount(1);
   await page.reload();
   await expect(runs(page)).toHaveCount(2);
 });
