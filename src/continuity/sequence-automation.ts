@@ -359,7 +359,14 @@ export async function reconcileSequenceQa(args: {
     if (state.due.length === 0) {
       const settling = state.cuts.some((c) => c.status === "settling");
       const queued = state.cuts.some((c) => c.status === "queued");
-      return result(settling ? "settling" : queued ? "already_queued" : "nothing_due", [], state);
+      const unknown = state.cuts.filter((c) => c.status === "settle_unknown").length;
+      return result(
+        settling ? "settling" : queued ? "already_queued" : "nothing_due",
+        unknown > 0
+          ? [`${unknown} cut(s) cannot be shown to have settled, so they are not submitted automatically.`]
+          : [],
+        state,
+      );
     }
     if (state.wave.length === 0)
       return result(

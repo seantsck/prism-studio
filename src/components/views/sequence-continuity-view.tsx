@@ -179,7 +179,7 @@ export function SequenceContinuityView({ episode, page }: { episode: Episode; pa
 }
 
 /** Sequence automation status. It shows counts and reasons only: never an Episode continuity score. */
-function SequenceAutomationPanel({
+export function SequenceAutomationPanel({
   auto,
   projectSlug,
   episodeId,

@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { addAttempt, item, world } from "@/domain/continuity/__tests__/cut-fixtures";
 import { defaultQaPolicy, type ProjectQaPolicy } from "@/domain/continuity/automation";
 import { buildEpisodeCuts } from "@/domain/continuity/sequence";
-import { SEQUENCE_SETTLE_MS } from "@/domain/continuity/sequence-automation";
+import { emptySettlementClock, SEQUENCE_SETTLE_MS } from "@/domain/continuity/sequence-automation";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { SequenceAutomationPanel } from "@/components/views/sequence-continuity-view";
 import { buildEpisodeEditView } from "@/domain/edit/view";
 import type { Asset, ProjectData } from "@/domain/schemas";
 import { MemoryRepository } from "@/data/memory-repository";
@@ -32,6 +35,14 @@ import { sequenceIdempotencyKey, submitSequenceReview } from "../sequence-review
  * plan, real ffmpeg derivation, the atomic wave. A fake Gemini transport only; nothing can leave the process.
  */
 vi.setConfig({ testTimeout: 120_000 });
+// the panel's client pieces and the view's server actions are not under test (and need a Next runtime)
+vi.mock("@/components/continuity/sequence-automation", () => ({
+  SequenceAutoReconciler: () => null,
+  SequenceJobPoller: () => null,
+}));
+vi.mock("@/server/episode-edit-actions", () => ({ clearCutIntent: vi.fn(), setCutIntent: vi.fn() }));
+vi.mock("@/server/sequence-review-actions", () => ({ startSequenceReview: vi.fn() }));
+vi.mock("@/components/action-form", () => ({ ActionForm: () => null }));
 afterEach(() => vi.useRealTimers());
 
 const processor = new FfmpegMediaProcessor({ limits: { timeoutMs: 60_000 } });
@@ -552,6 +563,62 @@ media("settling", () => {
     expect(next.revision).toBe(edit.revision + 1);
     const st = await s.state({ now: new Date() });
     expect(st.due).toHaveLength(3);
+  });
+});
+
+media("settle_unknown is visible and safe", () => {
+  it("every required clock missing: reported, shown as blocked, and nothing is derived, run, queued or called", async () => {
+    const calls = { n: 0 };
+    const s = await setup({ provider: gemini(calls), policy: { analyzer: "gemini" } });
+    const unknown = { getCutSettlementClock: async () => emptySettlementClock() };
+    const state = await loadSequenceAutoState({
+      data: s.live(),
+      view: await s.viewOf(),
+      policy: s.policy,
+      deps: s.auto({ edits: unknown }),
+      now: s.settled(),
+    });
+    expect(state.cuts.map((c) => c.status)).toEqual(["settle_unknown", "settle_unknown", "settle_unknown"]);
+    for (const c of state.cuts) {
+      expect(c.settlement?.state).toBe("unknown");
+      expect((c.settlement as { missing: string[] }).missing.length).toBeGreaterThan(0);
+    }
+    const view = sequenceAutoView(state);
+    expect(view.counts).toMatchObject({ unknown: 3, due: 0, settling: 0 });
+    expect(view).toMatchObject({ due: false, dueKey: null, waveCuts: 0 });
+
+    const html = renderToStaticMarkup(
+      createElement(SequenceAutomationPanel, {
+        auto: view,
+        projectSlug: "p",
+        episodeId: "e",
+        editId: "x",
+        continuityHref: "/continuity",
+      }),
+    );
+    expect(html).toContain('data-testid="sequence-auto-unknown"');
+    expect(html).toContain("cannot be shown to have settled");
+    expect(html).toContain("Manual review stays available");
+    expect(html).toMatch(/data-testid="sequence-auto-due"[^>]*>0</);
+    expect(html).toMatch(/data-testid="sequence-auto-blocked"[^>]*>3</);
+
+    const r = await s.reconcile({ auto: { edits: unknown } });
+    expect(r).toMatchObject({ outcome: "nothing_due", dueCuts: 0, blockedCuts: 3, queued: 0, jobIds: [] });
+    expect(r.reasons.join(" ")).toMatch(/cannot be shown to have settled/);
+    await expectNothingHappened(s);
+    for (const c of await s.cuts())
+      expect(await s.repo.mediaQa.listTransitionRuns(s.projectId, c.transitionKey)).toEqual([]);
+    expect(calls.n).toBe(0);
+  });
+
+  it("the rule is not relaxed by waiting: unknown stays unknown long after the window", async () => {
+    const s = await setup();
+    const r = await s.reconcile({
+      now: new Date(Date.now() + 365 * 86_400_000),
+      auto: { edits: { getCutSettlementClock: async () => emptySettlementClock() } },
+    });
+    expect(r.queued).toBe(0);
+    await expectNothingHappened(s);
   });
 });
 
