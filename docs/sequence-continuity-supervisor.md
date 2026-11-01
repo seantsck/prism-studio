@@ -1,6 +1,6 @@
 # Sequence Continuity Supervisor (Phase 3A.4)
 
-**Status: architecture accepted; 3A.4A–E merged; 3A.4F orchestration implementation in review; hosted 0047 acceptance pending (2026-11-01).**
+**Status: COMPLETE (2026-11-01). 3A.4A–F merged. Migration 0047 accepted on hosted DEV. Sequence Automatic remains opt-in and defaults OFF. `sequence-calibration-v1` accepted nine Gemini cross-cut families; eyeline remains rejected and off.**
 The owner reviewed this design and accepted it with fixes, and those fixes are applied below. The owner decisions are
 recorded in [§21](#21-owner-decisions-and-implementation-details). 3A.4A (the pure cut domain and deterministic
 projection, [§22](#3a4a-implementation-notes)), 3A.4B (the deterministic Supervisor UI,
@@ -9,8 +9,9 @@ intent, [§22](#3a4c-implementation-notes)) and 3A.4D (the semantic cross-cut pi
 [§22](#3a4d-implementation-notes)) are merged. **Hosted migration head is 0046.** 3A.4E-A
 ([§22](#3a4e-a-implementation-notes)) built the calibration harness, and the live experiment has run.
 **9/10 semantic cut families accepted under `sequence-calibration-v1`; eyeline rejected**
-([results](#3a4e-c-live-calibration-results)). Accepted families still run only through the manual, consented review;
-automatic orchestration is 3A.4F. Each implementation slice ([§22](#22-implementation-slices)) is its own gate.
+([results](#3a4e-c-live-calibration-results)). Accepted families run through the manual, consented review, or
+automatically only where a Project opts in ([3A.4F](#3a4f-a-implementation-notes)); no Project has. Sections written
+before a slice shipped keep their design-time wording. Each implementation slice ([§22](#22-implementation-slices)) was its own gate.
 
 **Question it answers:** _does this cut work as continuity?_ In other words, does Shot B continue Shot A correctly at
 the cut that actually exists in the Episode Edit, as opposed to each Shot satisfying its own truth?
@@ -573,8 +574,8 @@ continuity_transition_subjects to authenticated`; `revoke all … from anon`. Th
 - Code obligations: the Shot-query isolation above. The asset-in-use check also counts cut-edge Assets named by
   transition jobs.
 
-The Project sequence-automation policy columns (§17) are a **later, separate migration** (proposed 0047, slice
-3A.4F), so each migration ships with the code that uses it. Neither is created in this gate.
+The Project sequence-automation policy columns (§17) are a **later, separate migration** (0047, slice 3A.4F), so each
+migration ships with the code that uses it.
 
 ## 16. Supervisor UI, Episode Edit and Sequence Board
 
@@ -645,7 +646,7 @@ Episode, and rapid trimming of one cut queues nothing for it. Settling only filt
 **Media is derived per wave, after the gates.** For every trigger the order is: plan the due cuts, select the bounded
 batch or wave, pass consent, policy and budget, and only then derive the selected cuts' edge media (§7).
 
-**Policy (later migration, 3A.4F):** `project_qa_policies.sequence_semantic_mode` (`off` default, `suggest`,
+**Policy (migration 0047, 3A.4F):** `project_qa_policies.sequence_semantic_mode` (`off` default, `suggest`,
 `automatic`) and `max_transitions_per_batch`, which defaults low (proposed 20).
 
 - `automatic` requires an analyzer, the existing `external_media_allowed`, the existing `direct_video_allowed`, and
@@ -850,7 +851,7 @@ behaviour.
 
 ## 22. Implementation slices
 
-Each slice is separately reviewed and gated. 3A.4A–D are merged; 3A.4E is current; 3A.4F is pending.
+Each slice was separately reviewed and gated. 3A.4A–F are all merged.
 
 | Slice     | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Migration           | Paid / live calls           |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------- |
@@ -1386,8 +1387,9 @@ abstract proxies with deliberately obvious breaks. It does not measure subtle br
 
 ### 3A.4F-A implementation notes
 
-**Hosted stays at 0046. Migration 0047 is verified on a disposable local database only.** Nothing here has run against
-hosted or a real provider.
+**Hosted acceptance (3A.4F-B, 2026-11-01): passed.** Migration 0047 was applied to hosted DEV at 2026-11-01T22:23:47Z at
+its reviewed checksum. Hosted RLS, both worker-role denials, the settling triggers and the status route's real ownership
+path were verified. Sequence Automatic is enabled on no Project, and no real provider call has run on this path.
 
 **Model.** Authenticated, idempotent, eventually automatic reconciliation, the 3A.2 model. There is no cron, privileged
 scheduler, edit trigger or database trigger that submits work, and the generation worker has no new role.
@@ -1457,8 +1459,8 @@ mirrors them. Audit of what else reads these clocks:
 | Package `sourceVersions.shotUpdatedAt`      | Informational. Not in any package fingerprint, so no output goes stale              |
 | `characters.updated_at`                     | No consumer besides settling                                                        |
 
-**After hosted 0047 is applied, wait 10 minutes before enabling Sequence Automatic,** so a change made just before the
-triggers existed cannot look settled.
+**The earliest safe enable was 10 minutes after hosted 0047 was applied (2026-11-01T22:33:47Z),** so a change made just
+before the triggers existed could not look settled.
 
 **Identity.** `AUTO_SEQUENCE_NONCE = "auto-sequence-v1"` through the existing `sequenceIdempotencyKey`, with no timestamp.
 An automatic transition run stores it in the existing `continuity_runs.automation_key`, and a manual run stores null. Any

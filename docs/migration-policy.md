@@ -135,13 +135,18 @@ worker role, 0 policies with `direct_video_allowed = true`; `db:validate` STRUCT
 67/67, `db:worker-role` 60/60 (REAL LOGIN), `db:continuity-analysis` 80/80, `db:media-qa` 39/39, narrow repository
 acceptance on a disposable Project 15/15, hosted browser E2E 40/40; counts and Storage back to baseline afterwards.
 
-**0047** (Phase 3A.4F, **NOT applied to hosted**; verified on a disposable local PostgreSQL only) adds
-`project_qa_policies.sequence_semantic_mode` and `max_transitions_per_batch`, their constraint, and four triggers that move
+**0047** (Phase 3A.4F, **applied to hosted DEV on 2026-11-01**, checksum
+`eb8ed24bef736480106ec392859f66e0d2a61321df631a08d5ade1fe71df5dd0`) adds `project_qa_policies.sequence_semantic_mode`
+(default `off`) and `max_transitions_per_batch` (default and maximum 20), their constraint, and four triggers that move
 `updated_at` where a cut-fingerprint change left no clock
 ([sequence-continuity-supervisor](sequence-continuity-supervisor.md#3a4f-a-implementation-notes)). No table, grant, revoke
-or policy change. After applying it to hosted, wait 10 minutes before enabling Sequence Automatic.
+or policy change. Hosted gate: `db:migrate:dry-run-check` 7/7, `--dry-run` rehearsal rolled back, then `db:migrate`
+applied exactly 0047 (ledger 47 rows, earlier rows unchanged); `db:validate` STRUCTURE OK, `db:behavior` 61/61, `db:rls`
+67/67; both worker roles denied on the policy table with real logins; 0 policy rows existed, so no Project opted in.
+Sequence Automatic could not safely be enabled before 2026-11-01T22:33:47Z, and is enabled on no Project.
 
-**0046** (Phase 3A.4C, **NOT applied to hosted**; verified on a disposable local PostgreSQL only) adds
+**0046** (Phase 3A.4C, **applied to hosted DEV on 2026-10-30**, checksum
+`eab65b89c4dec2a6f7b6befbee1de859f30d0b91872e5df6014729bbc26071a1`) adds
 `continuity_runs.subject_kind` / `continuity_analysis_jobs.subject_kind` (`attempt` | `transition`, default `attempt`
 for every existing row, otherwise unchanged; shape checks; a kind-aware run key the job references), re-creates both
 continuity guards with every field they froze before plus `subject_kind`, creates `continuity_transition_subjects`
@@ -153,7 +158,6 @@ Disposable gate: 0001–0045 apply unchanged through the Supabase shim; `--dry-r
 applied; historical rows unchanged (backfill proof); `db:validate` STRUCTURE OK, `db:behavior` 61/61,
 `db:sequence-continuity` 70/70, `db:media-qa` 39/39, `db:continuity-analysis` 81/81, `db:episode-edits` 94/94,
 `db:worker-role` 57/63 (the 6 generation end-to-end timing checks fail identically at 0045 on the loopback harness).
-Read-only `db:migrate:check` on hosted: 0001–0045 ok, 0046 pending.
 
 ## Adding a migration
 
