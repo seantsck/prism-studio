@@ -221,12 +221,18 @@ test("the results persist, eyeline stays unchecked, and repeat visits create not
   await expect(page.getByTestId("sequence-auto-covered")).toHaveText("2");
   await expect(page.getByTestId("sequence-auto-due")).toHaveText("0");
   // eyeline is on these cuts, is never analysed and stays unchecked, while an accepted family was analysed
-  const eyeline = page.getByTestId("cut-finding").filter({ hasText: "Eyeline match across the cut" });
-  expect(await eyeline.count()).toBeGreaterThan(0);
-  for (const f of await eyeline.all()) {
-    await expect(f.getByTestId("cut-finding-analyzed")).toHaveCount(0);
-    await expect(f.getByTestId("cut-finding-result")).toContainText(/unchecked/i);
+  let eyelines = 0;
+  for (const cut of [CUT_A, CUT_B]) {
+    const eyeline = row(page, cut)
+      .getByTestId("cut-finding")
+      .filter({ hasText: "Eyeline match across the cut" });
+    eyelines += await eyeline.count();
+    for (const f of await eyeline.all()) {
+      await expect(f.getByTestId("cut-finding-analyzed")).toHaveCount(0);
+      await expect(f.getByTestId("cut-finding-result")).toContainText(/unchecked/i);
+    }
   }
+  expect(eyelines).toBeGreaterThan(0);
   await expect(
     r
       .getByTestId("cut-finding")

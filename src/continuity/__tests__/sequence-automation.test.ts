@@ -6,6 +6,8 @@ import { buildEpisodeCuts } from "@/domain/continuity/sequence";
 import { emptySettlementClock, SEQUENCE_SETTLE_MS } from "@/domain/continuity/sequence-automation";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { continuityPage } from "@/components/views/sequence-continuity-model";
+import { NOT_CALIBRATED_SEQUENCE_REASON } from "@/domain/continuity/analysis/sequence-plan";
 import { SequenceAutomationPanel } from "@/components/views/sequence-continuity-view";
 import { buildEpisodeEditView } from "@/domain/edit/view";
 import type { Asset, ProjectData } from "@/domain/schemas";
@@ -246,6 +248,7 @@ async function setup(
     deps,
     auto,
     cuts: async () => buildEpisodeCuts({ data: live(), view: await viewOf() }),
+    media: { attempts: facts, bestPointers: [] },
   };
 }
 type World = Awaited<ReturnType<typeof setup>>;
@@ -587,6 +590,44 @@ media("the fake analyzer speaks the sequence contract, as the E2E relies on", ()
       expect(f.evidence.map((e) => e.input)).toEqual(["left:last", "right:first"]);
       expect(f.result).toBe("pass");
     }
+  });
+});
+
+media("the Supervisor never credits the analyzer with a criterion it was not sent", () => {
+  it("eyeline, unsupported in the frozen plan, gets no analyzer badge; a planned family does", async () => {
+    const s = await setup({ provider: gemini(), policy: { analyzer: "gemini", maxTransitionsPerBatch: 1 } });
+    await s.reconcile();
+    const [job] = await s.jobs();
+    const stored = (await s.repo.mediaQa.getTransitionRun(job!.runId))!;
+    const plan = stored.run.analysisPlan!;
+    expect(plan.items.find((i) => i.criterionKey === "cut:eyeline")?.status).toBe("unsupported");
+    const finished = structuredClone(stored);
+    finished.run.analysisStatus = "complete";
+    for (const { finding: f } of finished.findings)
+      if (f.criterionKey === "cut:eyeline" || f.criterionKey === "cut:screen_direction") {
+        // what the worker records for each: an honest unchecked reason, and a real answer
+        f.resultSource = "analyzer";
+        f.result = f.criterionKey === "cut:eyeline" ? "unchecked" : "pass";
+        f.notes = f.criterionKey === "cut:eyeline" ? NOT_CALIBRATED_SEQUENCE_REASON : "";
+        f.actual = "";
+      }
+    const data = s.live();
+    const edit = (await s.repo.episodeEdits.get(s.projectId, s.edit.id))!;
+    const row = continuityPage({
+      data,
+      episode: data.episodes[0]!,
+      edit,
+      media: s.media,
+      transitionRuns: new Map([[stored.subject.transitionKey, [finished]]]),
+    }).rows.find((r) => r.transitionKey === stored.subject.transitionKey)!;
+    const eyeline = row.semantic.find((f) => f.key === "cut:eyeline")!;
+    expect(eyeline.analyzed).toBeNull();
+    expect(eyeline.result).toBe("unchecked");
+    expect(eyeline.reason).toBe(NOT_CALIBRATED_SEQUENCE_REASON);
+    expect(row.semantic.find((f) => f.key === "cut:screen_direction")!.analyzed).toEqual({
+      analyzer: "gemini",
+      mock: false,
+    });
   });
 });
 

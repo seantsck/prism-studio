@@ -487,7 +487,10 @@ function cutRow(
     const items = (stored?.evidence as { items?: unknown[] } | undefined)?.items ?? [];
     const coverable =
       intentOn && c.intentCoverable && (declared!.scope.length === 0 || declared!.scope.includes(c.category));
-    const analyzed = stored?.resultSource === "analyzer";
+    // the worker also records why a criterion was never sent (unsupported family, no media, not allowed) with this
+    // source: only a criterion the run PLANNED was judged by the analyzer
+    const planStatus = latest.run.analysisPlan?.items.find((i) => i.criterionKey === c.key)?.status;
+    const analyzed = stored?.resultSource === "analyzer" && (planStatus == null || planStatus === "planned");
     return {
       c,
       vm: {
@@ -495,7 +498,7 @@ function cutRow(
         result,
         resultLabel: RESULT_LABELS[result],
         tone: RESULT_TONE[result],
-        reason: analyzed ? stored!.actual || base.reason : stored?.notes || base.reason,
+        reason: analyzed ? stored!.actual || base.reason : stored?.notes || stored?.actual || base.reason,
         analyzed: analyzed
           ? { analyzer: latest.run.analyzer, mock: latest.run.analyzerKind === "mock" }
           : null,
