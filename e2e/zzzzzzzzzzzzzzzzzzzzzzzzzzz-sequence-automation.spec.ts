@@ -144,7 +144,9 @@ test("suggest: due cuts and a review batch through the manual disclosure; nothin
   await expect(page.getByTestId("sequence-auto-cost")).toContainText("Estimated worst case $");
   await expect(runs(page)).toHaveCount(0);
   await page.getByTestId("sequence-auto-review").click();
-  await expect(page.getByTestId("sequence-review")).toBeVisible();
+  // the disclosure is a server render: first the navigation, then its content, so a failure says which
+  await page.waitForURL(/[?&]review=/, { timeout: 30_000 });
+  await expect(page.getByTestId("sequence-review")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("review-cut-count")).toHaveText("2");
   await expect(page.getByTestId("review-submit")).toBeVisible();
   // reading it created nothing
