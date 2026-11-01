@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   ANALYSIS_SCHEMA_VERSION,
@@ -17,14 +19,20 @@ import {
 } from "@/domain/continuity/sequence";
 import { createAnalysisProviders } from "../analysis/registry";
 import { buildCutInput } from "../calibration/sequence-calibration";
-import { FAMILY_CRITERIA, SEQUENCE_CALIBRATION_VERSION } from "../calibration/sequence-fixtures";
+import {
+  FAMILY_CRITERIA,
+  SEQUENCE_CALIBRATION_PROTOCOL,
+  SEQUENCE_CALIBRATION_VERSION,
+} from "../calibration/sequence-fixtures";
 import { CALIBRATION_VERSION } from "../calibration/temporal-calibration";
 import { GeminiAnalysisProvider } from "../providers/gemini/analyzer";
 import {
   GEMINI_ANALYZER_VERSION,
   GEMINI_CROSS_CUT_ACCEPTED_FAMILIES,
   GEMINI_CROSS_CUT_CALIBRATED,
+  GEMINI_CROSS_CUT_CALIBRATED_ON,
   GEMINI_CROSS_CUT_CALIBRATION_VERSION,
+  GEMINI_SDK,
   GEMINI_SEQUENCE_ANALYSIS_VERSION,
   readGeminiConfig,
 } from "../providers/gemini/config";
@@ -108,18 +116,112 @@ describe("the recorded decision", () => {
     expect(g.crossCutCalibration().acceptedFamilies).toEqual(ACCEPTED);
   });
 
-  it("accepts nothing on a model or thinking level the decision was not measured on", () => {
-    const offCalibration: Array<Record<string, string>> = [
+  it("the calibrated identity is exactly the frozen protocol's, and production really sends it", () => {
+    const p = SEQUENCE_CALIBRATION_PROTOCOL;
+    expect(GEMINI_CROSS_CUT_CALIBRATED_ON).toEqual({
+      model: "gemini-3.8-flash",
+      thinkingLevel: "LOW",
+      maxOutputTokensCap: 8192,
+      temperature: 0,
+      timeoutMs: 120_000,
+    });
+    expect(GEMINI_CROSS_CUT_CALIBRATED_ON).toEqual({
+      model: p.model,
+      thinkingLevel: p.thinkingLevel,
+      maxOutputTokensCap: p.maxOutputTokensCap,
+      temperature: p.temperature,
+      timeoutMs: p.timeoutMs,
+    });
+    const { provider } = production();
+    expect(provider.model).toBe(p.model);
+    expect(provider.inferenceSettings()).toEqual({
+      thinkingLevel: p.thinkingLevel,
+      maxOutputTokensCap: p.maxOutputTokensCap,
+      temperature: p.temperature,
+      timeoutMs: p.timeoutMs,
+    });
+  });
+
+  it("the production contract is the frozen protocol's: a change without a new decision fails here", () => {
+    const p = SEQUENCE_CALIBRATION_PROTOCOL;
+    expect(p.calibrationVersion).toBe(GEMINI_CROSS_CUT_CALIBRATION_VERSION);
+    expect(p.analyzerVersion).toBe(GEMINI_SEQUENCE_ANALYSIS_VERSION);
+    expect(p.promptVersion).toBe(PROMPT_VERSIONS.sequence_transition);
+    expect(p.rubricVersion).toBe(SEQUENCE_RUBRIC_VERSION);
+    expect(p.schemaVersion).toBe(ANALYSIS_SCHEMA_VERSION);
+    expect(p.edgePolicy).toBe(CUT_EDGE_POLICY.id);
+    expect(p.sdk).toBe(GEMINI_SDK);
+    expect(p.sdk).toBe("@google/genai@2.29.0");
+    const installed = JSON.parse(
+      readFileSync(path.join(process.cwd(), "node_modules/@google/genai/package.json"), "utf8"),
+    ) as { version: string };
+    expect(`@google/genai@${installed.version}`).toBe(p.sdk);
+    // and what a real production input carries
+    const { input } = planOf(production().provider, "axis");
+    expect(input.calibration.version).toBe(p.calibrationVersion);
+    expect(input.analyzerVersion).toBe(p.analyzerVersion);
+    expect(input.plan.batches[0]!.promptVersion).toBe(p.promptVersion);
+    expect(input.rubricVersion).toBe(p.rubricVersion);
+    expect(input.schemaVersion).toBe(p.schemaVersion);
+    expect(input.edgePolicy).toBe(p.edgePolicy);
+  });
+});
+
+describe("off the calibrated identity, no family is trusted", () => {
+  const config = readGeminiConfig({
+    PRISM_STUDIO_CONTINUITY_ANALYZERS: "gemini",
+    GEMINI_API_KEY: "test-key-not-a-real-credential",
+    PRISM_STUDIO_GEMINI_DIRECT_VIDEO: "1",
+  });
+  /** The settings are read through `inferenceSettings()`, so a changed literal is caught too. */
+  class ChangedTemperature extends GeminiAnalysisProvider {
+    override inferenceSettings() {
+      return { ...super.inferenceSettings(), temperature: 1 };
+    }
+  }
+  const cases: Array<[string, (t: FakeGeminiTransport) => GeminiAnalysisProvider]> = [
+    [
+      "model",
+      (transport) =>
+        new GeminiAnalysisProvider({ config: { ...config, model: "gemini-3.6-flash" }, transport }),
+    ],
+    [
+      "thinking level",
+      (transport) => new GeminiAnalysisProvider({ config: { ...config, thinkingLevel: "HIGH" }, transport }),
+    ],
+    [
+      "output cap",
+      (transport) =>
+        new GeminiAnalysisProvider({ config: { ...config, maxOutputTokensCap: 4096 }, transport }),
+    ],
+    [
+      "timeout",
+      (transport) => new GeminiAnalysisProvider({ config: { ...config, timeoutMs: 5000 }, transport }),
+    ],
+    ["temperature", (transport) => new ChangedTemperature({ config, transport })],
+  ];
+  for (const [name, make] of cases)
+    it(`${name}: empty accepted families, unsupported planning, zero transport calls`, () => {
+      const transport = new FakeGeminiTransport([]);
+      const provider = make(transport);
+      expect(provider.crossCutCalibration().acceptedFamilies).toEqual([]);
+      expect(provider.plannerView().crossCutFamilies).toEqual([]);
+      for (const family of SEMANTIC_CUT_FAMILIES) {
+        const { plan, item } = planOf(provider, family);
+        expect(plan.batches, family).toEqual([]);
+        expect(item, family).toMatchObject({ status: "unsupported", reason: NOT_CALIBRATED_SEQUENCE_REASON });
+      }
+      expect(transport.calls).toBe(0);
+    });
+
+  it("the environment reaches the same result", () => {
+    const envs: Array<Record<string, string>> = [
       { PRISM_STUDIO_GEMINI_ANALYSIS_MODEL: "gemini-3.6-flash" },
       { PRISM_STUDIO_GEMINI_THINKING_LEVEL: "HIGH" },
+      { PRISM_STUDIO_GEMINI_TIMEOUT_MS: "5000" },
     ];
-    for (const env of offCalibration) {
-      const { provider } = production(env);
-      expect(provider.crossCutCalibration().acceptedFamilies).toEqual([]);
-      const { plan, item } = planOf(provider, "screen_direction");
-      expect(plan.batches).toEqual([]);
-      expect(item).toMatchObject({ status: "unsupported", reason: NOT_CALIBRATED_SEQUENCE_REASON });
-    }
+    for (const env of envs)
+      expect(production(env).provider.crossCutCalibration().acceptedFamilies).toEqual([]);
   });
 });
 

@@ -1338,11 +1338,21 @@ this record holds a summary and their hashes.
 | `lighting`             | 6/6   | accepted |
 | `action_match`         | 6/6   | accepted |
 
-**Cost.** Calibration **$0.265075** (`actualUsd` in the hashed report, usage reported on 60/60 calls). Smoke $0.004063.
-Total $0.269138. The figure was reconciled during owner review, after a query about a value of $0.260418: the run's
-captured console line prints `report.actualUsd` directly and reads $0.265075, and recomputing from the report's tokens
-gives the same figure (265,584 input × $0.75/M + 17,570 output and thinking × $3.75/M). $0.260418 appears in no captured
-output of the run. Family decisions and request counts do not depend on this.
+**Cost.** The canonical value is the hashed report: calibration **$0.265075** (`actualUsd`, usage reported on 60/60
+calls), smoke $0.004063, total **$0.269138**.
+
+**Open audit note: a transcript disagrees.**
+
+| Source                                                  | Calibration `actual=` |
+| ------------------------------------------------------- | --------------------- |
+| Hashed report (canonical)                               | $0.265075             |
+| Locally retained console log of the run                 | $0.265075             |
+| Owner-pasted PowerShell transcript, right after the run | $0.260418             |
+
+The source of the transcript difference is **unresolved**. The CLI prints `report.actualUsd` directly, and the report's
+tokens recompute to its figure (265,584 input × $0.75/M + 17,570 output and thinking × $3.75/M), but neither check
+explains the transcript. Family decisions, request count, correction count and the report's SHA-256 are unaffected. No
+live rerun was performed and the report was not changed.
 
 **Eyeline is rejected under v1, and that is final.** Positive 3/3; conflict 0/3: all three conflict trials answered
 `pass`. It is not rerun, reinterpreted or retroactively accepted.
@@ -1354,14 +1364,22 @@ broken, and the three model summaries reasoned from that one-sided formulation. 
 revised eyeline definition or fixture needs a new calibration version.
 
 **What production now holds.** `GEMINI_CROSS_CUT_CALIBRATED = true`, version `sequence-calibration-v1`, and exactly the nine
-accepted families. The boolean means a decision exists: only list membership trusts a family. The decision applies only
-to the model and thinking level it was measured on (`GEMINI_CROSS_CUT_CALIBRATED_ON`); anything else has no accepted
-family. The request contract is unchanged (`gemini-sequence-1`, `continuity-gemini-transition-v1`, `sequence-rubric-1`,
+accepted families: `screen_direction`, `axis`, `character_appearance`, `wardrobe`, `prop`, `object_continuity`,
+`geography`, `lighting` and `action_match`. The boolean means a decision exists: only list membership trusts a family.
+
+The decision applies only on the inference identity it was measured on (`GEMINI_CROSS_CUT_CALIBRATED_ON`): model
+`gemini-3.8-flash`, thinking `LOW`, output cap 8192, temperature 0, timeout 120000 ms. A provider whose real request
+settings differ in any of these has no accepted family, and every cut family plans `unsupported`. Tests tie this identity
+and the production contract to `SEQUENCE_CALIBRATION_PROTOCOL`, so changing a setting, analyzer version, prompt, rubric,
+schema, edge policy or SDK without a new calibration decision fails them. The request contract is unchanged (`gemini-sequence-1`, `continuity-gemini-transition-v1`, `sequence-rubric-1`,
 schema 2, `cut-edge-static-v1`), and so is Shot analysis.
 
-**Acceptance is not execution.** Semantic cut analysis still needs the manual review action, the server video gate, the
-Project's `direct_video_allowed`, the bounded disclosure and confirmation, supported media, the cost checks, current
+**Acceptance is not execution.** Semantic cut analysis still needs the calibrated inference identity, the manual review action, the server video gate,
+the Project's `direct_video_allowed`, external media permission where required, the bounded disclosure and confirmation, supported media, the cost checks, current
 truth and an accepted family. `sequence_semantic_mode`, 0047 and automatic reconciliation belong to 3A.4F.
+
+**Merging is not deploying.** The repository has no platform configuration and no Git-integrated deployment
+([deployment](deployment.md)), so a merge deploys nothing.
 
 **Limits of the evidence.** One positive and one conflict fixture per family, repeated three times at temperature 0, on
 abstract proxies with deliberately obvious breaks. It does not measure subtle breaks or real footage.

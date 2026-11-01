@@ -52,8 +52,14 @@ export const GEMINI_CROSS_CUT_ACCEPTED_FAMILIES: readonly string[] = Object.free
   "action_match",
 ]);
 export const GEMINI_CROSS_CUT_CALIBRATION_VERSION = "sequence-calibration-v1";
-/** What the decision was measured on. Any other configured model or thinking level has no accepted family. */
-export const GEMINI_CROSS_CUT_CALIBRATED_ON = { model: "gemini-3.8-flash", thinkingLevel: "LOW" } as const;
+/** What the decision was measured on. A provider whose real settings differ in any of these has no accepted family. */
+export const GEMINI_CROSS_CUT_CALIBRATED_ON = {
+  model: "gemini-3.8-flash",
+  thinkingLevel: "LOW",
+  maxOutputTokensCap: 8192,
+  temperature: 0,
+  timeoutMs: 120_000,
+} as const;
 export const GEMINI_SDK = "@google/genai@2.29.0";
 export const GEMINI_DEFAULT_MODEL = "gemini-3.8-flash";
 
