@@ -1,15 +1,16 @@
 # Sequence Continuity Supervisor (Phase 3A.4)
 
-**Status: architecture accepted; 3A.4A–D merged; 3A.4E current (3A.4E-A harness implemented, no live run); 3A.4F pending (2026-11-01).**
+**Status: architecture accepted; 3A.4A–D merged; 3A.4E live calibration completed; 3A.4F pending (2026-11-01).**
 The owner reviewed this design and accepted it with fixes, and those fixes are applied below. The owner decisions are
 recorded in [§21](#21-owner-decisions-and-implementation-details). 3A.4A (the pure cut domain and deterministic
 projection, [§22](#3a4a-implementation-notes)), 3A.4B (the deterministic Supervisor UI,
 [§22](#3a4b-implementation-notes)), 3A.4C (migration 0046: transition persistence and predecessor-bound cut
 intent, [§22](#3a4c-implementation-notes)) and 3A.4D (the semantic cross-cut pipeline,
-[§22](#3a4d-implementation-notes)) are merged. **Hosted migration head is 0046.** Every production cut family stays
-**uncalibrated and OFF**. 3A.4E-A ([§22](#3a4e-a-implementation-notes)) builds the calibration harness.
-**NO LIVE SEQUENCE CALIBRATION HAS RUN.** The live gate, 3A.4E-B, needs separate owner authorization. Each implementation
-slice ([§22](#22-implementation-slices)) is its own gate.
+[§22](#3a4d-implementation-notes)) are merged. **Hosted migration head is 0046.** 3A.4E-A
+([§22](#3a4e-a-implementation-notes)) built the calibration harness, and the live experiment has run.
+**9/10 semantic cut families accepted under `sequence-calibration-v1`; eyeline rejected**
+([results](#3a4e-c-live-calibration-results)). Accepted families still run only through the manual, consented review;
+automatic orchestration is 3A.4F. Each implementation slice ([§22](#22-implementation-slices)) is its own gate.
 
 **Question it answers:** _does this cut work as continuity?_ In other words, does Shot B continue Shot A correctly at
 the cut that actually exists in the Episode Edit, as opposed to each Shot satisfying its own truth?
@@ -273,8 +274,9 @@ clips. 3A.4 therefore keeps the two separately identifiable:
   initially empty). A family not on the list stays `unsupported`. Unlike 3A.3's single switch, 3A.4 can then
   production-enable direction and eyeline while, for example, lighting is still being calibrated.
 - `GEMINI_LIP_SYNC_CALIBRATED` is unrelated and untouched. `VIDEO_CAPABILITIES` stays `["video_temporal"]`.
-- **Production default:** OFF. Semantic cut findings are not production-enabled until a 3A.4 calibration gate,
-  separately authorised, accepts them.
+- **Production state:** nine families accepted by `sequence-calibration-v1`, measured on `gemini-3.8-flash` at `LOW`
+  thinking; any other configured model or thinking level has no accepted family. `eyeline` is rejected and stays
+  `unsupported`.
 - **UI copy** says "Sequence Continuity" or "cut continuity". It never shows `cross_cut` or `sequence_transition`.
 
 ### Sequence calibration `sequence-calibration-v1`
@@ -1144,9 +1146,8 @@ sourceInMs, itemEditStartMs }`: clip-local → source → edit time is a Prism p
 
 ### 3A.4E-A implementation notes
 
-**NO LIVE SEQUENCE CALIBRATION HAS RUN. Production accepted families remain empty**
-(`GEMINI_CROSS_CUT_CALIBRATED = false`, `GEMINI_CROSS_CUT_ACCEPTED_FAMILIES = []`). 3A.4E-B, the live gate, requires
-separate owner authorization. No result below is a statement about a real model.
+**These notes record the state when the harness was built, before any live run.** No result in this section is a
+statement about a real model. The live results are in [3A.4E-C](#3a4e-c-live-calibration-results).
 
 The harness is in `src/continuity/calibration/sequence-*.ts`, with `npm run continuity:sequence:smoke` and
 `npm run continuity:sequence:calibrate` as thin wrappers. Both default to the offline fake transport. There is no
@@ -1305,6 +1306,65 @@ secret and changes no production constant.
 
 **Not in 3A.4E-A.** Any live call, any accepted family, any change to production calibration constants, 0047,
 orchestration (3A.4F), deployment.
+
+### 3A.4E-C live calibration results
+
+The owner reviewed the completed live experiment and accepted this decision. The raw reports stay local and gitignored:
+this record holds a summary and their hashes.
+
+| Value                  |                                                                    |
+| ---------------------- | ------------------------------------------------------------------ |
+| Calibration            | `sequence-calibration-v1`                                          |
+| Model                  | `gemini-3.8-flash`, thinking `LOW`, output cap 8192, temperature 0 |
+| SDK, processor         | `@google/genai@2.29.0`, ffmpeg/1 `9.0.1-full_build-www.gyan.dev`   |
+| Definition hash        | `6459a28d1de7c84d0430e653dc560c8b92435dadf1408c4d24901695c0a55d35` |
+| Input hash             | `a711406c89bb517d90caf081593ac9c871e4a184d702d7d50b92ee0ed887a60e` |
+| Smoke report SHA-256   | `7c5514efd058f8cd13dc71292c819ae27f8ac8e2b7f7bb9250354805e94dca44` |
+| Calibration report SHA | `856d1d207b224677811a08a0a3b169af9b853c693d279fd2af62979488676d13` |
+| Observations           | 60/60 completed; run status `completed`, no abort                  |
+| Requests               | 60 analysis, 0 corrections, 0 uploads                              |
+| Decision               | 9 accepted, 1 rejected                                             |
+
+| Family                 | Score | Decision |
+| ---------------------- | ----- | -------- |
+| `screen_direction`     | 6/6   | accepted |
+| `eyeline`              | 3/6   | rejected |
+| `axis`                 | 6/6   | accepted |
+| `character_appearance` | 6/6   | accepted |
+| `wardrobe`             | 6/6   | accepted |
+| `prop`                 | 6/6   | accepted |
+| `object_continuity`    | 6/6   | accepted |
+| `geography`            | 6/6   | accepted |
+| `lighting`             | 6/6   | accepted |
+| `action_match`         | 6/6   | accepted |
+
+**Cost.** Calibration **$0.265075** (`actualUsd` in the hashed report, usage reported on 60/60 calls). Smoke $0.004063.
+Total $0.269138. The figure was reconciled during owner review, after a query about a value of $0.260418: the run's
+captured console line prints `report.actualUsd` directly and reads $0.265075, and recomputing from the report's tokens
+gives the same figure (265,584 input × $0.75/M + 17,570 output and thinking × $3.75/M). $0.260418 appears in no captured
+output of the run. Family decisions and request counts do not depend on this.
+
+**Eyeline is rejected under v1, and that is final.** Positive 3/3; conflict 0/3: all three conflict trials answered
+`pass`. It is not rerun, reinterpreted or retroactively accepted.
+
+An owner-review inference, **not a proven cause**: the production criterion says "A's look direction matches B's subject
+position (eyeline match)." In the conflict fixture A looks screen-right, B's subject is at screen-right, and B also looks
+screen-right, away from A. The criterion can therefore be read as satisfied although the intended reciprocal eyeline is
+broken, and the three model summaries reasoned from that one-sided formulation. This may explain the rejection. Any
+revised eyeline definition or fixture needs a new calibration version.
+
+**What production now holds.** `GEMINI_CROSS_CUT_CALIBRATED = true`, version `sequence-calibration-v1`, and exactly the nine
+accepted families. The boolean means a decision exists: only list membership trusts a family. The decision applies only
+to the model and thinking level it was measured on (`GEMINI_CROSS_CUT_CALIBRATED_ON`); anything else has no accepted
+family. The request contract is unchanged (`gemini-sequence-1`, `continuity-gemini-transition-v1`, `sequence-rubric-1`,
+schema 2, `cut-edge-static-v1`), and so is Shot analysis.
+
+**Acceptance is not execution.** Semantic cut analysis still needs the manual review action, the server video gate, the
+Project's `direct_video_allowed`, the bounded disclosure and confirmation, supported media, the cost checks, current
+truth and an accepted family. `sequence_semantic_mode`, 0047 and automatic reconciliation belong to 3A.4F.
+
+**Limits of the evidence.** One positive and one conflict fixture per family, repeated three times at temperature 0, on
+abstract proxies with deliberately obvious breaks. It does not measure subtle breaks or real footage.
 
 ## 23. Out of scope for 3A.4
 

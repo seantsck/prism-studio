@@ -99,7 +99,7 @@ test("without direct-video consent the disclosure blocks the review (nothing is 
   await expect(page.getByTestId("review-submit")).toHaveCount(0);
 });
 
-test("calibration off: production Gemini can review no cut family; nothing can be submitted or sent", async ({
+test("server video gate off: accepted families still cannot run on Gemini; nothing can be submitted or sent", async ({
   page,
 }) => {
   const out = external(page);

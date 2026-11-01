@@ -412,7 +412,7 @@ describe("refusals before the first request", () => {
       runSequenceCalibration({ provider, materials, maxTransportCalls: 120, maxUsd: 5, now: NOW }),
     ).rejects.toThrow(/unknown cost blocks/);
   });
-  it("a provider that accepts no family plans nothing: production Gemini can never run the calibration", async () => {
+  it("production Gemini lacks eyeline, so it can never run the calibration: only the harness's identity can", async () => {
     const transport = new FakeGeminiTransport([]);
     const provider = new GeminiAnalysisProvider({ config: calibrationConfig(), transport });
     await expect(

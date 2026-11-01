@@ -187,15 +187,16 @@ describe("Shot identities are unchanged by 3A.4D", () => {
 });
 
 describe("provider contract (mode-scoped versions, calibration)", () => {
-  it("Gemini: Shot modes v3, sequence gemini-sequence-1; production accepts NO family", () => {
+  it("Gemini: Shot modes v3, sequence gemini-sequence-1; production accepts the nine calibrated families", () => {
     const g = new GeminiAnalysisProvider({ config: geminiCfg, transport: new FakeGeminiTransport([]) });
     expect(g.version).toBe("3");
     expect(g.analysisVersion("image_set")).toBe("3");
     expect(g.analysisVersion("direct_video")).toBe("3");
     expect(g.analysisVersion("sequence_transition")).toBe("gemini-sequence-1");
     expect(g.modes()).toContain("sequence_transition");
-    expect(g.crossCutCalibration().acceptedFamilies).toEqual([]);
-    expect(g.plannerView().crossCutFamilies).toEqual([]);
+    expect(g.crossCutCalibration().acceptedFamilies).toHaveLength(9);
+    expect(g.crossCutCalibration().acceptedFamilies).not.toContain("eyeline");
+    expect(g.plannerView().crossCutFamilies).toEqual(g.crossCutCalibration().acceptedFamilies);
   });
   it("OpenAI: no sequence contract", () => {
     const o = new OpenAIContinuityAnalyzer({
@@ -231,8 +232,21 @@ describe("sequence planner", () => {
       p.batches.find((b) => b.criterionKeys.includes("cut:screen_direction"))!.referenceInputIds,
     ).toEqual([]);
   });
-  it("production Gemini: every family unsupported (not calibrated), nothing sent", () => {
+  it("production Gemini plans its accepted families; a family nobody accepted stays unsupported", () => {
     const g = new GeminiAnalysisProvider({ config: geminiCfg, transport: new FakeGeminiTransport([]) });
+    const p = plan(g.plannerView());
+    expect(
+      p.items
+        .filter((i) => i.status === "planned")
+        .map((i) => i.criterionKey)
+        .sort(),
+    ).toEqual(["cut:screen_direction", "cut:wardrobe:c1"]);
+  });
+  it("Gemini on a model the decision was not measured on: every family unsupported, nothing sent", () => {
+    const g = new GeminiAnalysisProvider({
+      config: { ...geminiCfg, model: "gemini-3.6-flash" },
+      transport: new FakeGeminiTransport([]),
+    });
     const p = plan(g.plannerView());
     expect(p.batches).toEqual([]);
     for (const k of ["cut:screen_direction", "cut:wardrobe:c1"]) {

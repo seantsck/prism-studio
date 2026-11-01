@@ -460,7 +460,7 @@ describe("the inter-Scene control", () => {
   });
 });
 
-describe("identities are unchanged, and production stays OFF", () => {
+describe("identities are unchanged, and production holds only the accepted decision", () => {
   it("the calibration version is its own; every analyzer identity is untouched", () => {
     expect(SEQUENCE_CALIBRATION_VERSION).toBe("sequence-calibration-v1");
     expect(CALIBRATION_VERSION).toBe("temporal-calibration-v2");
@@ -475,14 +475,15 @@ describe("identities are unchanged, and production stays OFF", () => {
     expect(CUT_EDGE_POLICY).toEqual({ id: "cut-edge-static-v1", windowMs: 2000, fps: 4, audio: "stripped" });
   });
 
-  it("production: no accepted family, and lip sync still off", () => {
-    expect(GEMINI_CROSS_CUT_CALIBRATED).toBe(false);
-    expect(GEMINI_CROSS_CUT_ACCEPTED_FAMILIES).toEqual([]);
+  it("production: the accepted decision without eyeline, and lip sync still off", () => {
+    expect(GEMINI_CROSS_CUT_CALIBRATED).toBe(true);
+    expect(GEMINI_CROSS_CUT_ACCEPTED_FAMILIES).toHaveLength(9);
+    expect(GEMINI_CROSS_CUT_ACCEPTED_FAMILIES).not.toContain("eyeline");
     // the 3A.3 state: video_temporal is the one video capability; lip sync stays separately gated off
     expect(calibrationProvider(new FakeGeminiTransport([])).videoCapabilities()).toEqual(["video_temporal"]);
   });
 
-  it("the registry's Gemini accepts no family, whatever the env says", () => {
+  it("the live-calibration env never widens the registry's Gemini beyond the accepted families", () => {
     const providers = createAnalysisProviders(
       {
         PRISM_STUDIO_CONTINUITY_ANALYZERS: "gemini",
@@ -493,9 +494,9 @@ describe("identities are unchanged, and production stays OFF", () => {
       { transport: new FakeGeminiTransport([]) },
     );
     const g = providers.get("gemini")!;
-    expect(g.crossCutCalibration().acceptedFamilies).toEqual([]);
-    expect(g.plannerView().crossCutFamilies).toEqual([]);
-    expect(g.crossCutCalibration().version).not.toBe(SEQUENCE_CALIBRATION_VERSION);
+    expect(g.crossCutCalibration().acceptedFamilies).toEqual([...GEMINI_CROSS_CUT_ACCEPTED_FAMILIES]);
+    expect(g.plannerView().crossCutFamilies).toEqual([...GEMINI_CROSS_CUT_ACCEPTED_FAMILIES]);
+    expect(g.crossCutCalibration().version).toBe(SEQUENCE_CALIBRATION_VERSION);
   });
 
   const files = (dir: string): string[] =>

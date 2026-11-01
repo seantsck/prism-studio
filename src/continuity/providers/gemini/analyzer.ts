@@ -31,6 +31,7 @@ import {
   GEMINI_ANALYZER_VERSION,
   GEMINI_CROSS_CUT_ACCEPTED_FAMILIES,
   GEMINI_CROSS_CUT_CALIBRATED,
+  GEMINI_CROSS_CUT_CALIBRATED_ON,
   GEMINI_CROSS_CUT_CALIBRATION_VERSION,
   GEMINI_MODELS,
   GEMINI_PRICING,
@@ -150,7 +151,12 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
     this.pricingTable = opts.pricing ?? GEMINI_PRICING;
     this.calibration = opts.testCrossCutCalibration ?? {
       version: GEMINI_CROSS_CUT_CALIBRATION_VERSION,
-      acceptedFamilies: GEMINI_CROSS_CUT_CALIBRATED ? GEMINI_CROSS_CUT_ACCEPTED_FAMILIES : [],
+      acceptedFamilies:
+        GEMINI_CROSS_CUT_CALIBRATED &&
+        opts.config.model === GEMINI_CROSS_CUT_CALIBRATED_ON.model &&
+        opts.config.thinkingLevel === GEMINI_CROSS_CUT_CALIBRATED_ON.thinkingLevel
+          ? GEMINI_CROSS_CUT_ACCEPTED_FAMILIES
+          : [],
     };
   }
 
