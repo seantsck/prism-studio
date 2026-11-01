@@ -23,3 +23,7 @@ test-results
 acceptance-report.json
 human-review.json
 run-manifest.json
+
+# Sequence calibration reports (save deliberately; never commit by accident)
+sequence-calibration-*.json
+sequence-contract-smoke-*.json

@@ -1,13 +1,14 @@
 # Sequence Continuity Supervisor (Phase 3A.4)
 
-**Status: architecture accepted; 3A.4A–C merged; 3A.4D implemented (current); 3A.4E–F pending (2026-10-30).**
+**Status: architecture accepted; 3A.4A–D merged; 3A.4E current (3A.4E-A harness implemented, no live run); 3A.4F pending (2026-11-01).**
 The owner reviewed this design and accepted it with fixes, and those fixes are applied below. The owner decisions are
 recorded in [§21](#21-owner-decisions-and-implementation-details). 3A.4A (the pure cut domain and deterministic
 projection, [§22](#3a4a-implementation-notes)), 3A.4B (the deterministic Supervisor UI,
-[§22](#3a4b-implementation-notes)) and 3A.4C (migration 0046: transition persistence and predecessor-bound cut
-intent, [§22](#3a4c-implementation-notes)) are merged. **Hosted migration head is 0046** (accepted at its hosted gate,
-2026-10-30). 3A.4D ([§22](#3a4d-implementation-notes)) adds the semantic cross-cut pipeline with every production cut
-family **uncalibrated and OFF**: no live provider call and no calibration happen before 3A.4E. Each implementation
+[§22](#3a4b-implementation-notes)), 3A.4C (migration 0046: transition persistence and predecessor-bound cut
+intent, [§22](#3a4c-implementation-notes)) and 3A.4D (the semantic cross-cut pipeline,
+[§22](#3a4d-implementation-notes)) are merged. **Hosted migration head is 0046.** Every production cut family stays
+**uncalibrated and OFF**. 3A.4E-A ([§22](#3a4e-a-implementation-notes)) builds the calibration harness.
+**NO LIVE SEQUENCE CALIBRATION HAS RUN.** The live gate, 3A.4E-B, needs separate owner authorization. Each implementation
 slice ([§22](#22-implementation-slices)) is its own gate.
 
 **Question it answers:** _does this cut work as continuity?_ In other words, does Shot B continue Shot A correctly at
@@ -276,30 +277,11 @@ clips. 3A.4 therefore keeps the two separately identifiable:
   separately authorised, accepts them.
 - **UI copy** says "Sequence Continuity" or "cut continuity". It never shows `cross_cut` or `sequence_transition`.
 
-### Sequence calibration `sequence-calibration-v1` (sketch; not built in this gate)
+### Sequence calibration `sequence-calibration-v1`
 
-The fixtures are deterministic synthetic pairs, two ffmpeg-rendered clips per fixture. They are cut-edge windows
-produced by the real `cut-edge-static-v1` extraction, so calibration also exercises the clipping. Each family has a
-positive control (continuity holds → `pass`) and a conflict control (continuity broken → `fail`). The truth is frozen
-in the fixture set, and the input hash is checked before execution.
-
-| Family              | Positive control                                                                     | Conflict control                          |
-| ------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------- |
-| screen direction    | square exits A moving L→R, enters B moving L→R                                       | B moves R→L                               |
-| eyeline             | A subject looks screen-right; B target sits screen-left of frame centre, facing back | B's target faces away / same side         |
-| axis (180°)         | two marked subjects keep their left/right order                                      | their order swaps across the cut          |
-| character position  | subject at the same relative position (match)                                        | subject jumps to the opposite third       |
-| object continuity   | prop present on both sides                                                           | prop disappears in B                      |
-| wardrobe            | same colour / pattern garment                                                        | garment colour changes                    |
-| geography           | landmark on the same side                                                            | landmark mirrored                         |
-| match on action     | motion phase continues (arm at 60 % → 65 %)                                          | motion restarts / mistimed (60 % → 10 %)  |
-| lighting            | key light from the same side and colour                                              | key flips side / colour temperature jumps |
-| inter-Scene control | any change across a Scene boundary                                                   | Prism plans `n_a`; no request is sent     |
-
-Acceptance is pre-registered, the same as 3A.3: 3 trials per fixture, 3/3 correct per fixture, conflict controls must
-be `fail` (`warn` and `unchecked` count as wrong), evidence must cite **both sides** with timestamps inside each clip,
-and a provider-access / request-contract fail-fast applies. It is accepted per family. The result of each run is
-recorded in this doc like the 3A.3 attempts.
+Built in 3A.4E-A. The fixture matrix, the pre-registered acceptance and the run control are in
+[§22](#3a4e-a-implementation-notes). This design's early sketch listed a "character position" row; the production
+taxonomy (`SEMANTIC_CUT_FAMILIES`) has `character_appearance` and `prop` instead, and those are what is calibrated.
 
 ## 10. Taxonomy, findings and evidence
 
@@ -866,7 +848,7 @@ behaviour.
 
 ## 22. Implementation slices
 
-Each slice is separately reviewed and gated. 3A.4A, 3A.4B and 3A.4C are merged; 3A.4D is implemented and awaiting merge; 3A.4E–F are pending.
+Each slice is separately reviewed and gated. 3A.4A–D are merged; 3A.4E is current; 3A.4F is pending.
 
 | Slice     | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Migration           | Paid / live calls           |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------------------- |
@@ -1159,6 +1141,170 @@ sourceInMs, itemEditStartMs }`: clip-local → source → edit time is a Prism p
     part of the derivation identity.
 - **Not in 3A.4D.** Live calls, calibration fixtures (3A.4E), automatic orchestration, waves, settle timing, sequence
   policy columns and migration 0047 (3A.4F).
+
+### 3A.4E-A implementation notes
+
+**NO LIVE SEQUENCE CALIBRATION HAS RUN. Production accepted families remain empty**
+(`GEMINI_CROSS_CUT_CALIBRATED = false`, `GEMINI_CROSS_CUT_ACCEPTED_FAMILIES = []`). 3A.4E-B, the live gate, requires
+separate owner authorization. No result below is a statement about a real model.
+
+The harness is in `src/continuity/calibration/sequence-*.ts`, with `npm run continuity:sequence:smoke` and
+`npm run continuity:sequence:calibrate` as thin wrappers. Both default to the offline fake transport. There is no
+migration, no database use and no Storage use.
+
+**Identity.** `sequence-calibration-v1` identifies the experiment. It is independent of `temporal-calibration-v2` and
+changes nothing else: analyzer `3` and `gemini-sequence-1`, prompt `continuity-gemini-transition-v1`, rubric
+`sequence-rubric-1`, schema 2, `SEQUENCE_RULES_VERSION = 3a.4` and `cut-edge-static-v1` are all unchanged.
+
+**The real path.** Each fixture has two rendered parents (5 s, each with a tone). The production `leftEdgeWindow` /
+`rightEdgeWindow` choose the windows (left `[2500, 4500]` of A, right `[500, 2500]` of B), the production
+`extractWindow` cuts the clips with audio stripped, and `extractFrame` takes `left:last` (4459 ms) and `right:first`
+(500 ms) from the parents. The input comes from the production `buildTransitionInput`, and the request goes through
+the real `analyzeBatch`: prompt, Gemini sequence schema, sided validation and the one correction. The 2-second window
+is not tuned: a family it cannot support is not accepted under v1, and a changed window is `cut-edge-static-v2` under
+a new calibration version.
+
+**Calibration-only families.** The harness passes the calibrated family set through the provider's
+`testCrossCutCalibration` option. The registry never does, and tests prove it. A run produces evidence only: enabling a
+family is a separate reviewed source change.
+
+**Fixture matrix.** Criterion text is production's own (a test compares it with `buildEpisodeCuts`). Media are abstract
+shapes, with "Proxy figure" and "Yellow baton" as the Character and Prop names.
+
+| Family                 | Positive (`pass`)                                                  | Conflict (`fail`)                                                     |
+| ---------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `screen_direction`     | Red square travels L→R, and continues L→R from the same x          | After the cut it travels R→L from the same x. Nothing exits the frame |
+| `eyeline`              | Face at left looks screen-right; reverse face at right looks left  | The reverse face looks screen-right, away                             |
+| `axis`                 | Red left of blue, joined by a line; same order in a closer framing | The order reverses, as if the camera crossed the line                 |
+| `character_appearance` | Same head structure, marks and hair; same torso                    | Head geometry, marks and hair change; the torso does not              |
+| `wardrobe`             | Same head; same red striped garment                                | Same pixel-identical head; plain green garment                        |
+| `prop`                 | Yellow baton held at the screen-right arm on both sides            | The baton moves to the screen-left arm (a hand change)                |
+| `object_continuity`    | Magenta cube on the floor at screen-right on both sides            | The cube is in no frame after the cut                                 |
+| `geography`            | Tower and figure left, building right, on both sides               | The set is mirrored: same shapes and colours, opposite sides          |
+| `lighting`             | Warm key from screen-left on both sides                            | Cold key from screen-right: lit half, glow and colour all change      |
+| `action_match`         | Block pushed along a track: 60 % at the cut, 65 % after it         | The block restarts at 10 % after the cut                              |
+
+An **inter-Scene control** runs a real Scene-boundary cut's criteria through the real planner. Prism owns the `n_a`, so
+it makes **zero requests**, is never graded and does not count toward the plan.
+
+**Plan.** 10 families × 2 fixtures = **20 fixtures**; × 3 trials = **60 sequence-analysis requests**, one observation
+each, never batched. The smoke's one request is separate.
+
+**Pre-registered acceptance (fixed before any live call), per family independently:**
+
+- every positive trial must answer `pass`, and every conflict trial must answer `fail`; `warn` on a conflict is wrong;
+- `unchecked`, a missing answer and an answer still invalid after the correction are wrong;
+- every judgement must satisfy the production validator: LEFT and RIGHT edge evidence, with each clip's times bounded
+  by that clip. A reference alone never counts as a side;
+- **screen direction needs temporal evidence:** its two controls meet at the same seam position and differ only in the
+  direction of travel, which a pair of stills cannot show. Each `screen_direction` trial must cite `left:clip` AND
+  `right:clip` with an interval (`endMs > atMs`, at least **250 ms**, the 4 fps sampling precision). Stills may add to
+  that but never replace it. This is a calibration rule: the production validator and schema 2 are unchanged. The
+  production prompt allows either a clip or a still and does not ask for this, and it stays unchanged too, so a model
+  that judges correctly but cites stills is scored wrong and the family is rejected under v1;
+- **3/3 per fixture, so 6/6 per family.** No majority and no "close enough";
+- **evidence windows:** `action_match` only, left `[1500, 2000]` and right `[0, 500]` in clip-local ms. Each side needs
+  one cited edge input lying entirely inside the window ± **500 ms** (250 ms sampling precision + 250 ms frozen slack).
+  An edge still counts at its own instant, which is at the cut. Every other fixture's truth holds for the whole clip,
+  so its evidence may be anywhere in the clips;
+- **corrections:** the real path keeps its one schema correction. A corrected answer that validates is a valid trial,
+  but it is recorded per fixture and trial, and the family's decision carries `ownerReviewRequired`: the owner reviews
+  it before any production enablement;
+- an aborted run accepts no family.
+
+Changing any of this after a live run is a new calibration version, never a re-grade. A family that cannot reach 6/6 on
+its abstract proxy is rejected under v1, never reinterpreted; another fixture design is `sequence-calibration-v2`.
+
+**Frozen protocol (`SEQUENCE_CALIBRATION_PROTOCOL`).** The exact experiment, part of the definition hash and verified
+against the real values before a live run's first request:
+
+| Setting              | Value                                                                       |
+| -------------------- | --------------------------------------------------------------------------- |
+| Model                | `gemini-3.8-flash`                                                          |
+| Thinking level       | `LOW`                                                                       |
+| Max output token cap | 8192                                                                        |
+| Temperature          | 0                                                                           |
+| SDK                  | `@google/genai@2.29.0`                                                      |
+| Timeout              | 120000 ms                                                                   |
+| Analyzer             | `gemini-sequence-1`                                                         |
+| Prompt, rubric       | `continuity-gemini-transition-v1`, `sequence-rubric-1`                      |
+| Schema, edge policy  | 2, `cut-edge-static-v1`                                                     |
+| Media processor      | `ffmpeg`, adapter version `1`, tool version `9.0.1-full_build-www.gyan.dev` |
+
+The environment cannot change these. A live run refuses, rather than overrides, a differing
+`PRISM_STUDIO_GEMINI_ANALYSIS_MODEL`, `PRISM_STUDIO_GEMINI_THINKING_LEVEL` or `PRISM_STUDIO_GEMINI_TIMEOUT_MS`, and any
+SDK endpoint override (`GOOGLE_GEMINI_BASE_URL`, `GOOGLE_VERTEX_BASE_URL`, `GOOGLE_GENAI_API_VERSION`,
+`GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GENAI_USE_ENTERPRISE`). The processor is compared by itself: another ffmpeg build
+is refused even if its bytes happen to hash the same. The JSON report records the protocol, the processor that prepared
+the media and the settings the provider really sends.
+
+**Input hash.** The definition (protocol, fixtures, truth, recipes, durations, cut positions, windows, acceptance, every
+version) plus the checksums of every rendered parent, derived clip and derived still:
+
+| Value           |                                                                    |
+| --------------- | ------------------------------------------------------------------ |
+| Input hash      | `a711406c89bb517d90caf081593ac9c871e4a184d702d7d50b92ee0ed887a60e` |
+| Definition hash | `6459a28d1de7c84d0430e653dc560c8b92435dadf1408c4d24901695c0a55d35` |
+
+`14c679499d38c5cad5ea6c91bba8ebe1073e1c579681cba0049318d4e5509f95` was **superseded before the first live run**, when
+the protocol and processor joined the definition. It is not live calibration evidence. The version stays
+`sequence-calibration-v1` because no live sequence calibration request has occurred.
+
+**Preregistration is enforced at the runner, not only the CLI.** `runSequenceCalibration({ live: true })` refuses before
+its first request without a matching `livePreregistration`: input hash, definition hash, model, inference settings, SDK,
+analyzer, prompt, rubric, schema, edge policy and processor. The CLI also compares `--input-hash`.
+
+**Smoke.** One `sequence_transition` request through the real prompt and schema on diagnostic media (a green square on
+navy) with one sacrificial criterion. It uses no fixture and no truth and grades nothing. Hard limits: 1 request, 0
+uploads, 0 corrections, no retry, $0.05. The estimator's worst case is $0.026262. Media that would need an upload is
+refused. It uses the same frozen model and environment rules, because it proves this calibration's own request contract.
+It must PASS before a live calibration.
+
+The estimator is the primary spend protection, and the ceiling also governs the verdict. If usage then shows a known
+cost above the approved ceiling, a valid answer reports `cost_ceiling_exceeded`, not `pass`, with the provider result,
+the local validation, the actual cost and the ceiling, and the CLI exits 3. The request has already happened, so it does
+not say nothing was sent. Missing usage stays `UNKNOWN`.
+
+**Live readiness.** Every gate is checked before the SDK transport can exist; a refusal exits 2 and sends nothing:
+`--live`, `--i-understand-this-sends-synthetic-video-and-costs-money`, `PRISM_STUDIO_SEQUENCE_CALIBRATION_LIVE=1`,
+`PRISM_STUDIO_ALLOW_PAID_ANALYSIS=1`, `--model gemini-3.8-flash`, `--max-calls` (≥ 120), `--max-usd`, `--input-hash`, `--max-rpm`,
+`--max-tpm`, `--max-rpd`, `--confirm-rpd-remaining`, `--billing-active yes`, `--project-tier`, `--spend-cap`, a
+credential, and the reviewed media processor. Limits are read from AI Studio for the project behind the key, because Prism cannot infer them.
+
+**Run control (frozen).** The first 401/402/403/404 or 429 aborts; 3 consecutive 5xx abort; 2 consecutive identical
+400s abort as `request_contract_invalid`; 3 consecutive ambiguous timeouts or network failures abort. Nothing is ever
+retried: an ambiguous attempt is an unanswered trial. Known usage above `--max-usd` aborts. Requests are paced start to
+start at `floor(RPM × 0.8)`. The TPM preflight uses the larger correction request, and the RPD preflight covers the full
+120-request envelope. An aborted run writes its partial report and exits 3.
+
+**Requests and cost (estimator, no live measurement).** `--max-calls` counts every outbound request and must authorize
+the whole envelope: 60 primaries + 60 possible corrections = **120**. A lower value is refused, because it would silently
+remove corrections from the protocol. A higher value authorizes nothing more: the ceiling is clamped to 120. This is
+authorization capacity: a normal run may still use only 60 requests.
+
+| Value                         | `gemini-3.8-flash`, pricing `gemini-2026-10-13` |
+| ----------------------------- | ----------------------------------------------- |
+| Quality requests              | 60                                              |
+| Worst-case transport          | 120 (60 + one correction each)                  |
+| Expected                      | $0.49281                                        |
+| Worst case                    | $1.575744                                       |
+| Recommended owner `--max-usd` | $2.00 (the owner decides at 3A.4E-B)            |
+
+Cost honesty follows 3A.3: `0` only when no generation request left Prism; a figure only when every attempt reported
+usage; otherwise `UNKNOWN` with the known usage as a lower bound. A fake run's report says `transport: "fake"` and its
+usage figures are simulated.
+
+**Inline only.** Every derived clip is about 3–6 KB, far under the 12 MB inline limit. Any clip that would need a
+provider file refuses the run before the first request, and an upload attempt aborts it. v1 measures judgement, not the
+Files API.
+
+**Report.** Durable JSON: every identity and hash, each fixture, each trial (result, evidence, window and temporal grades, correction,
+provider ref, sanitized errors), token and cost accounting, and an independent `accepted` / `rejected` / `not_measured`
+decision for each of the ten families. A lighting failure does not invalidate screen direction. The report contains no
+secret and changes no production constant.
+
+**Not in 3A.4E-A.** Any live call, any accepted family, any change to production calibration constants, 0047,
+orchestration (3A.4F), deployment.
 
 ## 23. Out of scope for 3A.4
 

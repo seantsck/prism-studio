@@ -84,7 +84,7 @@ export interface GeminiProviderOptions {
   transport: GeminiTransport;
   pricing?: PricingTable;
   /**
-   * TESTS ONLY (fake transport): the semantic cut families to treat as accepted, so the sequence request constructor
+   * TESTS AND THE CALIBRATION HARNESS ONLY: the semantic cut families to treat as accepted, so the request constructor
    * can be exercised end to end. The registry never passes it: production uses `GEMINI_CROSS_CUT_ACCEPTED_FAMILIES`
    * (empty in 3A.4D) and its calibration identity.
    */
@@ -151,6 +151,16 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
     this.calibration = opts.testCrossCutCalibration ?? {
       version: GEMINI_CROSS_CUT_CALIBRATION_VERSION,
       acceptedFamilies: GEMINI_CROSS_CUT_CALIBRATED ? GEMINI_CROSS_CUT_ACCEPTED_FAMILIES : [],
+    };
+  }
+
+  /** The settings every request carries, read by `request()` and by a preregistered calibration's identity check. */
+  inferenceSettings() {
+    return {
+      thinkingLevel: this.cfg.thinkingLevel,
+      maxOutputTokensCap: this.cfg.maxOutputTokensCap,
+      temperature: 0,
+      timeoutMs: this.cfg.timeoutMs,
     };
   }
 
@@ -369,15 +379,16 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
     ctx: AnalysisContext,
     mode: AnalysisMode,
   ): GeminiRequest {
+    const settings = this.inferenceSettings();
     return {
       model: this.model,
       systemInstruction: spec.systemInstruction,
       turns,
       responseJsonSchema: geminiResponseJsonSchema(mode, criteria),
-      maxOutputTokens: maxOutputTokensFor(criteria, this.cfg.maxOutputTokensCap),
-      temperature: 0,
-      thinkingLevel: this.cfg.thinkingLevel,
-      timeoutMs: this.cfg.timeoutMs,
+      maxOutputTokens: maxOutputTokensFor(criteria, settings.maxOutputTokensCap),
+      temperature: settings.temperature,
+      thinkingLevel: settings.thinkingLevel,
+      timeoutMs: settings.timeoutMs,
       signal: ctx.signal,
     };
   }
