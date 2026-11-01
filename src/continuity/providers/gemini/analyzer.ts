@@ -31,6 +31,7 @@ import {
   GEMINI_ANALYZER_VERSION,
   GEMINI_CROSS_CUT_ACCEPTED_FAMILIES,
   GEMINI_CROSS_CUT_CALIBRATED,
+  GEMINI_CROSS_CUT_CALIBRATED_ON,
   GEMINI_CROSS_CUT_CALIBRATION_VERSION,
   GEMINI_MODELS,
   GEMINI_PRICING,
@@ -85,8 +86,8 @@ export interface GeminiProviderOptions {
   pricing?: PricingTable;
   /**
    * TESTS AND THE CALIBRATION HARNESS ONLY: the semantic cut families to treat as accepted, so the request constructor
-   * can be exercised end to end. The registry never passes it: production uses `GEMINI_CROSS_CUT_ACCEPTED_FAMILIES`
-   * (empty in 3A.4D) and its calibration identity.
+   * can be exercised end to end. The registry never passes it: production trusts the owner-accepted decision
+   * (`GEMINI_CROSS_CUT_ACCEPTED_FAMILIES`), and only on the inference identity it was measured on.
    */
   testCrossCutCalibration?: { version: string; acceptedFamilies: readonly string[] };
 }
@@ -150,8 +151,22 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
     this.pricingTable = opts.pricing ?? GEMINI_PRICING;
     this.calibration = opts.testCrossCutCalibration ?? {
       version: GEMINI_CROSS_CUT_CALIBRATION_VERSION,
-      acceptedFamilies: GEMINI_CROSS_CUT_CALIBRATED ? GEMINI_CROSS_CUT_ACCEPTED_FAMILIES : [],
+      acceptedFamilies:
+        GEMINI_CROSS_CUT_CALIBRATED && this.onCalibratedIdentity() ? GEMINI_CROSS_CUT_ACCEPTED_FAMILIES : [],
     };
+  }
+
+  /** The real request settings, not the config's, so a later change to any of them drops the accepted families. */
+  private onCalibratedIdentity(): boolean {
+    const on = GEMINI_CROSS_CUT_CALIBRATED_ON;
+    const s = this.inferenceSettings();
+    return (
+      this.model === on.model &&
+      s.thinkingLevel === on.thinkingLevel &&
+      s.maxOutputTokensCap === on.maxOutputTokensCap &&
+      s.temperature === on.temperature &&
+      s.timeoutMs === on.timeoutMs
+    );
   }
 
   /** The settings every request carries, read by `request()` and by a preregistered calibration's identity check. */

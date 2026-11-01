@@ -34,12 +34,32 @@ export const GEMINI_ANALYZER_VERSION = "3";
  */
 export const GEMINI_SEQUENCE_ANALYSIS_VERSION = "gemini-sequence-1";
 /**
- * 3A.4D: Prism trusts Gemini with NO semantic cut family yet. 3A.4E's calibration gate is the only thing that may
- * accept a family; until then every production cut criterion stays unchecked ("has not passed calibration yet").
+ * 3A.4E: the owner-accepted decision of the live `sequence-calibration-v1` run (docs/sequence-continuity-supervisor.md,
+ * 3A.4E-C). CALIBRATED means a calibration decision exists, not that every family passed: only membership in the list
+ * trusts a family. `eyeline` was rejected (3/6) and stays absent; changing it needs a new calibration version. The
+ * version is a literal (a test ties it to the harness) and it joins transition job identity.
  */
-export const GEMINI_CROSS_CUT_CALIBRATED = false;
-export const GEMINI_CROSS_CUT_ACCEPTED_FAMILIES: readonly string[] = Object.freeze([]);
-export const GEMINI_CROSS_CUT_CALIBRATION_VERSION = "gemini-cross-cut-uncalibrated";
+export const GEMINI_CROSS_CUT_CALIBRATED = true;
+export const GEMINI_CROSS_CUT_ACCEPTED_FAMILIES: readonly string[] = Object.freeze([
+  "screen_direction",
+  "axis",
+  "character_appearance",
+  "wardrobe",
+  "prop",
+  "object_continuity",
+  "geography",
+  "lighting",
+  "action_match",
+]);
+export const GEMINI_CROSS_CUT_CALIBRATION_VERSION = "sequence-calibration-v1";
+/** What the decision was measured on. A provider whose real settings differ in any of these has no accepted family. */
+export const GEMINI_CROSS_CUT_CALIBRATED_ON = {
+  model: "gemini-3.8-flash",
+  thinkingLevel: "LOW",
+  maxOutputTokensCap: 8192,
+  temperature: 0,
+  timeoutMs: 120_000,
+} as const;
 export const GEMINI_SDK = "@google/genai@2.29.0";
 export const GEMINI_DEFAULT_MODEL = "gemini-3.8-flash";
 

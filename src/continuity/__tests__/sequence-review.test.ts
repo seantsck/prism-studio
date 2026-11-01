@@ -192,12 +192,13 @@ async function setup(
   };
 }
 
-const productionGemini = (calls: { n: number }) =>
+const productionGemini = (calls: { n: number }, env: Record<string, string> = {}) =>
   new GeminiAnalysisProvider({
     config: readGeminiConfig({
       PRISM_STUDIO_CONTINUITY_ANALYZERS: "gemini",
       GEMINI_API_KEY: "test-key-not-real",
       PRISM_STUDIO_GEMINI_DIRECT_VIDEO: "1",
+      ...env,
     }),
     transport: {
       async generate(req) {
@@ -256,10 +257,34 @@ media("3A.4D manual sequence review (memory, real ffmpeg, mock analyzer)", () =>
     expect(s.storage.objects.size).toBe(before);
   });
 
-  it("production Gemini: every cut family is not calibrated; nothing derived, no provider call", async () => {
+  it("production Gemini: accepted families are disclosed as planned, and eyeline never is", async () => {
     const s = await setup({ directVideoAllowed: true, externalMediaAllowed: true });
     const calls = { n: 0 };
-    const gemini = productionGemini(calls);
+    const before = s.storage.objects.size;
+    const d = previewSequenceReview({
+      data: s.data,
+      view: s.view,
+      transitionKeys: [s.cut.transitionKey],
+      provider: productionGemini(calls),
+      qaPolicy: s.qaPolicy,
+      paid: PAID,
+      spentLast24hUsd: 0,
+      projectSpentLast24hUsd: 0,
+      now: NOW,
+    });
+    const c = d.cuts[0]!;
+    expect(c.planned.length).toBeGreaterThan(0);
+    expect(c.planned).not.toContain("cut:eyeline");
+    // the acceptance test covers an applicable eyeline criterion through the planner
+    // a disclosure is a read: nothing derived, nothing sent, even with families accepted
+    expect(s.storage.objects.size).toBe(before);
+    expect(calls.n).toBe(0);
+  });
+
+  it("Gemini on a model the decision was not measured on: nothing derived, no provider call", async () => {
+    const s = await setup({ directVideoAllowed: true, externalMediaAllowed: true });
+    const calls = { n: 0 };
+    const gemini = productionGemini(calls, { PRISM_STUDIO_GEMINI_ANALYSIS_MODEL: "gemini-3.6-flash" });
     expect(gemini.crossCutCalibration().acceptedFamilies).toEqual([]);
     expect(gemini.analysisVersion("sequence_transition")).toBe("gemini-sequence-1");
     expect(gemini.analysisVersion("direct_video")).toBe("3");

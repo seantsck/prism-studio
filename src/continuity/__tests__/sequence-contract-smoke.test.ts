@@ -226,9 +226,9 @@ describe("the smoke", () => {
     expect(SEQUENCE_SMOKE_LIMITS).toEqual({ maxRequests: 1, maxUsd: 0.05, uploads: 0, corrections: 0 });
   });
 
-  it("production Gemini (no family accepted) cannot plan it", async () => {
+  it("a provider that accepts no family cannot plan it", async () => {
     const p = new GeminiAnalysisProvider({
-      config: calibrationConfig(),
+      config: { ...calibrationConfig(), model: "gemini-3.6-flash" },
       transport: new FakeGeminiTransport([]),
     });
     await expect(smoke(p)).rejects.toThrow(/exactly one sequence batch/);
