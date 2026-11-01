@@ -1,6 +1,6 @@
 # Sequence Continuity Supervisor (Phase 3A.4)
 
-**Status: architecture accepted; 3A.4A–D merged; 3A.4E live calibration completed; 3A.4F pending (2026-11-01).**
+**Status: architecture accepted; 3A.4A–E merged; 3A.4F orchestration implementation in review; hosted 0047 acceptance pending (2026-11-01).**
 The owner reviewed this design and accepted it with fixes, and those fixes are applied below. The owner decisions are
 recorded in [§21](#21-owner-decisions-and-implementation-details). 3A.4A (the pure cut domain and deterministic
 projection, [§22](#3a4a-implementation-notes)), 3A.4B (the deterministic Supervisor UI,
@@ -1383,6 +1383,107 @@ truth and an accepted family. `sequence_semantic_mode`, 0047 and automatic recon
 
 **Limits of the evidence.** One positive and one conflict fixture per family, repeated three times at temperature 0, on
 abstract proxies with deliberately obvious breaks. It does not measure subtle breaks or real footage.
+
+### 3A.4F-A implementation notes
+
+**Hosted stays at 0046. Migration 0047 is verified on a disposable local database only.** Nothing here has run against
+hosted or a real provider.
+
+**Model.** Authenticated, idempotent, eventually automatic reconciliation, the 3A.2 model. There is no cron, privileged
+scheduler, edit trigger or database trigger that submits work, and the generation worker has no new role.
+
+| Role              | What it does                                                              |
+| ----------------- | ------------------------------------------------------------------------- |
+| Signed-in app     | Decides whether Sequence QA is due and explicitly reconciles it           |
+| Continuity worker | Executes an already-frozen job; never reads the policy or discovers a cut |
+| Generation worker | Nothing new                                                               |
+
+A page read writes nothing, and an edit write submits nothing. The Supervisor's read returns a `dueKey`;
+`SequenceAutoReconciler` calls `reconcileSequenceQaAction` once per key, and the server re-reads everything first. No
+timer exists: closing the Supervisor stops future waves, and a cut that settles while nobody is looking is picked up by
+the next visit.
+
+`SequenceJobPoller` polls an owner-only status route only while this edit has active Sequence jobs, or while Sequence
+Automatic has settled due work blocked on shared capacity. It never polls for settling cuts or in off mode. The route
+returns this edit's job states and the Project's active jobs (id, kind, status only), so a finished Shot QA job or another
+edit's job also wakes the page. The poller compares its first response with the status the server rendered, refreshes once
+per change, and can only refresh: the reconciler remains the one thing that asks for a wave.
+
+**Policy (0047).** `sequence_semantic_mode` (`off` | `suggest` | `automatic`, default `off`) and
+`max_transitions_per_batch` (default 20, range 1–20) on `project_qa_policies`. It is independent of the Shot
+`semantic_mode` in both directions, and shares its analyzer and spend ceilings. No new environment switch exists.
+`automatic` needs an analyzer, `external_media_allowed`, `direct_video_allowed` and two finite ceilings (a database
+constraint), plus its own confirmation (`confirmSequenceAutomatic`), which the server re-checks. Changing the mode stops
+new submissions and never cancels queued jobs.
+
+**Readiness is split.** `sequenceAutomationReady()` proves the 0047 columns; `automationReady()` still means 0044. Before
+0047, Shot automation and manual Sequence review keep working, reads map to `off` and 20, default values still save, and
+a non-default Sequence policy is refused as `not_migrated`. No clock, plan or media is read.
+
+**Settling (`SEQUENCE_SETTLE_MS` = 10 minutes, automatic only).** A cut is settled when `now - changedAt >= 10 minutes`,
+where `changedAt` is the newest clock of its sources. A future clock is not settled.
+
+| Source that can change a cut's fingerprints              | Clock                              |
+| -------------------------------------------------------- | ---------------------------------- |
+| Edit item: picture, trim, position                       | `episode_edit_items.updated_at`    |
+| Shot truth, Location, Scene, assignments, Look, Prop set | `shots.updated_at`                 |
+| Location View selection set                              | `selected_at`                      |
+| Location View selection cleared, or its View deleted     | `shots.updated_at` (**0047**)      |
+| Continuity Lock selection set                            | `selected_at`                      |
+| Continuity Lock selection cleared, or its Lock deleted   | `shots.updated_at` (**0047**)      |
+| Prop removed from a Shot, or deleted                     | `shots.updated_at` (**0047**)      |
+| Character name                                           | `characters.updated_at`            |
+| Identity reference: any write, or its Asset deleted      | `characters.updated_at` (**0047**) |
+| Look name, reference images                              | `character_looks.updated_at`       |
+| Location name                                            | `locations.updated_at`             |
+| Prop name                                                | `props.updated_at`                 |
+| Pinned clip or reference Asset                           | `assets.updated_at`                |
+
+Location Views and Continuity Locks are immutable rows, the Production Frame comes from the attempt's frozen package, and
+no operation changes the edit rate, so they need no clock. A missing clock is `settle_unknown`: never auto-submitted and
+reported, with manual review still available. `now` is never invented as a change time. Neither the edit's revision or
+`updated_at` nor the Project's is ever used.
+
+A reorder restarts every shifted item's clock, including cuts whose neighbours did not change. The owner accepted this:
+it only delays work and needs no adjacency history.
+
+**The 0047 triggers** only move `updated_at`. They are database triggers, so FK cascades are covered, and memory mode
+mirrors them. Audit of what else reads these clocks:
+
+| Consumer                                    | Effect of a touch                                                                   |
+| ------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Generation submit (`expectedShotUpdatedAt`) | A submission being prepared is refused as stale. Intended: the package would change |
+| Project revision (candidate sets)           | Changes, for the same reason. Intended                                              |
+| Package `sourceVersions.shotUpdatedAt`      | Informational. Not in any package fingerprint, so no output goes stale              |
+| `characters.updated_at`                     | No consumer besides settling                                                        |
+
+**After hosted 0047 is applied, wait 10 minutes before enabling Sequence Automatic,** so a change made just before the
+triggers existed cannot look settled.
+
+**Identity.** `AUTO_SEQUENCE_NONCE = "auto-sequence-v1"` through the existing `sequenceIdempotencyKey`, with no timestamp.
+An automatic transition run stores it in the existing `continuity_runs.automation_key`, and a manual run stores null. Any
+job with the key covers the truth, as in Shot QA. A manual run never covers it, and changed truth or calibration identity
+makes a new key. The first event says the job was queued automatically under the Project's policy.
+
+**One wave.** At most `min(maxTransitionsPerBatch, maxActivePerProject - activeJobs)`, sharing active slots with Shot QA.
+Order: critical-capable first, then edit order. The wave is the longest prefix fitting the slots, the cap and every
+budget; it never reorders to fit more. Each cut is one run against the per-run ceilings, and the wave's total counts
+against the same 24-hour ledger as Shot QA. An unknown estimate submits nothing.
+
+**Gate order.** Truth, migration, policy, calibrated capability, settling, coverage, capacity, estimate, wave, and only
+then media. Manual and automatic share `queueTransitionBatch`: derivation, exact transfer, validation, exact recomputed
+cost and `createTransitionBatchWithJobs`. Their authorities stay explicit, and an automatic wave fakes no confirmation.
+If the exact media no longer fits, the whole wave is refused; derived Assets stay reusable and are not rolled back.
+
+**Suggest** writes, derives, queues and spends nothing. It shows due, settling and blocked counts and a **Review batch**
+link into the existing manual disclosure, limited to the manual cap. **Manual review** is available in every mode and
+never waits for settling.
+
+**Calibration.** Automatic Sequence QA runs only on the exact accepted identity (`gemini-3.8-flash`, `LOW`, 8192, 0,
+120000 ms) with the nine accepted families. Eyeline stays off. Any mismatch has no accepted family and queues nothing.
+
+**Tests.** `scripts/db-sequence-automation.mts` proves 0047's policy, security and triggers on a disposable database. The
+E2E uses a 15-second window, honoured only in memory mode with the fake transport (`getSequenceSettleMs`).
 
 ## 23. Out of scope for 3A.4
 

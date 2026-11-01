@@ -12,6 +12,8 @@ import {
   type TransitionRun,
   type TransitionState,
 } from "@/domain/continuity/sequence";
+import type { SequenceAutoView } from "@/continuity/sequence-automation";
+import type { SequenceStatus } from "@/domain/continuity/sequence-status";
 import type { SequenceReviewDisclosure } from "@/continuity/sequence-review";
 import { sequenceInputSide } from "@/domain/continuity/analysis/sequence-plan";
 import type { TransitionRunView } from "@/data/media-qa-repository";
@@ -49,6 +51,8 @@ export const SEMANTIC_NOTE =
   "Sequence Continuity criteria stay unchecked until a review of this cut runs. A family an analyzer has not been calibrated for stays unchecked.";
 export const NO_EDIT_MESSAGE =
   "Sequence Continuity needs a persisted Episode Edit because the edit determines the actual cuts.";
+export const SEQUENCE_MODE_LABELS = { off: "Off", suggest: "Suggest", automatic: "Automatic" } as const;
+
 export const NO_CUTS_MESSAGE = "This edit has no cuts to review yet.";
 export const RUNS_NOTE =
   "Sequence Continuity reviews run only when you select cuts and confirm the disclosure. Nothing runs on page load or edit changes.";
@@ -208,6 +212,11 @@ export type ContinuityPageVM =
       review: { disclosure: SequenceReviewDisclosure; nonce: string } | null;
       analyzers: Array<{ id: string; label: string }>;
       selectedAnalyzer: string | null;
+      /** 3A.4F: the Project's Sequence automation status (null = it could not be read; nothing depends on it) */
+      autoSequence?: SequenceAutoView | null;
+      /** 3A.4F: the job state this render saw, which the poller compares its first response against */
+      sequenceStatus?: SequenceStatus | null;
+      episodeId?: string;
     };
 
 export const supervisorLinks = (data: ProjectData, episode: Episode): SupervisorLinks => ({
@@ -481,7 +490,10 @@ function cutRow(
     const items = (stored?.evidence as { items?: unknown[] } | undefined)?.items ?? [];
     const coverable =
       intentOn && c.intentCoverable && (declared!.scope.length === 0 || declared!.scope.includes(c.category));
-    const analyzed = stored?.resultSource === "analyzer";
+    // the worker also records why a criterion was never sent (unsupported family, no media, not allowed) with this
+    // source: only a criterion the run PLANNED was judged by the analyzer
+    const planStatus = latest.run.analysisPlan?.items.find((i) => i.criterionKey === c.key)?.status;
+    const analyzed = stored?.resultSource === "analyzer" && (planStatus == null || planStatus === "planned");
     return {
       c,
       vm: {
@@ -489,7 +501,7 @@ function cutRow(
         result,
         resultLabel: RESULT_LABELS[result],
         tone: RESULT_TONE[result],
-        reason: analyzed ? stored!.actual || base.reason : stored?.notes || base.reason,
+        reason: analyzed ? stored!.actual || base.reason : stored?.notes || stored?.actual || base.reason,
         analyzed: analyzed
           ? { analyzer: latest.run.analyzer, mock: latest.run.analyzerKind === "mock" }
           : null,

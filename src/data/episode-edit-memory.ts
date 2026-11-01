@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { emptySettlementClock, type SettlementTable } from "@/domain/continuity/sequence-automation";
 import type { AttemptMediaFacts } from "@/domain/edit/eligibility";
 import type { EpisodeEdit } from "@/domain/edit/model";
 import type { ProductionFrame } from "@/domain/production-frame";
@@ -34,6 +35,8 @@ export interface MemoryEpisodeEditAccess {
   generation(): Pick<MemoryGenerationService, "getAttemptView">;
   mediaQa(): Pick<MemoryMediaQaService, "listAttemptDerivations" | "getDelivery">;
   productionFrames(): Pick<MemoryProductionFrameService, "listForProject">;
+  /** The memory twin of a row's `updated_at`: the repository's stamp, else when the store was created. */
+  stampOf(table: SettlementTable, id: string): string;
 }
 
 /** What a removed row of each collection is called in the refusal (`assertNotReferenced`). */
@@ -60,6 +63,8 @@ const REFERENCED_NAME: Partial<Record<CollectionName, string>> = {
  */
 export class MemoryEpisodeEditService implements EpisodeEditRepository {
   private edits = new Map<string, EpisodeEdit>();
+  /** The memory twin of `episode_edit_items.updated_at` (see `stampItems`). */
+  private itemStamps = new Map<string, string>();
 
   constructor(private readonly access: MemoryEpisodeEditAccess) {}
 
@@ -179,6 +184,7 @@ export class MemoryEpisodeEditService implements EpisodeEditRepository {
     const plan = applyEditOps(base, ops, facts, randomUUID, { userId: input.userId, now: input.now });
     assertEditValid(plan, facts, base);
     this.edits.set(base.id, clone(plan.next));
+    this.stampItems(null, plan.next);
     return clone(plan.next);
   }
 
@@ -198,7 +204,49 @@ export class MemoryEpisodeEditService implements EpisodeEditRepository {
     assertEditValid(plan, facts, current);
     const next: EpisodeEdit = { ...plan.next, revision: current.revision + 1 };
     this.edits.set(next.id, clone(next));
+    this.stampItems(current, next);
     return clone(next);
+  }
+
+  /**
+   * Exactly the item rows the Postgres write updates: an inserted item, a changed picture, position, source audio,
+   * performance basis or cut intent. A placement-only change writes no item row. A reorder moves every shifted item.
+   */
+  private stampItems(before: EpisodeEdit | null, next: EpisodeEdit): void {
+    const now = new Date().toISOString();
+    const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+    const prior = new Map(before?.items.map((item, position) => [item.id, { item, position }]));
+    next.items.forEach((item, position) => {
+      const p = prior.get(item.id);
+      if (
+        !p ||
+        p.position !== position ||
+        !same(p.item.visual, item.visual) ||
+        p.item.sourceAudio !== item.sourceAudio ||
+        !same(p.item.performanceBasis, item.performanceBasis) ||
+        !same(p.item.incomingCutIntent ?? null, item.incomingCutIntent ?? null)
+      )
+        this.itemStamps.set(item.id, now);
+    });
+  }
+
+  async getCutSettlementClock(projectId: string, editId: string) {
+    const clock = emptySettlementClock();
+    const project = this.projectOf(projectId);
+    const edit = this.edits.get(editId);
+    if (!project || edit?.projectId !== projectId) return clock;
+    clock.items = Object.fromEntries(
+      edit.items.map((i) => [i.id, this.itemStamps.get(i.id) ?? this.access.stampOf("items", i.id)]),
+    );
+    const stamps = (table: SettlementTable, rows: ReadonlyArray<{ id: string }>) =>
+      Object.fromEntries(rows.map((r) => [r.id, this.access.stampOf(table, r.id)]));
+    clock.shots = stamps("shots", project.shots);
+    clock.characters = stamps("characters", project.characters);
+    clock.looks = stamps("looks", project.looks);
+    clock.locations = stamps("locations", project.locations);
+    clock.props = stamps("props", project.props);
+    clock.assets = stamps("assets", project.assets);
+    return clock;
   }
 
   async delete(input: DeleteEpisodeEditInput): Promise<void> {

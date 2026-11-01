@@ -214,6 +214,8 @@ export interface NewTransitionRun {
   findings: NewFinding[];
   createdBy: string | null;
   now: string;
+  /** 3A.4F: the stable identity of an AUTOMATIC run (absent = a manual or deterministic run: null). */
+  automationKey?: string | null;
   /** 3A.4D semantic transition runs: the frozen plan, manifest and request identity (absent on deterministic runs) */
   analysisPlan?: ContinuityAnalysisPlan | null;
   externalManifest?: ExternalMediaManifest | null;
@@ -227,9 +229,11 @@ export interface NewTransitionAnalysisRun {
   run: NewTransitionRun;
   job: NewAnalysisRun["job"];
   limits: { maxActivePerProject: number };
+  /** 3A.4F: the job's first event, when it was not a person's submission. */
+  queuedNote?: string;
 }
 
-/** 3A.4D: ONE confirmed manual batch (all or none). */
+/** 3A.4D: ONE confirmed manual batch, or 3A.4F: one automatic wave (all or none). */
 export interface NewTransitionAnalysisBatch {
   entries: NewTransitionAnalysisRun[];
   limits: { maxActivePerProject: number };
@@ -552,6 +556,8 @@ export interface MediaQaRepository {
   createTransitionBatchWithJobs(
     input: NewTransitionAnalysisBatch,
   ): Promise<Array<{ run: TransitionRunView; job: TransitionAnalysisJob; duplicate: boolean }>>;
+  /** 3A.4F: every transition job recorded against an edit (Prism's own job state, for the Supervisor's progress). */
+  listEditTransitionAnalysisJobs(projectId: string, editId: string): Promise<TransitionAnalysisJob[]>;
   /** 3A.4D: the existing transition jobs with these idempotency keys (any status). */
   findTransitionJobsByKeys(projectId: string, keys: string[]): Promise<TransitionAnalysisJob[]>;
   getTransitionRun(runId: string): Promise<TransitionRunView | null>;
@@ -619,6 +625,11 @@ export interface MediaQaRepository {
    * automatic work so an un-migrated database never reads or probes media for a run it cannot record.
    */
   automationReady(): Promise<boolean>;
+  /**
+   * 3A.4F: the database can hold the Sequence policy and has the settling clocks (migration 0047). Separate from
+   * `automationReady`: Shot automation and manual Sequence review keep working without it.
+   */
+  sequenceAutomationReady(): Promise<boolean>;
   /** The Project's policy; the default (semantic automation off, revision 0) when none was ever saved. */
   getQaPolicy(projectId: string): Promise<ProjectQaPolicy>;
   /**

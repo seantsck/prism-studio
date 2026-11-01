@@ -7,11 +7,19 @@ import {
   type EdgeTransfer,
   type SequenceSelection,
 } from "@/continuity/sequence-review";
+import { reconcileSequenceQa } from "@/continuity/sequence-automation";
+import type { SequenceReconcileResult } from "@/domain/continuity/sequence-automation";
 import { buildEpisodeEditView } from "@/domain/edit/view";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { loadEditMediaFacts } from "./episode-edit-media";
 import { getEpisodeEditRepo } from "./episode-edits";
-import { getAnalysisConfig, getAnalysisProviders, getDeliveryDeps, getMediaQaRepo } from "./media-qa";
+import {
+  getAnalysisConfig,
+  getAnalysisProviders,
+  getDeliveryDeps,
+  getMediaQaRepo,
+  sequenceAutoDeps,
+} from "./media-qa";
 import { getRepo, requireProjectFresh } from "./repo";
 
 /**
@@ -71,6 +79,48 @@ async function startSequenceReview_impl(form: FormData) {
     throw err;
   }
   revalidatePath(`/projects/${slug}`, "layout");
+}
+
+/**
+ * Phase 3A.4F: the Supervisor found a wave due and asks for it. Idempotent, and everything is re-read here: the Project,
+ * the persisted edit, its media facts, the policy, the analyzers, job and spend state. The browser supplies only which
+ * Episode. Returns every outcome and reason.
+ */
+export async function reconcileSequenceQaAction(form: FormData): Promise<SequenceReconcileResult> {
+  const refused = (reason: string): SequenceReconcileResult => ({
+    outcome: "failed",
+    reasons: [reason],
+    totalCuts: 0,
+    dueCuts: 0,
+    settlingCuts: 0,
+    blockedCuts: 0,
+    queued: 0,
+    remainingDue: 0,
+    jobIds: [],
+  });
+  const slug = String(form.get("projectSlug") ?? "");
+  let data;
+  try {
+    data = await requireProjectFresh(slug);
+  } catch {
+    return refused("That Project is not available.");
+  }
+  const episode = data.episodes.find((e) => e.id === String(form.get("episodeId") ?? ""));
+  if (!episode) return refused("That Episode no longer exists.");
+  const edit = await (await getEpisodeEditRepo()).getForEpisode(data.project.id, episode.id);
+  if (!edit) return refused("This Episode has no persisted edit.");
+  const pinned = edit.items.flatMap((i) => (i.visual.kind === "video" ? [i.visual.attemptId] : []));
+  const view = buildEpisodeEditView(data, edit, await loadEditMediaFacts(data, episode.id, pinned));
+  const qa = await getMediaQaRepo();
+  const result = await reconcileSequenceQa({
+    data,
+    view,
+    policy: await qa.getQaPolicy(data.project.id),
+    auto: await sequenceAutoDeps(qa),
+    deps: await getDeliveryDeps((await getRepo()).currentUserId()),
+  });
+  if (result.outcome === "queued") revalidatePath(`/projects/${slug}`, "layout");
+  return result;
 }
 
 export async function startSequenceReview(form: FormData): Promise<ActionResult> {

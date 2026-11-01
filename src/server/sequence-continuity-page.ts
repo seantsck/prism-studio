@@ -1,7 +1,14 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import {
+  loadSequenceAutoState,
+  sequenceAutoView,
+  type SequenceAutoView,
+} from "@/continuity/sequence-automation";
 import { findEdgeAssets, previewSequenceReview } from "@/continuity/sequence-review";
+import { isAnalysisActive } from "@/domain/continuity/analysis/job-state";
 import { buildEpisodeCuts } from "@/domain/continuity/sequence";
+import { sequenceStatusOf, type SequenceStatus } from "@/domain/continuity/sequence-status";
 import { EpisodeEditError } from "@/data/episode-edit-repository";
 import type { TransitionRunView } from "@/data/media-qa-repository";
 import { buildEpisodeEditView } from "@/domain/edit/view";
@@ -14,7 +21,13 @@ import {
 } from "@/components/views/sequence-continuity-model";
 import { loadEditMediaFacts } from "./episode-edit-media";
 import { getEpisodeEditRepo } from "./episode-edits";
-import { getAnalysisConfig, getMediaProcessor, getMediaQaRepo, getPreviewProviders } from "./media-qa";
+import {
+  getAnalysisConfig,
+  getMediaProcessor,
+  getMediaQaRepo,
+  getPreviewProviders,
+  sequenceAutoDeps,
+} from "./media-qa";
 
 /**
  * The Continuity Supervisor page's READ (Phase 3A.4B, extended by 3A.4D): the persisted edit and its media facts, the
@@ -84,16 +97,44 @@ export async function loadContinuityPage(
         nonce: randomUUID(),
       };
     }
-    return continuityPage({
-      data,
-      episode,
-      edit,
-      media,
-      transitionRuns,
-      review,
-      analyzers,
-      selectedAnalyzer,
-    });
+    // automation status is advisory: a failure to read it never hides the deterministic Supervisor
+    let autoSequence: SequenceAutoView | null = null;
+    let sequenceStatus: SequenceStatus | null = null;
+    try {
+      const state = await loadSequenceAutoState({
+        data,
+        view: buildEpisodeEditView(data, edit, media),
+        policy: await qa.getQaPolicy(data.project.id),
+        deps: await sequenceAutoDeps(qa),
+        now: new Date(),
+      });
+      autoSequence = sequenceAutoView(state);
+      sequenceStatus = sequenceStatusOf({
+        editJobs: await qa.listEditTransitionAnalysisJobs(data.project.id, edit.id),
+        projectActiveJobs: await qa.listActiveProjectAnalysisJobs(data.project.id),
+        isActive: isAnalysisActive,
+      });
+    } catch (err) {
+      console.error(
+        "[continuity-supervisor-page] automation",
+        redactText(err instanceof Error ? err.message : err),
+      );
+    }
+    return {
+      ...continuityPage({
+        data,
+        episode,
+        edit,
+        media,
+        transitionRuns,
+        review,
+        analyzers,
+        selectedAnalyzer,
+      }),
+      autoSequence,
+      sequenceStatus,
+      episodeId: episode.id,
+    };
   } catch (err) {
     if (err instanceof EpisodeEditError) return { state: "error", message: err.message, links };
     const reference = Math.random().toString(36).slice(2, 10);

@@ -541,7 +541,10 @@ describe("memory repository: create, dedupe, select (same Location only), clear,
     expect(await lv.selectionForShot(pid, shot2A.id)).toBeNull();
     expect((await sel(shot2A.id, null)).locationViewId).toBe(view.id);
     // selecting never mutated the Shot row
-    expect((await repo.loadProject("ojousama"))!.shots.find((s) => s.id === shot2A.id)).toEqual(shot2A);
+    // 3A.4F (0047): clearing moves the Shot's clock and nothing else about it
+    const cleared = (await repo.loadProject("ojousama"))!.shots.find((s) => s.id === shot2A.id)!;
+    expect(cleared.updatedAt).not.toBe(shot2A.updatedAt);
+    expect({ ...cleared, updatedAt: shot2A.updatedAt }).toEqual(shot2A);
   });
 
   it("moving the Shot to another Location clears the old Location's view selection (like the database trigger)", async () => {

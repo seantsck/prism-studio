@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { ActionForm } from "@/components/action-form";
+import { SequenceAutoReconciler, SequenceJobPoller } from "@/components/continuity/sequence-automation";
 import { ContinuityFilters } from "@/components/sequence/continuity-filters";
+import type { SequenceAutoView } from "@/continuity/sequence-automation";
 import { Badge, Button, Empty, PageHeader } from "@/components/ui";
 import {
   CUT_INTENT_KIND_LABELS,
@@ -8,6 +10,7 @@ import {
   CUT_INTENT_NOTE_MAX,
 } from "@/domain/continuity/cut-intent";
 import { CATEGORY_LABELS, CONTINUITY_CATEGORIES } from "@/domain/continuity/model";
+import { shouldPollSequenceStatus, type SequenceStatus } from "@/domain/continuity/sequence-status";
 import type { Episode } from "@/domain/schemas";
 import { clearCutIntent, setCutIntent } from "@/server/episode-edit-actions";
 import { startSequenceReview } from "@/server/sequence-review-actions";
@@ -17,6 +20,7 @@ import {
   NO_EDIT_MESSAGE,
   RUNS_NOTE,
   SEMANTIC_NOTE,
+  SEQUENCE_MODE_LABELS,
   type ContinuityPageVM,
   type CutRowVM,
   type FindingVM,
@@ -108,6 +112,16 @@ export function SequenceContinuityView({ episode, page }: { episode: Episode; pa
         <p className="text-[11px] text-faint" data-testid="continuity-runs-note">
           {RUNS_NOTE}
         </p>
+        {page.autoSequence ? (
+          <SequenceAutomationPanel
+            auto={page.autoSequence}
+            status={page.sequenceStatus ?? null}
+            projectSlug={page.projectSlug}
+            episodeId={page.episodeId ?? episode.id}
+            editId={page.editId}
+            continuityHref={`/projects/${page.projectSlug}/episodes/${episode.slug}/continuity`}
+          />
+        ) : null}
         {page.rows.length > 0 && page.analyzers.length > 0 ? (
           // a plain GET: selecting cuts only DISCLOSES what a review would do (nothing is derived or queued)
           <form
@@ -163,6 +177,131 @@ export function SequenceContinuityView({ episode, page }: { episode: Episode; pa
         )}
       </div>
     </div>
+  );
+}
+
+/** Sequence automation status. It shows counts and reasons only: never an Episode continuity score. */
+export function SequenceAutomationPanel({
+  auto,
+  status,
+  projectSlug,
+  episodeId,
+  editId,
+  continuityHref,
+}: {
+  auto: SequenceAutoView;
+  status: SequenceStatus | null;
+  projectSlug: string;
+  episodeId: string;
+  editId: string;
+  continuityHref: string;
+}) {
+  const c = auto.counts;
+  const money = (n: number | null) => (n == null ? "unknown" : `$${n.toFixed(4)}`);
+  const review = auto.reviewBatch;
+  const reviewHref = review
+    ? `${continuityHref}?${[
+        ...review.transitionKeys.map((k) => `review=${encodeURIComponent(k)}`),
+        `analyzer=${encodeURIComponent(review.analyzer)}`,
+      ].join("&")}`
+    : null;
+  return (
+    <section
+      className="space-y-1 border border-line bg-panel p-3 text-[12px]"
+      data-testid="sequence-automation"
+      data-mode={auto.mode}
+    >
+      <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+        Sequence Continuity automation ·{" "}
+        <span data-testid="sequence-auto-mode">{SEQUENCE_MODE_LABELS[auto.mode]}</span>
+      </h2>
+      {!auto.ready ? (
+        <p className="text-muted" data-testid="sequence-auto-not-ready">
+          Automatic Sequence Continuity needs database migration 0047. Manual reviews still work.
+        </p>
+      ) : auto.mode === "off" ? (
+        <p className="text-muted">
+          No cut is analysed automatically. Manual reviews below stay available.{" "}
+          <Link href={`/projects/${projectSlug}/qa`} className="text-accent hover:underline">
+            QA settings
+          </Link>
+        </p>
+      ) : (
+        <>
+          <p className="text-muted">
+            Analyzer {auto.analyzer ?? "none"}
+            {auto.calibration
+              ? ` · calibration ${auto.calibration.version}, ${auto.calibration.acceptedFamilies} accepted families`
+              : ""}{" "}
+            · batch cap {auto.batchCap}
+          </p>
+          <p data-testid="sequence-auto-counts">
+            <span data-testid="sequence-auto-due">{c.due}</span> settled cuts due ·{" "}
+            <span data-testid="sequence-auto-settling">{c.settling}</span> settling ·{" "}
+            <span data-testid="sequence-auto-blocked">{c.blocked + c.unknown}</span> blocked ·{" "}
+            <span data-testid="sequence-auto-covered">{c.covered}</span> covered ·{" "}
+            <span data-testid="sequence-auto-active">{status?.edit.active ?? 0}</span> active jobs
+          </p>
+          {c.due > 0 ? (
+            <p className="text-muted" data-testid="sequence-auto-cost">
+              Estimated worst case {money(auto.dueMaxUsd)}
+              {auto.waveCuts < c.due ? ` · next wave ${auto.waveCuts} cuts, ${money(auto.waveMaxUsd)}` : ""}
+            </p>
+          ) : null}
+          {c.settling > 0 ? (
+            <p className="text-faint">
+              A cut settles after 10 quiet minutes, and is picked up the next time this page opens.
+            </p>
+          ) : null}
+          {c.unknown > 0 ? (
+            <p className="text-warn" data-testid="sequence-auto-unknown">
+              {c.unknown} cuts cannot be shown to have settled, so they are not submitted automatically.
+              Manual review stays available.
+            </p>
+          ) : null}
+          {auto.mode === "automatic" ? (
+            <p className="text-faint">
+              Queued work runs under this Project&apos;s standing authorisation. It is advisory only.
+            </p>
+          ) : null}
+          {reviewHref ? (
+            <p>
+              <Link
+                href={reviewHref}
+                className="text-accent hover:underline"
+                data-testid="sequence-auto-review"
+              >
+                Review batch
+              </Link>
+              {review && review.more > 0 ? (
+                <span className="text-muted"> · {review.more} more stay due after this batch</span>
+              ) : null}
+            </p>
+          ) : null}
+          {auto.reasons.length > 0 ? (
+            <ul className="text-[11px] text-warn" data-testid="sequence-auto-reasons">
+              {auto.reasons.map((r) => (
+                <li key={r}>{r}</li>
+              ))}
+            </ul>
+          ) : null}
+        </>
+      )}
+      <SequenceAutoReconciler projectSlug={projectSlug} episodeId={episodeId} dueKey={auto.dueKey} />
+      {status ? (
+        <SequenceJobPoller
+          projectSlug={projectSlug}
+          editId={editId}
+          initialSignature={status.signature}
+          poll={shouldPollSequenceStatus({
+            mode: auto.mode,
+            ready: auto.ready,
+            editActive: status.edit.active,
+            capacityBlocked: auto.capacityBlocked,
+          })}
+        />
+      ) : null}
+    </section>
   );
 }
 

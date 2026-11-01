@@ -34,10 +34,20 @@ export interface ProjectQaPolicy {
    * credential, by the semantic mode or by a past manual analysis. Default false: no 3A.2 policy gains it.
    */
   directVideoAllowed: boolean;
+  /**
+   * 3A.4F (migration 0047): the Project's separate standing authorisation for cuts. Independent of `semanticMode` in
+   * both directions; never inferred from it. Default off.
+   */
+  sequenceSemanticMode: SemanticMode;
+  /** A safety cap on one automatic wave, not a queue length; it never overrides the shared active-job limit. */
+  maxTransitionsPerBatch: number;
   revision: number;
   updatedBy: string | null;
   updatedAt: string | null;
 }
+
+/** The default and hard maximum of `maxTransitionsPerBatch` (the database enforces the same range). */
+export const MAX_TRANSITIONS_PER_BATCH = 20;
 
 export const defaultQaPolicy = (projectId: string): ProjectQaPolicy => ({
   projectId,
@@ -47,6 +57,8 @@ export const defaultQaPolicy = (projectId: string): ProjectQaPolicy => ({
   maxCostPerRunUsd: null,
   maxCostPerDayUsd: null,
   directVideoAllowed: false,
+  sequenceSemanticMode: "off",
+  maxTransitionsPerBatch: MAX_TRANSITIONS_PER_BATCH,
   revision: 0,
   updatedBy: null,
   updatedAt: null,
@@ -58,6 +70,10 @@ export type QaPolicyInput = Pick<
 > & {
   /** Absent (a 3A.2 caller) = false. */
   directVideoAllowed?: boolean;
+  /** Absent (a 3A.2 / 3A.3 caller) = off. */
+  sequenceSemanticMode?: SemanticMode;
+  /** Absent = the default. */
+  maxTransitionsPerBatch?: number;
 };
 
 /**
@@ -98,8 +114,30 @@ export function qaPolicyErrors(p: QaPolicyInput): string[] {
     if (!finite(p.maxCostPerDayUsd))
       out.push("Automatic semantic QA needs a finite 24-hour Project ceiling.");
   }
+  const sequenceMode = p.sequenceSemanticMode ?? "off";
+  if (!(SEMANTIC_MODES as readonly string[]).includes(sequenceMode))
+    out.push("Choose a Sequence Continuity automation mode.");
+  const cap = p.maxTransitionsPerBatch ?? MAX_TRANSITIONS_PER_BATCH;
+  if (!Number.isInteger(cap) || cap < 1 || cap > MAX_TRANSITIONS_PER_BATCH)
+    out.push(`The transitions per batch must be a whole number from 1 to ${MAX_TRANSITIONS_PER_BATCH}.`);
+  if (sequenceMode === "automatic") {
+    if (!p.analyzer) out.push("Automatic Sequence Continuity needs an analyzer.");
+    if (!p.externalMediaAllowed)
+      out.push("Automatic Sequence Continuity needs your standing consent to send media to the analyzer.");
+    if (p.directVideoAllowed !== true)
+      out.push("Automatic Sequence Continuity needs your permission to send Shot video.");
+    if (!finite(p.maxCostPerRunUsd))
+      out.push("Automatic Sequence Continuity needs a finite per-run ceiling.");
+    if (!finite(p.maxCostPerDayUsd))
+      out.push("Automatic Sequence Continuity needs a finite 24-hour Project ceiling.");
+  }
   return out;
 }
+
+/** Whether this policy needs migration 0047 to be stored honestly. */
+export const qaPolicyNeedsSequenceColumns = (p: QaPolicyInput) =>
+  (p.sequenceSemanticMode ?? "off") !== "off" ||
+  (p.maxTransitionsPerBatch ?? MAX_TRANSITIONS_PER_BATCH) !== MAX_TRANSITIONS_PER_BATCH;
 
 // ───────────────────────── automatic identities ─────────────────────────
 
@@ -166,6 +204,33 @@ export function semanticPolicyBlockers(
     });
   }
   return out;
+}
+
+/** The Sequence equivalent of `semanticPolicyBlockers`: the cheap gates of a standing authorisation for cuts. */
+export function sequencePolicyBlockers(
+  policy: ProjectQaPolicy,
+  analyzer: AnalyzerAvailability | null,
+): SpendBlocker[] {
+  if (policy.sequenceSemanticMode !== "automatic") return [];
+  const errors = qaPolicyErrors(policy);
+  if (errors.length > 0) return errors.map((message) => ({ code: "policy.incomplete", message }));
+  if (!analyzer)
+    return [
+      {
+        code: "analyzer.unavailable",
+        message: `The Project's analyzer "${policy.analyzer}" is not enabled on this server.`,
+      },
+    ];
+  if (!analyzer.usable)
+    return [
+      {
+        code: "analyzer.not_runnable",
+        message: `The Project's analyzer "${policy.analyzer}" cannot run here${
+          analyzer.missingConfig.length ? ` (missing ${analyzer.missingConfig.join(", ")})` : ""
+        }.`,
+      },
+    ];
+  return [];
 }
 
 /**

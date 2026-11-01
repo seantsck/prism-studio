@@ -10,6 +10,13 @@ only under an explicit, persisted Project policy. Automatic QA **creates QA runs
 retries, regenerates or selects anything, and it never changes `reviewStatus`, the approved attempt, Best, Production
 Frame / Location View / Character Lock selections or Episode Edits.
 
+## Shared with Sequence Continuity automation
+
+Phase 3A.4F adds a separate `sequence_semantic_mode` to the same policy row
+([sequence-continuity-supervisor](sequence-continuity-supervisor.md#3a4f-a-implementation-notes)). Neither mode implies the
+other. Both use this policy's analyzer and ceilings, the same 24-hour spend ledger and the same active-job limit.
+`automationReady()` still means 0044: Shot automation does not need migration 0047.
+
 ## Orchestration boundary
 
 | Role                  | What it does in 3A.2                                                                                    |

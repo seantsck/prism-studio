@@ -7,6 +7,7 @@ import { computeQaInputs, runContinuityReview } from "@/continuity/service";
 import {
   directVideoPermitted,
   qaPolicyErrors,
+  MAX_TRANSITIONS_PER_BATCH,
   SEMANTIC_MODES,
   type ReconcileResult,
   type SemanticMode,
@@ -214,6 +215,9 @@ async function saveQaPolicy_impl(form: FormData): Promise<ActionResult> {
   const mode = str(form, "semanticMode") as SemanticMode;
   if (!(SEMANTIC_MODES as readonly string[]).includes(mode))
     throw new UserFacingError("Choose a semantic QA mode.");
+  const sequenceMode = (str(form, "sequenceSemanticMode") || "off") as SemanticMode;
+  if (!(SEMANTIC_MODES as readonly string[]).includes(sequenceMode))
+    throw new UserFacingError("Choose a Sequence Continuity automation mode.");
   const policy = {
     semanticMode: mode,
     analyzer: str(form, "analyzer") || null,
@@ -222,6 +226,9 @@ async function saveQaPolicy_impl(form: FormData): Promise<ActionResult> {
     maxCostPerDayUsd: money(form, "maxCostPerDayUsd"),
     // 3A.3: only an explicit checkbox; never inferred from the mode, a credential or media consent
     directVideoAllowed: str(form, "directVideoAllowed") === "1",
+    // 3A.4F: its own mode; never inferred from the Shot mode
+    sequenceSemanticMode: sequenceMode,
+    maxTransitionsPerBatch: Number(str(form, "maxTransitionsPerBatch") || MAX_TRANSITIONS_PER_BATCH),
   };
   const errors = qaPolicyErrors(policy);
   if (errors.length > 0) throw new UserFacingError(errors.join(" "));
@@ -229,7 +236,15 @@ async function saveQaPolicy_impl(form: FormData): Promise<ActionResult> {
     throw new UserFacingError(
       "Confirm the standing authorisation to turn on automatic semantic QA (it sends media and may cost money without asking each time).",
     );
-  if (policy.analyzer && !getAnalysisProviders().has(policy.analyzer) && mode === "automatic")
+  if (sequenceMode === "automatic" && str(form, "confirmSequenceAutomatic") !== "1")
+    throw new UserFacingError(
+      "Confirm the Sequence Continuity standing authorisation to turn on automatic cut QA (it sends edge clips and may cost money without asking each time).",
+    );
+  if (
+    policy.analyzer &&
+    !getAnalysisProviders().has(policy.analyzer) &&
+    (mode === "automatic" || sequenceMode === "automatic")
+  )
     throw new UserFacingError(`The analyzer "${policy.analyzer}" is not available on this server.`);
   const qa = await getMediaQaRepo();
   await guard(() =>

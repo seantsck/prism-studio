@@ -149,7 +149,7 @@ export class MemoryLocationViewService implements LocationViewRepository {
   async clearForShot(input: ClearLocationViewInput): Promise<void> {
     this.shotOf(input.projectId, input.shotId);
     this.checkExpected(input.shotId, input.expectedSelectedViewId);
-    this.selections.delete(input.shotId);
+    if (this.selections.delete(input.shotId)) this.access.touchShot?.(input.projectId, input.shotId);
   }
 
   async selectionForShot(projectId: string, shotId: string) {

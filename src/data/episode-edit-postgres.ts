@@ -1,3 +1,4 @@
+import { emptySettlementClock } from "@/domain/continuity/sequence-automation";
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { parseCutIntent } from "@/domain/continuity/cut-intent";
@@ -485,6 +486,33 @@ export class PostgresEpisodeEditData implements EpisodeEditRepository {
     await this.guarded(async (c) => {
       await this.lockEdit(c, input.projectId, input.editId, input.expectedRevision);
       await c.query("delete from episode_edits where id = $1", [input.editId]);
+    });
+  }
+
+  async getCutSettlementClock(projectId: string, editId: string) {
+    return this.tx(async (c) => {
+      const clock = emptySettlementClock();
+      const read = async (table: keyof typeof clock, sql: string, params: unknown[]) => {
+        const r = await c.query(sql, params);
+        clock[table] = Object.fromEntries(
+          r.rows.map((x) => [String(x.id), new Date(x.updated_at as string | Date).toISOString()]),
+        );
+      };
+      await read(
+        "items",
+        "select id, updated_at from episode_edit_items where project_id = $1 and edit_id = $2",
+        [projectId, editId],
+      );
+      for (const [table, name] of [
+        ["shots", "shots"],
+        ["characters", "characters"],
+        ["looks", "character_looks"],
+        ["locations", "locations"],
+        ["props", "props"],
+        ["assets", "assets"],
+      ] as const)
+        await read(table, `select id, updated_at from ${name} where project_id = $1`, [projectId]);
+      return clock;
     });
   }
 
