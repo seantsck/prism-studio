@@ -151,10 +151,21 @@ export function answerAll(
       video?: { durationMs: number | null };
     };
     const input = evidenceInput ?? json.inputs.at(-1)?.inputId ?? "none";
+    // a cut (3A.4D): the sequence contract needs evidence from BOTH sides, each with an explicit endMs
+    const sided =
+      !evidenceInput && json.inputs.some((i) => i.inputId === "left:last")
+        ? ["left:last", "right:first"].map((i) => ({
+            input: i,
+            timestampMs: null,
+            endMs: null,
+            observation: "Visible in this edge frame.",
+          }))
+        : null;
     // a direct-video batch: timestamped interval evidence inside the clip (schema 2)
     const duration = json.video?.durationMs ?? null;
-    const evidence =
-      json.video && duration
+    const evidence = sided
+      ? sided
+      : json.video && duration
         ? [
             {
               input,
