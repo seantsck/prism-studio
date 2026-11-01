@@ -248,6 +248,8 @@ export interface SequenceAutoView {
   waveCuts: number;
   waveMaxUsd: number;
   reasons: string[];
+  /** automatic mode: settled due work is waiting only for the Project's shared active capacity */
+  capacityBlocked: boolean;
   /** automatic mode: the page should invoke the reconciliation, once per key */
   due: boolean;
   dueKey: string | null;
@@ -294,6 +296,13 @@ export function sequenceAutoView(state: SequenceAutoState): SequenceAutoView {
     waveCuts: state.wave.length,
     waveMaxUsd: state.waveMaxUsd,
     reasons,
+    capacityBlocked:
+      state.ready &&
+      mode === "automatic" &&
+      state.policyBlockers.length === 0 &&
+      state.due.length > 0 &&
+      state.wave.length === 0 &&
+      state.waveStop === "no_slots",
     due: automatic,
     // the free slots are part of it: when a job finishes the next wave has a new key and the reconciler fires again
     dueKey: automatic

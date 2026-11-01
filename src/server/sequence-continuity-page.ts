@@ -6,7 +6,9 @@ import {
   type SequenceAutoView,
 } from "@/continuity/sequence-automation";
 import { findEdgeAssets, previewSequenceReview } from "@/continuity/sequence-review";
+import { isAnalysisActive } from "@/domain/continuity/analysis/job-state";
 import { buildEpisodeCuts } from "@/domain/continuity/sequence";
+import { sequenceStatusOf, type SequenceStatus } from "@/domain/continuity/sequence-status";
 import { EpisodeEditError } from "@/data/episode-edit-repository";
 import type { TransitionRunView } from "@/data/media-qa-repository";
 import { buildEpisodeEditView } from "@/domain/edit/view";
@@ -97,6 +99,7 @@ export async function loadContinuityPage(
     }
     // automation status is advisory: a failure to read it never hides the deterministic Supervisor
     let autoSequence: SequenceAutoView | null = null;
+    let sequenceStatus: SequenceStatus | null = null;
     try {
       const state = await loadSequenceAutoState({
         data,
@@ -106,6 +109,11 @@ export async function loadContinuityPage(
         now: new Date(),
       });
       autoSequence = sequenceAutoView(state);
+      sequenceStatus = sequenceStatusOf({
+        editJobs: await qa.listEditTransitionAnalysisJobs(data.project.id, edit.id),
+        projectActiveJobs: await qa.listActiveProjectAnalysisJobs(data.project.id),
+        isActive: isAnalysisActive,
+      });
     } catch (err) {
       console.error(
         "[continuity-supervisor-page] automation",
@@ -124,6 +132,7 @@ export async function loadContinuityPage(
         selectedAnalyzer,
       }),
       autoSequence,
+      sequenceStatus,
       episodeId: episode.id,
     };
   } catch (err) {

@@ -1,4 +1,5 @@
 import { isAnalysisActive } from "@/domain/continuity/analysis/job-state";
+import { sequenceStatusOf } from "@/domain/continuity/sequence-status";
 import { getCurrentUser } from "@/server/auth";
 import { getEpisodeEditRepo } from "@/server/episode-edits";
 import { getMediaQaRepo } from "@/server/media-qa";
@@ -8,8 +9,9 @@ const SLUG = /^[a-z0-9][a-z0-9-]{0,80}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Narrow status endpoint for the Continuity Supervisor's live progress: Prism's OWN transition job state for one edit,
- * owner only. No provider payload, snapshot or credential ever reaches the browser. Reads only.
+ * Narrow status endpoint for the Continuity Supervisor: this edit's transition jobs and the Project's shared active
+ * capacity, as Prism's OWN safe job state only (`sequenceStatusOf`), owner only. No provider payload, snapshot, reference
+ * or credential ever reaches the browser. Reads only.
  *   ?edit=<uuid>
  */
 export async function GET(req: Request, ctx: { params: Promise<{ project: string }> }) {
@@ -24,16 +26,13 @@ export async function GET(req: Request, ctx: { params: Promise<{ project: string
   const edit = await (await getEpisodeEditRepo()).get(found.id, editId);
   if (!edit) return new Response("Not found", { status: 404 });
 
-  const jobs = await (
-    await getMediaQaRepo({ startInlineWorker: false })
-  ).listEditTransitionAnalysisJobs(found.id, editId);
-  const rows = jobs.map((j) => ({ id: j.id, status: j.status }));
+  const qa = await getMediaQaRepo({ startInlineWorker: false });
   return Response.json(
-    {
-      signature: rows.map((r) => `${r.id}:${r.status}`).join("|"),
-      active: jobs.filter((j) => isAnalysisActive(j.status)).length,
-      jobs: rows,
-    },
+    sequenceStatusOf({
+      editJobs: await qa.listEditTransitionAnalysisJobs(found.id, editId),
+      projectActiveJobs: await qa.listActiveProjectAnalysisJobs(found.id),
+      isActive: isAnalysisActive,
+    }),
     { headers: { "cache-control": "private, no-store" } },
   );
 }

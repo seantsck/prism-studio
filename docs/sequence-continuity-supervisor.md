@@ -1401,7 +1401,13 @@ scheduler, edit trigger or database trigger that submits work, and the generatio
 A page read writes nothing, and an edit write submits nothing. The Supervisor's read returns a `dueKey`;
 `SequenceAutoReconciler` calls `reconcileSequenceQaAction` once per key, and the server re-reads everything first. No
 timer exists: closing the Supervisor stops future waves, and a cut that settles while nobody is looking is picked up by
-the next visit. `SequenceJobPoller` polls an owner-only, edit-scoped status route only while jobs are active.
+the next visit.
+
+`SequenceJobPoller` polls an owner-only status route only while this edit has active Sequence jobs, or while Sequence
+Automatic has settled due work blocked on shared capacity. It never polls for settling cuts or in off mode. The route
+returns this edit's job states and the Project's active jobs (id, kind, status only), so a finished Shot QA job or another
+edit's job also wakes the page. The poller compares its first response with the status the server rendered, refreshes once
+per change, and can only refresh: the reconciler remains the one thing that asks for a wave.
 
 **Policy (0047).** `sequence_semantic_mode` (`off` | `suggest` | `automatic`, default `off`) and
 `max_transitions_per_batch` (default 20, range 1–20) on `project_qa_policies`. It is independent of the Shot

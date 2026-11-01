@@ -13,6 +13,7 @@ import {
   type TransitionState,
 } from "@/domain/continuity/sequence";
 import type { SequenceAutoView } from "@/continuity/sequence-automation";
+import type { SequenceStatus } from "@/domain/continuity/sequence-status";
 import type { SequenceReviewDisclosure } from "@/continuity/sequence-review";
 import { sequenceInputSide } from "@/domain/continuity/analysis/sequence-plan";
 import type { TransitionRunView } from "@/data/media-qa-repository";
@@ -213,6 +214,8 @@ export type ContinuityPageVM =
       selectedAnalyzer: string | null;
       /** 3A.4F: the Project's Sequence automation status (null = it could not be read; nothing depends on it) */
       autoSequence?: SequenceAutoView | null;
+      /** 3A.4F: the job state this render saw, which the poller compares its first response against */
+      sequenceStatus?: SequenceStatus | null;
       episodeId?: string;
     };
 

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { SequenceReconcileResult } from "@/domain/continuity/sequence-automation";
+import { createSequenceStatusPoller } from "@/domain/continuity/sequence-status";
 import { reconcileSequenceQaAction } from "@/server/sequence-review-actions";
 
 /**
@@ -68,43 +69,49 @@ export function SequenceAutoReconciler({
   );
 }
 
-const POLL_MS = 3000;
-
 /**
- * Refreshes the Supervisor while this edit's transition jobs are active: Prism's own job state only, through a narrow
- * owner-only endpoint. It polls only with active jobs, so merely settling cuts start no timer and spend nothing.
+ * Refreshes the Supervisor when this edit's jobs or the Project's shared capacity change. It reads Prism's own job state
+ * through a narrow owner-only endpoint and only ever refreshes: the server re-reads everything, and the reconciler above
+ * stays the only thing that asks for a wave. `poll` is false while merely settling, so no timer exists then.
  */
 export function SequenceJobPoller({
   projectSlug,
   editId,
-  active,
+  initialSignature,
+  poll,
 }: {
   projectSlug: string;
   editId: string;
-  active: number;
+  /** the status the server rendered: a job that finished before the first poll is noticed on that first response */
+  initialSignature: string;
+  poll: boolean;
 }) {
   const router = useRouter();
-  const last = useRef<string | null>(null);
+  const poller = useRef<ReturnType<typeof createSequenceStatusPoller> | null>(null);
 
   useEffect(() => {
-    if (active <= 0) return;
-    let stopped = false;
+    if (!poll) return;
     const url = `/api/projects/${projectSlug}/continuity/sequence-status?edit=${editId}`;
-    const timer = setInterval(() => {
-      void fetch(url, { cache: "no-store" })
-        .then((r) => (r.ok ? (r.json() as Promise<{ signature: string }>) : null))
-        .then((body) => {
-          if (stopped || !body) return;
-          if (last.current !== null && last.current !== body.signature) router.refresh();
-          last.current = body.signature;
-        })
-        .catch(() => undefined);
-    }, POLL_MS);
+    const p = createSequenceStatusPoller({
+      initialSignature,
+      fetchSignature: async () => {
+        const r = await fetch(url, { cache: "no-store" });
+        return r.ok ? ((await r.json()) as { signature: string }).signature : null;
+      },
+      refresh: () => router.refresh(),
+      setInterval: (fn, ms) => window.setInterval(fn, ms),
+      clearInterval: (h) => window.clearInterval(h),
+    });
+    poller.current = p;
     return () => {
-      stopped = true;
-      clearInterval(timer);
+      poller.current = null;
+      p.stop();
     };
-  }, [active, projectSlug, editId, router]);
+    // a new render's signature updates the running poller below; it must not restart the timer
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poll, projectSlug, editId, router]);
+
+  useEffect(() => poller.current?.rendered(initialSignature), [initialSignature]);
 
   return null;
 }

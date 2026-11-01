@@ -199,10 +199,8 @@ test("automatic: a change restarts settling and nothing queues; after the window
   await page.waitForTimeout(SETTLE_MS + 1000);
   await expect(runs(page)).toHaveCount(0);
   await page.reload();
-  await expect(async () => {
-    await page.goto(`${EP}/continuity`);
-    await expect(runs(page)).toHaveCount(2, { timeout: 2000 });
-  }).toPass({ timeout: 120_000 });
+  // the batch cap is 1, so the second wave comes only through the poller's refresh: no navigation from here
+  await expect(runs(page)).toHaveCount(2, { timeout: 120_000 });
   await expect(async () => {
     await page.goto(`${EP}/continuity`);
     for (const cut of [CUT_A, CUT_B])

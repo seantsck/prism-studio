@@ -286,6 +286,7 @@ function priorJob(s: World, o: { status?: string; kind: "attempt" | "transition"
       amountUsd: o.usd,
       recordedAt: new Date().toISOString(),
     });
+  return id;
 }
 
 media("standing authorisation: nothing happens without all of it", () => {
@@ -655,6 +656,7 @@ media("settle_unknown is visible and safe", () => {
     const html = renderToStaticMarkup(
       createElement(SequenceAutomationPanel, {
         auto: view,
+        status: null,
         projectSlug: "p",
         episodeId: "e",
         editId: "x",
@@ -737,6 +739,29 @@ media("the wave", () => {
     priorJob(seq, { kind: "transition" });
     expect(await seq.reconcile()).toMatchObject({ outcome: "queued", queued: 2 });
     expect((await seq.state()).freeSlots).toBe(0);
+  });
+
+  it("due work with no free slot is capacity-blocked, and stops being so when a shared job finishes", async () => {
+    const s = await setup();
+    const a = sequenceAutoView(await s.state());
+    expect(a.capacityBlocked).toBe(false);
+    const jobs = [0, 1, 2].map(() => priorJob(s, { kind: "attempt" }));
+    const blocked = sequenceAutoView(await s.state());
+    expect(blocked).toMatchObject({ capacityBlocked: true, due: false, dueKey: null, freeSlots: 0 });
+    const stores = s.repo.mediaQa as unknown as { jobs: Map<string, { status: string }> };
+    stores.jobs.get(jobs[0]!)!.status = "succeeded";
+    const released = sequenceAutoView(await s.state());
+    expect(released.capacityBlocked).toBe(false);
+    expect(released.due).toBe(true);
+    expect(released.dueKey).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("settling only is not capacity-blocked, so nothing polls", async () => {
+    const s = await setup();
+    for (let i = 0; i < 3; i++) priorJob(s, { kind: "attempt" });
+    const view = sequenceAutoView(await s.state({ now: new Date() }));
+    expect(view.counts.settling).toBe(3);
+    expect(view.capacityBlocked).toBe(false);
   });
 
   it("the free-slot figure is part of dueKey, so a finished job makes the next wave due again", async () => {

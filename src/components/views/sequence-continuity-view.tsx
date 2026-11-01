@@ -10,6 +10,7 @@ import {
   CUT_INTENT_NOTE_MAX,
 } from "@/domain/continuity/cut-intent";
 import { CATEGORY_LABELS, CONTINUITY_CATEGORIES } from "@/domain/continuity/model";
+import { shouldPollSequenceStatus, type SequenceStatus } from "@/domain/continuity/sequence-status";
 import type { Episode } from "@/domain/schemas";
 import { clearCutIntent, setCutIntent } from "@/server/episode-edit-actions";
 import { startSequenceReview } from "@/server/sequence-review-actions";
@@ -114,6 +115,7 @@ export function SequenceContinuityView({ episode, page }: { episode: Episode; pa
         {page.autoSequence ? (
           <SequenceAutomationPanel
             auto={page.autoSequence}
+            status={page.sequenceStatus ?? null}
             projectSlug={page.projectSlug}
             episodeId={page.episodeId ?? episode.id}
             editId={page.editId}
@@ -181,12 +183,14 @@ export function SequenceContinuityView({ episode, page }: { episode: Episode; pa
 /** Sequence automation status. It shows counts and reasons only: never an Episode continuity score. */
 export function SequenceAutomationPanel({
   auto,
+  status,
   projectSlug,
   episodeId,
   editId,
   continuityHref,
 }: {
   auto: SequenceAutoView;
+  status: SequenceStatus | null;
   projectSlug: string;
   episodeId: string;
   editId: string;
@@ -236,7 +240,7 @@ export function SequenceAutomationPanel({
             <span data-testid="sequence-auto-settling">{c.settling}</span> settling ·{" "}
             <span data-testid="sequence-auto-blocked">{c.blocked + c.unknown}</span> blocked ·{" "}
             <span data-testid="sequence-auto-covered">{c.covered}</span> covered ·{" "}
-            <span data-testid="sequence-auto-active">{c.activeJobs}</span> active jobs
+            <span data-testid="sequence-auto-active">{status?.edit.active ?? 0}</span> active jobs
           </p>
           {c.due > 0 ? (
             <p className="text-muted" data-testid="sequence-auto-cost">
@@ -284,7 +288,19 @@ export function SequenceAutomationPanel({
         </>
       )}
       <SequenceAutoReconciler projectSlug={projectSlug} episodeId={episodeId} dueKey={auto.dueKey} />
-      <SequenceJobPoller projectSlug={projectSlug} editId={editId} active={c.activeJobs} />
+      {status ? (
+        <SequenceJobPoller
+          projectSlug={projectSlug}
+          editId={editId}
+          initialSignature={status.signature}
+          poll={shouldPollSequenceStatus({
+            mode: auto.mode,
+            ready: auto.ready,
+            editActive: status.edit.active,
+            capacityBlocked: auto.capacityBlocked,
+          })}
+        />
+      ) : null}
     </section>
   );
 }
