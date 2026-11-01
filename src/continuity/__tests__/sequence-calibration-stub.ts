@@ -1,15 +1,20 @@
 import { createHash } from "node:crypto";
 import type {
   EdgeMediaFile,
+  SequenceLivePreregistration,
   SequenceEdgePair,
   SequenceEdgeSide,
   SequenceMaterials,
 } from "../calibration/sequence-calibration";
-import { SEQUENCE_FIXTURES } from "../calibration/sequence-fixtures";
+import { SEQUENCE_FIXTURES, sequenceInputHash } from "../calibration/sequence-fixtures";
 import { GeminiAnalysisProvider } from "../providers/gemini/analyzer";
 import { readGeminiConfig } from "../providers/gemini/config";
 import type { GeminiTransport } from "../providers/gemini/transport";
-import { sequenceCalibrationIdentity } from "../calibration/sequence-calibration";
+import {
+  materialChecksums,
+  SEQUENCE_CALIBRATION_PREREGISTERED,
+  sequenceCalibrationIdentity,
+} from "../calibration/sequence-calibration";
 
 /** Small unique bytes standing in for the derived media, so the harness tests need no ffmpeg (the media test does). */
 const stubFile = (tag: string, mime: string, durationMs: number | null, size = 2048): EdgeMediaFile => {
@@ -43,6 +48,13 @@ export const stubEdges = (id: string, clipBytes?: number): SequenceEdgePair => (
 
 export const stubMaterials = (): SequenceMaterials =>
   new Map(SEQUENCE_FIXTURES.map((f) => [f.id, stubEdges(f.id)]));
+
+/** The reviewed identity, over the stub media's hash: everything else in it is the real preregistration. */
+export const stubPreregistration = (materials: SequenceMaterials): SequenceLivePreregistration => ({
+  ...SEQUENCE_CALIBRATION_PREREGISTERED,
+  inputHash: sequenceInputHash(materialChecksums(materials)),
+});
+export const REVIEWED_PROCESSOR = SEQUENCE_CALIBRATION_PREREGISTERED.protocol.processor;
 
 export const calibrationConfig = () =>
   readGeminiConfig({

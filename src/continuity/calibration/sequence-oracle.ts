@@ -3,7 +3,11 @@ import type { GeminiRequest } from "../providers/gemini/transport";
 import type { FakeStep } from "../providers/gemini/fake-transport";
 import { GeminiTransportError } from "../providers/gemini/transport";
 import type { SequenceMaterials } from "./sequence-calibration";
-import { SEQUENCE_FIXTURES, type SequenceCalibrationFixture } from "./sequence-fixtures";
+import {
+  SEQUENCE_CALIBRATION_ACCEPTANCE,
+  SEQUENCE_FIXTURES,
+  type SequenceCalibrationFixture,
+} from "./sequence-fixtures";
 
 /**
  * The OFFLINE quality oracle for ordinary CI. It identifies the fixture only from the media bytes it receives (the
@@ -21,6 +25,9 @@ export type OracleBehaviour =
   | "one_sided"
   | "bad_timestamp"
   | "out_of_window"
+  | "direction_still_only"
+  | "direction_one_side_temporal"
+  | "direction_short_interval"
   | "malformed"
   | "malformed_then_truthful"
   | { error: GeminiTransportError };
@@ -47,6 +54,17 @@ const sided = [
   { input: "right:first", timestampMs: null, endMs: null, observation: "The right edge frame." },
 ];
 
+/** Valid temporal evidence: an interval of travel in each clip. */
+const clipInterval = (input: "left:clip" | "right:clip", timestampMs = 500, endMs = 1500) => ({
+  input,
+  timestampMs,
+  endMs,
+  observation: "The direction of travel across this interval.",
+});
+const temporal = [clipInterval("left:clip"), clipInterval("right:clip")];
+const needsTemporal = (f: SequenceCalibrationFixture) =>
+  (SEQUENCE_CALIBRATION_ACCEPTANCE.temporalEvidence.families as readonly string[]).includes(f.family);
+
 export function sequenceOracle(
   materials: SequenceMaterials,
   behaviour: OracleBehaviour,
@@ -64,7 +82,7 @@ export function sequenceOracle(
     if (!f) throw new Error("The oracle received media of no fixture.");
     const id = answerOf(req).criteria[0]!.criterionId;
     const isCorrection = req.turns.length > 1;
-    const answer = (result: string, evidence: unknown[] = sided) => ({
+    const answer = (result: string, evidence: unknown[] = needsTemporal(f) ? temporal : sided) => ({
       kind: "json" as const,
       body: {
         criteria: [
@@ -106,8 +124,19 @@ export function sequenceOracle(
         // valid evidence, but at the far start of the left clip and the far end of the right clip
         return answer(f.correct, [
           { input: "left:clip", timestampMs: 0, endMs: 250, observation: "Far from the cut." },
-          { input: "right:clip", timestampMs: 1750, endMs: 1900, observation: "Far from the cut." },
+          { input: "right:clip", timestampMs: 1650, endMs: 1900, observation: "Far from the cut." },
         ]);
+      case "direction_still_only":
+        return answer(f.correct, sided);
+      case "direction_one_side_temporal":
+        return answer(f.correct, needsTemporal(f) ? [clipInterval("left:clip"), sided[1]] : undefined);
+      case "direction_short_interval":
+        return answer(
+          f.correct,
+          needsTemporal(f)
+            ? [clipInterval("left:clip", 500, 749), clipInterval("right:clip", 500, 749)]
+            : undefined,
+        );
       case "malformed":
         return { kind: "text", text: "not json" };
       case "malformed_then_truthful":

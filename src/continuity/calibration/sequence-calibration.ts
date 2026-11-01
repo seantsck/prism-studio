@@ -25,20 +25,23 @@ import { DEFAULT_EDIT_RATE } from "@/domain/edit/edit-rate";
 import type { EpisodeEditView } from "@/domain/edit/view";
 import type { Asset, ProjectData } from "@/domain/schemas";
 import { redactText } from "@/lib/auth/redact";
-import type { MediaProcessor } from "@/media/types";
+import type { MediaProcessor, MediaProcessorIdentity } from "@/media/types";
 import { AnalysisBatchError, type ContinuityAnalysisProvider, type UsageCall } from "../analysis/provider";
+import { GEMINI_SDK } from "../providers/gemini/config";
 import { buildTransitionInput, clipTransfer, type EdgeAssets } from "../sequence-review";
 import {
   FAMILY_CRITERIA,
   INTER_SCENE_CONTROL_FAMILIES,
   SEQUENCE_CALIBRATION_ACCEPTANCE,
   SEQUENCE_CALIBRATION_PLAN,
+  SEQUENCE_CALIBRATION_PROTOCOL,
   SEQUENCE_CALIBRATION_VERSION,
   SEQUENCE_FIXTURES,
   sequenceCalibrationDefinition,
   sequenceDefinitionHash,
   sequenceInputHash,
   type SequenceCalibrationFixture,
+  type SequenceCalibrationProtocol,
   type SequenceFixtureChecksums,
   type SequenceRenderSpec,
 } from "./sequence-fixtures";
@@ -65,16 +68,86 @@ import {
  * a separate reviewed source change. It needs no database, Project or Storage.
  */
 
+/** What a live run must match before its first request. */
+export interface SequenceLivePreregistration {
+  inputHash: string;
+  definitionHash: string;
+  protocol: SequenceCalibrationProtocol;
+}
+
 /**
- * The reviewed input hash and the ffmpeg build that produces it. A live run refuses any other computed hash: another
- * build, recipe or truth is another experiment. Updating these is a reviewed source change, and after a live run it is
- * only allowed with a new calibration version.
+ * The reviewed experiment. A live run refuses any other hash, model, inference setting, version or processor: each is
+ * another experiment. Updating these is a reviewed source change, and after a live run it is only allowed with a new
+ * calibration version.
  */
 export const SEQUENCE_CALIBRATION_PREREGISTERED = {
-  inputHash: "14c679499d38c5cad5ea6c91bba8ebe1073e1c579681cba0049318d4e5509f95",
-  definitionHash: "8852f8e720c8980e767da0609567a9bc91fa666fd4661856581c290da75fbb7f",
-  ffmpegVersion: "9.0.1-full_build-www.gyan.dev",
-} as const;
+  inputHash: "a711406c89bb517d90caf081593ac9c871e4a184d702d7d50b92ee0ed887a60e",
+  definitionHash: "6459a28d1de7c84d0430e653dc560c8b92435dadf1408c4d24901695c0a55d35",
+  protocol: SEQUENCE_CALIBRATION_PROTOCOL,
+  /** Never live evidence: these were replaced before any live sequence calibration request existed. */
+  superseded: [
+    {
+      inputHash: "14c679499d38c5cad5ea6c91bba8ebe1073e1c579681cba0049318d4e5509f95",
+      status: "superseded before first live run",
+    },
+  ],
+} as const satisfies SequenceLivePreregistration & { superseded: readonly unknown[] };
+
+/**
+ * The environment that could silently change a frozen setting or where the SDK sends a request. A live run refuses
+ * rather than override it, so the operator learns their environment disagrees with the protocol.
+ */
+export function frozenGeminiEnvProblems(env: Record<string, string | undefined>): string[] {
+  const p = SEQUENCE_CALIBRATION_PROTOCOL;
+  const out: string[] = [];
+  const set = (n: string) => env[n]?.trim() || null;
+  const model = set("PRISM_STUDIO_GEMINI_ANALYSIS_MODEL");
+  if (model && model !== p.model)
+    out.push(`PRISM_STUDIO_GEMINI_ANALYSIS_MODEL=${model} differs from the frozen model ${p.model}.`);
+  const thinking = set("PRISM_STUDIO_GEMINI_THINKING_LEVEL");
+  if (thinking && thinking.toUpperCase() !== p.thinkingLevel)
+    out.push(`PRISM_STUDIO_GEMINI_THINKING_LEVEL=${thinking} differs from the frozen ${p.thinkingLevel}.`);
+  const timeout = set("PRISM_STUDIO_GEMINI_TIMEOUT_MS");
+  if (timeout && Number(timeout) !== p.timeoutMs)
+    out.push(`PRISM_STUDIO_GEMINI_TIMEOUT_MS=${timeout} differs from the frozen ${p.timeoutMs}.`);
+  for (const n of [
+    "GOOGLE_GEMINI_BASE_URL",
+    "GOOGLE_VERTEX_BASE_URL",
+    "GOOGLE_GENAI_API_VERSION",
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "GOOGLE_GENAI_USE_ENTERPRISE",
+  ])
+    if (set(n)) out.push(`${n} is set: the frozen protocol uses the SDK's default Gemini API endpoint.`);
+  return out;
+}
+
+const sameProcessor = (a: MediaProcessorIdentity | null, b: MediaProcessorIdentity) =>
+  a?.name === b.name && a.adapterVersion === b.adapterVersion && a.toolVersion === b.toolVersion;
+
+/** A processor other than the preregistered one, as a refusal message; null when it is the reviewed one. */
+export function processorProblem(
+  expected: MediaProcessorIdentity,
+  actual: MediaProcessorIdentity | null,
+): string | null {
+  if (sameProcessor(actual, expected)) return null;
+  const at = (p: MediaProcessorIdentity) => `${p.name}/${p.adapterVersion} (${p.toolVersion})`;
+  return `The media processor is ${actual ? at(actual) : "unknown"}, not the preregistered ${at(expected)}.`;
+}
+
+/** Compares every frozen identity field with the real value. An empty list = this IS the reviewed experiment. */
+export function liveProtocolProblems(
+  expected: SequenceCalibrationProtocol,
+  actual: Omit<SequenceCalibrationProtocol, "processor"> & { processor: MediaProcessorIdentity | null },
+): string[] {
+  const out: string[] = [];
+  for (const k of Object.keys(expected) as Array<keyof SequenceCalibrationProtocol>) {
+    if (k === "processor") continue;
+    if (expected[k] !== actual[k])
+      out.push(`${k} is ${String(actual[k])}, not the preregistered ${String(expected[k])}.`);
+  }
+  const processor = processorProblem(expected.processor, actual.processor);
+  return processor ? [...out, processor] : out;
+}
 
 /**
  * RUN CONTROL, fixed before any live run and never tuned on answers. 3A.3's rules apply unchanged (first 401/402/403/404
@@ -360,6 +433,7 @@ export function interSceneControl(
 // ───────────────────────── grading ─────────────────────────
 
 export type SequenceWindowGrade = "not_applicable" | "inside" | "outside";
+export type SequenceTemporalGrade = "not_applicable" | "sufficient" | "insufficient";
 
 export interface SequenceTrial {
   fixture: string;
@@ -377,6 +451,7 @@ export interface SequenceTrial {
   }>;
   bothSides: boolean;
   windowGrade: SequenceWindowGrade;
+  temporalGrade: SequenceTemporalGrade;
   correctionUsed: boolean;
   /** Set when a correction was used and whether its answer then validated. */
   correctionValidated: boolean | null;
@@ -422,6 +497,26 @@ export function gradeEvidenceWindows(
   return "inside";
 }
 
+/** The frozen temporal rule: each required clip is cited with a long enough interval. Stills can never satisfy it. */
+export function gradeTemporalEvidence(
+  f: Pick<SequenceCalibrationFixture, "family">,
+  finding: Pick<NormalizedFinding, "evidence"> | null,
+): SequenceTemporalGrade {
+  const rule = SEQUENCE_CALIBRATION_ACCEPTANCE.temporalEvidence;
+  if (!(rule.families as readonly string[]).includes(f.family)) return "not_applicable";
+  const shown = rule.inputs.every((input) =>
+    finding?.evidence.some(
+      (e) =>
+        e.input === input &&
+        e.atMs != null &&
+        e.endMs != null &&
+        e.endMs > e.atMs &&
+        e.endMs - e.atMs >= rule.minIntervalMs,
+    ),
+  );
+  return shown ? "sufficient" : "insufficient";
+}
+
 /** Grades one answer against the frozen truth. `warn` on a conflict, `unchecked` and errors are never correct. */
 export function gradeSequenceTrial(
   f: SequenceCalibrationFixture,
@@ -438,6 +533,7 @@ export function gradeSequenceTrial(
   | "evidence"
   | "bothSides"
   | "windowGrade"
+  | "temporalGrade"
   | "note"
 > {
   const base = { fixture: f.id, family: f.family, control: f.control, expected: f.correct };
@@ -449,6 +545,7 @@ export function gradeSequenceTrial(
       evidence: [],
       bothSides: false,
       windowGrade: f.evidenceWindows ? "outside" : "not_applicable",
+      temporalGrade: gradeTemporalEvidence(f, null),
       note: "no answer",
     };
   const evidence = finding.evidence.map((e) => ({
@@ -462,13 +559,19 @@ export function gradeSequenceTrial(
     evidence.some((e) => e.side === side && !e.input.startsWith("ref:"));
   const bothSides = edgeOf("left") && edgeOf("right");
   const windowGrade = gradeEvidenceWindows(f, finding, edge);
+  const temporalGrade = gradeTemporalEvidence(f, finding);
   return {
     ...base,
     result: finding.result,
-    correct: finding.result === f.correct && bothSides && windowGrade !== "outside",
+    correct:
+      finding.result === f.correct &&
+      bothSides &&
+      windowGrade !== "outside" &&
+      temporalGrade !== "insufficient",
     evidence,
     bothSides,
     windowGrade,
+    temporalGrade,
     note: redactText(finding.summary).slice(0, 200),
   };
 }
@@ -494,6 +597,13 @@ export interface SequenceFamilyReport {
   ownerReviewRequired: boolean;
 }
 
+export interface GeminiInferenceSettings {
+  thinkingLevel: string;
+  maxOutputTokensCap: number;
+  temperature: number;
+  timeoutMs: number;
+}
+
 export interface SequenceCostEstimate {
   /** Per fixture, one trial (the estimator's worst case includes the one correction). */
   perFixture: Array<{
@@ -517,6 +627,14 @@ export interface SequenceCalibrationReport {
   inputHash: string;
   definitionHash: string;
   matchesPreregisteredHash: boolean;
+  /** The reviewed experiment identity this version freezes. */
+  protocol: SequenceCalibrationProtocol;
+  /** The media processor that prepared this run's media; null only when an offline caller did not supply one. */
+  processor: MediaProcessorIdentity | null;
+  /** The settings the provider really sends; null when the provider does not expose them. */
+  inferenceSettings: GeminiInferenceSettings | null;
+  /** True only for a live run, which cannot start without a verified preregistration. */
+  livePreregistrationVerified: boolean;
   date: string;
   analyzer: string;
   analyzerVersion: string;
@@ -683,19 +801,23 @@ export function inlineOnlyProblems(
 }
 
 /**
- * Runs the frozen plan under hard ceilings. Exactly one primary request per fixture per trial (60); the analyzer's one
- * correction may add a request only while the ceiling still leaves room for every remaining primary, so corrections can
- * never starve the plan. `maxTransportCalls` counts EVERY outbound request. Everything is refused before the first
- * request when it does not hold: the fixed plan, inline-only media, the production input contract, the worst-case
- * dollars and, live, the declared quota. No retry of any kind.
+ * Runs the frozen plan under hard ceilings. Exactly one primary request per fixture per trial (60), each with the
+ * analyzer's one schema correction available: `maxTransportCalls` counts EVERY outbound request, must authorize the whole
+ * 120-request envelope and is clamped to it, so an operator's ceiling can never change the protocol. Everything is
+ * refused before the first request when it does not hold: the fixed plan, inline-only media, the production input
+ * contract, the worst-case dollars and, live, the declared quota and the preregistered identity. No retry of any kind.
  */
 export async function runSequenceCalibration(args: {
-  provider: ContinuityAnalysisProvider;
+  provider: ContinuityAnalysisProvider & { inferenceSettings?: () => GeminiInferenceSettings };
   materials: SequenceMaterials;
   maxTransportCalls: number;
   maxUsd: number;
   now?: Date;
   live?: boolean;
+  /** Required live: no live calibration may run against an unreviewed experiment. Offline runs may omit it. */
+  livePreregistration?: SequenceLivePreregistration;
+  /** The processor that prepared `materials`. Required live, where it must equal the preregistered one. */
+  processorIdentity?: MediaProcessorIdentity;
   quota?: CalibrationQuota;
   clock?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -706,13 +828,17 @@ export async function runSequenceCalibration(args: {
   const planned = fixtures.length * trials;
   if (planned !== SEQUENCE_CALIBRATION_PLAN.qualityRequests)
     throw new Error("The calibration plan is fixed at 60 quality requests; nothing was sent.");
-  if (!Number.isInteger(args.maxTransportCalls) || args.maxTransportCalls < planned)
-    throw new Error(`Calibration needs a request ceiling of at least ${planned}; nothing was sent.`);
-  const ceiling = Math.min(args.maxTransportCalls, SEQUENCE_CALIBRATION_PLAN.maxTransportRequests);
+  const ceiling = SEQUENCE_CALIBRATION_PLAN.maxTransportRequests;
+  if (!Number.isInteger(args.maxTransportCalls) || args.maxTransportCalls < ceiling)
+    throw new Error(
+      `Calibration needs a request ceiling of at least ${ceiling} (${planned} primaries, each with its one correction); nothing was sent.`,
+    );
   if (typeof args.maxUsd !== "number" || !Number.isFinite(args.maxUsd) || args.maxUsd <= 0)
     throw new Error("Calibration needs a positive, finite dollar ceiling; nothing was sent.");
   if (args.live && !args.quota)
     throw new Error("A live calibration needs the project's declared RPM/TPM/RPD limits; nothing was sent.");
+  if (args.live && !args.livePreregistration)
+    throw new Error("A live calibration needs a matching preregistration; nothing was sent.");
   const now = args.now ?? new Date();
   const clock = args.clock ?? (() => Date.now());
   const sleep = args.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -731,6 +857,43 @@ export async function runSequenceCalibration(args: {
       );
     return { f, edge, input, batch: batches[0]!, media: edgeMediaMap(edge) };
   });
+  const checksums = materialChecksums(materials);
+  const inputHash = sequenceInputHash(checksums);
+  const definitionHash = sequenceDefinitionHash();
+  const inferenceSettings = provider.inferenceSettings?.() ?? null;
+  if (args.live) {
+    const pre = args.livePreregistration!;
+    const problems = [
+      ...(inputHash === pre.inputHash ? [] : [`The input hash ${inputHash} is not the preregistered one.`]),
+      ...(definitionHash === pre.definitionHash
+        ? []
+        : [`The definition hash ${definitionHash} is not the preregistered one.`]),
+      ...(JSON.stringify(pre.protocol) === JSON.stringify(SEQUENCE_CALIBRATION_PROTOCOL)
+        ? []
+        : ["The preregistration's protocol is not this calibration version's."]),
+      ...inputs.flatMap(({ input, batch }) =>
+        liveProtocolProblems(pre.protocol, {
+          calibrationVersion: input.calibration.version,
+          model: provider.model,
+          analyzerVersion: input.analyzerVersion,
+          promptVersion: batch.promptVersion,
+          rubricVersion: input.rubricVersion,
+          schemaVersion: input.schemaVersion,
+          edgePolicy: input.edgePolicy,
+          thinkingLevel: inferenceSettings?.thinkingLevel ?? "unknown",
+          maxOutputTokensCap: inferenceSettings?.maxOutputTokensCap ?? Number.NaN,
+          temperature: inferenceSettings?.temperature ?? Number.NaN,
+          sdk: GEMINI_SDK,
+          timeoutMs: inferenceSettings?.timeoutMs ?? Number.NaN,
+          processor: args.processorIdentity ?? null,
+        }),
+      ),
+    ];
+    if (problems.length)
+      throw new Error(
+        `${[...new Set(problems)].join(" ")} This is not the reviewed experiment; nothing was sent.`,
+      );
+  }
   const estimate = estimateSequenceCalibration(provider, materials, now, fixtures);
   if (estimate.worstCaseUsd > args.maxUsd)
     throw new Error(
@@ -747,9 +910,6 @@ export async function runSequenceCalibration(args: {
         })),
       )
     : null;
-  const checksums = materialChecksums(materials);
-  const inputHash = sequenceInputHash(checksums);
-  const definitionHash = sequenceDefinitionHash();
 
   const out: SequenceTrial[] = [];
   const calls: UsageCall[] = [];
@@ -766,7 +926,7 @@ export async function runSequenceCalibration(args: {
       const ctx = {
         now: () => now,
         sleep: async () => undefined,
-        canCorrect: () => counts.transport + (planned - counts.analysis) < ceiling,
+        canCorrect: () => counts.transport < ceiling,
         beforeTransportCall: async ({ kind }: { kind: "analysis" | "correction" | "upload" }) => {
           if (kind === "upload") {
             counts.upload += 1;
@@ -888,7 +1048,12 @@ export async function runSequenceCalibration(args: {
     transport: args.live ? "live" : "fake",
     inputHash,
     definitionHash,
-    matchesPreregisteredHash: inputHash === SEQUENCE_CALIBRATION_PREREGISTERED.inputHash,
+    matchesPreregisteredHash:
+      inputHash === (args.livePreregistration ?? SEQUENCE_CALIBRATION_PREREGISTERED).inputHash,
+    protocol: SEQUENCE_CALIBRATION_PROTOCOL,
+    processor: args.processorIdentity ?? null,
+    inferenceSettings,
+    livePreregistrationVerified: args.live === true,
     date: now.toISOString(),
     analyzer: provider.id,
     analyzerVersion: inputs[0]!.input.analyzerVersion,

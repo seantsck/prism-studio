@@ -9,8 +9,9 @@
 //     --i-understand-this-sends-synthetic-video-and-costs-money  LIVE: only at the separately authorised 3A.4E-B gate.
 //
 // A live run needs ALL of the flags above, PRISM_STUDIO_SEQUENCE_CALIBRATION_LIVE=1, PRISM_STUDIO_ALLOW_PAID_ANALYSIS=1,
-// a Gemini credential, and a computed input hash equal to the reviewed one. --max-calls counts every outbound request,
-// corrections included: at least 60, worst case 120. Run `continuity:sequence:smoke` first and require PASS. Only
+// a Gemini credential, the frozen model and media processor, and a computed input hash equal to the reviewed one.
+// --max-calls counts every outbound request and must authorize the whole envelope: 60 primaries + 60 corrections = 120
+// (a higher value authorizes nothing more). Run `continuity:sequence:smoke` first and require PASS. Only
 // synthetic fixtures leave Prism. The run writes a report and changes no production configuration.
 //
 // The logic lives in src/continuity/calibration/sequence-calibration-cli.ts (tested: every live refusal happens before

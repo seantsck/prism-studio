@@ -154,6 +154,16 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
     };
   }
 
+  /** The settings every request carries, read by `request()` and by a preregistered calibration's identity check. */
+  inferenceSettings() {
+    return {
+      thinkingLevel: this.cfg.thinkingLevel,
+      maxOutputTokensCap: this.cfg.maxOutputTokensCap,
+      temperature: 0,
+      timeoutMs: this.cfg.timeoutMs,
+    };
+  }
+
   /** Shot modes share v3; the cut contract has its own version (`gemini-sequence-1`). */
   analysisVersion(mode: AnalysisMode): string | null {
     return mode === "sequence_transition" ? GEMINI_SEQUENCE_ANALYSIS_VERSION : this.version;
@@ -369,15 +379,16 @@ export class GeminiAnalysisProvider implements ContinuityAnalysisProvider {
     ctx: AnalysisContext,
     mode: AnalysisMode,
   ): GeminiRequest {
+    const settings = this.inferenceSettings();
     return {
       model: this.model,
       systemInstruction: spec.systemInstruction,
       turns,
       responseJsonSchema: geminiResponseJsonSchema(mode, criteria),
-      maxOutputTokens: maxOutputTokensFor(criteria, this.cfg.maxOutputTokensCap),
-      temperature: 0,
-      thinkingLevel: this.cfg.thinkingLevel,
-      timeoutMs: this.cfg.timeoutMs,
+      maxOutputTokens: maxOutputTokensFor(criteria, settings.maxOutputTokensCap),
+      temperature: settings.temperature,
+      thinkingLevel: settings.thinkingLevel,
+      timeoutMs: settings.timeoutMs,
       signal: ctx.signal,
     };
   }

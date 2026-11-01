@@ -1196,6 +1196,12 @@ each, never batched. The smoke's one request is separate.
 - `unchecked`, a missing answer and an answer still invalid after the correction are wrong;
 - every judgement must satisfy the production validator: LEFT and RIGHT edge evidence, with each clip's times bounded
   by that clip. A reference alone never counts as a side;
+- **screen direction needs temporal evidence:** its two controls meet at the same seam position and differ only in the
+  direction of travel, which a pair of stills cannot show. Each `screen_direction` trial must cite `left:clip` AND
+  `right:clip` with an interval (`endMs > atMs`, at least **250 ms**, the 4 fps sampling precision). Stills may add to
+  that but never replace it. This is a calibration rule: the production validator and schema 2 are unchanged. The
+  production prompt allows either a clip or a still and does not ask for this, and it stays unchanged too, so a model
+  that judges correctly but cites stills is scored wrong and the family is rejected under v1;
 - **3/3 per fixture, so 6/6 per family.** No majority and no "close enough";
 - **evidence windows:** `action_match` only, left `[1500, 2000]` and right `[0, 500]` in clip-local ms. Each side needs
   one cited edge input lying entirely inside the window ± **500 ms** (250 ms sampling precision + 250 ms frozen slack).
@@ -1206,39 +1212,75 @@ each, never batched. The smoke's one request is separate.
   it before any production enablement;
 - an aborted run accepts no family.
 
-Changing any of this after a live run is a new calibration version, never a re-grade.
+Changing any of this after a live run is a new calibration version, never a re-grade. A family that cannot reach 6/6 on
+its abstract proxy is rejected under v1, never reinterpreted; another fixture design is `sequence-calibration-v2`.
 
-**Input hash.** The definition (fixtures, truth, recipes, durations, cut positions, windows, acceptance, every version)
-plus the checksums of every rendered parent, derived clip and derived still:
+**Frozen protocol (`SEQUENCE_CALIBRATION_PROTOCOL`).** The exact experiment, part of the definition hash and verified
+against the real values before a live run's first request:
+
+| Setting              | Value                                                                       |
+| -------------------- | --------------------------------------------------------------------------- |
+| Model                | `gemini-3.8-flash`                                                          |
+| Thinking level       | `LOW`                                                                       |
+| Max output token cap | 8192                                                                        |
+| Temperature          | 0                                                                           |
+| SDK                  | `@google/genai@2.29.0`                                                      |
+| Timeout              | 120000 ms                                                                   |
+| Analyzer             | `gemini-sequence-1`                                                         |
+| Prompt, rubric       | `continuity-gemini-transition-v1`, `sequence-rubric-1`                      |
+| Schema, edge policy  | 2, `cut-edge-static-v1`                                                     |
+| Media processor      | `ffmpeg`, adapter version `1`, tool version `9.0.1-full_build-www.gyan.dev` |
+
+The environment cannot change these. A live run refuses, rather than overrides, a differing
+`PRISM_STUDIO_GEMINI_ANALYSIS_MODEL`, `PRISM_STUDIO_GEMINI_THINKING_LEVEL` or `PRISM_STUDIO_GEMINI_TIMEOUT_MS`, and any
+SDK endpoint override (`GOOGLE_GEMINI_BASE_URL`, `GOOGLE_VERTEX_BASE_URL`, `GOOGLE_GENAI_API_VERSION`,
+`GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GENAI_USE_ENTERPRISE`). The processor is compared by itself: another ffmpeg build
+is refused even if its bytes happen to hash the same. The JSON report records the protocol, the processor that prepared
+the media and the settings the provider really sends.
+
+**Input hash.** The definition (protocol, fixtures, truth, recipes, durations, cut positions, windows, acceptance, every
+version) plus the checksums of every rendered parent, derived clip and derived still:
 
 | Value           |                                                                    |
 | --------------- | ------------------------------------------------------------------ |
-| Input hash      | `14c679499d38c5cad5ea6c91bba8ebe1073e1c579681cba0049318d4e5509f95` |
-| Definition hash | `8852f8e720c8980e767da0609567a9bc91fa666fd4661856581c290da75fbb7f` |
-| ffmpeg          | `9.0.1-full_build-www.gyan.dev`                                    |
+| Input hash      | `a711406c89bb517d90caf081593ac9c871e4a184d702d7d50b92ee0ed887a60e` |
+| Definition hash | `6459a28d1de7c84d0430e653dc560c8b92435dadf1408c4d24901695c0a55d35` |
 
-Byte identity is only claimed within one ffmpeg build. A live run refuses unless the computed hash equals the reviewed
-constant (`SEQUENCE_CALIBRATION_PREREGISTERED`) and the operator's `--input-hash`.
+`14c679499d38c5cad5ea6c91bba8ebe1073e1c579681cba0049318d4e5509f95` was **superseded before the first live run**, when
+the protocol and processor joined the definition. It is not live calibration evidence. The version stays
+`sequence-calibration-v1` because no live sequence calibration request has occurred.
+
+**Preregistration is enforced at the runner, not only the CLI.** `runSequenceCalibration({ live: true })` refuses before
+its first request without a matching `livePreregistration`: input hash, definition hash, model, inference settings, SDK,
+analyzer, prompt, rubric, schema, edge policy and processor. The CLI also compares `--input-hash`.
 
 **Smoke.** One `sequence_transition` request through the real prompt and schema on diagnostic media (a green square on
 navy) with one sacrificial criterion. It uses no fixture and no truth and grades nothing. Hard limits: 1 request, 0
 uploads, 0 corrections, no retry, $0.05. The estimator's worst case is $0.026262. Media that would need an upload is
-refused. It must PASS before a live calibration.
+refused. It uses the same frozen model and environment rules, because it proves this calibration's own request contract.
+It must PASS before a live calibration.
+
+The estimator is the primary spend protection, and the ceiling also governs the verdict. If usage then shows a known
+cost above the approved ceiling, a valid answer reports `cost_ceiling_exceeded`, not `pass`, with the provider result,
+the local validation, the actual cost and the ceiling, and the CLI exits 3. The request has already happened, so it does
+not say nothing was sent. Missing usage stays `UNKNOWN`.
 
 **Live readiness.** Every gate is checked before the SDK transport can exist; a refusal exits 2 and sends nothing:
 `--live`, `--i-understand-this-sends-synthetic-video-and-costs-money`, `PRISM_STUDIO_SEQUENCE_CALIBRATION_LIVE=1`,
-`PRISM_STUDIO_ALLOW_PAID_ANALYSIS=1`, `--model`, `--max-calls` (≥ 60), `--max-usd`, `--input-hash`, `--max-rpm`,
-`--max-tpm`, `--max-rpd`, `--confirm-rpd-remaining`, `--billing-active yes`, `--project-tier`, `--spend-cap`, and a
-credential. Limits are read from AI Studio for the project behind the key, because Prism cannot infer them.
+`PRISM_STUDIO_ALLOW_PAID_ANALYSIS=1`, `--model gemini-3.8-flash`, `--max-calls` (≥ 120), `--max-usd`, `--input-hash`, `--max-rpm`,
+`--max-tpm`, `--max-rpd`, `--confirm-rpd-remaining`, `--billing-active yes`, `--project-tier`, `--spend-cap`, a
+credential, and the reviewed media processor. Limits are read from AI Studio for the project behind the key, because Prism cannot infer them.
 
 **Run control (frozen).** The first 401/402/403/404 or 429 aborts; 3 consecutive 5xx abort; 2 consecutive identical
 400s abort as `request_contract_invalid`; 3 consecutive ambiguous timeouts or network failures abort. Nothing is ever
 retried: an ambiguous attempt is an unanswered trial. Known usage above `--max-usd` aborts. Requests are paced start to
-start at `floor(RPM × 0.8)`. The TPM preflight uses the larger correction request, and the RPD preflight covers every
-request the ceiling allows. An aborted run writes its partial report and exits 3.
+start at `floor(RPM × 0.8)`. The TPM preflight uses the larger correction request, and the RPD preflight covers the full
+120-request envelope. An aborted run writes its partial report and exits 3.
 
-**Requests and cost (estimator, no live measurement).** `--max-calls` counts every outbound request. Corrections may
-use only the room left above the remaining primaries, so they can never starve the plan.
+**Requests and cost (estimator, no live measurement).** `--max-calls` counts every outbound request and must authorize
+the whole envelope: 60 primaries + 60 possible corrections = **120**. A lower value is refused, because it would silently
+remove corrections from the protocol. A higher value authorizes nothing more: the ceiling is clamped to 120. This is
+authorization capacity: a normal run may still use only 60 requests.
 
 | Value                         | `gemini-3.8-flash`, pricing `gemini-2026-10-13` |
 | ----------------------------- | ----------------------------------------------- |
@@ -1256,7 +1298,7 @@ usage figures are simulated.
 provider file refuses the run before the first request, and an upload attempt aborts it. v1 measures judgement, not the
 Files API.
 
-**Report.** Durable JSON: every identity and hash, each fixture, each trial (result, evidence, window grade, correction,
+**Report.** Durable JSON: every identity and hash, each fixture, each trial (result, evidence, window and temporal grades, correction,
 provider ref, sanitized errors), token and cost accounting, and an independent `accepted` / `rejected` / `not_measured`
 decision for each of the ten families. A lighting failure does not invalidate screen direction. The report contains no
 secret and changes no production constant.

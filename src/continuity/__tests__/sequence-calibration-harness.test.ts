@@ -6,15 +6,18 @@ import {
   gradeSequenceTrial,
   inlineOnlyProblems,
   runSequenceCalibration,
+  SEQUENCE_CALIBRATION_PREREGISTERED,
   SEQUENCE_RUN_CONTROL,
 } from "../calibration/sequence-calibration";
 import {
   SEQUENCE_CALIBRATION_ACCEPTANCE,
+  SEQUENCE_CALIBRATION_PROTOCOL,
   SEQUENCE_FIXTURES,
   type SequenceCalibrationFixture,
 } from "../calibration/sequence-fixtures";
 import { sequenceOracle, type OracleBehaviour } from "../calibration/sequence-oracle";
 import { GeminiAnalysisProvider } from "../providers/gemini/analyzer";
+import { readGeminiConfig } from "../providers/gemini/config";
 import { FakeGeminiTransport, type FakeStep } from "../providers/gemini/fake-transport";
 import { geminiResponseJsonSchema } from "../providers/gemini/response-schema";
 import { SdkGeminiTransport } from "../providers/gemini/sdk-transport";
@@ -22,8 +25,10 @@ import { GeminiTransportError, type GeminiRequest } from "../providers/gemini/tr
 import {
   calibrationConfig,
   calibrationProvider,
+  REVIEWED_PROCESSOR,
   stubEdges,
   stubMaterials,
+  stubPreregistration,
 } from "./sequence-calibration-stub";
 
 /**
@@ -47,6 +52,14 @@ afterEach(() => {
 
 const materials = stubMaterials();
 const NOW = new Date("2026-11-01T00:00:00Z");
+/** The gates of a live run, with the transport still fake. */
+const LIVE = {
+  live: true,
+  quota: { maxRpm: 1000, maxTpm: 100_000_000, maxRpd: 1000 },
+  livePreregistration: stubPreregistration(materials),
+  processorIdentity: REVIEWED_PROCESSOR,
+  sleep: async () => undefined,
+};
 
 async function run(
   script: OracleBehaviour | ((req: GeminiRequest, n: number) => FakeStep),
@@ -105,6 +118,14 @@ describe("the truthful oracle", () => {
       plannedQualityRequests: 60,
       transportCeiling: 120,
       productionConfigUnchanged: true,
+      protocol: SEQUENCE_CALIBRATION_PROTOCOL,
+      inferenceSettings: {
+        thinkingLevel: "LOW",
+        maxOutputTokensCap: 8192,
+        temperature: 0,
+        timeoutMs: 120_000,
+      },
+      livePreregistrationVerified: false,
     });
     expect(report.inputHash).toMatch(/^[0-9a-f]{64}$/);
     expect(report.definitionHash).toMatch(/^[0-9a-f]{64}$/);
@@ -135,6 +156,23 @@ describe("the truthful oracle", () => {
     for (const id of ["left:clip", "right:clip", "left:last", "right:first"]) expect(text).toContain(id);
     expect(req.responseJsonSchema).toEqual(geminiResponseJsonSchema("sequence_transition", 1));
     expect(transport.calls).toBe(60);
+  });
+
+  it("every request, correction included, really carries the frozen model and settings", async () => {
+    const seen: GeminiRequest[] = [];
+    const oracle = sequenceOracle(materials, "malformed_then_truthful");
+    await run((req, n) => {
+      seen.push(req);
+      return oracle(req, n);
+    });
+    expect(seen).toHaveLength(120);
+    for (const r of seen) {
+      expect(r.model).toBe("gemini-3.8-flash");
+      expect(r.thinkingLevel).toBe("LOW");
+      expect(r.temperature).toBe(0);
+      expect(r.timeoutMs).toBe(120_000);
+      expect(r.maxOutputTokens).toBeLessThanOrEqual(8192);
+    }
   });
 
   it("every fixture input is the production transition contract, and its clip transfer is frozen inline", () => {
@@ -223,6 +261,30 @@ describe("a bad analyzer is caught, per family", () => {
   });
 });
 
+describe("screen direction needs temporal evidence", () => {
+  const onlyDirectionRejected = async (behaviour: OracleBehaviour) => {
+    const { report } = await run(behaviour);
+    expect(report.status).toBe("completed");
+    expect(report.families.screen_direction).toMatchObject({ decision: "rejected", correct: 0 });
+    const t = report.trials.find((x) => x.family === "screen_direction")!;
+    expect(t).toMatchObject({ temporalGrade: "insufficient", correct: false, bothSides: true });
+    expect(t.result).toBe(t.expected);
+    for (const f of SEMANTIC_CUT_FAMILIES.filter((x) => x !== "screen_direction"))
+      expect(report.families[f], f).toMatchObject({ decision: "accepted", correct: 6 });
+  };
+  it("the right answer on stills alone is not accepted", () => onlyDirectionRejected("direction_still_only"));
+  it("an interval on one side only is not accepted", () =>
+    onlyDirectionRejected("direction_one_side_temporal"));
+  it("intervals under the frozen minimum are not accepted", () =>
+    onlyDirectionRejected("direction_short_interval"));
+  it("valid intervals on both sides are accepted", async () => {
+    const { report } = await run("truthful");
+    expect(report.families.screen_direction).toMatchObject({ decision: "accepted", correct: 6 });
+    expect(report.trials.find((x) => x.family === "screen_direction")!.temporalGrade).toBe("sufficient");
+    expect(report.trials.find((x) => x.family === "axis")!.temporalGrade).toBe("not_applicable");
+  });
+});
+
 describe("the grader", () => {
   const f = (id: string) => SEQUENCE_FIXTURES.find((x) => x.id === id) as SequenceCalibrationFixture;
   const finding = (result: "pass" | "warn" | "fail" | "unchecked", inputs: string[]) => ({
@@ -287,23 +349,17 @@ describe("corrections", () => {
     expect(SEQUENCE_CALIBRATION_ACCEPTANCE.correctionRule).toContain("owner review");
   });
 
-  it("--max-calls counts corrections: at 60 none is sent, and every primary still runs", async () => {
-    const { report } = await run("malformed_then_truthful", { maxTransportCalls: 60 });
-    expect(report.transportCalls).toBe(60);
-    expect(report.correctionAttempts).toBe(0);
-    expect(report.trialsAttempted).toBe(60);
-    expect(report.trials[0]).toMatchObject({
-      result: "error",
-      errorCategory: "schema_invalid",
-      correct: false,
-    });
+  it("a ceiling above the envelope authorizes nothing more: it is clamped to 120", async () => {
+    const { report } = await run("malformed_then_truthful", { maxTransportCalls: 500 });
+    expect(report.transportCeiling).toBe(120);
+    expect(report.transportCalls).toBe(120);
+    expect(report.correctionAttempts).toBe(60);
   });
 
-  it("a partial allowance never starves a primary", async () => {
-    const { report } = await run("malformed_then_truthful", { maxTransportCalls: 70 });
-    expect(report.analysisAttempts).toBe(60);
-    expect(report.correctionAttempts).toBe(10);
-    expect(report.transportCalls).toBe(70);
+  it("an ordinary run uses only the 60 primaries, whatever it is authorized for", async () => {
+    const { report } = await run("truthful", { maxTransportCalls: 120 });
+    expect(report.transportCalls).toBe(60);
+    expect(report.correctionAttempts).toBe(0);
   });
 });
 
@@ -322,18 +378,20 @@ describe("refusals before the first request", () => {
     ).rejects.toThrow(re);
     expect(transport.calls).toBe(0);
   };
-  it("a request ceiling under the plan", () => refused({ maxTransportCalls: 59 }, /at least 60/));
-  it("a non-integer request ceiling", () => refused({ maxTransportCalls: 60.5 }, /at least 60/));
+  it("a ceiling of the 60 primaries: corrections would silently vanish", () =>
+    refused({ maxTransportCalls: 60 }, /at least 120/));
+  it("a ceiling one short of the envelope", () => refused({ maxTransportCalls: 119 }, /at least 120/));
+  it("a non-integer request ceiling", () => refused({ maxTransportCalls: 120.5 }, /at least 120/));
   it("NaN dollars", () => refused({ maxUsd: Number.NaN }, /finite dollar/));
   it("a worst case above the dollars", () => refused({ maxUsd: 0.01 }, /worst-case estimate/));
   it("live without declared limits", () => refused({ live: true }, /RPM\/TPM\/RPD/));
   it("TPM below the paced worst case", () =>
     refused(
-      { live: true, quota: { maxRpm: 100, maxTpm: 1000, maxRpd: 1000 } },
+      { ...LIVE, quota: { maxRpm: 100, maxTpm: 1000, maxRpd: 1000 } },
       /tokens\/min, above the TPM limit/,
     ));
-  it("RPD below the requests the ceiling allows", () =>
-    refused({ live: true, quota: { maxRpm: 10, maxTpm: 10_000_000, maxRpd: 100 } }, /above the RPD limit/));
+  it("RPD one short of the 120-request envelope, not merely the 60 primaries", () =>
+    refused({ ...LIVE, quota: { maxRpm: 10, maxTpm: 10_000_000, maxRpd: 119 } }, /above the RPD limit/));
   it("a clip over the inline threshold: v1 is inline-only", async () => {
     const big = new Map(materials);
     const id = SEQUENCE_FIXTURES[7]!.id;
@@ -361,6 +419,125 @@ describe("refusals before the first request", () => {
       runSequenceCalibration({ provider, materials, maxTransportCalls: 120, maxUsd: 5, now: NOW }),
     ).rejects.toThrow(/must plan exactly one sequence batch/);
     expect(transport.calls).toBe(0);
+  });
+});
+
+describe("a live run proves it is the reviewed experiment, at the runner itself", () => {
+  const liveRun = async (
+    o: Partial<Parameters<typeof runSequenceCalibration>[0]>,
+    transport = new FakeGeminiTransport(sequenceOracle(materials, "truthful")),
+  ) => ({
+    transport,
+    result: await runSequenceCalibration({
+      provider: calibrationProvider(transport),
+      materials,
+      maxTransportCalls: 120,
+      maxUsd: 5,
+      now: NOW,
+      ...LIVE,
+      ...o,
+    }).then(
+      (report) => ({ report, error: null }),
+      (error: Error) => ({ report: null, error }),
+    ),
+  });
+  const refusedAtZero = async (o: Parameters<typeof liveRun>[0], re: RegExp) => {
+    const { result, transport } = await liveRun(o);
+    expect(result.error?.message).toMatch(re);
+    expect(result.error?.message).toMatch(/nothing was sent/);
+    expect(transport.calls).toBe(0);
+  };
+  const providerWith = (env: Record<string, string>) =>
+    new GeminiAnalysisProvider({
+      config: readGeminiConfig({
+        PRISM_STUDIO_CONTINUITY_ANALYZERS: "gemini",
+        GEMINI_API_KEY: "test-key-not-a-real-credential",
+        PRISM_STUDIO_GEMINI_DIRECT_VIDEO: "1",
+        ...env,
+      }),
+      transport: new FakeGeminiTransport(sequenceOracle(materials, "truthful")),
+      testCrossCutCalibration: calibrationProvider(new FakeGeminiTransport([])).crossCutCalibration(),
+    });
+  const pre = stubPreregistration(materials);
+
+  it("no preregistration", () =>
+    refusedAtZero({ livePreregistration: undefined }, /needs a matching preregistration/));
+  it("a wrong input hash", () =>
+    refusedAtZero({ livePreregistration: { ...pre, inputHash: "0".repeat(64) } }, /input hash/));
+  it("the real constant over media that hash differently", () =>
+    refusedAtZero({ livePreregistration: SEQUENCE_CALIBRATION_PREREGISTERED }, /input hash/));
+  it("a wrong definition hash", () =>
+    refusedAtZero({ livePreregistration: { ...pre, definitionHash: "0".repeat(64) } }, /definition hash/));
+  it("a preregistration naming another protocol", () =>
+    refusedAtZero(
+      { livePreregistration: { ...pre, protocol: { ...pre.protocol, promptVersion: "other" } } },
+      /protocol is not this calibration version's/,
+    ));
+  it("a wrong model", () =>
+    refusedAtZero(
+      { provider: providerWith({ PRISM_STUDIO_GEMINI_ANALYSIS_MODEL: "gemini-3.6-flash" }) },
+      /model is gemini-3\.6-flash/,
+    ));
+  it("a wrong thinking level", () =>
+    refusedAtZero(
+      { provider: providerWith({ PRISM_STUDIO_GEMINI_THINKING_LEVEL: "HIGH" }) },
+      /thinkingLevel is HIGH/,
+    ));
+  it("a wrong timeout", () =>
+    refusedAtZero(
+      { provider: providerWith({ PRISM_STUDIO_GEMINI_TIMEOUT_MS: "5000" }) },
+      /timeoutMs is 5000/,
+    ));
+  it("a wrong output cap", () => {
+    const provider = providerWith({});
+    const real = provider.inferenceSettings.bind(provider);
+    provider.inferenceSettings = () => ({ ...real(), maxOutputTokensCap: 4096 });
+    return refusedAtZero({ provider }, /maxOutputTokensCap is 4096/);
+  });
+  it("a provider whose settings cannot be read", () => {
+    const provider = providerWith({}) as unknown as { inferenceSettings?: unknown };
+    provider.inferenceSettings = undefined;
+    return refusedAtZero({ provider: provider as never }, /thinkingLevel is unknown/);
+  });
+  it("a wrong ffmpeg build, even with identical media", () =>
+    refusedAtZero(
+      { processorIdentity: { ...REVIEWED_PROCESSOR, toolVersion: "8.0-other" } },
+      /media processor is ffmpeg\/1 \(8\.0-other\)/,
+    ));
+  it("a wrong adapter version", () =>
+    refusedAtZero(
+      { processorIdentity: { ...REVIEWED_PROCESSOR, adapterVersion: "2" } },
+      /media processor is ffmpeg\/2/,
+    ));
+  it("an unknown processor", () =>
+    refusedAtZero({ processorIdentity: undefined }, /media processor is unknown/));
+
+  it("the exact reviewed identity may proceed, and the report records it", async () => {
+    const { result, transport } = await liveRun({});
+    expect(result.error).toBeNull();
+    expect(transport.calls).toBe(60);
+    expect(result.report).toMatchObject({
+      transport: "live",
+      status: "completed",
+      livePreregistrationVerified: true,
+      matchesPreregisteredHash: true,
+      processor: REVIEWED_PROCESSOR,
+      protocol: SEQUENCE_CALIBRATION_PROTOCOL,
+    });
+    expect(result.report!.quota!.plannedAnalysisRequests).toBe(120);
+  });
+
+  it("the RPD preflight allows exactly the 120-request envelope", async () => {
+    const { result } = await liveRun({ quota: { maxRpm: 1000, maxTpm: 100_000_000, maxRpd: 120 } });
+    expect(result.error).toBeNull();
+    expect(result.report!.quota!.plannedAnalysisRequests).toBe(120);
+  });
+
+  it("offline runs stay free to use arbitrary materials without a preregistration", async () => {
+    const { report } = await run("truthful");
+    expect(report.livePreregistrationVerified).toBe(false);
+    expect(report.matchesPreregisteredHash).toBe(false);
+    expect(report.status).toBe("completed");
   });
 });
 
@@ -506,7 +683,7 @@ describe("pacing", () => {
       maxTransportCalls: 120,
       maxUsd: 5,
       now: NOW,
-      live: true,
+      ...LIVE,
       quota: { maxRpm: 10, maxTpm: 10_000_000, maxRpd: 1000 },
       clock: () => t,
       sleep: async (ms) => {

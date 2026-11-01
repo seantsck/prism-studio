@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { materialChecksums } from "../calibration/sequence-calibration";
+import { materialChecksums, type SequenceLivePreregistration } from "../calibration/sequence-calibration";
 import { runSequenceCalibrationCli } from "../calibration/sequence-calibration-cli";
 import { sequenceInputHash } from "../calibration/sequence-fixtures";
 import { sequenceOracle } from "../calibration/sequence-oracle";
 import { FakeGeminiTransport } from "../providers/gemini/fake-transport";
 import { GeminiTransportError } from "../providers/gemini/transport";
-import { stubMaterials } from "./sequence-calibration-stub";
+import { REVIEWED_PROCESSOR, stubMaterials, stubPreregistration } from "./sequence-calibration-stub";
 
 /**
  * CLI ORDERING: every live refusal happens BEFORE the network transport exists. Three independent tripwires: the
@@ -25,6 +25,7 @@ vi.mock("@google/genai", async (importOriginal) => ({
 
 const materials = stubMaterials();
 const HASH = sequenceInputHash(materialChecksums(materials));
+const PRE = stubPreregistration(materials);
 const READY = [
   "--live",
   "--model",
@@ -89,7 +90,8 @@ async function cli(
   env: Record<string, string | undefined> = ENV,
   o: {
     transport?: FakeGeminiTransport;
-    preregistered?: { inputHash: string };
+    preregistered?: SequenceLivePreregistration;
+    processor?: typeof REVIEWED_PROCESSOR | { name: string; adapterVersion: string; toolVersion: string };
   } = {},
 ) {
   const errors: string[] = [];
@@ -105,7 +107,8 @@ async function cli(
     env,
     createLiveTransport,
     prepare,
-    preregistered: o.preregistered ?? { inputHash: HASH },
+    preregistered: o.preregistered ?? PRE,
+    processorIdentity: async () => o.processor ?? REVIEWED_PROCESSOR,
     sleep: async () => undefined,
     log: (l) => void logs.push(l),
     error: (l) => void errors.push(l),
@@ -144,14 +147,48 @@ describe("sequence calibration CLI: live refusals come before any transport", ()
       { ...ENV, PRISM_STUDIO_ALLOW_PAID_ANALYSIS: "true" },
     ],
     ["no model", without("--model"), /--model is required/],
-    ["an unlisted model", withValue("--model", "gemini-made-up"), /gemini-made-up|not/i],
-    ["no max calls", without("--max-calls"), /--max-calls must be an integer of at least 60/],
+    ["an unlisted model", withValue("--model", "gemini-made-up"), /--model must be gemini-3\.8-flash/],
     [
-      "max calls under the plan",
-      withValue("--max-calls", "59"),
-      /--max-calls must be an integer of at least 60/,
+      "a verified but other model",
+      withValue("--model", "gemini-3.6-flash"),
+      /--model must be gemini-3\.8-flash/,
     ],
-    ["fractional max calls", withValue("--max-calls", "60.5"), /--max-calls must be/],
+    [
+      "an env model that disagrees",
+      READY,
+      /PRISM_STUDIO_GEMINI_ANALYSIS_MODEL=gemini-3\.6-flash differs/,
+      { ...ENV, PRISM_STUDIO_GEMINI_ANALYSIS_MODEL: "gemini-3.6-flash" },
+    ],
+    [
+      "an env thinking level that disagrees",
+      READY,
+      /PRISM_STUDIO_GEMINI_THINKING_LEVEL=HIGH differs/,
+      { ...ENV, PRISM_STUDIO_GEMINI_THINKING_LEVEL: "HIGH" },
+    ],
+    [
+      "an env timeout that disagrees",
+      READY,
+      /PRISM_STUDIO_GEMINI_TIMEOUT_MS=5000 differs/,
+      { ...ENV, PRISM_STUDIO_GEMINI_TIMEOUT_MS: "5000" },
+    ],
+    [
+      "an SDK endpoint override",
+      READY,
+      /GOOGLE_GEMINI_BASE_URL is set/,
+      { ...ENV, GOOGLE_GEMINI_BASE_URL: "https://example.invalid" },
+    ],
+    ["no max calls", without("--max-calls"), /--max-calls must be an integer of at least 120/],
+    [
+      "max calls of only the primaries",
+      withValue("--max-calls", "60"),
+      /--max-calls must be an integer of at least 120/,
+    ],
+    [
+      "max calls one short of the envelope",
+      withValue("--max-calls", "119"),
+      /--max-calls must be an integer of at least 120/,
+    ],
+    ["fractional max calls", withValue("--max-calls", "120.5"), /--max-calls must be/],
     ["no max usd", without("--max-usd"), /--max-usd must be a positive amount/],
     ["zero max usd", withValue("--max-usd", "0"), /--max-usd must be a positive amount/],
     ["a worst case above max usd", withValue("--max-usd", "0.01"), /worst-case estimate/],
@@ -187,8 +224,27 @@ describe("sequence calibration CLI: live refusals come before any transport", ()
       expect(r.written).toEqual([]);
     });
 
+  it("another ffmpeg build refuses before any media work, even though the media would hash the same", async () => {
+    const transport = new FakeGeminiTransport(sequenceOracle(materials, "truthful"));
+    const r = await cli(READY, ENV, {
+      transport,
+      processor: { ...REVIEWED_PROCESSOR, toolVersion: "8.0-other" },
+    });
+    expect(r.code).toBe(2);
+    expect(r.errors.join(" ")).toMatch(/media processor is ffmpeg\/1 \(8\.0-other\)/);
+    expect(r.prepare).not.toHaveBeenCalled();
+    expect(r.createLiveTransport).not.toHaveBeenCalled();
+    expect(transport.calls).toBe(0);
+  });
+
+  it("another adapter version refuses too", async () => {
+    const r = await cli(READY, ENV, { processor: { ...REVIEWED_PROCESSOR, adapterVersion: "2" } });
+    expect(r.code).toBe(2);
+    expect(r.createLiveTransport).not.toHaveBeenCalled();
+  });
+
   it("a computed hash other than the reviewed one refuses, whatever the flag says", async () => {
-    const r = await cli(READY, ENV, { preregistered: { inputHash: "f".repeat(64) } });
+    const r = await cli(READY, ENV, { preregistered: { ...PRE, inputHash: "f".repeat(64) } });
     expect(r.code).toBe(2);
     expect(r.errors.join(" ")).toMatch(/differs from the reviewed one/);
     expect(r.createLiveTransport).not.toHaveBeenCalled();
@@ -197,6 +253,14 @@ describe("sequence calibration CLI: live refusals come before any transport", ()
   it("gate refusals happen before any media work", async () => {
     const r = await cli(without("--max-rpm"));
     expect(r.prepare).not.toHaveBeenCalled();
+  });
+
+  it("an RPD that holds the 60 primaries but not the 120-request envelope refuses before any request", async () => {
+    const transport = new FakeGeminiTransport(sequenceOracle(materials, "truthful"));
+    const r = await cli(withValue("--max-rpd", "119"), ENV, { transport });
+    expect(r.code).toBe(2);
+    expect(r.errors.join(" ")).toMatch(/above the RPD limit/);
+    expect(transport.calls).toBe(0);
   });
 
   it("a TPM too low for the paced plan refuses before any request", async () => {
@@ -233,9 +297,20 @@ describe("sequence calibration CLI: the default is offline", () => {
   });
 
   it("offline, a hash mismatch is reported but does not refuse", async () => {
-    const r = await cli(["--out", "fake.json"], {}, { preregistered: { inputHash: "f".repeat(64) } });
+    const r = await cli(["--out", "fake.json"], {}, { preregistered: { ...PRE, inputHash: "f".repeat(64) } });
     expect(r.code).toBe(0);
     expect(r.logs.join("\n")).toContain("MATCHES THE REVIEWED HASH: NO");
+  });
+
+  it("offline, another processor is reported, recorded and not refused", async () => {
+    const other = { ...REVIEWED_PROCESSOR, toolVersion: "8.0-other" };
+    const r = await cli(["--out", "fake.json"], {}, { processor: other });
+    expect(r.code).toBe(0);
+    expect(r.logs.join("\n")).toContain("MEDIA PROCESSOR: ffmpeg/1 (8.0-other)");
+    expect(JSON.parse(r.written[0]!.json)).toMatchObject({
+      processor: other,
+      livePreregistrationVerified: false,
+    });
   });
 });
 
@@ -252,8 +327,22 @@ describe("sequence calibration CLI: with every gate passed (fake transport stand
     };
     expect(report.transport).toBe("live");
     expect(report.operator).toMatchObject({ projectTier: "Tier 1", billingActive: true });
+    expect(report).toMatchObject({
+      processor: REVIEWED_PROCESSOR,
+      livePreregistrationVerified: true,
+      transportCeiling: 120,
+      protocol: { model: "gemini-3.8-flash", thinkingLevel: "LOW" },
+    });
     expect(JSON.stringify(report)).not.toContain(ENV.GEMINI_API_KEY);
     expect(r.logs.join("\n")).toContain("BILLING ACTIVE: YES");
+  });
+
+  it("a ceiling above the envelope authorizes nothing more", async () => {
+    const transport = new FakeGeminiTransport(sequenceOracle(materials, "truthful"));
+    const r = await cli(withValue("--max-calls", "500"), ENV, { transport });
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.written[0]!.json)).toMatchObject({ transportCeiling: 120 });
+    expect(r.logs.join("\n")).toContain("ceilings: 120 outbound requests");
   });
 
   it("an abort writes the partial report and exits 3", async () => {

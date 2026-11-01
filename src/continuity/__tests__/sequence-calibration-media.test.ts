@@ -26,7 +26,7 @@ import { calibrationProvider } from "./sequence-calibration-stub";
 /**
  * Phase 3A.4E: the REAL media path, for every fixture: rendered parents, production `extractWindow` / `extractFrame`,
  * then the real provider path over a fake transport. Local ffmpeg only; byte identity is only claimed within one tool
- * build (`SEQUENCE_CALIBRATION_PREREGISTERED.ffmpegVersion`).
+ * build (`SEQUENCE_CALIBRATION_PREREGISTERED.protocol.processor`).
  */
 vi.setConfig({ testTimeout: 300_000, hookTimeout: 400_000 });
 const processor = new FfmpegMediaProcessor({ limits: { timeoutMs: 60_000 } });
@@ -204,7 +204,8 @@ suite("every fixture through the real cut-edge path", () => {
     expect(report.transportCalls).toBe(60);
     expect(transport.requests.every((r) => r.inlineVideos === 2 && r.fileParts === 0)).toBe(true);
     expect(report.matchesPreregisteredHash).toBe(
-      (await processor.identity()).toolVersion === SEQUENCE_CALIBRATION_PREREGISTERED.ffmpegVersion,
+      (await processor.identity()).toolVersion ===
+        SEQUENCE_CALIBRATION_PREREGISTERED.protocol.processor.toolVersion,
     );
   });
 
@@ -217,8 +218,11 @@ suite("every fixture through the real cut-edge path", () => {
   });
 
   it("on the recorded ffmpeg build, the computed hash IS the reviewed hash", async () => {
-    const { toolVersion } = await processor.identity();
-    if (toolVersion !== SEQUENCE_CALIBRATION_PREREGISTERED.ffmpegVersion) return; // another build is another experiment
+    const identity = await processor.identity();
+    const pinned = SEQUENCE_CALIBRATION_PREREGISTERED.protocol.processor;
+    expect(identity.name).toBe(pinned.name);
+    expect(identity.adapterVersion).toBe(pinned.adapterVersion);
+    if (identity.toolVersion !== pinned.toolVersion) return; // another build is another experiment
     expect(sequenceInputHash(materialChecksums(materials))).toBe(
       SEQUENCE_CALIBRATION_PREREGISTERED.inputHash,
     );

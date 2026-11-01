@@ -9,7 +9,14 @@ import { GeminiAnalysisProvider } from "../providers/gemini/analyzer";
 import { geminiModelBlocker, readGeminiConfig } from "../providers/gemini/config";
 import { FakeGeminiTransport, type FakeStep } from "../providers/gemini/fake-transport";
 import type { GeminiRequest, GeminiTransport } from "../providers/gemini/transport";
-import { buildCutInput, deriveEdgeSide, edgeMediaMap, type SequenceEdgePair } from "./sequence-calibration";
+import {
+  buildCutInput,
+  deriveEdgeSide,
+  edgeMediaMap,
+  frozenGeminiEnvProblems,
+  type SequenceEdgePair,
+} from "./sequence-calibration";
+import { SEQUENCE_CALIBRATION_MODEL } from "./sequence-fixtures";
 import { renderFixture } from "./temporal-calibration";
 
 /**
@@ -51,6 +58,7 @@ export const sequenceSmokeIdentity = () => ({
 
 export type SequenceSmokeStatus =
   | "pass"
+  | "cost_ceiling_exceeded"
   | "provider_rejected"
   | "provider_accepted_local_invalid"
   | "outcome_unknown"
@@ -76,6 +84,9 @@ export interface SequenceSmokeReport {
   estimatedMaxUsd: number;
   actualUsd: number | null;
   costStatus: "none_sent" | "known" | "unknown";
+  approvedMaxUsd: number;
+  /** Known cost above the approved ceiling. UNKNOWN usage proves neither way: false, with `costStatus` "unknown". */
+  costCeilingExceeded: boolean;
   /** Shape only (no quality meaning). */
   finding: { result: string; evidence: number } | null;
 }
@@ -140,12 +151,20 @@ export async function runSequenceContractSmoke(args: {
     mode: batch.mode,
     prompt: batch.promptVersion,
     estimatedMaxUsd: Math.round(estimate * 1e6) / 1e6,
+    approvedMaxUsd: maxUsd,
   };
   const cost = (calls: UsageCall[]) => {
-    if (counts.requests === 0) return { actualUsd: 0, costStatus: "none_sent" as const };
-    if (calls.length === counts.requests && calls.every(usageComplete))
-      return { actualUsd: provider.actualCost(calls, now).amountUsd, costStatus: "known" as const };
-    return { actualUsd: null, costStatus: "unknown" as const };
+    if (counts.requests === 0)
+      return { actualUsd: 0, costStatus: "none_sent" as const, costCeilingExceeded: false };
+    if (calls.length === counts.requests && calls.every(usageComplete)) {
+      const actualUsd = provider.actualCost(calls, now).amountUsd;
+      return {
+        actualUsd,
+        costStatus: "known" as const,
+        costCeilingExceeded: actualUsd != null && actualUsd > maxUsd,
+      };
+    }
+    return { actualUsd: null, costStatus: "unknown" as const, costCeilingExceeded: false };
   };
   try {
     const res = await provider.analyzeBatch({
@@ -169,9 +188,15 @@ export async function runSequenceContractSmoke(args: {
       },
     });
     const f = res.findings.find((x) => x.criterionKey === SEQUENCE_DIAGNOSTIC_CRITERION.key) ?? null;
+    const spent = cost(res.calls);
     return {
       ...base,
-      status: f ? "pass" : "provider_accepted_local_invalid",
+      // the request already happened: a valid answer over the approved ceiling is reported, and is not a pass
+      status: !f
+        ? "provider_accepted_local_invalid"
+        : spent.costCeilingExceeded
+          ? "cost_ceiling_exceeded"
+          : "pass",
       providerAccepted: true,
       localValidation: f ? "ok" : "failed",
       httpStatus: 200,
@@ -180,7 +205,7 @@ export async function runSequenceContractSmoke(args: {
       requests: counts.requests,
       uploadAttempts: counts.upload,
       correctionAttempts: counts.correction,
-      ...cost(res.calls),
+      ...spent,
       finding: f ? { result: f.result, evidence: f.evidence.length } : null,
     };
   } catch (err) {
@@ -277,7 +302,13 @@ export async function runSequenceSmokeCli(deps: {
         fail("PRISM_STUDIO_SEQUENCE_CALIBRATION_LIVE=1 is not set.");
       if (env.PRISM_STUDIO_ALLOW_PAID_ANALYSIS !== "1")
         fail("PRISM_STUDIO_ALLOW_PAID_ANALYSIS=1 is not set.");
-      const model = value("--model") ?? fail("--model is required (an exact verified Gemini model id).");
+      const model = value("--model") ?? fail(`--model is required: exactly ${SEQUENCE_CALIBRATION_MODEL}.`);
+      if (model !== SEQUENCE_CALIBRATION_MODEL)
+        fail(
+          `--model must be ${SEQUENCE_CALIBRATION_MODEL}: the smoke proves the calibration's own contract.`,
+        );
+      const envProblems = frozenGeminiEnvProblems(env);
+      if (envProblems.length) fail(envProblems.join(" "));
       const mu = Number(value("--max-usd"));
       if (!(mu > 0) || !Number.isFinite(mu)) fail("--max-usd must be a positive amount.");
       const blocker = geminiModelBlocker(model);
@@ -345,7 +376,7 @@ export async function runSequenceSmokeCli(deps: {
       `status=${report.status} provider_accepted=${report.providerAccepted} local_validation=${report.localValidation} http=${report.httpStatus ?? "-"}${report.category ? ` category=${report.category}` : ""}`,
     );
     log(
-      `requests=${report.requests} uploads=${report.uploadAttempts} corrections=${report.correctionAttempts} estimate≤$${report.estimatedMaxUsd} actual=${report.actualUsd == null ? "UNKNOWN" : `$${report.actualUsd}`} (${report.costStatus})`,
+      `requests=${report.requests} uploads=${report.uploadAttempts} corrections=${report.correctionAttempts} estimate≤$${report.estimatedMaxUsd} actual=${report.actualUsd == null ? "UNKNOWN" : `$${report.actualUsd}`} (${report.costStatus}) approved_max=$${report.approvedMaxUsd} ceiling_exceeded=${report.costCeilingExceeded}`,
     );
     log(`report: ${out} (request-contract check only: no quality meaning)`);
     return report.status === "pass" ? 0 : 3;

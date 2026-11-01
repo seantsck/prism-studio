@@ -11,7 +11,7 @@ import {
 } from "../calibration/sequence-contract-smoke";
 import { SEQUENCE_FIXTURES } from "../calibration/sequence-fixtures";
 import { GeminiAnalysisProvider } from "../providers/gemini/analyzer";
-import { FakeGeminiTransport } from "../providers/gemini/fake-transport";
+import { FakeGeminiTransport, type FakeStep } from "../providers/gemini/fake-transport";
 import { GeminiTransportError, type GeminiRequest } from "../providers/gemini/transport";
 import { calibrationConfig, stubEdges } from "./sequence-calibration-stub";
 
@@ -167,6 +167,51 @@ describe("the smoke", () => {
     expect(transport.calls).toBe(1);
   });
 
+  it("a valid answer whose known cost passes the ceiling is not a pass, and is not retried", async () => {
+    const answer = smokeFakeAnswer();
+    const { provider: p, transport } = provider((r) => ({
+      ...(answer(r) as Extract<FakeStep, { kind: "json" }>),
+      usage: { promptTokens: 10_000_000, candidatesTokens: 1_000_000 },
+    }));
+    const report = await smoke(p);
+    expect(transport.calls).toBe(1);
+    expect(report).toMatchObject({
+      status: "cost_ceiling_exceeded",
+      providerAccepted: true,
+      localValidation: "ok",
+      requests: 1,
+      costStatus: "known",
+      approvedMaxUsd: 0.05,
+      costCeilingExceeded: true,
+    });
+    expect(report.actualUsd).toBeGreaterThan(0.05);
+  });
+
+  it("usage it was not told stays UNKNOWN, and proves no overrun", async () => {
+    const answer = smokeFakeAnswer();
+    const { provider: p } = provider((r) => ({
+      ...(answer(r) as Extract<FakeStep, { kind: "json" }>),
+      usage: {
+        promptTokens: undefined as never,
+        candidatesTokens: undefined as never,
+        thoughtsTokens: undefined as never,
+      },
+    }));
+    expect(await smoke(p)).toMatchObject({
+      status: "pass",
+      actualUsd: null,
+      costStatus: "unknown",
+      costCeilingExceeded: false,
+    });
+  });
+
+  it("a normal known cost under the ceiling is a pass", async () => {
+    const { provider: p } = provider(smokeFakeAnswer());
+    const report = await smoke(p);
+    expect(report).toMatchObject({ status: "pass", costStatus: "known", costCeilingExceeded: false });
+    expect(report.actualUsd).toBeLessThanOrEqual(0.05);
+  });
+
   it("refuses before sending: a clip that would need an upload, and a dollar ceiling under the estimate", async () => {
     const { provider: p, transport } = provider(smokeFakeAnswer());
     const big = stubEdges("big", GeminiAnalysisProvider.INLINE_VIDEO_MAX_BYTES + 1);
@@ -210,11 +255,16 @@ describe("the smoke CLI", () => {
     const i = READY.indexOf(name as (typeof READY)[number]);
     return READY.filter((_, j) => j < i || j > i + values);
   };
-  async function cli(argv: readonly string[], env: Record<string, string | undefined>, big = false) {
+  async function cli(
+    argv: readonly string[],
+    env: Record<string, string | undefined>,
+    big = false,
+    script: ConstructorParameters<typeof FakeGeminiTransport>[0] = smokeFakeAnswer(),
+  ) {
     const errors: string[] = [];
     const logs: string[] = [];
     const written: string[] = [];
-    const createLiveTransport = vi.fn(async () => new FakeGeminiTransport(smokeFakeAnswer()));
+    const createLiveTransport = vi.fn(async () => new FakeGeminiTransport(script));
     const code = await runSequenceSmokeCli({
       argv,
       env,
@@ -243,6 +293,18 @@ describe("the smoke CLI", () => {
     ],
     ["no paid env", READY, { ...ENV, PRISM_STUDIO_ALLOW_PAID_ANALYSIS: undefined }, /ALLOW_PAID_ANALYSIS=1/],
     ["no model", drop("--model", 1), ENV, /--model is required/],
+    [
+      "another model",
+      READY.map((a) => (a === "gemini-3.8-flash" ? "gemini-3.6-flash" : a)),
+      ENV,
+      /--model must be gemini-3\.8-flash/,
+    ],
+    [
+      "an env thinking level that disagrees",
+      READY,
+      { ...ENV, PRISM_STUDIO_GEMINI_THINKING_LEVEL: "HIGH" },
+      /PRISM_STUDIO_GEMINI_THINKING_LEVEL=HIGH differs/,
+    ],
     ["no dollars", drop("--max-usd", 1), ENV, /--max-usd must be/],
     ["no credential", READY, { ...ENV, GEMINI_API_KEY: undefined }, /GEMINI_API_KEY is not set/],
   ] as const)
@@ -266,6 +328,29 @@ describe("the smoke CLI", () => {
     expect(r.createLiveTransport).not.toHaveBeenCalled();
     expect(r.logs.join("\n")).toContain("FAKE transport");
     expect(r.logs.join("\n")).toContain("no quality meaning");
+  });
+
+  it("a known cost over the ceiling exits 3 and says what happened: the request was sent", async () => {
+    const answer = smokeFakeAnswer();
+    const r = await cli(READY, ENV, false, (req) => ({
+      ...(answer(req) as Extract<FakeStep, { kind: "json" }>),
+      usage: { promptTokens: 10_000_000, candidatesTokens: 1_000_000 },
+    }));
+    expect(r.code).toBe(3);
+    const report = JSON.parse(r.written[0]!) as { actualUsd: number };
+    expect(report).toMatchObject({
+      status: "cost_ceiling_exceeded",
+      requests: 1,
+      providerAccepted: true,
+      localValidation: "ok",
+      approvedMaxUsd: 0.05,
+      costCeilingExceeded: true,
+    });
+    expect(report.actualUsd).toBeGreaterThan(0.05);
+    const log = r.logs.join("\n");
+    expect(log).toContain("status=cost_ceiling_exceeded");
+    expect(log).toContain("ceiling_exceeded=true");
+    expect(`${log} ${r.errors.join(" ")}`).not.toMatch(/nothing was sent/i);
   });
 
   it("with every gate passed: one factory call and an exit 0 on pass", async () => {

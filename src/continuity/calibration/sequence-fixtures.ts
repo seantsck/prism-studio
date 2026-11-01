@@ -27,12 +27,60 @@ import { GEMINI_SEQUENCE_ANALYSIS_VERSION } from "../providers/gemini/config";
  */
 export const SEQUENCE_CALIBRATION_VERSION = "sequence-calibration-v1";
 
+/** The exact model of this experiment. Explicit on purpose: a later `GEMINI_DEFAULT_MODEL` change cannot move it. */
+export const SEQUENCE_CALIBRATION_MODEL = "gemini-3.8-flash";
+
+export interface SequenceProcessorIdentity {
+  name: string;
+  adapterVersion: string;
+  toolVersion: string;
+}
+
+export interface SequenceCalibrationProtocol {
+  calibrationVersion: string;
+  model: string;
+  analyzerVersion: string;
+  promptVersion: string;
+  rubricVersion: string;
+  schemaVersion: number;
+  edgePolicy: string;
+  thinkingLevel: string;
+  maxOutputTokensCap: number;
+  temperature: number;
+  sdk: string;
+  timeoutMs: number;
+  processor: SequenceProcessorIdentity;
+}
+
+/**
+ * The experiment's exact identity, as literals, so that production drifting away from it is detected rather than
+ * followed: a HIGH-thinking run, another model or another ffmpeg build is not this calibration. It is part of the
+ * definition hash, and a live run verifies the real values against it before its first request.
+ */
+export const SEQUENCE_CALIBRATION_PROTOCOL = {
+  calibrationVersion: SEQUENCE_CALIBRATION_VERSION,
+  model: SEQUENCE_CALIBRATION_MODEL,
+  analyzerVersion: "gemini-sequence-1",
+  promptVersion: "continuity-gemini-transition-v1",
+  rubricVersion: "sequence-rubric-1",
+  schemaVersion: 2,
+  edgePolicy: "cut-edge-static-v1",
+  thinkingLevel: "LOW",
+  maxOutputTokensCap: 8192,
+  temperature: 0,
+  sdk: "@google/genai@2.29.0",
+  timeoutMs: 120_000,
+  processor: { name: "ffmpeg", adapterVersion: "1", toolVersion: "9.0.1-full_build-www.gyan.dev" },
+} as const satisfies SequenceCalibrationProtocol;
+
 /** One observation per fixture per trial; never batched across families or trials. */
 export const SEQUENCE_CALIBRATION_PLAN = {
   fixtures: 20,
   trials: 3,
   qualityRequests: 60,
   /** Every quality request may use the analyzer's one schema correction; nothing else can add a request. */
+  maxCorrections: 60,
+  /** A run must be authorized for this whole envelope, so the operator's ceiling can never change the protocol. */
   maxTransportRequests: 120,
 } as const;
 
@@ -49,6 +97,10 @@ const PROP = "Yellow baton";
  *  - a fixture with an evidence window needs, on each windowed side, at least one cited edge input lying ENTIRELY inside
  *    the window ± `eventToleranceMs` (the 4 fps sampling precision + `eventSlackMs`; an edge still counts at its own
  *    instant, a reference never counts). A fixture without a window takes evidence anywhere in the clips;
+ *  - `screen_direction` needs TEMPORAL evidence: its controls meet at the same seam position and differ only in the
+ *    direction of travel, which no pair of stills can show. Each trial must cite `left:clip` AND `right:clip` with an
+ *    interval (`endMs > atMs`) of at least the 4 fps sampling precision. Stills may add to that, never replace it. This
+ *    is a calibration rule: the production validator still accepts edge stills as sided evidence;
  *  - 3/3 per fixture, so 6/6 per family: no majority, no "close enough";
  *  - CORRECTIONS: the real provider path keeps its one schema correction. A corrected answer that then validates is a
  *    valid trial, but the family's decision and the report disclose it and `ownerReviewRequired` is set: the owner
@@ -66,6 +118,12 @@ export const SEQUENCE_CALIBRATION_ACCEPTANCE = {
   eventSlackMs: 250,
   eventToleranceMs: Math.round(1000 / CUT_EDGE_POLICY.fps) + 250,
   windowRule: "at least one cited edge input per windowed side lies entirely inside window ± tolerance",
+  temporalEvidence: {
+    families: ["screen_direction"],
+    inputs: ["left:clip", "right:clip"],
+    minIntervalMs: Math.round(1000 / CUT_EDGE_POLICY.fps),
+    rule: "each listed input is cited with an interval where endMs > atMs and endMs - atMs >= minIntervalMs",
+  },
   correctionRule: "a validated corrected answer is a valid trial, disclosed, and requires owner review",
   abortRule: "an aborted run accepts no family",
 } as const;
@@ -509,6 +567,7 @@ export interface SequenceFixtureChecksums {
 export function sequenceCalibrationDefinition(fixtures = SEQUENCE_FIXTURES) {
   return {
     calibrationVersion: SEQUENCE_CALIBRATION_VERSION,
+    protocol: SEQUENCE_CALIBRATION_PROTOCOL,
     plan: SEQUENCE_CALIBRATION_PLAN,
     acceptance: SEQUENCE_CALIBRATION_ACCEPTANCE,
     families: [...SEMANTIC_CUT_FAMILIES],
@@ -532,9 +591,9 @@ export const sequenceDefinitionHash = (
 ) => sha256(JSON.stringify(definition));
 
 /**
- * The CALIBRATION INPUT HASH: the definition plus every rendered and derived checksum, in fixture order. Computed
- * before any transport can exist. The pixels depend on the ffmpeg build, which is recorded beside the hash: another
- * build yields another hash, which is what refuses a live run.
+ * The CALIBRATION INPUT HASH: the definition (with the protocol) plus every rendered and derived checksum, in fixture
+ * order. Computed before any transport can exist. A processor other than the protocol's refuses a live run by itself,
+ * even if its bytes happened to hash the same.
  */
 export function sequenceInputHash(
   checksums: Readonly<Record<string, SequenceFixtureChecksums>>,

@@ -1,20 +1,25 @@
 import { writeFileSync } from "node:fs";
 import { FfmpegMediaProcessor } from "@/media/ffmpeg";
+import type { MediaProcessorIdentity } from "@/media/types";
 import { GeminiAnalysisProvider } from "../providers/gemini/analyzer";
 import { geminiModelBlocker, readGeminiConfig } from "../providers/gemini/config";
 import { FakeGeminiTransport } from "../providers/gemini/fake-transport";
 import type { GeminiTransport } from "../providers/gemini/transport";
 import {
   estimateSequenceCalibration,
+  frozenGeminiEnvProblems,
   inlineOnlyProblems,
   materialChecksums,
   prepareSequenceMaterials,
+  processorProblem,
   runSequenceCalibration,
   sequenceCalibrationIdentity,
   SEQUENCE_CALIBRATION_PREREGISTERED,
+  type SequenceLivePreregistration,
   type SequenceMaterials,
 } from "./sequence-calibration";
 import {
+  SEQUENCE_CALIBRATION_MODEL,
   SEQUENCE_CALIBRATION_PLAN,
   SEQUENCE_CALIBRATION_VERSION,
   sequenceDefinitionHash,
@@ -26,9 +31,9 @@ import { liveReadinessProblems, type CalibrationQuota } from "./temporal-calibra
 /**
  * The Sequence Continuity calibration CLI (scripts/continuity-sequence-calibration.mts is a thin wrapper). The default
  * is OFFLINE: the truthful fake oracle over the real media. The real SDK transport is INJECTED and only ever created
- * after every live refusal has passed, in this order: acknowledgement, both env flags, model, ceilings, the operator's
- * quota and billing readiness, the model check, the credential, the local media, the reviewed input hash, inline-only
- * media, the worst case. A refusal returns exit code 2 with "REFUSED: … Nothing was sent."
+ * after every live refusal has passed, in this order: acknowledgement, both env flags, the frozen model and environment,
+ * the full request envelope, the dollars, the operator's quota and billing readiness, the credential, the media
+ * processor's identity, the local media, the reviewed input hash, inline-only media, the worst case. A refusal returns exit code 2 with "REFUSED: … Nothing was sent."
  */
 export interface SequenceCalibrationCliDeps {
   argv: readonly string[];
@@ -36,7 +41,9 @@ export interface SequenceCalibrationCliDeps {
   createLiveTransport: (apiKey: string) => Promise<GeminiTransport>;
   /** Injected for tests; default renders and derives with the local ffmpeg. */
   prepare?: () => Promise<SequenceMaterials>;
-  preregistered?: { inputHash: string };
+  /** Injected for tests; default asks the local ffmpeg. */
+  processorIdentity?: () => Promise<MediaProcessorIdentity>;
+  preregistered?: SequenceLivePreregistration;
   /** Injected for tests, which never wait; default: fake mode never waits, live mode really paces. */
   sleep?: (ms: number) => Promise<void>;
   log?: (line: string) => void;
@@ -69,7 +76,9 @@ export async function runSequenceCalibrationCli(deps: SequenceCalibrationCliDeps
   const fail = (m: string): never => {
     throw new Refusal(m);
   };
-  const prepare = deps.prepare ?? (() => prepareSequenceMaterials({ processor: new FfmpegMediaProcessor() }));
+  const processor = new FfmpegMediaProcessor();
+  const prepare = deps.prepare ?? (() => prepareSequenceMaterials({ processor }));
+  const readProcessorIdentity = deps.processorIdentity ?? (() => processor.identity());
   const preregistered = deps.preregistered ?? SEQUENCE_CALIBRATION_PREREGISTERED;
 
   try {
@@ -94,12 +103,16 @@ export async function runSequenceCalibrationCli(deps: SequenceCalibrationCliDeps
         fail("PRISM_STUDIO_SEQUENCE_CALIBRATION_LIVE=1 is not set.");
       if (env.PRISM_STUDIO_ALLOW_PAID_ANALYSIS !== "1")
         fail("PRISM_STUDIO_ALLOW_PAID_ANALYSIS=1 is not set.");
-      const model = value("--model") ?? fail("--model is required (an exact verified Gemini model id).");
+      const model = value("--model") ?? fail(`--model is required: exactly ${SEQUENCE_CALIBRATION_MODEL}.`);
+      if (model !== SEQUENCE_CALIBRATION_MODEL)
+        fail(`--model must be ${SEQUENCE_CALIBRATION_MODEL}: ${SEQUENCE_CALIBRATION_VERSION} freezes it.`);
+      const envProblems = frozenGeminiEnvProblems(env);
+      if (envProblems.length) fail(envProblems.join(" "));
       const mc = Number(value("--max-calls"));
       const mu = Number(value("--max-usd"));
-      if (!Number.isInteger(mc) || mc < SEQUENCE_CALIBRATION_PLAN.qualityRequests)
+      if (!Number.isInteger(mc) || mc < SEQUENCE_CALIBRATION_PLAN.maxTransportRequests)
         fail(
-          `--max-calls must be an integer of at least ${SEQUENCE_CALIBRATION_PLAN.qualityRequests}: it counts every outbound request, corrections included (the plan's worst case is ${SEQUENCE_CALIBRATION_PLAN.maxTransportRequests}).`,
+          `--max-calls must be an integer of at least ${SEQUENCE_CALIBRATION_PLAN.maxTransportRequests}: ${SEQUENCE_CALIBRATION_PLAN.qualityRequests} primaries plus the one correction the protocol allows each. A higher value authorizes nothing more.`,
         );
       if (!(mu > 0) || !Number.isFinite(mu)) fail("--max-usd must be a positive amount.");
       const problems = liveReadinessProblems(readiness);
@@ -121,6 +134,16 @@ export async function runSequenceCalibrationCli(deps: SequenceCalibrationCliDeps
         maxTpm: readiness.maxTpm ?? Number.NaN,
         maxRpd: readiness.maxRpd ?? Number.NaN,
       };
+    }
+
+    // the processor is compared by itself: identical bytes from another build are still not the reviewed tool
+    const processorIdentity = await readProcessorIdentity();
+    log(
+      `MEDIA PROCESSOR: ${processorIdentity.name}/${processorIdentity.adapterVersion} (${processorIdentity.toolVersion})`,
+    );
+    if (live) {
+      const problem = processorProblem(preregistered.protocol.processor, processorIdentity);
+      if (problem) fail(problem);
     }
 
     // the hash is computed and compared before any real transport exists
@@ -193,6 +216,8 @@ export async function runSequenceCalibrationCli(deps: SequenceCalibrationCliDeps
         live,
         quota,
         now,
+        processorIdentity,
+        ...(live ? { livePreregistration: preregistered } : {}),
         ...(deps.sleep ? { sleep: deps.sleep } : live ? {} : { sleep: async () => undefined }),
       });
     } catch (err) {
