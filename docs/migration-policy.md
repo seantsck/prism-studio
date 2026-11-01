@@ -135,6 +135,12 @@ worker role, 0 policies with `direct_video_allowed = true`; `db:validate` STRUCT
 67/67, `db:worker-role` 60/60 (REAL LOGIN), `db:continuity-analysis` 80/80, `db:media-qa` 39/39, narrow repository
 acceptance on a disposable Project 15/15, hosted browser E2E 40/40; counts and Storage back to baseline afterwards.
 
+**0047** (Phase 3A.4F, **NOT applied to hosted**; verified on a disposable local PostgreSQL only) adds
+`project_qa_policies.sequence_semantic_mode` and `max_transitions_per_batch`, their constraint, and four triggers that move
+`updated_at` where a cut-fingerprint change left no clock
+([sequence-continuity-supervisor](sequence-continuity-supervisor.md#3a4f-a-implementation-notes)). No table, grant, revoke
+or policy change. After applying it to hosted, wait 10 minutes before enabling Sequence Automatic.
+
 **0046** (Phase 3A.4C, **NOT applied to hosted**; verified on a disposable local PostgreSQL only) adds
 `continuity_runs.subject_kind` / `continuity_analysis_jobs.subject_kind` (`attempt` | `transition`, default `attempt`
 for every existing row, otherwise unchanged; shape checks; a kind-aware run key the job references), re-creates both

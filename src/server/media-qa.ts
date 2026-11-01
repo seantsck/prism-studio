@@ -1,3 +1,6 @@
+import type { SequenceAutoDeps } from "@/continuity/sequence-automation";
+import { getEpisodeEditRepo } from "./episode-edits";
+import { SEQUENCE_SETTLE_MS } from "@/domain/continuity/sequence-automation";
 import "server-only";
 import type { MediaQaRepository } from "@/data/media-qa-repository";
 import type { MemoryRepository } from "@/data/memory-repository";
@@ -132,6 +135,15 @@ export function getContinuityAnalyzer(): ContinuityAnalyzer | null {
   return process.env.PRISM_STUDIO_CONTINUITY_ANALYZER === "none" ? null : new MockContinuityAnalyzer();
 }
 
+/**
+ * How long a cut must be quiet before automatic Sequence QA (frozen in the domain). Only the memory-mode E2E, on its fake
+ * transports, may shorten it so a browser test need not wait 10 minutes; a stray variable can never touch a real deployment.
+ */
+export function getSequenceSettleMs(): number {
+  const test = Number(process.env.PRISM_STUDIO_E2E_SEQUENCE_SETTLE_MS);
+  return fakeAnalysisTransportsEnabled() && Number.isFinite(test) && test > 0 ? test : SEQUENCE_SETTLE_MS;
+}
+
 /** Safe availability facts for the Shot QA automation gates (no credentials). */
 export function getAnalyzerAvailability(): AnalyzerAvailability[] {
   return getAnalyzerStatuses().map((s) => ({
@@ -154,6 +166,20 @@ export async function getAutoQaDeps(userId: string | null): Promise<AutoQaDeps> 
     availability: getAnalyzerAvailability(),
     paid: config.paid,
     limits: config.limits,
+  };
+}
+
+/** Phase 3A.4F: the reads a Sequence automation decision needs, under the CURRENT user's session (owner RLS). */
+export async function sequenceAutoDeps(qa: MediaQaRepository): Promise<SequenceAutoDeps> {
+  const config = getAnalysisConfig();
+  return {
+    qa,
+    edits: await getEpisodeEditRepo(),
+    providers: getAnalysisProviders(),
+    availability: getAnalyzerAvailability(),
+    paid: config.paid,
+    limits: config.limits,
+    settleMs: getSequenceSettleMs(),
   };
 }
 

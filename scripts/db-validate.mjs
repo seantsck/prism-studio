@@ -195,6 +195,11 @@ const must = {
     "continuity_runs_subject_check",
     "continuity_transition_subjects_run_check",
     "episode_edit_items_cut_intent_check",
+    // 0047 (Phase 3A.4F): the cut settling clocks
+    "shot_location_view_selections_touch_shot",
+    "shot_character_continuity_selections_touch_shot",
+    "shot_props_touch_shot",
+    "character_identity_refs_touch_character",
   ],
 };
 const missingIdx = must.indexes.filter((i) => !idx.some((x) => x.indexname === i));
@@ -234,6 +239,8 @@ const columnProblems = [
     ["continuity_runs", "automation_key"],
     // 0045 (Phase 3A.3): explicit full-video consent for temporal Shot QA
     ["project_qa_policies", "direct_video_allowed"],
+    ["project_qa_policies", "sequence_semantic_mode"],
+    ["project_qa_policies", "max_transitions_per_batch"],
     // 0046 (Phase 3A.4C): subject kinds and persisted cut intent
     ["continuity_runs", "subject_kind"],
     ["continuity_analysis_jobs", "subject_kind"],

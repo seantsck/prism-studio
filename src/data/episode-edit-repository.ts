@@ -1,5 +1,6 @@
 import type { CutIntentKind } from "@/domain/continuity/cut-intent";
 import type { ContinuityCategory } from "@/domain/continuity/model";
+import type { CutSettlementClock } from "@/domain/continuity/sequence-automation";
 import type { EditRate } from "@/domain/edit/edit-rate";
 import type {
   AudioPlacement,
@@ -125,6 +126,11 @@ export interface EpisodeEditRepository {
   apply(input: ApplyEpisodeEditInput): Promise<EpisodeEdit>;
   /** Deletes the edit with its items and placements (explicit; nothing else deletes an edit but its Episode/Project). */
   delete(input: DeleteEpisodeEditInput): Promise<void>;
+  /**
+   * 3A.4F: the clocks of the rows a cut's fingerprints can depend on (`cutSettlementSources`). A narrow read: these
+   * timestamps are not part of the creative domain shape.
+   */
+  getCutSettlementClock(projectId: string, editId: string): Promise<CutSettlementClock>;
   /** Whether any edit (of any project the caller owns) pins this Asset. */
   usesAsset(assetId: string): Promise<boolean>;
 }

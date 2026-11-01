@@ -13,12 +13,14 @@ const sql = readFileSync(`${DIR}/0046_sequence_continuity_persistence.sql`, "utf
 const code = sql.replace(/--.*$/gm, ""); // statements only, no comments
 
 describe("migration 0046 — transition persistence and predecessor-bound cut intent", () => {
-  it("is the latest migration, follows 0045, and leaves the applied 0045 byte-for-byte unchanged", () => {
+  it("follows 0045, and leaves the applied 0045 byte-for-byte unchanged", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe("0046_sequence_continuity_persistence.sql");
-    expect(files.at(-2)).toBe("0045_project_qa_direct_video.sql");
+    expect(files).toContain("0046_sequence_continuity_persistence.sql");
+    expect(files[files.indexOf("0046_sequence_continuity_persistence.sql") - 1]).toBe(
+      "0045_project_qa_direct_video.sql",
+    );
     expect(checksumOf(readFileSync(`${DIR}/0045_project_qa_direct_video.sql`, "utf8"))).toBe(
       "44cc9360b867cc1d30b5fa8d758eca311f56b01d3485bb100d235c87d265d325",
     );

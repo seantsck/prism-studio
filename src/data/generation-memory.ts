@@ -36,6 +36,8 @@ import {
 export interface MemoryProjectsAccess {
   all(): ProjectData[];
   ownerUserId(): string;
+  /** 3A.4F: the memory twin of migration 0047's triggers (a Shot's selection or Prop was removed). */
+  touchShot?(projectId: string, shotId: string): void;
   /**
    * Phase 2H: the Shot's currently selected Production Frame id (memory keeps selections in the Production Frame
    * service, outside ProjectData). Missing accessor = no selection, so an animation is refused, never accepted.

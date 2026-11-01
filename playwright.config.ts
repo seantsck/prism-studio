@@ -69,6 +69,9 @@ const ISOLATED_3A4B = "zzzzzzzzzzzzzzzzzzzzzzzz-continuity-supervisor.spec.ts";
 /** The Phase 3A.4C cut-intent spec: its own memory server (it creates an edit, a mock clip and cut intents). */
 const ISOLATED_3A4C = "zzzzzzzzzzzzzzzzzzzzzzzzz-cut-intent.spec.ts";
 
+/** The Phase 3A.4F sequence-automation spec: its own memory server (policy, clips, automatic waves, a short settle). */
+const ISOLATED_3A4F = "zzzzzzzzzzzzzzzzzzzzzzzzzzz-sequence-automation.spec.ts";
+
 /** The Phase 3A.4D sequence-review spec: its own memory server (edit, two mock clips, consent, a transition run). */
 const ISOLATED_3A4D = "zzzzzzzzzzzzzzzzzzzzzzzzzz-sequence-review.spec.ts";
 
@@ -96,6 +99,7 @@ export default defineConfig({
         ISOLATED_3A4B,
         ISOLATED_3A4C,
         ISOLATED_3A4D,
+        ISOLATED_3A4F,
       ],
       use: { baseURL: "http://localhost:3102" },
     },
@@ -133,6 +137,11 @@ export default defineConfig({
       name: "memory-3a4d-isolated",
       testMatch: ISOLATED_3A4D,
       use: { baseURL: "http://localhost:3109" },
+    },
+    {
+      name: "memory-3a4f-isolated",
+      testMatch: ISOLATED_3A4F,
+      use: { baseURL: "http://localhost:3110" },
     },
   ],
   // Started in order: the first builds; the others serve the same build from separate processes (separate stores).
@@ -200,6 +209,21 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 120_000,
       env: memoryEnv(3109),
+    },
+    {
+      command: `npx next start -p 3110 ${KEEP_ALIVE}`,
+      url: "http://localhost:3110",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: {
+        ...memoryEnv(3110),
+        // Gemini through the FAKE transport only: the placeholder is not a credential and nothing can leave the process.
+        GEMINI_API_KEY: "e2e-placeholder-not-a-credential",
+        PRISM_STUDIO_GEMINI_DIRECT_VIDEO: "1",
+        PRISM_STUDIO_MAX_ANALYSIS_USD_PER_RUN: "0.50",
+        // honoured only in memory mode with the fake transport: production's window is frozen at 10 minutes
+        PRISM_STUDIO_E2E_SEQUENCE_SETTLE_MS: "15000",
+      },
     },
   ],
 });

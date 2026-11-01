@@ -169,7 +169,7 @@ export class MemoryCharacterContinuityService implements CharacterContinuityRepo
       throw new CharacterContinuityError("not_found", "That Shot no longer exists.");
     const k = key(input.shotId, input.characterId);
     this.checkExpected(k, input.expectedSelectedLockId);
-    this.selections.delete(k);
+    if (this.selections.delete(k)) this.access.touchShot?.(input.projectId, input.shotId);
   }
 
   async selectionsForShot(projectId: string, shotId: string) {

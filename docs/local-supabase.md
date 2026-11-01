@@ -87,7 +87,8 @@ database name starts with `prism_disposable` (`scripts/lib/safety.mjs` `disposab
    `scripts/local-db/supabase-shim.sql`: the Supabase roles, `auth.users` / `auth.uid()`, minimal `storage` tables and
    Supabase's legacy default privileges, and create the dev user), then `scripts/db-migrate.mjs` (the real runner),
    `scripts/db-disposable.mjs roles` (local logins for the worker roles), `scripts/db-seed.mts`, and any verifier.
-   `scripts/local-db/backfill-0046.mjs before|after` proves 0046 rewrites no history.
+   `scripts/local-db/backfill-0046.mjs before|after` proves 0046 rewrites no history. `scripts/db-sequence-automation.mts`
+   proves 0047 (Phase 3A.4F).
 
 Limits: the shim is not Supabase (no PostgREST, no Storage API, no real Auth); `db:worker-role`'s generation
 end-to-end checks are wall-clock dependent and fail on loopback (identically before and after a migration);

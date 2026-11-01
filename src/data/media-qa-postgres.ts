@@ -5,6 +5,8 @@ import { upsertRow } from "./postgres-repository";
 import { ANALYSIS_ACTIVE, assertAnalysisTransition } from "@/domain/continuity/analysis/job-state";
 import {
   defaultQaPolicy,
+  MAX_TRANSITIONS_PER_BATCH,
+  qaPolicyNeedsSequenceColumns,
   qaPolicyErrors,
   type ProjectQaPolicy,
   type SemanticMode,
@@ -41,6 +43,8 @@ import { transitionRunRefusal } from "./transition-runs";
 
 const NOT_MIGRATED =
   "Automatic Shot QA needs database migration 0044, which is not applied to this database yet.";
+const NOT_MIGRATED_0047 =
+  "Sequence Continuity automation needs database migration 0047, which is not applied to this database yet.";
 const NOT_MIGRATED_0045 =
   "Full-video (temporal) Shot QA permission needs database migration 0045, which is not applied to this database yet.";
 
@@ -53,6 +57,13 @@ const mapQaPolicy = (r: Row): ProjectQaPolicy => ({
   maxCostPerDayUsd: r.max_cost_per_day_usd == null ? null : Number(r.max_cost_per_day_usd),
   // absent before migration 0045: full-video analysis is simply not allowed
   directVideoAllowed: r.direct_video_allowed === true,
+  // before migration 0047 these columns are absent: Sequence automation is simply off
+  sequenceSemanticMode:
+    r.sequence_semantic_mode === "suggest" || r.sequence_semantic_mode === "automatic"
+      ? r.sequence_semantic_mode
+      : "off",
+  maxTransitionsPerBatch:
+    r.max_transitions_per_batch == null ? MAX_TRANSITIONS_PER_BATCH : Number(r.max_transitions_per_batch),
   revision: Number(r.revision),
   updatedBy: r.updated_by ? String(r.updated_by) : null,
   updatedAt:
@@ -719,6 +730,21 @@ export class PostgresMediaQaData implements MediaQaRepository {
     });
   }
 
+  async listEditTransitionAnalysisJobs(projectId: string, editId: string) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        `select j.* from continuity_analysis_jobs j
+           join continuity_transition_subjects s on s.run_id = j.run_id
+         where j.project_id = $1 and j.subject_kind = 'transition' and s.edit_id = $2
+         order by j.created_at`,
+        [projectId, editId],
+      );
+      return r.rows
+        .map(mapAnalysisJob)
+        .filter((j): j is TransitionAnalysisJob => j.subjectKind === "transition");
+    });
+  }
+
   async findTransitionJobsByKeys(projectId: string, keys: string[]) {
     return this.tx(async (c) => {
       const r = await c.query(
@@ -776,8 +802,8 @@ export class PostgresMediaQaData implements MediaQaRepository {
     );
     await c.query(
       `insert into continuity_analysis_events (project_id, job_id, run_id, at, from_status, to_status, note)
-       values ($1, $2, $3, $4, null, 'queued', 'Sequence review submitted by user')`,
-      [r.projectId, jobRow.id, run.id, r.now],
+       values ($1, $2, $3, $4, null, 'queued', $5)`,
+      [r.projectId, jobRow.id, run.id, r.now, input.queuedNote ?? "Sequence review submitted by user"],
     );
     return jobRow;
   }
@@ -831,10 +857,10 @@ export class PostgresMediaQaData implements MediaQaRepository {
              (project_id, subject_kind, attempt_id, run_number, subject_asset_id, original_asset_id, analyzer,
               analyzer_version, analyzer_kind, rules_version, analysis_status, package_fingerprint,
               subject_fingerprint, criteria_fingerprint, reference_fingerprint, reference_set, created_by, created_at,
-              completed_at, analysis_plan, external_manifest, prompt_version, rubric_version, model)
+              completed_at, analysis_plan, external_manifest, prompt_version, rubric_version, model, automation_key)
            values ($1, 'transition', null, $2, null, null, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13,
                    $14, case when $7 in ('complete', 'failed') then $14::timestamptz end, $15::jsonb, $16::jsonb,
-                   $17, $18, $19)
+                   $17, $18, $19, $20)
            returning *`,
           [
             input.projectId,
@@ -857,6 +883,7 @@ export class PostgresMediaQaData implements MediaQaRepository {
             input.promptVersion ?? null,
             input.rubricVersion ?? null,
             input.model ?? null,
+            input.automationKey ?? null,
           ],
         )
       ).rows[0] as Row;
@@ -1311,6 +1338,22 @@ export class PostgresMediaQaData implements MediaQaRepository {
     return this.automationApplied;
   }
 
+  /** Forward-only like `automationApplied`: 0047 is re-checked until seen. */
+  private sequenceAutomationApplied = false;
+
+  async sequenceAutomationReady() {
+    if (this.sequenceAutomationApplied) return true;
+    this.sequenceAutomationApplied = await this.tx(async (c) => {
+      const r = await c.query(
+        `select exists (select 1 from pg_attribute a
+                         where a.attrelid = to_regclass('public.project_qa_policies')
+                           and a.attname = 'sequence_semantic_mode' and not a.attisdropped) as ready`,
+      );
+      return Boolean(r.rows[0]?.ready);
+    });
+    return this.sequenceAutomationApplied;
+  }
+
   async getQaPolicy(projectId: string) {
     try {
       return await this.tx(async (c) => {
@@ -1339,43 +1382,55 @@ export class PostgresMediaQaData implements MediaQaRepository {
       input.by,
       input.now,
     ];
-    // 0045 adds direct_video_allowed; `withColumn: false` is the 0044-only shape (it can only ever write "false")
-    const write = (withColumn: boolean) =>
+    // the columns beyond the 0044 shape: 0045's direct_video_allowed, 0047's Sequence policy
+    const write = (extra: Array<[column: string, value: unknown]>) =>
       this.tx(async (c) => {
         const r =
           input.expectedRevision === 0
             ? await c.query(
                 `insert into project_qa_policies
                    (project_id, semantic_mode, analyzer, external_media_allowed, max_cost_per_run_usd,
-                    max_cost_per_day_usd, revision, updated_by, updated_at${withColumn ? ", direct_video_allowed" : ""})
-                 values ($1, $2, $3, $4, $5, $6, 1, $7, $8${withColumn ? ", $9" : ""})
+                    max_cost_per_day_usd, revision, updated_by, updated_at${extra.map(([n]) => `, ${n}`).join("")})
+                 values ($1, $2, $3, $4, $5, $6, 1, $7, $8${extra.map((_, i) => `, $${9 + i}`).join("")})
                  on conflict (project_id) do nothing
                  returning *`,
-                withColumn ? [...values, directVideo] : values,
+                [...values, ...extra.map(([, v]) => v)],
               )
             : await c.query(
                 `update project_qa_policies set
                    semantic_mode = $2, analyzer = $3, external_media_allowed = $4, max_cost_per_run_usd = $5,
-                   max_cost_per_day_usd = $6, revision = revision + 1, updated_by = $7, updated_at = $8${
-                     withColumn ? ", direct_video_allowed = $10" : ""
-                   }
+                   max_cost_per_day_usd = $6, revision = revision + 1, updated_by = $7, updated_at = $8${extra
+                     .map(([n], i) => `, ${n} = $${10 + i}`)
+                     .join("")}
                  where project_id = $1 and revision = $9
                  returning *`,
-                withColumn
-                  ? [...values, input.expectedRevision, directVideo]
-                  : [...values, input.expectedRevision],
+                [...values, input.expectedRevision, ...extra.map(([, v]) => v)],
               );
         return r.rows[0] ? mapQaPolicy(r.rows[0]) : null;
       });
+    const with0045: Array<[string, unknown]> = [["direct_video_allowed", directVideo]];
+    const with0047: Array<[string, unknown]> = [
+      ...with0045,
+      ["sequence_semantic_mode", p.sequenceSemanticMode ?? "off"],
+      ["max_transitions_per_batch", p.maxTransitionsPerBatch ?? MAX_TRANSITIONS_PER_BATCH],
+    ];
+    const missingColumn = (err: unknown) => (err as { code?: string }).code === "42703";
     try {
       let saved: ProjectQaPolicy | null;
       try {
-        saved = await write(true);
+        saved = await write(with0047);
       } catch (err) {
-        // before 0045 the column does not exist: "false" needs no column; "true" cannot be stored honestly
-        if ((err as { code?: string }).code !== "42703") throw err;
-        if (directVideo) throw new MediaQaError("not_migrated", NOT_MIGRATED_0045);
-        saved = await write(false);
+        if (!missingColumn(err)) throw err;
+        // before 0047 the defaults need no column; anything else cannot be stored honestly
+        if (qaPolicyNeedsSequenceColumns(p)) throw new MediaQaError("not_migrated", NOT_MIGRATED_0047);
+        try {
+          saved = await write(with0045);
+        } catch (err2) {
+          if (!missingColumn(err2)) throw err2;
+          // before 0045 the column does not exist: "false" needs no column; "true" cannot be stored honestly
+          if (directVideo) throw new MediaQaError("not_migrated", NOT_MIGRATED_0045);
+          saved = await write([]);
+        }
       }
       if (!saved)
         throw new MediaQaError(

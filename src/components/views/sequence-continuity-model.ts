@@ -12,6 +12,7 @@ import {
   type TransitionRun,
   type TransitionState,
 } from "@/domain/continuity/sequence";
+import type { SequenceAutoView } from "@/continuity/sequence-automation";
 import type { SequenceReviewDisclosure } from "@/continuity/sequence-review";
 import { sequenceInputSide } from "@/domain/continuity/analysis/sequence-plan";
 import type { TransitionRunView } from "@/data/media-qa-repository";
@@ -49,6 +50,8 @@ export const SEMANTIC_NOTE =
   "Sequence Continuity criteria stay unchecked until a review of this cut runs. A family an analyzer has not been calibrated for stays unchecked.";
 export const NO_EDIT_MESSAGE =
   "Sequence Continuity needs a persisted Episode Edit because the edit determines the actual cuts.";
+export const SEQUENCE_MODE_LABELS = { off: "Off", suggest: "Suggest", automatic: "Automatic" } as const;
+
 export const NO_CUTS_MESSAGE = "This edit has no cuts to review yet.";
 export const RUNS_NOTE =
   "Sequence Continuity reviews run only when you select cuts and confirm the disclosure. Nothing runs on page load or edit changes.";
@@ -208,6 +211,9 @@ export type ContinuityPageVM =
       review: { disclosure: SequenceReviewDisclosure; nonce: string } | null;
       analyzers: Array<{ id: string; label: string }>;
       selectedAnalyzer: string | null;
+      /** 3A.4F: the Project's Sequence automation status (null = it could not be read; nothing depends on it) */
+      autoSequence?: SequenceAutoView | null;
+      episodeId?: string;
     };
 
 export const supervisorLinks = (data: ProjectData, episode: Episode): SupervisorLinks => ({

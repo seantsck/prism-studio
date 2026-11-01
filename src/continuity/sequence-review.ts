@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { analysisSpendBlockers, type AnalysisSpendPolicy } from "@/domain/continuity/analysis/cost";
+import {
+  analysisSpendBlockers,
+  type AnalysisSpendPolicy,
+  type CostEstimateUsd,
+} from "@/domain/continuity/analysis/cost";
 import {
   buildSequencePlan,
   sequenceInputSide,
@@ -584,9 +588,7 @@ type Submitted = { run: TransitionRunView; job: TransitionAnalysisJob; duplicate
 /**
  * One confirmed manual batch, ALL OR NONE. Before any derivation: changed cut truth, consent, plan, the whole batch's
  * worst-case cost (also against the confirmed ceiling) and the shared active capacity for the NEW jobs (replays take no
- * slot). After derivation, every frozen input is validated (media contract, exact transfer method as confirmed,
- * recomputed cost) BEFORE one atomic batch write. A refusal after derivation queues nothing: the derived Assets remain
- * as reusable deterministic derivations (they are not rolled back), and no run / job / cost / event exists.
+ * slot). Then `queueTransitionBatch`, the machinery automatic waves share.
  */
 export async function submitSequenceReview(args: {
   data: ProjectData;
@@ -704,33 +706,88 @@ export async function submitSequenceReview(args: {
       `This review needs ${fresh.size} analysis slot(s) but the project has ${free} free (${active} in progress, limit ${args.limits.maxActivePerProject}). Nothing was derived or queued.`,
     );
 
+  return queueTransitionBatch({
+    data,
+    view,
+    cuts,
+    keys,
+    provider,
+    qaPolicy: args.qaPolicy,
+    deps,
+    limits: args.limits,
+    now,
+    authority: {
+      kind: "manual",
+      approved: args.selections.map((x) => x.transfer),
+      checkBudget: (inputs) => budget(inputs, "After preparing the exact media"),
+    },
+  });
+}
+
+/** Under what authority a batch is queued. The two are never mixed: an automatic wave fakes no human confirmation. */
+export type SequenceBatchAuthority =
+  /** a person confirmed these exact transfer methods and worst case in a disclosure */
+  | {
+      kind: "manual";
+      approved: Array<{ left: EdgeTransfer; right: EdgeTransfer }>;
+      checkBudget: (inputs: TransitionContinuityAnalysisInput[]) => Promise<CostEstimateUsd[]>;
+    }
+  /** the Project's persisted standing authorisation, which disclosed inline and temporary-file transfer in advance */
+  | {
+      kind: "automatic";
+      queuedNote: string;
+      checkBudget: (inputs: TransitionContinuityAnalysisInput[]) => Promise<CostEstimateUsd[]>;
+    };
+
+/**
+ * Manual and automatic share everything from here, ALL OR NONE: derive (or reuse) every cut's exact edge media, rebuild
+ * and validate every frozen input (media contract, exact transfer method, recomputed worst case), then ONE atomic batch
+ * write. A refusal after derivation queues nothing: the derived Assets remain as reusable deterministic derivations
+ * (they are not rolled back), and no run / job / cost / event exists.
+ */
+export async function queueTransitionBatch(args: {
+  data: ProjectData;
+  view: EpisodeEditView;
+  cuts: CutTransition[];
+  keys: string[];
+  provider: ContinuityAnalysisProvider;
+  qaPolicy: ProjectQaPolicy;
+  deps: DeliveryDeps;
+  limits: { maxActivePerProject: number; maxJobAttempts: number };
+  now: Date;
+  authority: SequenceBatchAuthority;
+}): Promise<Submitted[]> {
+  const { data, view, cuts, keys, provider, deps, authority, now } = args;
   // 5. derive (or reuse) every selected cut's exact edge media, then build and VALIDATE every frozen input
   const finals: TransitionContinuityAnalysisInput[] = [];
   for (const [i, cut] of cuts.entries()) {
     const left = await ensureEdgeAssets({ side: cut.left, which: "left", assets: data.assets, deps });
     const right = await ensureEdgeAssets({ side: cut.right, which: "right", assets: data.assets, deps });
-    const draft = build(
+    const draft = buildTransitionInput({
       cut,
-      {
+      view,
+      data,
+      provider,
+      directVideoAllowed: args.qaPolicy.directVideoAllowed,
+      edge: {
         left: { clip: left.clip.asset, still: left.still.asset },
         right: { clip: right.clip.asset, still: right.still.asset },
       },
-      keys[i]!.slice(0, 16),
-    );
+      runKey: keys[i]!.slice(0, 16),
+    });
     if (draft.plan.batches.length === 0)
       throw new SequenceReviewError(
         "media",
         `The exact edge media of ${title(cut)} is outside the cut-edge bounds (${draft.plan.items.find((x) => x.status === "no_media")?.reason ?? "no batch"}). Nothing was queued for this review.`,
       );
-    // the EXACT transfer method of each derived clip must be the one the person confirmed (frozen on the media)
-    const approved = args.selections[i]!.transfer;
+    // the transfer method of each derived clip is frozen on the media; a person's review must have confirmed it exactly
     for (const which of ["left", "right"] as const) {
       const clip = draft.media.find((m) => m.inputId === `${which}:clip`)!;
       const actual = clipTransfer(provider, clip.byteSize, true);
-      if (actual !== approved[which])
+      if (authority.kind === "manual" && actual !== authority.approved[i]![which])
         throw new SequenceReviewError(
           "transfer_changed",
-          `The exact ${which} edge clip of ${title(cut)} (${clip.byteSize ?? "?"} bytes) would be sent as ${actual === "provider_file" ? "a temporary provider file" : actual === "inline" ? "inline data" : "nothing (not sent)"}, not as disclosed (${approved[which]}). Nothing was queued or sent; review the disclosure again (it now shows the exact media).`,
+          `The exact ${which} edge clip of ${title(cut)} (${clip.byteSize ?? "?"} bytes) would be sent as ${actual === "provider_file" ? "a temporary provider file" : actual === "inline" ? "inline data" : "nothing (not sent)"}, not as disclosed (${authority.approved[i]![which]}). Nothing was queued or sent; review the disclosure again (it now shows the exact media).`,
         );
       clip.edge = { ...clip.edge!, transfer: actual };
     }
@@ -740,7 +797,7 @@ export async function submitSequenceReview(args: {
   }
 
   // 6. the recomputed worst case of the EXACT media, again before anything is queued
-  const estimates = await budget(finals, "After preparing the exact media");
+  const estimates = await authority.checkBudget(finals);
 
   // 7. ONE atomic batch write: replays resolved, the shared limit re-checked, every run + job or none
   try {
@@ -751,6 +808,7 @@ export async function submitSequenceReview(args: {
         const estimate = estimates[i]!;
         return {
           limits: { maxActivePerProject: args.limits.maxActivePerProject },
+          ...(authority.kind === "automatic" ? { queuedNote: authority.queuedNote } : {}),
           run: {
             ...newTransitionRun({ cut, view, userId: deps.userId, now: now.toISOString() }),
             analyzer: provider.id,
@@ -762,6 +820,7 @@ export async function submitSequenceReview(args: {
             promptVersion: input.promptVersions.sequence_transition,
             rubricVersion: SEQUENCE_RUBRIC_VERSION,
             model: provider.model,
+            automationKey: authority.kind === "automatic" ? keys[i]! : null,
           },
           job: {
             idempotencyKey: keys[i]!,

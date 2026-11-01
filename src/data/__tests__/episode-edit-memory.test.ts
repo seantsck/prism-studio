@@ -120,6 +120,7 @@ function world() {
   const projects = [data, other];
   const access: MemoryEpisodeEditAccess = {
     all: () => projects,
+    stampOf: () => "2026-10-01T00:00:00.000Z",
     generation: () =>
       ({
         getAttemptView: async (id: string) => ({

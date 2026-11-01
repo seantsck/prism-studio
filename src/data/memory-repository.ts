@@ -1,3 +1,5 @@
+import type { SettlementTable } from "@/domain/continuity/sequence-automation";
+import type { IdentityRef } from "@/domain/schemas";
 import { LOCAL_USER_ID, buildSeedProject } from "./seed";
 import { MemoryCandidateService } from "./candidates-memory";
 import { MemoryCharacterContinuityService } from "./character-continuity-memory";
@@ -22,6 +24,16 @@ type Keyed = { id: string };
 
 const clone = <T>(v: T): T => structuredClone(v);
 
+/** The collections with an `updated_at` a cut's settling reads. */
+const STAMPED: Partial<Record<CollectionName, SettlementTable>> = {
+  shots: "shots",
+  characters: "characters",
+  looks: "looks",
+  locations: "locations",
+  props: "props",
+  assets: "assets",
+};
+
 export class MemoryRepository implements Repository {
   private projects = new Map<string, ProjectData>();
   private generationService: MemoryGenerationService | undefined;
@@ -32,6 +44,9 @@ export class MemoryRepository implements Repository {
   private locationViewService: MemoryLocationViewService | undefined;
   private characterContinuityService: MemoryCharacterContinuityService | undefined;
   private episodeEditService: MemoryEpisodeEditService | undefined;
+  /** The memory twin of `updated_at` on the rows a cut's fingerprints depend on (`getCutSettlementClock`). */
+  private stamps = new Map<string, string>();
+  private readonly createdAt = new Date().toISOString();
 
   /** Derived-media lineage, delivery masters and continuity QA runs (same semantics as Postgres). */
   get mediaQa(): MemoryMediaQaService {
@@ -86,6 +101,7 @@ export class MemoryRepository implements Repository {
     this.locationViewService ??= new MemoryLocationViewService({
       all: () => [...this.projects.values()],
       ownerUserId: () => LOCAL_USER_ID,
+      touchShot: (projectId, shotId) => this.touchShot(projectId, shotId),
     });
     return this.locationViewService;
   }
@@ -95,6 +111,7 @@ export class MemoryRepository implements Repository {
     this.characterContinuityService ??= new MemoryCharacterContinuityService({
       all: () => [...this.projects.values()],
       ownerUserId: () => LOCAL_USER_ID,
+      touchShot: (projectId, shotId) => this.touchShot(projectId, shotId),
     });
     return this.characterContinuityService;
   }
@@ -106,6 +123,7 @@ export class MemoryRepository implements Repository {
       generation: () => this.generation,
       mediaQa: () => this.mediaQa,
       productionFrames: () => this.productionFrames,
+      stampOf: (table, id) => this.stamps.get(`${table}:${id}`) ?? this.createdAt,
     });
     return this.episodeEditService;
   }
@@ -116,6 +134,28 @@ export class MemoryRepository implements Repository {
 
   currentUserId(): string {
     return LOCAL_USER_ID;
+  }
+
+  private stamp(table: SettlementTable, id: string, at: string): void {
+    this.stamps.set(`${table}:${id}`, at);
+  }
+
+  /** The memory twin of migration 0047's triggers on the Shot's selections and Props. */
+  private touchShot(projectId: string, shotId: string): void {
+    const now = new Date().toISOString();
+    const shot = this.projects.get(projectId)?.shots.find((s) => s.id === shotId);
+    if (!shot) return;
+    shot.updatedAt = now;
+    this.stamp("shots", shotId, now);
+  }
+
+  /** The memory twin of migration 0047's trigger on `character_identity_refs`. */
+  private touchCharacter(projectId: string, characterId: string): void {
+    const now = new Date().toISOString();
+    const character = this.projects.get(projectId)?.characters.find((c) => c.id === characterId);
+    if (!character) return;
+    character.updatedAt = now;
+    this.stamp("characters", characterId, now);
   }
 
   /** Synchronous owner/title lookup by id (the memory Local Agent store's ownership re-check). */
@@ -183,8 +223,16 @@ export class MemoryRepository implements Repository {
     const list = this.get(projectId)[name] as unknown as Keyed[];
     const next = clone(item) as unknown as Keyed;
     const i = list.findIndex((x) => x.id === next.id);
+    const previous = i >= 0 ? list[i] : undefined;
     if (i >= 0) list[i] = next;
     else list.push(next);
+    // the memory twin of the `updated_at` triggers on these rows
+    const table = STAMPED[name];
+    if (table) this.stamp(table, next.id, new Date().toISOString());
+    if (name === "identityRefs") {
+      if (previous) this.touchCharacter(projectId, (previous as unknown as IdentityRef).characterId);
+      this.touchCharacter(projectId, (next as unknown as IdentityRef).characterId);
+    }
     // the memory twin of migration 0040's trigger on shots.location_id: a Shot that moves to another Location loses
     // a Location View selection of its previous Location in the same write
     if (name === "shots") this.locationViewService?.onShotSaved(next as unknown as Shot);
@@ -207,7 +255,22 @@ export class MemoryRepository implements Repository {
     this.episodeEditService?.assertNotReferenced(projectId, name, id);
     const list = p[name] as unknown as Keyed[];
     const i = list.findIndex((x) => x.id === id);
+    const removed = i >= 0 ? list[i] : undefined;
     if (i >= 0) list.splice(i, 1);
+    // the memory twins of the FK cascades and migration 0047's triggers: `shot_props` cascades, an identity reference's
+    // Asset is set null, and each of those moves the parent's clock
+    if (name === "props")
+      for (const shot of p.shots.filter((s) => s.propIds.includes(id))) {
+        shot.propIds = shot.propIds.filter((x) => x !== id);
+        this.touchShot(projectId, shot.id);
+      }
+    if (name === "assets")
+      for (const ref of p.identityRefs.filter((r) => r.assetId === id)) {
+        ref.assetId = null;
+        this.touchCharacter(projectId, ref.characterId);
+      }
+    if (name === "identityRefs" && removed)
+      this.touchCharacter(projectId, (removed as unknown as IdentityRef).characterId);
   }
 
   async findAsset(assetId: string): Promise<Asset | null> {

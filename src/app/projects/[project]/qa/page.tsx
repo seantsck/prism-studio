@@ -1,3 +1,4 @@
+import type { ContinuityAnalysisProvider } from "@/continuity/analysis/provider";
 import { PageHeader } from "@/components/ui";
 import { QaPolicyForm } from "@/components/continuity/qa-policy-form";
 import { analysisSpendBlockers } from "@/domain/continuity/analysis/cost";
@@ -12,10 +13,25 @@ import { requireProject } from "@/server/repo";
 export const dynamic = "force-dynamic";
 
 /** Phase 3A.2: the Project's Shot QA automation policy (owner only, RLS-bound). */
+function sequenceCapability(provider: ContinuityAnalysisProvider | undefined) {
+  if (!provider?.modes().includes("sequence_transition"))
+    return { available: false, label: "cannot analyse cuts on this server" };
+  const c = provider.crossCutCalibration();
+  if (c.acceptedFamilies.length === 0)
+    return { available: false, label: "no cut family has passed calibration on this configuration" };
+  const eyeline = c.acceptedFamilies.includes("eyeline") ? "" : "; eyeline unavailable";
+  return {
+    available: true,
+    label: `${c.acceptedFamilies.length} cut families accepted (${c.version})${eyeline}`,
+  };
+}
+
 export default async function ShotQaSettingsPage({ params }: { params: Promise<{ project: string }> }) {
   const { project: slug } = await params;
   const data = await requireProject(slug);
-  const policy = await (await getMediaQaRepo()).getQaPolicy(data.project.id);
+  const qa = await getMediaQaRepo();
+  const policy = await qa.getQaPolicy(data.project.id);
+  const sequenceReady = await qa.sequenceAutomationReady();
   const config = getAnalysisConfig();
   const providers = getPreviewProviders();
   const analyzers = getAnalyzerStatuses().map((s) => ({
@@ -29,6 +45,8 @@ export default async function ShotQaSettingsPage({ params }: { params: Promise<{
       : s.id === "gemini"
         ? { available: false, label: "server disabled (direct video is off on this server)" }
         : { available: false, label: "this analyzer does not support temporal video" },
+    // 3A.4F: only a calibrated family can run; the analyzer's own decision, on this server's exact configuration
+    sequence: sequenceCapability(providers.get(s.id)),
     blockers: [
       ...(s.missingConfig.length ? [`missing ${s.missingConfig.join(", ")}.`] : []),
       ...(s.kind === "model"
@@ -72,9 +90,12 @@ export default async function ShotQaSettingsPage({ params }: { params: Promise<{
               maxCostPerRunUsd: policy.maxCostPerRunUsd,
               maxCostPerDayUsd: policy.maxCostPerDayUsd,
               directVideoAllowed: policy.directVideoAllowed,
+              sequenceSemanticMode: policy.sequenceSemanticMode,
+              maxTransitionsPerBatch: policy.maxTransitionsPerBatch,
               revision: policy.revision,
             }}
             analyzers={analyzers}
+            sequenceReady={sequenceReady}
           />
         </section>
       </div>

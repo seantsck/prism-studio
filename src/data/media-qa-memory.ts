@@ -7,9 +7,11 @@ import {
 } from "@/domain/continuity/analysis/job-state";
 import {
   defaultQaPolicy,
+  MAX_TRANSITIONS_PER_BATCH,
   qaPolicyErrors,
   type ProjectQaPolicy,
   type QaPolicyInput,
+  type SemanticMode,
 } from "@/domain/continuity/automation";
 import type { EpisodeEdit } from "@/domain/edit/model";
 import type { MemoryProjectsAccess } from "./generation-memory";
@@ -440,7 +442,7 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
       pricingVersion: input.job.estimate.pricingVersion,
       recordedAt: now,
     });
-    this.addEvent(job, null, "queued", "Sequence review submitted by user", now);
+    this.addEvent(job, null, "queued", input.queuedNote ?? "Sequence review submitted by user", now);
     return job;
   }
 
@@ -490,7 +492,7 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
       promptVersion: input.promptVersion ?? null,
       rubricVersion: input.rubricVersion ?? null,
       model: input.model ?? null,
-      automationKey: null,
+      automationKey: input.automationKey ?? null,
       createdBy: input.createdBy,
       createdAt: input.now,
       completedAt: done ? input.now : null,
@@ -797,6 +799,22 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
     return true;
   }
 
+  async sequenceAutomationReady() {
+    return true;
+  }
+
+  async listEditTransitionAnalysisJobs(projectId: string, editId: string) {
+    const runs = new Set(
+      this.transitionSubjects
+        .filter((s) => s.projectId === projectId && s.editId === editId)
+        .map((s) => s.runId),
+    );
+    return [...this.jobs.values()]
+      .filter((j): j is TransitionAnalysisJob => j.subjectKind === "transition" && runs.has(j.runId))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map(clone);
+  }
+
   async getQaPolicy(projectId: string) {
     return clone(this.qaPolicies.get(projectId) ?? defaultQaPolicy(projectId));
   }
@@ -1040,7 +1058,11 @@ export class MemoryMediaQaService implements MediaQaRepository, AnalysisWorkerSt
 }
 
 /** Stores exactly what the owner entered (an empty analyzer becomes null); nothing is inferred or promoted. */
-function normalisePolicy(p: QaPolicyInput): QaPolicyInput & { directVideoAllowed: boolean } {
+function normalisePolicy(p: QaPolicyInput): QaPolicyInput & {
+  directVideoAllowed: boolean;
+  sequenceSemanticMode: SemanticMode;
+  maxTransitionsPerBatch: number;
+} {
   return {
     semanticMode: p.semanticMode,
     analyzer: p.analyzer || null,
@@ -1049,5 +1071,8 @@ function normalisePolicy(p: QaPolicyInput): QaPolicyInput & { directVideoAllowed
     maxCostPerDayUsd: p.maxCostPerDayUsd,
     // 3A.3: never implied; a caller that does not set it (3A.2) saves false
     directVideoAllowed: p.directVideoAllowed === true,
+    // 3A.4F: never implied by the Shot mode; a caller that does not set them saves the defaults
+    sequenceSemanticMode: p.sequenceSemanticMode ?? "off",
+    maxTransitionsPerBatch: p.maxTransitionsPerBatch ?? MAX_TRANSITIONS_PER_BATCH,
   };
 }
