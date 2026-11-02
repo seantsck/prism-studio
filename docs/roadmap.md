@@ -236,12 +236,29 @@ vision; face embeddings; cross-Shot / cut-level continuity (3A.4); cross-Episode
 accepted on the verified calibration v2 (six temporal families). Lip sync stays unchecked and separately gated, and QA
 stays advisory.
 
-## Phase 4 — persistent 3D sets + virtual cameras + blocking
+## Phase 4 — Spatial Production _(architecture accepted; implementation not started)_
 
-- React Three Fiber set editor attached via `locations.set3d`.
-- Camera rigs and blocking markers replace abstract `spatial.marks`; 3D previews become
-  `storyboard_frames(source='3d_preview')`.
-- Light rigs feed `lighting` and the generation package.
+Design: [phase-4-spatial-production](phase-4-spatial-production.md). **3D is an optional construction tool for a Production
+Frame, never a prerequisite for one.**
+
+**Foundation already delivered by Phase 2F** ([virtual-set](virtual-set.md), [production-frames](production-frames.md)):
+persistent Location scene documents, Shot camera bookmarks and paths, Shot blocking, deterministic Master Frames, local
+previs, depth/object-id/mask control passes, splat environments and the Production Frame handoff. It uses the vendored
+ArtCraft-derived Three.js engine behind `SpatialSceneAdapter`. React Three Fiber is not required. `locations.set3d` was never
+the attachment, holds no data, and stays legacy and non-authoritative. `spatial.marks` stays authored text.
+
+**Phase 4 work remaining:**
+
+| Slice | Scope                                                                                          | Status              |
+| ----- | ---------------------------------------------------------------------------------------------- | ------------------- |
+| 4A    | Architecture and consolidation                                                                 | complete, docs only |
+| 4B    | Shot Lighting Rigs: `prism.shot-lighting.v1`, overlay, render provenance, optional package key | not started         |
+| 4C    | Shot-centric Spatial Workspace and Production Frame handoff                                    | not started         |
+| 4D    | Reusable setups: explicit copies, never live links                                             | not started         |
+| 4E    | Splat control-pass refusal and environment limits                                              | not started         |
+| 4F    | Production acceptance and roadmap close                                                        | not started         |
+
+Real reconstruction (M2D.3D2) stays optional and does not block any slice.
 
 ## Phase 5 — rough-cut editor / audio / captions / NLE export
 
