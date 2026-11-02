@@ -1,0 +1,433 @@
+# Phase 4 — Spatial Production
+
+**Status: 4A architecture, awaiting owner review (2026-11-01). Nothing in this document is implemented yet unless it is
+listed under [Phase 2F foundation](#1-phase-2f-foundation). No migration 0048 exists. Hosted head is 0047.**
+
+Phase 4 finishes the optional spatial path into a Production Frame. It does not build a 3D system: Phase 2F already built
+one, in a different shape from the one the old roadmap described. What is missing is Shot-owned lighting, a workflow that
+starts from the Shot, reusable setups, and an honest decision on splat control passes.
+
+Abbreviations for citations: `VS` is [virtual-set.md](virtual-set.md), `PF` is [production-frames.md](production-frames.md).
+
+## 1. Phase 2F foundation
+
+Evidence is a static read of the code, plus read-only hosted counts taken on 2026-11-01. "Location" and "Shot" name the
+owner.
+
+| Capability                     | State    | Owner    | Authority and where it lives                                                                                                                                                      | Known limit                                                                                                      |
+| ------------------------------ | -------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Persistent scene               | built    | Location | `location_scene_documents`, `prism.previs.v1`, one per Location, compare-and-set revision (`0030`, `src/domain/previs/types.ts`)                                                  | No hierarchy UI                                                                                                  |
+| Set geometry, GLB              | built    | Location | Document `objects[]`; `kind=glb` resolved to `m_<assetId>` (`src/domain/previs/document.ts`)                                                                                      | Single file; no Draco, KTX2 or Meshopt (VS "Known gaps")                                                         |
+| Splat environment              | built    | Location | `kind=splat` plus `location_spatial_reconstructions` (`0035`, `src/domain/previs/splat.ts`)                                                                                       | One per Set; 50 MB and 8M Gaussians; software-renderer proof only                                                |
+| Navigation vs production cam   | built    | Location | `productionCamera`; `editor.navigationCamera` is excluded from the fingerprint                                                                                                    | Inspector camera edits are not undoable                                                                          |
+| Camera bookmark                | built    | Shot     | `shot_camera_bookmarks` (`0030`), basis `vertical-sensor-24mm`                                                                                                                    |                                                                                                                  |
+| Camera path                    | built    | Shot     | `shot_camera_paths`, `prism.camera-path.v1` (`0031`, `src/domain/previs/camera-path.ts`)                                                                                          | Engine timeline unused                                                                                           |
+| Local previs, audio mix        | built    | Shot     | `shot_previs_clips` (`0031`, `0032`), `prism.previs-audio-mix.v1`                                                                                                                 | Static blocking pose; no mixer                                                                                   |
+| Blocking, rig, pose            | built    | Shot     | `shot_character_blocking`, `prism.shot-blocking.v1`, `prism.humanoid-rig.v1`, `prism.pose.v1` (`0033`)                                                                            | FK only, no IK, no pose animation                                                                                |
+| Master Frames                  | built    | Shot     | `scene_master_frames` (`0030`, `0033`), `src/server/previs-actions.ts`                                                                                                            | Needs a saved set and a linked camera; see [§9](#9-findings-this-audit-surfaced)                                 |
+| Production Frame handoff       | built    | Shot     | `promoteMasterFrame` creates a `shot_production_frames` row with source `previs_master` and selects it (`0039`, `src/server/production-frame-actions.ts`)                         | Aspect mismatch refused, never cropped                                                                           |
+| Depth, object id, masks        | built    | Shot     | `shot_spatial_pass_bundles` (`0034`), `src/domain/previs/spatial-passes.ts`                                                                                                       | One frame per capture; raw rasters; refused when a splat is visible                                              |
+| Reconstruction jobs            | built    | Location | `reconstruction_jobs`, `prism.reconstruction-job.v1` (`0036`, `0037`)                                                                                                             | No automatic fallback                                                                                            |
+| Local and remote agent capture | partial  | Location | `src/lib/reconstruction/local-capture.ts` (`not_installed` until a toolchain exists); `local_agents` (`0038`), gated by `PRISM_LOCAL_AGENTS_ENABLED`                              | Not production ready. No real COLMAP or Brush run ([reconstruction-acceptance.md](reconstruction-acceptance.md)) |
+| Package reference              | built    | Shot     | `spatialReference` frozen by value (`src/domain/previs/spatial.ts`); key omitted when absent (`src/domain/generation-package.ts`). Assets by id and checksum, never bytes or URLs |                                                                                                                  |
+| **Shot lighting**              | **none** | —        | Text only, see [§5](#5-shot-lighting-architecture)                                                                                                                                |                                                                                                                  |
+
+**Boundary.** `SpatialSceneAdapter` (`src/lib/previs/scene-adapter.ts`) is the architectural boundary, implemented by
+`ArtCraftSceneAdapter` over the vendored ArtCraft-derived Three.js engine at a pinned commit. New spatial capability goes
+through it. `blocking-overlay.ts` is the one other module that touches engine internals (`UPSTREAM.md`), which VS's "only
+the adapter" sentence omits.
+
+**Security shape, to be copied by anything new.** Owner-only RLS, no worker grant, and repo memory and Postgres twins.
+
+**Hosted data.** All spatial tables hold 0 rows. `storyboard_frames` holds only `sketch` sources. No `generation_attempts`
+snapshot has a `spatialReference`. So additive Phase 4 migrations have nothing to backfill today, and no feature here has
+yet been accepted against real hosted spatial data.
+
+## 2. Why the old roadmap wording is obsolete
+
+| Old statement                                               | Classification             | What is true now                                                                                                                                                                                                                                                                                         |
+| ----------------------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| React Three Fiber set editor attached via `locations.set3d` | Implemented differently    | The editor exists, on the ArtCraft-derived Three.js engine, attached through `location_scene_documents`. No R3F anywhere. **R3F is not a requirement, and the working engine is not to be replaced because the roadmap once named another library.** `locations.set3d` was never used as the attachment. |
+| Camera rigs replace `spatial.marks`                         | Implemented differently    | Cameras are `shot_camera_bookmarks` and `shot_camera_paths`. They did not replace marks; they sit beside them.                                                                                                                                                                                           |
+| Blocking markers replace `spatial.marks`                    | Implemented differently    | `shot_character_blocking` is the 3D authority. `spatial.marks` stays as authored text intent ([§8](#8-camera-blocking-and-reconstruction-decisions)).                                                                                                                                                    |
+| 3D previews become `storyboard_frames(source='3d_preview')` | Implemented, not primary   | `adoptMasterFrame` writes that source, and it works. The canonical route is now Master Frame promotion to a Production Frame, which does not need adoption.                                                                                                                                              |
+| Light rigs feed `lighting`                                  | Obsolete, and wrong way up | A rig must not write the authored `lighting` text. Authored intent and spatial implementation are separate truths ([§5.2](#52-four-separate-truths)).                                                                                                                                                    |
+| Light rigs feed the generation package                      | Still missing              | No Shot-owned spatial lighting exists. Designed below as optional `spatialReference.shotLighting`.                                                                                                                                                                                                       |
+| Phase 4 is the persistent 3D set                            | Mostly delivered by 2F     | Persistent scene, cameras, blocking, previs, Master Frames, control passes, splats and the handoff are delivered. Phase 4 is what remains.                                                                                                                                                               |
+
+### `locations.set3d` and `set3d_model_asset_id`
+
+| Question                      | Answer                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authoritative paths?          | None. No authoring path, and no previs, render or package use.                                                                                                                                                                                                                                                                                                      |
+| What still touches them?      | Column definitions (`0001_core.sql`); pass-through mapping (`src/data/postgres-mapping.ts`); schema (`src/domain/schemas.ts`); action preserving the existing value (`src/server/actions.ts`); seed and fixture nulls. **One real read:** `src/domain/asset-usage.ts` reports `set3d_model` where-used. So `domain-model.md` calling it "unused" is slightly wrong. |
+| Hosted data?                  | None: 0 of 8 Locations have a non-empty `set3d` or a `set3d_model_asset_id`.                                                                                                                                                                                                                                                                                        |
+| Duplicates current authority? | Yes in meaning. `{cameraRigs, blockingMarkers, lightRigs}` overlaps bookmarks, blocking and the proposed rig table, and it is Location-owned where those are Shot-owned.                                                                                                                                                                                            |
+| Stay deprecated?              | Yes. **Legacy and non-authoritative. No new feature may read or write them.**                                                                                                                                                                                                                                                                                       |
+| Later removal?                | Possible, as its own forward-only migration plus removal of the mapping, schema and where-used reader. Not part of Phase 4 core.                                                                                                                                                                                                                                    |
+| Would removal break history?  | Not on current evidence: no package reads them and hosted is empty. Re-check counts on every environment immediately before any removal. **Nothing is removed by 4A.**                                                                                                                                                                                              |
+
+UI copy at `src/app/projects/[project]/locations/page.tsx` still promises "A future 3D Set". That is stale; 4C corrects it.
+
+## 3. Authority matrix
+
+The matrix proposed for this gate matches the code, with the refinements below.
+
+| Truth                        | Authority                                                                             | Not authority                                          |
+| ---------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Location geometry            | `location_scene_documents` / `prism.previs.v1`                                        | `locations.set3d`                                      |
+| Reconstruction               | `location_spatial_reconstructions`, with the splat object saved in the scene document | Job rows, which are process history                    |
+| Static Shot camera           | `shot_camera_bookmarks`                                                               | `editor.navigationCamera`; `productionCamera` alone    |
+| Camera motion                | `shot_camera_paths`                                                                   | Engine timeline                                        |
+| Blocking                     | `shot_character_blocking`                                                             | `spatial.marks`, `locations.set3d`                     |
+| **Shot lighting (proposed)** | **`shot_light_rigs`**                                                                 | Location scene; the `lighting` text; `locations.set3d` |
+| Authored lighting intent     | `shot.lighting`, time of day, weather; `location.lighting`; `continuity.lighting`     | Any rig                                                |
+| Render provenance            | `scene_master_frames`, `shot_previs_clips`, `shot_spatial_pass_bundles`               | Live scene state                                       |
+| Canonical visual             | `shot_production_frames` and the selection pointer                                    | Master Frames; `3d_preview` storyboard frames          |
+| Downstream frozen            | `GenerationPackage.spatialReference`                                                  | Any live pointer                                       |
+
+Differences from the proposed matrix:
+
+1. **Lighting is two truths**, and the authored one has three text sources today.
+2. **A Master Frame's camera provenance is a pointer.** `camera_bookmark_id` has no camera fingerprint, unlike blocking.
+3. **`spatial.characterBlocking` in `spatialReference` is legacy**, kept for historical shape; `shotBlocking` is current.
+4. **The provenance tables do not all enforce immutability.** See [§9](#9-findings-this-audit-surfaced).
+
+## 4. Image-first invariant
+
+> **3D is an optional construction tool for a Production Frame, never a prerequisite for one.**
+
+Default path: script → performance → Shot Prep → storyboard → Production Frame → image-to-video → Episode Edit → QA.
+
+Optional path: Location scene + Shot camera + blocking + lighting → deterministic Master Frame → Production Frame.
+
+Today's code already honours this (PF top section; `production-workflow.md`; `src/domain/production-frame.ts`; tests in
+`production-frame.test.ts`; `e2e/zzzzzzzzzzzzzzz-production-frames.spec.ts`). A Shot with no scene promotes a storyboard,
+upload or generated image, and its package has no `spatialReference` key. Rules for every Phase 4 slice:
+
+- No Phase 4 migration, preflight check, QA criterion or UI step may require a scene, camera, blocking or rig.
+- Every new package key is optional and omitted when absent, so historical and no-3D packages stay byte-comparable.
+- Each slice carries a test that a Shot with no spatial data reaches a selected Production Frame and a valid package.
+
+**Production Frame authority.** The Production Frame is the downstream visual authority. The Master Frame is a
+deterministic render and its provenance. Promotion reuses the Asset and writes an immutable row. Later spatial edits never
+silently rewrite either one or the selection, and they do not stale the Production Frame: the scene is deliberately not a
+freshness part (PF; `production-frame.test.ts`). Video generation reads stored Assets and never depends on a live viewport.
+
+## 5. Shot Lighting architecture
+
+### 5.1 Current state
+
+- **Engine base rig**, created by the vendored engine rather than authored: hemisphere 3.0, directional 2.0 with shadows
+  off, plus an ambient light added only by some skybox branches (`src/vendor/artcraft-scene-engine/engine/scene.ts`).
+- **Scene lights**: the schema has `kind: "light"` with transform and colour only. An engine `PointLight` is hardcoded to
+  intensity 1, range 100, and neither value persists. No Prism UI can add one (`PrimitiveKind` omits lights). In practice
+  every set is lit by the base rig.
+- **Skybox**: a saved `skybox` changes which base lights exist, is **outside the scene fingerprint**, and has no Prism UI.
+- **Shadows**: the static read found no `shadowMap` enablement in the engine scene or adapter, and the base rig has
+  `castShadow = false`.
+- **Text**: `shot.lighting` reaches the prompt, package, QA, Production Frame intent and freshness; `location.lighting`
+  reaches freshness, package and prompt; `continuity.lighting` reaches package and sequence QA.
+- **Pixels**: Master Frames and previs render the live lit scene, so lighting changes them. Control passes do not depend on
+  it: their shader override sets `lights: false`, lights are hidden, and environment and fog are nulled
+  (`src/lib/previs/spatial-pass-renderer.ts`).
+
+So a Shot cannot express "night, single practical from camera left" spatially. **Shot Lighting is needed.** The base rig's
+3.0 + 2.0 also means added lights alone cannot make a dark scene, so the design must control the base, not only add to it.
+
+### 5.2 Four separate truths
+
+| Truth                                   | Meaning                    | Changes when                 |
+| --------------------------------------- | -------------------------- | ---------------------------- |
+| `shot.lighting`, `timeOfDay`, `weather` | Authored intent (text)     | A writer edits it            |
+| `ShotLightingRig`                       | Spatial implementation     | The rig is saved             |
+| Master Frame `lighting_json`            | What was actually rendered | Never, once captured         |
+| Production Frame                        | The approved image         | Never; a new one is selected |
+
+Neither truth writes another. No rig save edits text, and no text edit changes a rig. Prism does not try to judge whether a
+rig "matches" prose. Conflict is detected deterministically: the rig freezes the authored text it was saved against
+(`authoredIntent`), and a later difference surfaces as `REVIEW: authored lighting changed since this rig was saved`. It is a
+review flag and blocks nothing. A rig saved after `Rain, dusk` became `Clear, noon` still renders exactly as saved until a
+person changes it.
+
+### 5.3 Proposed schema: `prism.shot-lighting.v1`
+
+```ts
+interface ShotLightingRigV1 {
+  schema: "prism.shot-lighting.v1";
+  /** how the engine's built-in lights behave for this Shot; see below */
+  base: { mode: "engine_default" } | { mode: "replace"; hemisphere: HemisphereValue | null };
+  lights: ShotLightV1[]; // ordered by id for fingerprinting; capped, proposed 16
+  authoredIntent: { lighting: string; timeOfDay: string; weather: string };
+}
+
+interface ShotLightV1 {
+  id: string; // stable within the rig
+  role: "key" | "fill" | "rim" | "practical" | "background" | "other"; // a label; it changes no pixels
+  label: string; // excluded from the fingerprint, like the role
+  type: "directional" | "point" | "spot" | "ambient";
+  enabled: boolean; // disabled lights stay in the document and in the fingerprint
+  color: string; // lowercase #rrggbb, always authoritative
+  intensity: number; // finite, >= 0, capped
+  position?: Vec3; // point, spot, directional
+  target?: Vec3; // spot, directional. A target, so orientation has one representation
+  range?: number; // point, spot. 0 means unbounded, as in Three.js
+  coneAngleDeg?: number; // spot only
+  penumbra?: number; // spot only, 0..1. This is the edge softness, nothing more
+  castShadow?: false; // v1 refuses true, see below
+}
+```
+
+What the renderer can honestly support decides each field:
+
+| Field              | Decision                                                                                                                                                                                                                           |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`             | Three.js types that work on the materials in use (Phong primitives, Standard mannequins). **`RectAreaLight` is excluded**: it needs Standard or Physical materials, so primitives would silently ignore it.                        |
+| Colour temperature | **Not a stored field.** Three.js has no Kelvin input. A later UI helper may convert Kelvin to `color` at authoring time; `color` stays the only truth.                                                                             |
+| Softness           | **Spot `penumbra` only.** No area-light softness, and no claim of physically based falloff or photometric units. `intensity` is an engine value, not lumens.                                                                       |
+| `castShadow`       | **Reserved, and `true` is refused in v1.** No shadow map appears enabled. 4B may enable shadows only if it proves determinism across capture sizes and adds shadow settings to the fingerprint; otherwise the field stays refused. |
+| `base.mode`        | `engine_default` keeps today's look. `replace` removes base hemisphere, directional and ambient contributions for this Shot, so dark scenes are possible.                                                                          |
+
+**Domain and engine stay separate.** `src/domain/previs/lighting.ts` holds the zod schema, normalisation, fingerprint and
+stale logic, and imports no Three.js. Translation to engine objects lives behind `SpatialSceneAdapter`. The engine's
+`media_id`, uuids and light classes never appear in the document.
+
+**Fingerprint.** `lighting_fingerprint` is a SHA-256 over canonical JSON of pixel-affecting fields only: `base`, and each
+light sorted by `id`, without `role`, `label` or `authoredIntent`. Relabelling therefore does not stale a render.
+
+### 5.4 Overlay layering
+
+The rig is a Shot overlay and is **never written into the Location scene**, following `BlockingOverlay` exactly:
+
+- Overlay objects carry no `media_id`, so the scene save filter skips them, and the scene document and its fingerprint are
+  untouched. A test must assert both.
+- `setFigures` and `reattachAll` have direct analogues: swap per Shot, and re-attach after scene load.
+- **Layers matter.** Three.js layer-tests lights against the camera, so overlay lights must stay on layer 0 and their
+  helpers on layer 1, which production cameras disable. A `cleanRender` hides gizmos.
+- `base: replace` is applied and **restored** when the Shot changes or the editor disposes, so one Shot's rig cannot leak
+  into another Shot's render.
+- Scene-level lights remain Location truth. A rig does not edit them; `replace` covers the engine base only.
+- Adapter additions, proposed: `lighting.setRig`, `lighting.clear`, `lighting.select`, and a read of the applied fingerprint
+  for the capture guard.
+
+### 5.5 Persistence: `shot_light_rigs`
+
+Candidate shape for **0048, not created by this gate**. It follows `shot_character_blocking`.
+
+```text
+shot_light_rigs
+  id, project_id, shot_id, location_id, scene_document_id
+  scene_revision, scene_fingerprint        the set state it was authored against
+  schema_version                           check = 'prism.shot-lighting.v1'
+  revision                                 compare-and-set, +1 per save
+  rig_json                                 check: object, schema matches
+  lighting_fingerprint                     char(64)
+  created_by, created_at, updated_at, metadata
+  unique (id, project_id); unique (shot_id)   one current rig per Shot
+  composite FKs to shots, locations, location_scene_documents, each cascading on project
+  guard trigger: cannot move between projects, Shots or Locations
+  owner-only RLS; no worker grant
+```
+
+**Is 0048 appropriate? Yes, as one additive forward-only migration in 4B and only there.** It holds the table and the render
+columns ([§5.6](#56-render-provenance)). Nothing is backfilled, because hosted is empty and historical nulls are correct.
+Scene edits do not invalidate a rig: light positions are world coordinates, so a changed set raises a review flag from
+`scene_fingerprint`, as blocking does.
+
+### 5.6 Render provenance
+
+Additive and nullable on `scene_master_frames` and `shot_previs_clips`:
+
+```text
+lighting_fingerprint text null check (char_length = 64)
+lighting_json        jsonb null
+```
+
+- **Null means no rig was applied,** which is every historical render. Historical rows are never rewritten or backfilled,
+  and null never gets a guessed value.
+- `lighting_json` is the frozen rig plus the **base environment actually in effect**: engine base state and the saved
+  `skybox` identifier. That closes the skybox gap for lit renders without changing `sceneFingerprint`, which would falsely
+  stale every historical comparison.
+- Server guard, copied from blocking: the claimed fingerprint must equal the one derived from the saved rig, or the capture
+  is refused.
+- Staleness is a new pure `masterFrameStaleReasons`, plus a `lighting` reason in `previsStaleReasons`. Master Frames have no
+  such function today ([§9](#9-findings-this-audit-surfaced)).
+
+### 5.7 Staleness boundaries
+
+| Artifact                        | Rig change does   | Why                                                                                 |
+| ------------------------------- | ----------------- | ----------------------------------------------------------------------------------- |
+| Master Frame                    | Stale flag        | Pixels depend on lights                                                             |
+| Local previs                    | Stale flag        | Pixels depend on lights                                                             |
+| Depth, object id, mask bundles  | **Nothing**       | `lights: false`; lights hidden; no dependency. **A test must pin this**             |
+| Camera path, bookmark, blocking | Nothing           | Independent truths                                                                  |
+| Selected Production Frame       | Nothing automatic | An approved image. Its source Master Frame may show a review note; no silent change |
+| Shot freshness and QA           | Nothing           | Rig is not a freshness part. `shot.lighting` text remains one, unchanged            |
+
+### 5.8 GenerationPackage
+
+Optional `spatialReference.shotLighting`, frozen by value, following `cameraMotion`:
+
+```ts
+interface ShotLightingReference {
+  schemaVersion: 1;
+  rigId: string;
+  rigRevision: number;
+  lightingFingerprint: string;
+  sceneRevision: number; // the set state it was authored against; may differ from live
+  sceneFingerprint: string;
+  rig: ShotLightingRigV1; // by value. No URLs, no live pointers, no bytes
+  /** the lighting the selected Production Frame's source Master Frame rendered, if any */
+  productionFrameLightingFingerprint: string | null;
+}
+```
+
+- **No rig: key omitted.** Historical packages and no-3D packages are unchanged, and no schema bump is needed, as with
+  `cameraMotion` and `shotBlocking`.
+- **It does not replace authored `lighting`.** Both travel. The authored text remains what the prompt plan uses.
+- `productionFrameLightingFingerprint` exists because the rig may have moved on since the approved image was rendered. A
+  mismatch is visible in the package and is not corrected. This avoids repeating the gap in [§9](#9-findings-this-audit-surfaced).
+- **Later, not 4B:** a deterministic prose summary such as "single warm key from camera left, low fill" could be derived for
+  provider prompts. It needs the same no-3D byte stability and its own review. **4B wires no provider and changes no prompt.**
+
+## 6. Shot-centric workflow
+
+Today the only route is `/projects/[project]/locations/[locationId]/3d?shot=`, reached through "Open in 3D Set" in Shot Prep.
+The editor is Location-first with an optional Shot.
+
+**Decision (4C): a Shot route over the same engine, not a second scene system.** A Shot-owned entry such as
+`/projects/[project]/shots/[shotId]/spatial` resolves the Shot's Location and mounts the same editor and adapter. The same
+Location scene is edited by the same CAS path. The workspace shows the Shot's camera, blocking and rig, then capture, then
+"Use as Production Frame". A Shot with no Location, or with a Location with no scene, sees a plain explanation and a route
+back to the image-first path. It is never a blocker. Editing Location geometry from a Shot must be visibly a Location edit,
+since other Shots share it.
+
+## 7. Reusable setups
+
+**Decision (4D): explicit copy-by-value templates.** A template is a saved camera, lighting or blocking value that a person
+applies to a Shot. Applying writes a normal revision of the Shot's own row and records `applied_from_template_id` and the
+template revision as provenance. **There is no live link: editing or deleting a template rewrites nothing**, neither Shots
+nor renders nor packages. Scope is Location for anything in world coordinates, since coordinates mean nothing in another set.
+Project-wide scope is limited to values that do not depend on position, such as lens-only camera presets.
+
+## 8. Camera, blocking and reconstruction decisions
+
+**Camera: split accepted.** Navigation (never fingerprinted), production (scene), bookmark (static Shot) and path (motion
+Shot) are distinct and work. **No second camera-rig table.** Named camera "rigs" are templates under §7. This closes the old
+`cameraRigs` idea.
+
+**Blocking: `shot_character_blocking` accepted. `spatial.marks` is not revived.** Marks remain authored text. Remaining uses:
+written in `src/server/actions.ts`, defaulted in `shot-defaults.ts`, read by `src/domain/preflight.ts` as a blocking check and
+by `shot-prep-view.tsx`, and carried indirectly by the whole `shot.spatial` in fingerprint, package and Production Frame
+intent. Editing marks therefore stales the `blocking` part, and that behaviour stays. Nothing links marks to 3D blocking, and
+nothing should start to.
+
+**Reconstruction: optional.** A splat can be imported without running a capture. Real local reconstruction stays "PRODUCTION
+READY: NO" with Gates A, B and C unpassed. **M2D.3D2 does not block any Phase 4 slice.** Phase 4 acceptance must not depend on
+a real COLMAP or Brush run.
+
+**Splat control passes: not core, and not solved.** Today's refusal stands in panel, client and server, with its honest
+message. Depth from a Gaussian renderer is a different thing from mesh depth, and object ids and masks have no direct
+equivalent. Slice 4E decides from a spike. Default if the spike is inconclusive: keep the refusal and document it as a
+permanent limitation of `prism.*.v1` passes. Any approximate output must use a **new, distinct pass schema** and may never
+claim the current exact ones. Likewise, whether a rig has any effect on a splat is unverified, since splats generally carry
+baked appearance. 4B must test it and tell the user plainly if lights do not affect the environment.
+
+## 9. Findings this audit surfaced
+
+These are real gaps in merged code, recorded here and fixed only by the slice named.
+
+| #   | Finding                                                                                                                                                                                            | Disposition                                                                             |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| 1   | **Scene fingerprint omits lighting and skybox**, so the picture can change while the fingerprint does not. VS's fingerprint section does not say so.                                               | 4B records base environment; doc corrected                                              |
+| 2   | **Master Frames have no staleness function.** Only an inline blocking compare in `virtual-set-editor.tsx`; VS implies more. Shot Prep shows none.                                                  | 4B adds it; 4C surfaces it in Shot Prep                                                 |
+| 3   | **Master Frames have no camera fingerprint**, only `camera_bookmark_id`.                                                                                                                           | 4C adds a nullable additive column; historical stays null                               |
+| 4   | **Promotion has no Master Frame staleness check** (`promoteMasterFrame_impl`). A stale frame promotes without warning.                                                                             | 4C warns and requires confirmation. It does not refuse: an older look can be the choice |
+| 5   | **Production Frame intent `spatial` freezes live `ctx.spatial`**, not the source Master Frame's fingerprints, so the two can differ.                                                               | 4C records source fingerprints additively                                               |
+| 6   | **"Never rewritten" is not enforced on `scene_master_frames` or `shot_previs_clips`.** No guard trigger; owner policy is `for all`. Only the bundle table is guarded, and DELETE stays open there. | Owner decision D3                                                                       |
+| 7   | Doc drift: VS "M2 reuse" lists built features as unbuilt; VS's adapter sentence; `domain-model.md` "unused".                                                                                       | 4F, docs only                                                                           |
+
+## 10. Slices
+
+Each slice is its own branch, PR, review and gate. Provider and network calls are **none** in every slice unless stated.
+
+### 4A — Consolidation (this gate)
+
+- **Goal:** this document, roadmap, tracking issue.
+- **Domain, persistence, UI, package, tests, hosted:** none.
+
+### 4B — Shot Lighting Rigs
+
+- **Goal:** a person can light one Shot, capture it, and see truthful provenance.
+- **Domain:** `prism.shot-lighting.v1`, normalisation, fingerprint, `masterFrameStaleReasons`, `lighting` in `previsStaleReasons`.
+- **Persistence:** migration 0048 (`shot_light_rigs`; render columns); memory and Postgres twins; CAS actions.
+- **UI:** lighting panel in the existing editor; overlay; add, edit, disable and delete lights; base mode; stale and review flags.
+- **Package:** optional `spatialReference.shotLighting`. No prompt change.
+- **Tests:** schema refusals (including `castShadow: true`); fingerprint ignores labels; scene save and fingerprint unchanged by
+  a rig; no leak across Shots; **control-pass bytes unchanged by a rig**; historical package byte-stable; no-rig and no-3D
+  paths; guard refuses a mismatched fingerprint; light visibly changes a Master Frame; light effect on a splat recorded;
+  Postgres RLS and behaviour.
+- **Hosted acceptance:** apply 0048 through the standard dry-run gate, `db:validate`, `db:behavior`, `db:rls`, non-owner denial.
+- **Non-goals:** shadows unless proven deterministic; Shot route; templates; prose summary; relighting a Production Frame.
+
+### 4C — Shot-centric Spatial Workspace and Production Frame handoff
+
+- **Goal:** start from a Shot, finish with a selected Production Frame, without visiting a Location page.
+- **Domain:** source fingerprints on promotion; stale warning at promotion.
+- **Persistence:** likely one additive migration for master frame camera fingerprint and Production Frame source fingerprints.
+- **UI:** Shot route over the same editor; Shot Prep shows Master Frame staleness; correct the stale "future 3D Set" copy.
+- **Package:** none beyond additive provenance already designed.
+- **Tests:** E2E Shot → camera → blocking → rig → Master Frame → Production Frame → package; no-Location Shot; shared-set warning.
+- **Hosted acceptance:** migration gate if one exists, plus the E2E story against hosted.
+- **Non-goals:** a second scene system; replacing the Location route; making any step mandatory.
+
+### 4D — Reusable setups
+
+- **Goal:** apply a camera, lighting or blocking setup to several Shots explicitly.
+- **Domain:** template schema; copy-by-value apply; provenance.
+- **Persistence:** one additive templates table and `applied_from_*` columns.
+- **UI:** save as template, apply, and a visible "copied from" note.
+- **Package:** none. The Shot's own rows are what freeze.
+- **Tests:** editing or deleting a template changes no Shot, render or package.
+- **Hosted acceptance:** migration gate.
+- **Non-goals:** live-linked templates; automatic application; a global marketplace.
+
+### 4E — Spatial environment parity and the splat control-pass decision
+
+- **Goal:** a written decision backed by a spike, and truthful behaviour either way.
+- **Domain, persistence, package:** none unless the spike justifies a new distinct pass schema, which then has its own gate.
+- **UI:** clearer messaging about what splats support.
+- **Tests:** a real-GPU splat proof; a test that the refusal still holds if parity is declined.
+- **Hosted acceptance:** only if storage or schema changes.
+- **Non-goals:** real COLMAP or Brush acceptance (M2D.3D2); new reconstruction providers.
+
+### 4F — Production acceptance and roadmap close
+
+- **Goal:** prove the optional spatial path end to end on hosted, and prove the image-first path still works.
+- **Domain, persistence, package:** none expected. The doc-drift corrections from §9 land here.
+- **Provider calls:** **none by default.** Whether to generate one video from a spatial Production Frame is owner decision D5,
+  taken separately with a cost cap.
+- **Non-goals:** Phase 5 or 6 scope.
+
+## 11. Non-goals
+
+**Kept in Phase 5:** NLE timeline work, transitions and effects, colour grading, captions, music editor, EDL/XML export.
+
+**Kept in Phase 6:** agents, automatic routing, automatic regeneration, AI-directed camera or lighting.
+
+**Also out:** replacing the engine; adopting React Three Fiber; physically based rendering claims; making reconstruction
+required; reading or writing `locations.set3d`; any change to Sequence Automatic.
+
+## 12. Unresolved owner decisions
+
+Each has a recommendation that this document assumes until told otherwise.
+
+| #   | Decision                                                                                     | Recommendation                                                                                                                   |
+| --- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | Should `prism.shot-lighting.v1` ship without shadows?                                        | **Yes.** Refuse `castShadow: true` in v1. A look without shadows is a real limit for a lighting tool, so it is the owner's call. |
+| D2  | Must `base: replace` exist in v1, rather than additive lights only?                          | **Yes.** With a 3.0 + 2.0 base rig, additive-only cannot produce a dark scene.                                                   |
+| D3  | Add guard triggers to `scene_master_frames` and `shot_previs_clips` for existing provenance? | **Yes, in 0048, while hosted has 0 rows.** Allow the `adopted_*` writes and FK nulling; verify every existing update path first. |
+| D4  | Slice order: 4C before 4D?                                                                   | **Yes.** Templates are more useful once the Shot route exists.                                                                   |
+| D5  | Does 4F include one paid video generation from a spatial Production Frame?                   | **Decide at 4F.** Not needed to prove the architecture; it is the only proof that the frame survives to video.                   |
+| D6  | Is a 4E spike worth its cost, or do we accept the splat refusal now?                         | **Accept the refusal unless a production need appears;** 4E can then shrink to documentation.                                    |
+| D7  | When is `locations.set3d` removed?                                                           | **After Phase 4,** as its own migration. No urgency: it holds nothing and misleads only readers.                                 |
