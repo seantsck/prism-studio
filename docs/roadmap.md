@@ -236,7 +236,7 @@ vision; face embeddings; cross-Shot / cut-level continuity (3A.4); cross-Episode
 accepted on the verified calibration v2 (six temporal families). Lip sync stays unchecked and separately gated, and QA
 stays advisory.
 
-## Phase 4 — Spatial Production _(architecture in review; implementation not started)_
+## Phase 4 — Spatial Production _(architecture accepted; implementation not started)_
 
 Design: [phase-4-spatial-production](phase-4-spatial-production.md). **3D is an optional construction tool for a Production
 Frame, never a prerequisite for one.**
@@ -249,14 +249,14 @@ the attachment, holds no data, and stays legacy and non-authoritative. `spatial.
 
 **Phase 4 work remaining:**
 
-| Slice | Scope                                                                                          | Status               |
-| ----- | ---------------------------------------------------------------------------------------------- | -------------------- |
-| 4A    | Architecture and consolidation                                                                 | in review, docs only |
-| 4B    | Shot Lighting Rigs: `prism.shot-lighting.v1`, overlay, render provenance, optional package key | not started          |
-| 4C    | Shot-centric Spatial Workspace and Production Frame handoff                                    | not started          |
-| 4D    | Reusable setups: explicit copies, never live links                                             | not started          |
-| 4E    | Spatial environment parity and the splat control-pass decision                                 | not started          |
-| 4F    | Production acceptance and roadmap close                                                        | not started          |
+| Slice | Scope                                                                                          | Status              |
+| ----- | ---------------------------------------------------------------------------------------------- | ------------------- |
+| 4A    | Architecture and consolidation                                                                 | complete, docs only |
+| 4B    | Shot Lighting Rigs: `prism.shot-lighting.v1`, overlay, render provenance, optional package key | not started         |
+| 4C    | Shot-centric Spatial Workspace and Production Frame handoff                                    | not started         |
+| 4D    | Reusable setups: explicit copies, never live links                                             | not started         |
+| 4E    | Splat control-pass refusal and environment limits                                              | not started         |
+| 4F    | Production acceptance and roadmap close                                                        | not started         |
 
 Real reconstruction (M2D.3D2) stays optional and does not block any slice.
 
