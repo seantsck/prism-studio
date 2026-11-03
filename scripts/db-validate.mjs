@@ -61,6 +61,7 @@ const expectedTables = [
   "shot_camera_paths",
   "shot_previs_clips",
   "shot_character_blocking",
+  "shot_light_rigs",
   "shot_spatial_pass_bundles",
   "location_spatial_reconstructions",
   "reconstruction_jobs",
@@ -200,6 +201,11 @@ const must = {
     "shot_character_continuity_selections_touch_shot",
     "shot_props_touch_shot",
     "character_identity_refs_touch_character",
+    // 0048 (Phase 4B): Shot lighting and the render-history provenance guards
+    "shot_light_rigs_guard",
+    "shot_light_rigs_set_updated_at",
+    "scene_master_frames_provenance_guard",
+    "shot_previs_clips_provenance_guard",
   ],
 };
 const missingIdx = must.indexes.filter((i) => !idx.some((x) => x.indexname === i));

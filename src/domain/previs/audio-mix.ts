@@ -1,5 +1,6 @@
 import { layoutPerformance } from "../duration";
 import { fingerprint } from "../hash";
+import { isRenderLightingStale, type CurrentLightingState, type RenderLighting } from "./lighting";
 
 /**
  * The performance audio of a local previs, as a deterministic plan on the SAME Shot timeline as the camera path.
@@ -138,6 +139,8 @@ export function pickCurrentClip<
     audioMixFingerprint: string | null;
     /** what the clip's picture shows of the Shot's blocking (absent/null = no character proxies) */
     blockingFingerprint?: string | null;
+    /** the rig the clip's picture was lit by (absent/null = none recorded) */
+    lightingFingerprint?: string | null;
     renderedAt: string;
   },
 >(
@@ -145,6 +148,7 @@ export function pickCurrentClip<
   pathFingerprint: string,
   currentAudioMixFingerprint: string | null,
   currentBlockingFingerprint: string | null = null,
+  currentLightingFingerprint: string | null = null,
 ): T | null {
   return (
     [...clips]
@@ -152,13 +156,14 @@ export function pickCurrentClip<
         (c) =>
           c.pathFingerprint === pathFingerprint &&
           (c.audioMixFingerprint === null || c.audioMixFingerprint === currentAudioMixFingerprint) &&
-          (c.blockingFingerprint ?? null) === currentBlockingFingerprint,
+          (c.blockingFingerprint ?? null) === currentBlockingFingerprint &&
+          (c.lightingFingerprint ?? null) === currentLightingFingerprint,
       )
       .sort((a, b) => (a.renderedAt < b.renderedAt ? 1 : a.renderedAt > b.renderedAt ? -1 : 0))[0] ?? null
   );
 }
 
-export type PrevisStaleReason = "scene" | "camera" | "audio" | "blocking";
+export type PrevisStaleReason = "scene" | "camera" | "audio" | "blocking" | "lighting";
 
 export interface PrevisFreshnessInput {
   clip: {
@@ -167,6 +172,9 @@ export interface PrevisFreshnessInput {
     audioMixFingerprint: string | null;
     /** absent/null = the clip shows no character proxies */
     blockingFingerprint?: string | null;
+    /** absent/null = no Shot Lighting Rig was recorded for this render */
+    lightingFingerprint?: string | null;
+    lighting?: Pick<RenderLighting, "baseEnvironment"> | null;
   };
   /** null = nothing saved / unknown: the corresponding check cannot pass */
   currentSceneFingerprint: string | null;
@@ -175,6 +183,8 @@ export interface PrevisFreshnessInput {
   currentAudioMixFingerprint: string | null;
   /** the Shot's rendered blocking layer now (null = no visible character proxies) */
   currentBlockingFingerprint?: string | null;
+  /** the Shot's lighting now (absent = no rig, no known base environment) */
+  currentLighting?: CurrentLightingState;
 }
 
 /**
@@ -192,6 +202,13 @@ export function previsStaleReasons(i: PrevisFreshnessInput): PrevisStaleReason[]
   // blocking is part of what the picture shows, silent or not
   if ((i.clip.blockingFingerprint ?? null) !== (i.currentBlockingFingerprint ?? null))
     reasons.push("blocking");
+  if (
+    isRenderLightingStale(
+      { lightingFingerprint: i.clip.lightingFingerprint ?? null, lighting: i.clip.lighting ?? null },
+      i.currentLighting ?? { lightingFingerprint: null, baseEnvironment: null },
+    )
+  )
+    reasons.push("lighting");
   return reasons;
 }
 
@@ -200,4 +217,5 @@ export const STALE_REASON_LABEL: Record<PrevisStaleReason, string> = {
   camera: "STALE CAMERA",
   audio: "STALE AUDIO",
   blocking: "STALE BLOCKING",
+  lighting: "STALE LIGHTING",
 };

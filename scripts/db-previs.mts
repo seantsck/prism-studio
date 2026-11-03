@@ -797,13 +797,26 @@ try {
       (e: Error) => e.message,
     );
   check("an unknown camera-path schema_version is rejected", badPathSchema !== null);
+  // an INSERT, so this proves the CHECK itself: an UPDATE would now stop at the provenance guard (0048) first
   const badContainer = await pool
-    .query("update shot_previs_clips set container = 'avi' where id = $1", [clip.id])
+    .query(
+      `insert into shot_previs_clips (project_id, shot_id, location_id, path_revision, path_fingerprint,
+         scene_document_id, scene_revision, scene_fingerprint, asset_id, frame_rate, duration_ms, render_width,
+         render_height, container, codec, rendered_at)
+       select project_id, shot_id, location_id, path_revision, path_fingerprint, scene_document_id, scene_revision,
+              scene_fingerprint, asset_id, frame_rate, duration_ms, render_width, render_height, 'avi', codec, rendered_at
+         from shot_previs_clips where id = $1`,
+      [clip.id],
+    )
     .then(
       () => null,
       (e: Error) => e.message,
     );
-  check("an unknown previs container is rejected", badContainer !== null);
+  check(
+    "an unknown previs container is rejected",
+    badContainer !== null && /container/.test(badContainer),
+    badContainer ?? "",
+  );
 } finally {
   // ── cleanup (cascade removes scenes, bookmarks and master frames) ──
   for (const id of created.projectIds)

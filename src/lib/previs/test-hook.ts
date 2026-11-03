@@ -8,6 +8,7 @@ import {
   type ControlCamera,
   type ObjectManifest,
 } from "@/domain/previs/spatial-passes";
+import type { ShotLightingDraft } from "@/domain/previs/lighting";
 import type { SpatialSceneAdapter } from "./scene-adapter";
 import { buildPassCamera, type RenderedPasses } from "./spatial-pass-renderer";
 
@@ -42,8 +43,11 @@ export interface SpatialTestHook {
   } | null;
   /** how many mask pixels a Character's derived mask has, and whether every one carries that object's id */
   maskStats(characterId: string): { count: number; objectIndex: number } | null;
-  /** SHA-256 of the last capture's raw rasters */
-  digest(): { depth: string; ids: string };
+  /**
+   * SHA-256 of the last capture's raw rasters, and of each derived Character mask's exact bytes (keyed by Character id;
+   * empty when no Character proxy is in the manifest)
+   */
+  digest(): { depth: string; ids: string; masks: Record<string, string> };
   /** SHA-256 of a master-frame style beauty render through the current Production Camera */
   beautyDigest(): Promise<string>;
   /** a digest of everything a pass capture must not change in the live scene (visibility, materials, layers) */
@@ -106,6 +110,14 @@ export interface SplatTestHook {
 }
 
 export interface PrevisTestHook {
+  /** What the Shot-lighting overlay holds and what the engine's base lights are doing. */
+  lightingInfo(): ReturnType<SpatialSceneAdapter["lighting"]["inspect"]> & { applied: string | null };
+  /** What saving the Set right now would serialise. */
+  sceneJson(): Record<string, unknown>;
+  /** Applies a rig to the live overlay for a render test (nothing is saved). */
+  setLighting(rig: ShotLightingDraft | null): void;
+  /** Mean RGB of a whole Master Frame style render through an explicit pose. */
+  beautyMean(pose: { position: number[]; rotation: number[]; focalLengthMm: number }): Promise<number[]>;
   spatial: SpatialTestHook;
   splat: SplatTestHook;
   /** Client-space (CSS px) position of a point `offsetWorld` away from the object's origin. */
@@ -148,6 +160,42 @@ export function installPrevisTestHook(adapter: SpatialSceneAdapter, canvas: HTML
     return last;
   };
   w.__prismSet = {
+    lightingInfo() {
+      return { ...adapter.lighting.inspect(), applied: adapter.lighting.appliedFingerprint() };
+    },
+    sceneJson() {
+      return adapter.serializeScene();
+    },
+    setLighting(rig) {
+      adapter.lighting.setRig(rig);
+    },
+    async beautyMean(pose) {
+      const frame = await adapter.captureMasterFrame(
+        bookmarkFromCamera({
+          id: "test",
+          label: "test",
+          position: { x: pose.position[0], y: pose.position[1], z: pose.position[2] },
+          rotation: { x: pose.rotation[0], y: pose.rotation[1], z: pose.rotation[2] },
+          focalLengthMm: pose.focalLengthMm,
+        }),
+      );
+      const bitmap = await createImageBitmap(frame.blob);
+      const c = document.createElement("canvas");
+      c.width = bitmap.width;
+      c.height = bitmap.height;
+      const g = c.getContext("2d", { willReadFrequently: true })!;
+      g.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      const sum = [0, 0, 0];
+      for (let i = 0; i < d.length; i += 4) {
+        sum[0] += d[i];
+        sum[1] += d[i + 1];
+        sum[2] += d[i + 2];
+      }
+      const n = d.length / 4;
+      return sum.map((v) => v / n);
+    },
     spatial: {
       capture(pose) {
         const camera = controlCameraFromPose(
@@ -248,12 +296,15 @@ export function installPrevisTestHook(adapter: SpatialSceneAdapter, canvas: HTML
         return m ? { count: m.visiblePixelCount, objectIndex: m.objectIndex } : null;
       },
       digest() {
-        const { passes } = requireLast();
+        const { passes, manifest } = requireLast();
         return {
           depth: sha256Bytes(
             new Uint8Array(passes.depth.buffer, passes.depth.byteOffset, passes.depth.byteLength),
           ),
           ids: sha256Bytes(new Uint8Array(passes.ids.buffer, passes.ids.byteOffset, passes.ids.byteLength)),
+          masks: Object.fromEntries(
+            deriveCharacterMasks(passes.ids, manifest).map((m) => [m.characterId, sha256Bytes(m.mask)]),
+          ),
         };
       },
       async beautyDigest() {

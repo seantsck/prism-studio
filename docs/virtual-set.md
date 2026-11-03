@@ -101,7 +101,9 @@ Playwright runs Chromium with the software rasteriser (`--use-angle=swiftshader`
 - No "New 3D set" template picker beyond "Load Hotel Canopy Test Set"; a fresh set starts empty with CAM-A at 35 mm.
 - Undo/redo covers object add/delete/transform/colour/lock/visibility; production-camera edits made through the
   inspector are not on the undo stack.
-- Lights other than the engine's default rig are not offered; the vendored point-light shape exists but has no button.
+- The Set itself offers no lights beyond the engine's default rig; the vendored point-light shape exists but has no
+  button. Shot-owned lighting is a separate overlay ([Shot Lighting](#shot-lighting-phase-4b-in-review)), never part of
+  the Set.
 - The outliner has no rename, reorder or grouping; the engine has no hierarchy UI.
 - GLBs must be single-file (`.glb`, no Draco/KTX2/Meshopt, no external resources) and are added through the normal
   Assets upload with any purpose.
@@ -840,3 +842,13 @@ A Location's spatial environment can now also be **generated** from its referenc
 - `spatialReference.spatialEnvironment` gains an optional `generation` block (job, attempt, provider, capability,
   model, operation id) for generated environments only; imported environments are unchanged;
 - a visible generated splat blocks M2C control passes exactly like an imported one.
+
+## Shot Lighting (Phase 4B, in review)
+
+The selected Shot's lighting panel adds, edits, disables and deletes `ambient`, `point`, `directional` and `spot` lights
+(at most 16) and picks a base mode: `engine_default` keeps the engine's base rig, `replace` hides it. It is a runtime
+overlay: **it never enters the scene document or `sceneFingerprint`**, and it never writes `Shot.lighting`. Shadows are not
+simulated in v1. Master Frames and previs record the rig they were lit by and show `STALE LIGHTING` when the Shot's rig
+moves on; control passes ignore lighting byte for byte. **Gaussian splats do not respond to Shot lights** (their colour is
+baked) and the panel says so when a visible splat is in the Set. Full notes:
+[phase-4-spatial-production](phase-4-spatial-production.md#4b-implementation-notes).

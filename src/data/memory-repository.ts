@@ -83,6 +83,7 @@ export class MemoryRepository implements Repository {
     this.previsService ??= new MemoryPrevisService({
       all: () => [...this.projects.values()],
       ownerUserId: () => LOCAL_USER_ID,
+      selectedProductionFrame: (projectId, shotId) => this.productionFrames.selectedFrame(projectId, shotId),
     });
     return this.previsService;
   }

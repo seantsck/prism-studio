@@ -12,12 +12,14 @@ const sql = readFileSync(`${DIR}/0047_sequence_qa_automation.sql`, "utf8");
 const code = sql.replace(/--.*$/gm, ""); // statements only, no comments
 
 describe("migration 0047: Sequence automation policy and cut settling clocks", () => {
-  it("is the latest migration, follows 0046, and leaves 0044, 0045 and 0046 byte-for-byte unchanged", () => {
+  it("follows 0046, and leaves 0044, 0045 and 0046 byte-for-byte unchanged", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe("0047_sequence_qa_automation.sql");
-    expect(files.at(-2)).toBe("0046_sequence_continuity_persistence.sql");
+    expect(files).toContain("0047_sequence_qa_automation.sql");
+    expect(files[files.indexOf("0047_sequence_qa_automation.sql") - 1]).toBe(
+      "0046_sequence_continuity_persistence.sql",
+    );
     const sumOf = (f: string) => checksumOf(readFileSync(`${DIR}/${f}`, "utf8"));
     expect(sumOf("0044_shot_qa_automation.sql")).toBe(
       "31abe729026e1c89b9590d9167b2d608b1747de4bae72fdf7bcdb7961b72dcd7",

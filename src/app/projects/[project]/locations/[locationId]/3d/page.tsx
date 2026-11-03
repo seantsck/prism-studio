@@ -5,6 +5,7 @@ import { VirtualSetLoader } from "@/components/previs/virtual-set-loader";
 import { buildShotContext } from "@/domain/context";
 import type { TimelineCue } from "@/domain/previs/audio-mix";
 import { shotTimelineCues } from "@/domain/previs/audio-mix-shot";
+import { authoredLightingIntent } from "@/domain/previs/lighting";
 import { getPrevisRepo } from "@/server/previs";
 import { requireProject } from "@/server/repo";
 
@@ -42,6 +43,13 @@ export default async function VirtualSetPage({
   const clips = activeShotId ? await previs.listPrevisClips(activeShotId) : [];
   const blockingRecords = activeShotId ? await previs.listShotBlocking(activeShotId) : [];
   const spatialBundles = activeShotId ? await previs.listSpatialPassBundles(activeShotId) : [];
+  const activeShot = activeShotId ? data.shots.find((s) => s.id === activeShotId) : undefined;
+  const shotLighting = activeShot
+    ? {
+        rig: await previs.getLightingRigForShot(activeShot.id),
+        currentIntent: authoredLightingIntent(activeShot),
+      }
+    : null;
 
   // Gaussian-splat environments of this Location: immutable reconstruction records + their private result Assets
   const assetById = new Map(data.assets.map((a) => [a.id, a]));
@@ -174,17 +182,23 @@ export default async function VirtualSetPage({
           audioMixFingerprint: c.audioMixFingerprint,
           audioCodec: c.audioMix?.codec ?? null,
           blockingFingerprint: c.blockingFingerprint,
+          lightingFingerprint: c.lightingFingerprint,
+          lighting: c.lighting ? { baseEnvironment: c.lighting.baseEnvironment } : null,
           renderedAt: c.renderedAt,
         }))}
         masterFrames={frames.map((f) => ({
           id: f.id,
           assetId: f.assetId,
           sceneRevision: f.sceneRevision,
+          sceneFingerprint: f.sceneFingerprint,
           capturedAt: f.capturedAt,
           adopted: f.adoptedAt !== null,
           blockingFingerprint: f.blockingFingerprint,
+          lightingFingerprint: f.lightingFingerprint,
+          lighting: f.lighting ? { baseEnvironment: f.lighting.baseEnvironment } : null,
         }))}
         spatialBundles={spatialBundles}
+        shotLighting={shotLighting}
         blocking={blockingRecords.map((r) => ({
           characterId: r.characterId,
           name: data.characters.find((c) => c.id === r.characterId)?.name ?? "Character",

@@ -63,6 +63,11 @@ state and compare with hashes recorded when the artifact was made.
 
 `visualFingerprint` combines the visual parts; `overallFingerprint` combines all.
 
+A Shot Lighting Rig (Phase 4B, in review) is **not** a freshness part: saving or clearing a rig changes no part above, so
+it never stales a storyboard frame or a Production Frame. The `lighting` part stays the authored `shot.lighting` text. A
+rig's own staleness lives on the renders it lit (Master Frames and previs: `STALE LIGHTING`); see
+[phase-4-spatial-production](phase-4-spatial-production.md#4b-implementation-notes).
+
 ### Storyboard frames
 
 On approval a frame stores `approved_fingerprint` and `approved_snapshot = { parts, durationMs }`

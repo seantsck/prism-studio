@@ -3,7 +3,13 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { ZodError } from "zod";
-import { PrevisError } from "@/data/previs-repository";
+import {
+  LIGHTING_RIG_ELSEWHERE,
+  PrevisError,
+  type PrevisRepository,
+  type SceneDocumentRecord,
+  type ShotLightingRigRecord,
+} from "@/data/previs-repository";
 import { assetSchema, shotSchema, storyboardFrameSchema } from "@/domain/schemas";
 import { audioMixFingerprint, type StoredAudioMix } from "@/domain/previs/audio-mix";
 import { performanceAudioPlanForShot } from "@/domain/previs/audio-mix-shot";
@@ -16,6 +22,14 @@ import {
 } from "@/domain/previs/blocking";
 import { cameraPathSchema, validateCameraPath } from "@/domain/previs/camera-path";
 import { buildPrevisDocument } from "@/domain/previs/document";
+import {
+  authoredLightingIntent,
+  buildRenderLighting,
+  parseShotLightingDraft,
+  parseShotLightingRig,
+  type AuthoredLightingIntent,
+  type RenderLighting,
+} from "@/domain/previs/lighting";
 import { isSplatMime } from "@/domain/previs/splat";
 import { PREVIS_PRODUCTION_FRAME } from "@/domain/previs/types";
 import { readImageSize } from "@/lib/image-size";
@@ -69,6 +83,28 @@ async function guarded<T>(body: () => Promise<PrevisResult<T>>): Promise<PrevisR
     console.error(`[previs ${ref}]`, err instanceof Error ? err.message : "unknown error");
     return { ok: false, error: `Something went wrong saving the 3D set (ref ${ref}).` };
   }
+}
+
+/**
+ * The lighting a render may claim. The saved rig is reloaded and everything is re-derived here: the browser only states
+ * what it applied, and any difference refuses the render before a byte is stored.
+ */
+async function authorizeRenderLighting(
+  previs: PrevisRepository,
+  args: { shotId: string; scene: SceneDocumentRecord; claimed: string | null },
+): Promise<{ lightingFingerprint: string | null; lighting: RenderLighting | null }> {
+  const rig = await previs.getLightingRigForShot(args.shotId);
+  if (rig && rig.sceneDocumentId !== args.scene.id) throw new UserFacingError(LIGHTING_RIG_ELSEWHERE);
+  if ((rig?.lightingFingerprint ?? null) !== args.claimed)
+    throw new PrevisError(
+      "conflict",
+      "The Shot's lighting changed after this was rendered. Save the lighting and render again.",
+    );
+  if (!rig) return { lightingFingerprint: null, lighting: null };
+  return {
+    lightingFingerprint: rig.lightingFingerprint,
+    lighting: buildRenderLighting({ rig, scene: args.scene.document }),
+  };
 }
 
 /** Saves the editor's engine scene as the Location's current 3D set (compare-and-set on revision). */
@@ -226,6 +262,7 @@ export async function captureMasterFrame(
     const locationId = str(form, "locationId");
     const claimedRevision = Number(str(form, "sceneRevision"));
     const claimedBlocking = optStr(form, "blockingFingerprint");
+    const claimedLighting = optStr(form, "lightingFingerprint");
     const file = form.get("file");
     if (!(file instanceof File) || file.size === 0)
       throw new UserFacingError("No rendered frame was received.");
@@ -251,6 +288,7 @@ export async function captureMasterFrame(
         "conflict",
         "The character blocking changed after this frame was rendered. Save the blocking and capture again.",
       );
+    const renderLighting = await authorizeRenderLighting(previs, { shotId, scene, claimed: claimedLighting });
 
     const bytes = new Uint8Array(await file.arrayBuffer());
     const check = checkUpload(
@@ -315,6 +353,9 @@ export async function captureMasterFrame(
           upstreamCommit: scene.upstreamCommit,
           // ids + fingerprints only: which saved blocking this frame shows (no pose data, no URLs)
           ...(blockingProv ? { blocking: blockingProv } : {}),
+          ...(renderLighting.lightingFingerprint
+            ? { lightingFingerprint: renderLighting.lightingFingerprint }
+            : {}),
         },
       },
       createdAt: stamp,
@@ -340,6 +381,7 @@ export async function captureMasterFrame(
         capturedAt: stamp,
         blockingFingerprint: blockingProv?.fingerprint ?? null,
         blocking: blockingProv?.figures ?? null,
+        ...renderLighting,
         userId: actorOf(user),
       });
       refresh(slug);
@@ -493,6 +535,7 @@ export async function recordPrevisClip(
     const claimedMix = optStr(form, "audioMixFingerprint");
     const audioCodec = optStr(form, "audioCodec");
     const claimedBlocking = optStr(form, "blockingFingerprint");
+    const claimedLighting = optStr(form, "lightingFingerprint");
     const file = form.get("file");
     if (!(file instanceof File) || file.size === 0)
       throw new UserFacingError("No rendered previs was received.");
@@ -530,6 +573,7 @@ export async function recordPrevisClip(
         "conflict",
         "The character blocking changed while the previs was rendering. Save the blocking and render again.",
       );
+    const renderLighting = await authorizeRenderLighting(previs, { shotId, scene, claimed: claimedLighting });
 
     // performance audio: the server derives the mix itself from the Shot's CURRENT selected takes and timing; the
     // client only says which mix it rendered. A mismatch means the takes changed during the render.
@@ -619,6 +663,9 @@ export async function recordPrevisClip(
           audioAssetId: null,
           hasAudio: mix !== null,
           ...(blockingProv ? { blocking: blockingProv } : {}),
+          ...(renderLighting.lightingFingerprint
+            ? { lightingFingerprint: renderLighting.lightingFingerprint }
+            : {}),
           // ids/fingerprint only; the full cue list lives on the previs clip row
           ...(mix
             ? {
@@ -665,6 +712,7 @@ export async function recordPrevisClip(
         audioMixFingerprint: mix ? mix.mixFingerprint : null,
         blockingFingerprint: blockingProv?.fingerprint ?? null,
         blocking: blockingProv?.figures ?? null,
+        ...renderLighting,
         renderedAt: stamp,
         userId: actorOf(user),
       });
@@ -679,6 +727,109 @@ export async function recordPrevisClip(
       }
       throw err;
     }
+  });
+}
+
+const MAX_LIGHTING_JSON_BYTES = 64 * 1024;
+
+export interface ShotLightingData {
+  rig: ShotLightingRigRecord | null;
+  /** the Shot's authored lighting text now, for the non-blocking review flag */
+  currentIntent: AuthoredLightingIntent;
+}
+
+/**
+ * Saves the Shot's lighting (compare-and-set on revision). The browser sends only the lights: the authored intent is
+ * re-read from the Shot, the set state from the LIVE saved set, and the fingerprint is derived in the repository. Only
+ * this Shot's rig changes: never the Set, never `Shot.lighting`, never another Shot.
+ */
+export async function saveShotLighting(
+  form: FormData,
+): Promise<PrevisResult<{ rig: ShotLightingRigRecord }>> {
+  return guarded(async () => {
+    const slug = str(form, "projectSlug");
+    const shotId = str(form, "shotId");
+    const locationId = str(form, "locationId");
+    const expectedRaw = str(form, "expectedRevision");
+    if (expectedRaw !== "" && !(Number.isInteger(Number(expectedRaw)) && Number(expectedRaw) >= 1))
+      throw new UserFacingError("Invalid revision.");
+    const raw = String(form.get("rigJson") ?? "");
+    if (raw.length === 0 || raw.length > MAX_LIGHTING_JSON_BYTES)
+      throw new UserFacingError("The Shot lighting is empty or too large to save.");
+    let draft;
+    try {
+      draft = parseShotLightingDraft(JSON.parse(raw));
+    } catch {
+      throw new UserFacingError("The Shot lighting data is not valid.");
+    }
+
+    const user = await requireUser();
+    const data = await requireProjectFresh(slug);
+    const shot = data.shots.find((x) => x.id === shotId);
+    if (!shot) throw new UserFacingError("That shot no longer exists.");
+    if (!data.locations.some((l) => l.id === locationId))
+      throw new UserFacingError("That location is not in this project.");
+    if (shot.spatial.locationId && shot.spatial.locationId !== locationId)
+      throw new UserFacingError("This shot is set in another location.");
+    const previs = await getPrevisRepo();
+    const scene = await previs.getSceneForLocation(locationId);
+    if (!scene || scene.projectId !== data.project.id)
+      throw new UserFacingError("Save the 3D set before saving Shot lighting.");
+
+    const saved = await previs.saveLightingRig({
+      id: randomUUID(),
+      projectId: data.project.id,
+      shotId,
+      locationId,
+      sceneDocumentId: scene.id,
+      sceneRevision: scene.revision,
+      sceneFingerprint: scene.sceneFingerprint,
+      rig: parseShotLightingRig({ ...draft, authoredIntent: authoredLightingIntent(shot) }),
+      expectedRevision: expectedRaw === "" ? null : Number(expectedRaw),
+      userId: actorOf(user),
+      now: new Date().toISOString(),
+    });
+    refresh(slug);
+    return { ok: true, rig: saved };
+  });
+}
+
+/** Removes the Shot's current rig. Renders keep the lighting they recorded. */
+export async function clearShotLighting(form: FormData): Promise<PrevisResult<object>> {
+  return guarded(async () => {
+    const slug = str(form, "projectSlug");
+    const shotId = str(form, "shotId");
+    const expected = Number(str(form, "expectedRevision"));
+    if (!Number.isInteger(expected)) throw new UserFacingError("Invalid revision.");
+    await requireUser();
+    const data = await requireProjectFresh(slug);
+    if (!data.shots.some((x) => x.id === shotId)) throw new UserFacingError("That shot no longer exists.");
+    await (
+      await getPrevisRepo()
+    ).clearLightingRig({
+      projectId: data.project.id,
+      shotId,
+      expectedRevision: expected,
+    });
+    refresh(slug);
+    return { ok: true };
+  });
+}
+
+/** The stored rig of one Shot (used when the editor switches shot without leaving the page). */
+export async function loadShotLighting(form: FormData): Promise<PrevisResult<ShotLightingData>> {
+  return guarded(async () => {
+    const slug = str(form, "projectSlug");
+    const shotId = str(form, "shotId");
+    await requireUser();
+    const data = await requireProjectFresh(slug);
+    const shot = data.shots.find((x) => x.id === shotId);
+    if (!shot) throw new UserFacingError("That shot no longer exists.");
+    return {
+      ok: true,
+      rig: await (await getPrevisRepo()).getLightingRigForShot(shotId),
+      currentIntent: authoredLightingIntent(shot),
+    };
   });
 }
 
