@@ -2,7 +2,8 @@
 
 **Status: 4A complete (architecture accepted by the owner 2026-11-01, decisions in [§12](#12-accepted-owner-decisions)).
 4B (Shot Lighting Rigs) complete (PR #46); migration 0048 applied to and accepted on hosted DEV (hosted head 0048, nothing
-pending). 4C–4F have not started. What 4B actually shipped is
+pending). 4C architecture is in review ([4C-A](#4c-a-architecture-in-review)); 4C implementation and 4D–4F have not
+started. What 4B actually shipped is
 recorded in [4B implementation notes](#4b-implementation-notes); elsewhere, design text describes intent.**
 
 Phase 4 finishes the optional spatial path into a Production Frame. It does not build a 3D system: Phase 2F already built
@@ -475,6 +476,313 @@ spot`; at most 16 lights; base modes `engine_default | replace`; `castShadow: tr
 - **Tests:** E2E Shot → camera → blocking → rig → Master Frame → Production Frame → package; no-Location Shot; shared-set warning.
 - **Hosted acceptance:** migration gate if one exists, plus the E2E story against hosted.
 - **Non-goals:** a second scene system; replacing the Location route; making any step mandatory.
+
+#### 4C-A architecture (in review)
+
+Status: **architecture in review; nothing is implemented, migration 0049 is NOT created.** Audited on `main` `070c1f1`,
+hosted head 0048. This section is the plan the 4C implementation will follow once the owner accepts it.
+
+##### 4C.1 What the audit found
+
+| #   | Finding                                                                                                                                                                                                                                                                                                                                                                                        | Consequence for 4C                                                                                     |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| F1  | The only way into 3D is Shot Prep § Location / set → **Open in 3D Set** → `/projects/<p>/locations/<L>/3d?shot=<id>`. The Location page loads everything for `activeShotId` only.                                                                                                                                                                                                              | A Shot route needs the same loader, not a new one.                                                     |
+| F2  | `VirtualSetEditor` (1085 lines) already is the reusable workspace: one adapter, camera / blocking / lighting / motion / passes panels, Master Frame capture and adoption. Its only Location-route assumption is the in-page Shot `<select>` (`shot-select`).                                                                                                                                   | Reuse it; replace the dropdown by route identity.                                                      |
+| F3  | **Shot-state leak on the Location route:** choosing another Shot in `shot-select` changes only local `shotId`. `bookmark` and `frames` stay the previously loaded Shot's (they are `useState(props…)` with no reset); panels for the new Shot render with `initial = null`; staleness lines are hidden (`shotId === props.activeShotId`).                                                      | Route = Shot identity; the Location route's switcher becomes navigation.                               |
+| F4  | **Capture does not verify the camera.** The browser renders with ITS `bookmark.value` and the server checks only that the Shot has _a_ bookmark on the same scene document. With F3, Shot A's camera can be recorded as Shot B's Master Frame.                                                                                                                                                 | The capture must claim a camera fingerprint the server verifies, as blocking and lighting already are. |
+| F5  | `scene_master_frames` keeps `camera_bookmark_id` only (nulled when the bookmark is deleted, and the bookmark's value can be re-linked). The camera a frame was rendered with is not frozen.                                                                                                                                                                                                    | 0049 adds frozen camera provenance.                                                                    |
+| F6  | `promoteMasterFrame` reads only the Master Frame row (same Project and Shot) and its Asset, then `draftProductionFrame` → create + select. **No staleness is computed or shown; a stale frame is promoted silently.** Two call paths: Production Frame section (Shot Prep), nothing in the editor.                                                                                             | Server-side recheck, explicit confirmation, digest.                                                    |
+| F7  | `shot_production_frames.source_master_frame_id` is a plain uuid **without a foreign key**; Master Frames may be deleted (0048 allows DELETE). The 4B chain (selected PF → `source_master_frame_id` → that row's `lighting_fingerprint`) silently becomes null when the Master Frame is gone.                                                                                                   | Freeze the source's spatial fingerprints on the Production Frame itself.                               |
+| F8  | `shot_production_frames` is already fully immutable: `guard_shot_production_frame()` raises on **every** UPDATE; there is no user UPDATE/DELETE policy; Shot/Project cascades still work.                                                                                                                                                                                                      | New columns are immutable with no new guard.                                                           |
+| F9  | 0048's Master Frame guard is deny-by-default (`to_jsonb(new) - [adopted_at, adopted_frame_id, camera_bookmark_id]`).                                                                                                                                                                                                                                                                           | New Master Frame columns are immutable with no trigger change.                                         |
+| F10 | `bookmarkCameraFingerprint(value)` = `fingerprint(controlCameraFromBookmark(value))`: position (1e-6), canonical quaternion, focal length, the 24 mm vertical sensor, vertical FOV, production aspect, 2.39:1 frame size, near 0.05 / far 2000 (the same values `productionRenderSpec` renders with). It refuses any other projection or focal basis. The spatial-pass bundles already use it. | Reuse it as the camera fingerprint; no new canonicalisation.                                           |
+| F11 | Every insert into `scene_master_frames` and `shot_production_frames` names its columns, and reads map by name.                                                                                                                                                                                                                                                                                 | Nullable 0049 columns are safe for current `main` (migration ahead of code).                           |
+| F12 | Stale product copy: Locations page subtitle "A future 3D Set plugs into `set3d`…"; `src/domain/schemas.ts` comment "Extension points for the future 3D Set" (`set3d` is legacy, D7).                                                                                                                                                                                                           | Correct both; nothing else.                                                                            |
+| F13 | A Master Frame is 2.39:1 (`PREVIS_PRODUCTION_FRAME`); promotion refuses a Shot whose production aspect differs (`assetPromotionStatus`).                                                                                                                                                                                                                                                       | Unchanged; the workspace shows the same reason instead of a button.                                    |
+
+##### 4C.2 Route and workspace
+
+- **Route:** `/projects/[project]/episodes/[ep]/shots/[shotId]/spatial` (beside the existing Shot detail route). The route
+  is the Shot identity: no Shot switcher. "Previous / next Shot" are links to those Shots' routes.
+- **Loader extraction:** move the body of `locations/[locationId]/3d/page.tsx` (scene, bookmark, path, clips, blocking,
+  passes, lighting, splats, timing, Master Frames) into one server function, e.g. `loadVirtualSetProps(data, locationId,
+shotId | null)`. Both pages call it, through the SAME `getPrevisRepo()`. No Shot-owned scene storage, no second adapter,
+  engine or scene table, no R3F.
+- **Editor:** `VirtualSetEditor` gains `mode: { kind: "location"; shots } | { kind: "shot"; shot: { id; label; prev?;
+next? }; sharedWith: ShotRef[] }`. Shot mode hides `shot-select`; everything else is the same component.
+- **Location route** keeps its multi-Shot overview, but `shot-select` **navigates** (`?shot=<id>`) instead of changing
+  local state, and the loader is keyed by Shot (`key={activeShotId}`), so every Shot's state is reloaded from the server
+  (fixes F3 on both routes). Remounting reloads the scene from the saved document, so unsaved Set edits must be confirmed before the
+  navigation (there is no unsaved-changes prompt today; 4C adds one for the Set's dirty state).
+- **Resolution on the Shot route:** Shot → `shot.spatial.locationId` → that Location's scene. A Shot whose Location
+  changed resolves its NEW Location; its old bookmark / path / blocking / rig (tied to the old scene document) are listed
+  as "authored for another set" and are not loaded into the editor (today's saves already refuse a Shot set in another
+  Location).
+
+| State                                             | Shot route shows                                                                                                                                              |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No Location                                       | "Assign a Location to use optional spatial tools." + a link to § Location / set. No editor.                                                                   |
+| Location, no `location_scene_documents`           | **Create 3D Set**: opens the editor on an empty set; the first save creates THE Location's scene (`saveLocationScene`), the same row the Location page edits. |
+| Location scene deleted / Location gone            | Same as the two rows above (re-resolved on every request; nothing is cached client-side across routes).                                                       |
+| Bookmark deleted / rig cleared / blocking removed | The panel shows "none yet"; Master Frames keep their frozen provenance (camera shows stale or unknown, see 4C.4).                                             |
+| Deep link, refresh, back / forward                | Server-rendered from the route; no client state survives a route change (keyed loader).                                                                       |
+
+##### 4C.3 Ownership and the shared-set warning
+
+| Location-owned (one row, every Shot in the Location sees it)                                                         | Shot-owned (independent per Shot)                                                                                                    |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `location_scene_documents`: set geometry, GLBs, splat environment, the working production camera, `sceneFingerprint` | `shot_camera_bookmarks`, `shot_camera_paths`, `shot_character_blocking`, `shot_light_rigs`, Master Frames, previs, Production Frames |
+
+- **Working camera vs Shot camera:** the Location's production camera is shared working state. "Use Production Camera
+  for Shot" freezes it into THIS Shot's bookmark; "Restore Shot camera" copies the bookmark back into the working camera
+  for editing. Neither touches another Shot's bookmark. On the Shot route the workspace restores the Shot's bookmark into
+  the working camera on open (a viewport change, not a save; the set is not marked dirty by it, because the dirty check
+  already excludes navigation-only state and the restore is applied before the clean baseline is taken).
+- **Warning rule:** shown only for Location-owned truth, and only when the Location is shared — `sharedWith` = other Shots
+  whose `spatial.locationId` is this Location or that hold any bookmark / path / blocking / rig on this scene document.
+  - On open (Shot route, `sharedWith.length > 0`): a quiet line "This 3D Set is shared by N other Shots (2B, 3A…)."
+  - When the Set itself is dirty (live `sceneFingerprint` ≠ saved), beside **Save Set**: "Saving changes the Set for
+    every Shot in this Location: 2B, 3A. Their Master Frames will show STALE SCENE."
+  - Never for camera, blocking or lighting saves (Shot-owned).
+- A fingerprint change is the trigger, not a click: moving a light rig or a proxy never shows it, moving a set object does.
+
+##### 4C.4 Camera provenance and Master Frame states
+
+- **Camera fingerprint** = `bookmarkCameraFingerprint(bookmark.value)` (F10). No navigation camera, no browser state, no URL.
+- **Snapshot** `prism.render-camera.v1`, stored on new Master Frames:
+  `{ schema, cameraFingerprint, bookmarkId, bookmarkLabel, camera: ControlCamera }`. `camera` is the normalised control
+  camera already used for spatial passes (no engine object, no Three.js dump); `bookmarkId` is history, not a live link.
+- **Capture (fixes F4):** the browser sends `cameraFingerprint` of the bookmark it rendered with; the server re-reads the
+  Shot's bookmark, recomputes, and refuses a mismatch (`conflict`: "The Shot's camera changed after this frame was
+  rendered. Capture again."), exactly like the blocking and lighting claims. The stored snapshot is built server-side
+  from the bookmark row.
+- **Historical rows:** `camera_fingerprint` / `camera_json` stay **null**; null means _camera provenance was not frozen
+  at capture_. Never backfilled from current bookmarks, on any installation (hosted happens to hold 0 Master Frames; the
+  design does not rely on it).
+- **Per-axis state** (new domain function `masterFrameSpatialStatus`, extending `masterFrameStaleReasons`):
+
+| Axis     | fresh                                                                 | stale                                                      | unknown                            |
+| -------- | --------------------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------- |
+| scene    | frame's scene doc and fingerprint = the Shot's current Location scene | different fingerprint, different document, or no scene now | —                                  |
+| camera   | frame `camera_fingerprint` = fingerprint of the current Shot bookmark | different, or the Shot has no bookmark now                 | frame `camera_fingerprint` is null |
+| blocking | as today (frame vs current saved blocking provenance)                 | as today                                                   | —                                  |
+| lighting | as today (4B rig + base environment)                                  | as today                                                   | —                                  |
+
+Result: `{ stale: Axis[]; unknown: Axis[] }`; **fresh** = both empty. Unknown is never reported as fresh or stale.
+Only camera can be unknown: pre-4B frames had no rig and pre-0033 frames had no blocking, so their nulls are true
+statements, not missing provenance.
+
+- **Labels:** existing `STALE SCENE / BLOCKING / LIGHTING` plus `STALE CAMERA — the Shot's camera changed after this
+frame.` and `UNKNOWN CAMERA PROVENANCE — this frame was captured before cameras were recorded.`
+- `masterFrameStaleReasons` keeps its signature and returns the stale axes (4B callers and tests unchanged); the new
+  function is the one promotion uses.
+
+##### 4C.5 Promotion: server recheck, confirmation, TOCTOU
+
+- **Never a hard block.** An older composition may be the one wanted. No recapture, regeneration or approval is automatic.
+- **Server is the authority:** `promoteMasterFrame` reloads the exact Master Frame, the Shot's current Location scene,
+  bookmark, saved blocking and rig, and computes `masterFrameSpatialStatus` itself. Browser-sent reasons are ignored.
+- **State digest:** `promotionStateDigest = fingerprint({ masterFrameId, current: { scene, camera, blocking, lighting },
+stale, unknown })`. Deterministic, recomputable, not secret, not stored as a credential; ownership stays RLS's job.
+- **Flow:**
+  1. Submit without a digest. Fresh → promote. Otherwise → `{ ok: false, needsConfirmation: true, stale, unknown,
+stateDigest }` (an additive `ActionResult` variant; `ActionForm` renders the reasons and a **Use anyway** button
+     that resubmits with `confirmedStateDigest`).
+  2. Submit with a digest: server recomputes; equal → promote, recording what was confirmed; different → a NEW
+     `needsConfirmation` with the current reasons (never "promote under reasons B").
+  3. A frame that turned stale between display and a plain submit also gets `needsConfirmation`.
+- **Dedup:** promoting a Master Frame that already became Production Frame vN reselects vN (today's `frame_fingerprint`
+  rule) and reports vN's ORIGINAL promotion record; the reselection is the selection table's event, as today.
+- One server action for both surfaces (Production Frame section and the workspace); no parallel promotion logic.
+
+##### 4C.6 Production Frame exact-source provenance
+
+**Choice: dedicated nullable columns (Option A)**, because the four values are fixed-width fingerprints the database can
+verify against the source row by equality, the 4B chain query reads one of them directly, and the existing
+`intent_snapshot` / `parts` hold Shot intent, not render provenance. A JSON blob would need the same trigger with less
+readable checks.
+
+| Column                        | Meaning                                                                                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------- |
+| `source_scene_fingerprint`    | non-null ⇔ spatial source provenance was frozen (the marker)                                |
+| `source_camera_fingerprint`   | the Master Frame's `camera_fingerprint` (null = that frame had none: unknown at source)     |
+| `source_blocking_fingerprint` | the Master Frame's blocking fingerprint (null = no visible proxies)                         |
+| `source_lighting_fingerprint` | the Master Frame's lighting fingerprint (null = no rig)                                     |
+| `source_spatial_stale`        | `text[]` axes stale at promotion (`{}` = fresh); non-empty only after explicit confirmation |
+| `source_spatial_unknown`      | `text[]` axes unknown at promotion (`{}` or `{camera}`)                                     |
+
+- Values come **only** from `source_master_frame_id` → that exact `scene_master_frames` row, never from current state,
+  the newest or the adopted Master Frame. A `BEFORE INSERT` trigger verifies equality with that row (and that it is the
+  same Shot, Project and Asset), so neither the browser nor a server bug can freeze current state by mistake.
+- Historical and non-spatial Production Frames: all six null (_not frozen under this schema_). Never reconstructed.
+- Immutable through the existing guard (F8). Later scene / camera / blocking / lighting changes **do not** make the
+  selected Production Frame stale and never block image-to-video: it stays the approved visual truth; these columns only
+  explain where it came from. Production Frame freshness (`parts`, intent) is unchanged.
+
+##### 4C.7 GenerationPackage
+
+- `spatialReference` stays **current** spatial state (unchanged).
+- `references.productionFrame` (the selected frame) gains an optional `sourceSpatial`, **omitted** when not frozen:
+  `{ schemaVersion: 1, masterFrameId, sceneFingerprint, cameraFingerprint, blockingFingerprint, lightingFingerprint,
+staleAtPromotion, unknownAtPromotion }`. Ids and fingerprints only: no URL, no snapshot payload.
+- `spatialReference.shotLighting.productionFrameLightingFingerprint` keeps its 4B meaning; it reads the frozen
+  `source_lighting_fingerprint` when present and falls back to the 4B chain otherwise, so it survives a deleted Master
+  Frame (decision P3).
+- Packages of Shots without spatial state or without frozen frames are byte-identical. No prompt, adapter (Runway,
+  Gemini, OpenAI) or routing change.
+
+##### 4C.8 Shot Prep and the workspace UI
+
+- **Shot Prep, § Location / set:** "Open in 3D Set" becomes **Open Spatial Workspace** (the Shot route); the Location
+  page stays reachable from the Location list.
+- **Production Frame section:** each Master Frame row shows thumbnail, captured time, four axis badges
+  (fresh / STALE / UNKNOWN), **Use as Production Frame** (the same `promoteMasterFrame`, with the confirmation flow) and
+  **Open Spatial Workspace**. No canvas in Shot Prep. Statuses are computed server-side by the page (same function as
+  promotion).
+- **Workspace Master Frame list:** the same badges and the same **Use as Production Frame** next to "Use as Master Frame".
+- **After promotion:** the selected Production Frame shows its lineage: "from 3D Master Frame captured <time>" and the
+  four source fingerprints (short), plus "promoted fresh" or "promoted with confirmation: STALE CAMERA …". It never
+  claims the current setup still matches; a separate "compare with current" line may say so when it is checked.
+- The user is never asked which table something lives in; ownership is shown only in the shared-set warning.
+
+##### 4C.9 Proposed migration 0049 (not created)
+
+```sql
+-- 0049_spatial_camera_and_frame_source.sql (proposal; forward-only from 0048)
+alter table scene_master_frames
+  add column camera_fingerprint text,
+  add column camera_json jsonb,
+  add constraint scene_master_frames_camera_check check (
+    (camera_fingerprint is null and camera_json is null)
+    or coalesce(char_length(camera_fingerprint) = 64
+       and camera_json ->> 'schema' = 'prism.render-camera.v1'
+       and camera_json ->> 'cameraFingerprint' = camera_fingerprint
+       and jsonb_typeof(camera_json -> 'camera') = 'object', false));
+-- no trigger change: 0048's deny-by-default guard already freezes the new columns
+
+alter table shot_production_frames
+  add column source_scene_fingerprint    text,
+  add column source_camera_fingerprint   text,
+  add column source_blocking_fingerprint text,
+  add column source_lighting_fingerprint text,
+  add column source_spatial_stale        text[],
+  add column source_spatial_unknown      text[],
+  add constraint shot_production_frames_spatial_source_check check (
+    (source_scene_fingerprint is null and source_camera_fingerprint is null and source_blocking_fingerprint is null
+       and source_lighting_fingerprint is null and source_spatial_stale is null and source_spatial_unknown is null)
+    or (source = 'previs_master' and char_length(source_scene_fingerprint) = 64
+       and (source_camera_fingerprint is null or char_length(source_camera_fingerprint) = 64)
+       and (source_blocking_fingerprint is null or char_length(source_blocking_fingerprint) = 64)
+       and (source_lighting_fingerprint is null or char_length(source_lighting_fingerprint) = 64)
+       and source_spatial_stale is not null and source_spatial_unknown is not null
+       and source_spatial_stale <@ array['scene', 'camera', 'blocking', 'lighting']
+       and source_spatial_unknown <@ array['camera']));
+
+-- exact source: the frozen values must be that very Master Frame's own (SECURITY INVOKER; RLS lets the owner read it)
+create or replace function check_shot_production_frame_spatial_source() returns trigger
+language plpgsql as $$
+declare mf scene_master_frames%rowtype;
+begin
+  if new.source_scene_fingerprint is null then return new; end if;
+  select * into mf from scene_master_frames
+   where id = new.source_master_frame_id and shot_id = new.shot_id and project_id = new.project_id;
+  if not found or mf.asset_id <> new.asset_id
+     or mf.scene_fingerprint <> new.source_scene_fingerprint
+     or mf.camera_fingerprint is distinct from new.source_camera_fingerprint
+     or mf.blocking_fingerprint is distinct from new.source_blocking_fingerprint
+     or mf.lighting_fingerprint is distinct from new.source_lighting_fingerprint
+     or (mf.camera_fingerprint is null) <> ('camera' = any(new.source_spatial_unknown)) then
+    raise exception 'Production Frame spatial source must be its Master Frame''s own provenance';
+  end if;
+  return new;
+end;
+$$;
+create trigger shot_production_frames_spatial_source_check before insert on shot_production_frames
+  for each row execute function check_shot_production_frame_spatial_source();
+```
+
+- No backfill, no UPDATE / DELETE / INSERT of rows, no destructive DDL, no grant or revoke (the two tables keep their
+  current privileges; #47 stays separate), no SECURITY DEFINER, no new table.
+- **Migration ahead of code (mandatory):** current `main` inserts name their columns (F11), so with 0049 applied, `main`
+  writes null/null camera and null source provenance, which both checks accept, and its reads ignore the new columns.
+  The 4C code must also run against 0048 until 0049 is applied: it probes the columns once per request the way 4B probed
+  `shot_light_rigs` (`to_regclass` / `information_schema`) and omits them when absent.
+- The DB cannot require new code to fill the source columns (that would break `main`); the application requires it and
+  tests prove it.
+
+##### 4C.10 Memory / Postgres parity
+
+Both previs repositories store and return `cameraFingerprint` / `camera`; both Production Frame repositories store the
+six source fields and run the same exact-source check (`assertExactSpatialSource` in the domain, called by the memory
+repository; the trigger in Postgres). `masterFrameSpatialStatus`, `promotionStateDigest`, the confirmation flow and the
+package `sourceSpatial` are domain functions shared by both modes; memory mode does not skip any check.
+
+##### 4C.11 Tests
+
+- **Domain:**
+  - Camera fingerprint: same value gives the same fingerprint; position, rotation and focal length each change it; −0
+    and quaternion sign normalise; navigation-only fields are absent.
+  - `masterFrameSpatialStatus`: fresh, each axis stale, camera unknown, unknown not counted as fresh, no current
+    bookmark gives stale camera, and a different scene document gives stale scene.
+  - Digest: deterministic, and it changes with each input.
+  - Exact-source extraction: takes the source frame, never the newest or adopted one.
+  - Package: `sourceSpatial` is omitted for old frames, and `productionFrameLightingFingerprint` is unchanged when the
+    Master Frame exists.
+- **Real PostgreSQL** (`db:lighting`-style script `db:spatial-source`):
+  - Camera pair: null/null accepted; a valid pair accepted.
+  - Camera pair refusals: fingerprint without JSON, JSON without fingerprint, wrong schema, mismatched fingerprint, and
+    short fingerprint.
+  - A post-insert camera change is refused by the 0048 guard.
+  - Production Frame source: null accepted for non-spatial and old rows; `previs_master` with exact values accepted;
+    each mismatched value refused; another Shot's Master Frame refused; another Asset refused; source columns on a
+    non-`previs_master` frame refused.
+  - Any UPDATE is refused, and the Shot cascade still deletes.
+  - Migration: 0048 checksum unchanged; 0049 applies once; no row changed (digest before and after); a `main`-shaped
+    insert still works.
+  - Worker roles and `anon` are not broadened (privilege diff).
+- **Browser (memory, no provider):**
+  - **Story:** Shot → Open Spatial Workspace → existing set → link camera → blocking → lighting → capture → all fresh →
+    move the camera and re-link → STALE CAMERA → **Use as Production Frame** asks for confirmation → confirm → the
+    frame is selected, its source fingerprints equal the Master Frame's, and the package is valid with
+    `references.productionFrame.sourceSpatial`.
+  - **TOCTOU (release-blocking):** get the confirmation → change the blocking → submit the old digest → the server
+    returns a new confirmation and creates no frame.
+  - **Exact source:** Master Frames A and B with different fingerprints, B newest → promote A → the frame and package
+    source are A, never B.
+  - **Shared Location A/B:**
+    - each Shot keeps independent camera, blocking and lighting across route changes;
+    - a Set geometry edit from A shows the warning and changes the scene fingerprint for both;
+    - a lighting edit shows no warning.
+  - **Capture camera claim:** a forged `cameraFingerprint` is refused, and the Location route's Shot switch reloads
+    the right bookmark (F3 / F4 regression).
+  - **No spatial:** a Shot with no Location, scene, camera, blocking or lighting reaches a Production Frame, a package
+    and the image-first path, with no new required key.
+  - Location without a scene → **Create 3D Set** creates the Location's own scene document.
+- Existing 4B tests stay green unchanged.
+
+##### 4C.12 Hosted acceptance (4C-B, later, not executed now)
+
+0049 `--dry-run` → exact checksum → apply → `db:validate`, `db:behavior`, `db:rls`, `db:spatial-source`, `db:lighting`,
+`db:previs`, worker-role checks with real logins; current-`main` compatibility on hosted (its suites, a `main`-shaped
+insert); real owner and real non-owner (Admin-API ephemeral user, as 4B-B); the Shot-centric browser story run locally
+against hosted; temporary fixtures removed; no deployment; no provider call.
+
+##### 4C.13 Owner decisions requested
+
+- **P1 Route:** `/projects/[project]/episodes/[ep]/shots/[shotId]/spatial`, no Shot switcher; the Location route
+  keeps its switcher as navigation.
+- **P2 Production Frame storage:** six dedicated nullable columns + exact-source insert trigger (4C.6 / 4C.9).
+- **P3** `productionFrameLightingFingerprint` prefers the frozen source column and falls back to the 4B chain.
+- **P4 Unknown camera** is a separate state and, like stale, needs confirmation to promote.
+- **P5 Capture camera claim** (F4) is fixed in 4C, with a regression test, not as a separate hotfix.
+- **P6** The F3 dropdown leak is fixed by navigation in 4C (it is reachable today only on the Location route).
+
+##### 4C.14 Non-goals
+
+A second scene system or engine; Shot-owned set storage; replacing the Location route; mandatory 3D at any step;
+automatic recapture, regeneration or approval; relighting or re-framing an existing Production Frame; templates and
+copies (4D); splat changes (4E); NLE, mixer, grading, EDL (Phase 5); autonomous camera / lighting choice, routing or
+agents (Phase 6); any provider call (Runway / Gemini / OpenAI / reconstruction = 0; paid = 0).
 
 ### 4D — Reusable setups
 
