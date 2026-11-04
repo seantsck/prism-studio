@@ -102,7 +102,7 @@ Playwright runs Chromium with the software rasteriser (`--use-angle=swiftshader`
 - Undo/redo covers object add/delete/transform/colour/lock/visibility; production-camera edits made through the
   inspector are not on the undo stack.
 - The Set itself offers no lights beyond the engine's default rig; the vendored point-light shape exists but has no
-  button. Shot-owned lighting is a separate overlay ([Shot Lighting](#shot-lighting-phase-4b-in-review)), never part of
+  button. Shot-owned lighting is a separate overlay ([Shot Lighting](#shot-lighting-phase-4b)), never part of
   the Set.
 - The outliner has no rename, reorder or grouping; the engine has no hierarchy UI.
 - GLBs must be single-file (`.glb`, no Draco/KTX2/Meshopt, no external resources) and are added through the normal
@@ -843,13 +843,14 @@ A Location's spatial environment can now also be **generated** from its referenc
   model, operation id) for generated environments only; imported environments are unchanged;
 - a visible generated splat blocks M2C control passes exactly like an imported one.
 
-## Shot Lighting (Phase 4B, in review)
+## Shot Lighting (Phase 4B)
 
-The selected Shot's lighting panel adds, edits, disables and deletes `ambient`, `point`, `directional` and `spot` lights
+Shipped in Phase 4B (PR #46; migration 0048 on hosted). The selected Shot's lighting panel adds, edits, disables and deletes `ambient`, `point`, `directional` and `spot` lights
 (at most 16) and picks a base mode: `engine_default` keeps the engine's base rig, `replace` hides it. It is a runtime
 overlay: **it never enters the scene document or `sceneFingerprint`**, and it never writes `Shot.lighting`. Shadows are not
 simulated in v1. Master Frames and previs record the rig they were lit by and show `STALE LIGHTING` when the Shot's rig
 moves on; control passes ignore lighting byte for byte. **Gaussian splats do not respond to Shot lights** (their colour is
 baked) and the panel says so when a visible splat is in the Set. The engine base rig and background depend only on
-the saved skybox, never on the application UI theme, and a saved scene cannot alter the base directional light. Full notes:
+the saved skybox, never on the application UI theme, and a saved scene cannot alter the base directional light. The rig
+reaches the GenerationPackage as the optional `spatialReference.shotLighting`. Full notes:
 [phase-4-spatial-production](phase-4-spatial-production.md#4b-implementation-notes).

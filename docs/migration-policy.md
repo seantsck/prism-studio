@@ -135,19 +135,41 @@ worker role, 0 policies with `direct_video_allowed = true`; `db:validate` STRUCT
 67/67, `db:worker-role` 60/60 (REAL LOGIN), `db:continuity-analysis` 80/80, `db:media-qa` 39/39, narrow repository
 acceptance on a disposable Project 15/15, hosted browser E2E 40/40; counts and Storage back to baseline afterwards.
 
-**0048** (Phase 4B, **NOT applied to hosted**; hosted head stays 0047 and 0048 is the only pending migration; checksum
-`d59c8ef800ce83f78492b4e030a07d6349d06fb1c2e04daeec195384860034b1`) creates `shot_light_rigs` (one current
-`prism.shot-lighting.v1` rig per Shot; CAS revision guard; owner-only RLS; `authenticated` holds the four table
-privileges, `anon` and both worker roles hold none), adds the unique key `location_scene_documents (id, project_id,
-location_id)` the rig's set foreign key needs, adds nullable `lighting_fingerprint` / `lighting_json` pairs to
-`scene_master_frames` and `shot_previs_clips` (nothing backfilled), and adds deny-by-default provenance guards (D3) on
-both render tables: only adoption (`adopted_at`, `adopted_frame_id`) and an FK `SET NULL` of a deleted bookmark or path may
-change a row; DELETE and cascades stay allowed. No SECURITY DEFINER, no row written, no worker grant changed
-([phase-4-spatial-production](phase-4-spatial-production.md#4b-implementation-notes)). Disposable gate: 0001–0047 applied
-unchanged through the Supabase shim, 0048 `--dry-run` rolled back, then applied; `MIGRATION CHECKSUMS OK`; `db:validate`
-STRUCTURE OK, `db:behavior` 61/61, `db:lighting` 119/119, `db:blocking` 57/57, `db:previs` 60/60, `db:spatial-passes`
-80/80, `db:production-frames` 71/71, `db:reconstructions` 54/54. `db:rls` does not run on the shim and `db:worker-role` is
-57/63; both fail identically on `main` at 0047. Hosted acceptance (4B-B) is still required.
+**0048** (Phase 4B, **applied to hosted DEV on 2026-11-04T02:10:30.580Z**, checksum
+`d59c8ef800ce83f78492b4e030a07d6349d06fb1c2e04daeec195384860034b1`; hosted head 0048, nothing pending).
+
+- **`shot_light_rigs`:** one current `prism.shot-lighting.v1` rig per Shot.
+  - CAS revision guard; owner-only RLS.
+  - `authenticated` holds the four table privileges; `anon` and both worker roles hold none.
+- **Unique key `location_scene_documents (id, project_id, location_id)`:** the rig's set foreign key needs it.
+- **Render lighting:** nullable `lighting_fingerprint` / `lighting_json` pairs on `scene_master_frames` and `shot_previs_clips`, with nothing backfilled.
+- **Provenance guards (D3), deny-by-default on both render tables:**
+  - only adoption (`adopted_at`, `adopted_frame_id`) and an FK `SET NULL` of a deleted bookmark or path may change a row;
+  - DELETE and cascades stay allowed.
+- **Unchanged:** no SECURITY DEFINER, no row written, no worker grant changed.
+
+Details: [phase-4-spatial-production](phase-4-spatial-production.md#4b-implementation-notes).
+
+**Disposable gate.** 0001–0047 applied unchanged through the Supabase shim, then 0048 after a rolled-back `--dry-run`.
+
+**Hosted gate.**
+
+1. `db:migrate:dry-run-check` 7/7, then a `--dry-run` rehearsal (rolled back, ledger unchanged).
+2. `db:migrate` applied exactly 0048: ledger 48 rows, rows 0001–0047 unchanged, `MIGRATION CHECKSUMS OK`.
+3. Suites: `db:validate` STRUCTURE OK, `db:behavior` 61/61, `db:rls` 67/67, `db:lighting` 119/119, `db:previs` 60/60,
+   `db:blocking` 57/57, `db:worker-role` 63/63 (REAL LOGIN).
+4. Real-auth acceptance, with PR #46 run locally against hosted and not deployed:
+   - the owner created, read, updated, hit a stale-revision refusal and cleared a rig through the app;
+   - the server replaced or refused spoofed intent, scene and fingerprint fields;
+   - a non-owner session saw and changed nothing;
+   - `anon` and both real worker logins were denied;
+   - no guard is SECURITY DEFINER, and 0048 added no grant on either render table.
+5. Cleanup: every temporary fixture and the ephemeral Auth user (Admin API) were removed. Real Project data was untouched
+   apart from the migration DDL.
+
+Hosted had **0 Master Frames and 0 previs clips** before 0048. The "no historical row rewritten" check is therefore
+structurally valid but proves nothing about existing data. `anon`'s Supabase-default table grants on the two render
+tables pre-date 0048 and are unchanged (#47).
 
 **0047** (Phase 3A.4F, **applied to hosted DEV on 2026-11-01**, checksum
 `eb8ed24bef736480106ec392859f66e0d2a61321df631a08d5ade1fe71df5dd0`) adds `project_qa_policies.sequence_semantic_mode`

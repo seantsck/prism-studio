@@ -129,7 +129,7 @@ See [virtual-set](virtual-set.md).
 Blocking is **shot-specific**: it is never part of the Location's set. The proxy carries no identity. See
 [virtual-set](virtual-set.md#character-blocking-phase-2f-m2b).
 
-## Shot lighting (Phase 4B, in review; migration 0048 not yet on hosted)
+## Shot lighting (Phase 4B)
 
 | Entity            | Table / column                                                                      | Nature                                                                                                                                                                                               |
 | ----------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
