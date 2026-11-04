@@ -21,7 +21,11 @@ import {
   type ShotBlockingEntry,
 } from "@/domain/previs/blocking";
 import { cameraPathSchema, validateCameraPath } from "@/domain/previs/camera-path";
-import { buildRenderCamera, WRONG_CAMERA_MESSAGE, type RenderCamera } from "@/domain/previs/camera-provenance";
+import {
+  buildRenderCamera,
+  WRONG_CAMERA_MESSAGE,
+  type RenderCamera,
+} from "@/domain/previs/camera-provenance";
 import { buildPrevisDocument } from "@/domain/previs/document";
 import {
   authoredLightingIntent,
@@ -276,7 +280,9 @@ function authorizeRenderCamera(args: {
   try {
     camera = buildRenderCamera(b);
   } catch {
-    throw new UserFacingError("This Shot's production camera cannot be rendered. Link the production camera again.");
+    throw new UserFacingError(
+      "This Shot's production camera cannot be rendered. Link the production camera again.",
+    );
   }
   if (args.claimed !== camera.cameraFingerprint) throw new PrevisError("conflict", WRONG_CAMERA_MESSAGE);
   return camera;

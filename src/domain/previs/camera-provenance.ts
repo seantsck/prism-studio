@@ -47,7 +47,8 @@ export const renderCameraSchema = z.strictObject({
 export type RenderCamera = z.infer<typeof renderCameraSchema>;
 
 /** The canonical camera identity of a production camera bookmark (re-exported: there is exactly one). */
-export const renderCameraFingerprint = (value: CameraBookmarkValue): string => bookmarkCameraFingerprint(value);
+export const renderCameraFingerprint = (value: CameraBookmarkValue): string =>
+  bookmarkCameraFingerprint(value);
 
 /** Builds the `prism.render-camera.v1` snapshot from a SERVER-loaded bookmark. */
 export function buildRenderCamera(bookmark: {

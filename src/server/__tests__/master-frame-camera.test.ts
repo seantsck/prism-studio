@@ -150,7 +150,9 @@ describe("captureMasterFrame camera authority (P5, release-blocking)", () => {
   it("refuses Shot A's camera rendered as Shot B: no Master Frame, no Asset, no stored object", async () => {
     const ctx = await setup();
     const assetsBefore = await assetCount(ctx);
-    const r = await captureMasterFrame(captureForm(ctx, ctx.shotB.id, bookmarkCameraFingerprint(ctx.bmA.value)));
+    const r = await captureMasterFrame(
+      captureForm(ctx, ctx.shotB.id, bookmarkCameraFingerprint(ctx.bmA.value)),
+    );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/camera/i);
     expect(await ctx.repo.previs.listMasterFrames(ctx.shotB.id)).toEqual([]);
