@@ -236,7 +236,7 @@ vision; face embeddings; cross-Shot / cut-level continuity (3A.4); cross-Episode
 accepted on the verified calibration v2 (six temporal families). Lip sync stays unchecked and separately gated, and QA
 stays advisory.
 
-## Phase 4 — Spatial Production _(architecture accepted; 4A–4B complete; 4C architecture accepted, implementation started)_
+## Phase 4 — Spatial Production _(architecture accepted; 4A–4B complete; 4C architecture accepted, 4C-I1 in review)_
 
 Design: [phase-4-spatial-production](phase-4-spatial-production.md). **3D is an optional construction tool for a Production
 Frame, never a prerequisite for one.**
@@ -249,19 +249,25 @@ the attachment, holds no data, and stays legacy and non-authoritative. `spatial.
 
 **Phase 4 work remaining:**
 
-| Slice | Scope                                                                                          | Status                                                       |
-| ----- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| 4A    | Architecture and consolidation                                                                 | complete, docs only                                          |
-| 4B    | Shot Lighting Rigs: `prism.shot-lighting.v1`, overlay, render provenance, optional package key | complete (PR #46); migration 0048 applied to hosted DEV      |
-| 4C    | Shot-centric Spatial Workspace and Production Frame handoff                                    | architecture accepted (4C-A); implementation started (4C-I1) |
-| 4D    | Reusable setups: explicit copies, never live links                                             | not started                                                  |
-| 4E    | Splat control-pass refusal and environment limits                                              | not started                                                  |
-| 4F    | Production acceptance and roadmap close                                                        | not started                                                  |
+| Slice | Scope                                                                                          | Status                                                                           |
+| ----- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| 4A    | Architecture and consolidation                                                                 | complete, docs only                                                              |
+| 4B    | Shot Lighting Rigs: `prism.shot-lighting.v1`, overlay, render provenance, optional package key | complete (PR #46); migration 0048 applied to hosted DEV                          |
+| 4C    | Shot-centric Spatial Workspace and Production Frame handoff                                    | architecture accepted (4C-A); 4C-I1 in review (0049 in repo, not applied hosted) |
+| 4D    | Reusable setups: explicit copies, never live links                                             | not started                                                                      |
+| 4E    | Splat control-pass refusal and environment limits                                              | not started                                                                      |
+| 4F    | Production acceptance and roadmap close                                                        | not started                                                                      |
 
 **4B — complete.** Shot Lighting Rigs (`prism.shot-lighting.v1`) shipped in PR #46. Migration 0048 is applied to hosted
 DEV: the hosted head is 0048 and no migration is pending. Shot Lighting is optional and Shot-owned. It has base modes
 `engine_default | replace` and no authored shadows. Gaussian splats are not relit (their colour is baked). Filmmaking with
 no 3D at all stays fully supported.
+
+**4C — in progress.** The 4C-A architecture is accepted (PR #49). 4C-I1 (camera correctness, Master Frame spatial
+provenance, safe Production Frame promotion) is implemented on a draft PR and in technical review. Migration **0049** is
+in the repository and **not applied to hosted**: the hosted head is still 0048, and 0049 is pending once the branch
+exists. 4C is not complete: the Shot-centric Spatial Workspace (4C-I2, including P6) and the hosted acceptance (4C-B)
+have not started.
 
 Real reconstruction (M2D.3D2) stays optional and does not block any slice.
 

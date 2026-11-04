@@ -815,6 +815,63 @@ automatic recapture, regeneration or approval; relighting or re-framing an exist
 copies (4D); splat changes (4E); NLE, mixer, grading, EDL (Phase 5); autonomous camera / lighting choice, routing or
 agents (Phase 6); any provider call (Runway / Gemini / OpenAI / reconstruction = 0; paid = 0).
 
+#### 4C-I1 implementation notes (in review)
+
+Status: **4C-I1 implemented on branch `phase-4c-spatial-provenance` (draft PR, in technical review).** Migration
+**0049 exists in the repository and is NOT applied to hosted**: hosted head is 0048 and 0049 is pending. The
+Shot-centric Spatial Workspace (I2) is **not** built yet, and P6 (Location-page selector as navigation) is **not**
+fixed yet; I1 only makes the wrong-camera capture impossible even while that UI leak exists.
+
+- **P5 camera correctness (release-blocking, first).** The browser sends `cameraFingerprint`, the
+  `bookmarkCameraFingerprint` of the exact bookmark it rendered with. `captureMasterFrame` reloads the Shot's bookmark,
+  checks Shot / Project / Location / saved set, derives the canonical camera server-side and refuses a missing or
+  different claim **before any byte is stored** (no Asset row, no storage object, no Master Frame). The server then
+  persists its own `prism.render-camera.v1` snapshot, never browser camera JSON. `master-frame-camera.test.ts` failed on
+  `b340bcd` and passes now; E2E story A proves it through the Location page Shot switcher.
+- **One camera identity.** `prism.render-camera.v1` (`src/domain/previs/camera-provenance.ts`) is
+  `{schema, cameraFingerprint, bookmarkId, bookmarkLabel, projection, focalLengthBasis, productionAspectRatio, camera}`
+  with `camera` = the canonical `ControlCamera` (position, canonical-sign quaternion, focal length, sensor height,
+  vertical FOV, aspect, width, height, near, far). `cameraFingerprint` is exactly `bookmarkCameraFingerprint`
+  (= fingerprint of that ControlCamera); no second identity was introduced. Audit: the ControlCamera holds every
+  pixel-affecting fact `productionRenderSpec` renders (same lens formula, Production Frame, near 0.05, far 2000; Euler
+  vs quaternion is the same rotation), so no reconciliation was needed.
+- **Status.** `masterFrameSpatialStatus` (`spatial-status.ts`) returns separate `stale[]` and `unknown[]` over scene /
+  camera / blocking / lighting. A frame without camera provenance is UNKNOWN, never fresh and never silently stale. The
+  4B `masterFrameStaleReasons` is kept for its callers and never reports camera.
+- **Promotion.** `promoteMasterFrame` recomputes the whole state server-side (`promotionStateFor`) immediately before
+  promoting. Fresh promotes at once. Stale or unknown returns a typed `ActionResult` confirmation
+  (`confirmationRequired`, `confirmation: {digest, stale, unknown, messages, changed}`) and creates/selects nothing.
+  A resubmitted digest that no longer matches creates/selects nothing and returns the current state (`changed: true`).
+  The digest (`prism.master-frame-promotion-state.v1`) binds the Master Frame id, the four current values (explicit
+  null) and the canonical axes; no time, user or browser state. Browser stale/unknown views are never read.
+- **Residual in-request race (bounded, documented).** The recheck and the Production Frame transaction are separate
+  transactions; spatial rows (scene, bookmark, blocking, rig) are not locked across them. A concurrent spatial save in
+  that window can make the confirmed assessment milliseconds old. It cannot corrupt lineage: the frozen fingerprints
+  are copied from the immutable source Master Frame and re-verified at INSERT by the exact-source trigger (which also
+  requires the source to exist). The digest closes the user-visible TOCTOU (a stale confirmation screen); full
+  serializability of the assessment is not claimed and no broad advisory lock was added.
+- **Production Frame lineage.** Four nullable `source_*_fingerprint` fields, copied only from the exact source Master
+  Frame record. No stale/unknown arrays. Not in `frameFingerprint` and not in freshness, so 3D edits never stale an
+  approved Production Frame. **Dedup:** re-promoting the same Master Frame reselects the existing immutable frame when
+  the visual intent is unchanged (camera, blocking or lighting edits do not change it). Because the 2G.1 intent
+  snapshot freezes the Shot's set fingerprint, a **set edit** between promotions is new visual intent and makes a new
+  version, whose lineage is identical. A pre-4C duplicate is reselected untouched (its lineage stays null).
+- **Package.** `references.productionFrame.sourceSpatial = {schemaVersion: 1, masterFrameId, sceneFingerprint,
+cameraFingerprint, blockingFingerprint, lightingFingerprint}` only when frozen (omitted otherwise).
+  `spatialReference` keeps its meaning (current state); the two may differ. No provider reads either.
+- **P3 lighting.** `productionFrameLightingFingerprint`: frozen `source_lighting_fingerprint` when frozen, else the 4B
+  chain, else null; it survives source deletion for a 4C frame, and a historical frame whose source row is gone falls
+  to null.
+- **0048 compatibility.** One catalog probe per pool (`spatial-provenance-schema.ts`, cached once positive) decides
+  whether the 0049 columns are named. At 0048 the camera check still runs; the camera snapshot and source
+  fingerprints are simply not stored (they read back as unknown / not frozen) and `sourceSpatial` is omitted.
+- **UI (minimal).** Shot Prep → Production Frame: each 3D Master Frame shows its stale/unknown lines, "Use anyway" and
+  reconfirmation. Location 3D Master Frame list: camera stale and unknown lines. The missing-source message and the
+  Shot-centric route are I2.
+- **Tests.** Unit: `master-frame-camera`, `master-frame-promotion`, `camera-provenance`, production-frame lineage.
+  DB: `npm run db:spatial-source`. E2E: `e2e/zzzzzzzzzzzzzzzzzzzzzzzzzzzzz-spatial-provenance.spec.ts` (own memory
+  server) with stories A–H; story C uses the memory-only, env-gated `/api/dev/previs/master-frame-fixture`.
+
 ### 4D — Reusable setups
 
 - **Goal:** apply a camera, lighting or blocking setup to several Shots explicitly.

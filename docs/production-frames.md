@@ -119,6 +119,28 @@ returns the existing frame; the redundant new Asset is not stored (its uploaded 
 creates are serialised on the Shot row: a version is `max + 1` computed inside the creating transaction, so concurrent creates never produce a duplicate (gaplessness is not a promise: a failed attempt rolls back and takes no number, but nothing relies on consecutive numbering), and N identical concurrent creates
 make one frame.
 
+### Spatial source provenance and safe 3D promotion (Phase 4C-I1, migration 0049)
+
+- A `previs_master` frame promoted under 4C freezes the **exact source Master Frame's** four fingerprints:
+  `sourceSceneFingerprint` (the marker), `sourceCameraFingerprint`, `sourceBlockingFingerprint`,
+  `sourceLightingFingerprint` (null = that frame had none). They are copied from that Master Frame's own record, never
+  from current, package or browser state, and the database trigger re-verifies them at INSERT. They are **lineage, not
+  identity**: `frame_fingerprint` and freshness ignore them, so 3D edits never stale an approved Production Frame.
+- Historical, storyboard, upload and generated frames keep all four null. Nothing is backfilled. A pre-4C duplicate
+  found by the duplicate rule is reselected untouched.
+- `source_master_frame_id` still has **no foreign key**: deleting the Master Frame leaves the frame, its id and its
+  four fingerprints intact.
+- **Promotion asks first when needed.** Promoting a 3D Master Frame that is stale (scene / camera / blocking /
+  lighting changed since it was rendered) or has unknown camera provenance returns a confirmation with the reasons and a
+  digest; nothing is created or selected. "Use anyway" resubmits that digest. The server recomputes the state
+  immediately before promoting and refuses a digest that no longer matches. Promotion-time stale / unknown status is
+  **not** stored on the frame.
+- Package: `references.productionFrame.sourceSpatial` (only when frozen); `spatialReference` keeps describing the
+  Shot's current spatial setup, and the two may differ.
+- On a database still at 0048 the promotion and its confirmation work, but the four fingerprints are not stored (the
+  frame reads back as not frozen) and `sourceSpatial` is omitted. See
+  [phase-4-spatial-production](phase-4-spatial-production.md#4c-i1-implementation-notes-in-review).
+
 ## Selection
 
 `selectProductionFrame` moves the Shot's pointer to another frame of the same Shot. It is a **compare-and-set**: the

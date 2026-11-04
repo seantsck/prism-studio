@@ -67,6 +67,16 @@ stores the file in the private bucket (`purpose=storyboard`, `source=3d_render`)
 "Use as Master Frame" creates a _new unapproved_ storyboard frame version (`source=3d_preview`) and records the
 adoption; approval stays a separate, existing action.
 
+**Camera authority (Phase 4C-I1).** The capture request names the `cameraFingerprint` of the exact bookmark the browser
+rendered with. The server reloads **this Shot's** bookmark (same Project, Location and saved set), derives the canonical
+camera (`bookmarkCameraFingerprint`, the control-pass `ControlCamera` identity) and refuses a missing or different claim
+before anything is stored. So another Shot's camera can never be saved as this Shot's Master Frame, even while the
+Location page's Shot switcher still holds a previous Shot's bookmark (that UI leak, P6, is fixed in 4C-I2). From
+migration 0049 the row stores the server-derived `prism.render-camera.v1` snapshot (`camera_fingerprint`,
+`camera_json`); `metadata.previs.cameraFingerprint` records the verified identity. A frame without it (before 0049, or
+captured while the database was at 0048) has **unknown camera provenance**, shown separately from stale. The Master
+Frame list shows `STALE CAMERA` when the Shot's production camera changed after the frame.
+
 ## GenerationPackage
 
 `spatialReference` is optional and absent (key omitted, not null) when a Shot has no set, so those packages and their

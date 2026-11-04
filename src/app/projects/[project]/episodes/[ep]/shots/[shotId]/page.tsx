@@ -3,7 +3,8 @@ import { ShotPrepView } from "@/components/views/shot-prep-view";
 import { audioMixFingerprint } from "@/domain/previs/audio-mix";
 import { renderedBlockingFingerprint } from "@/domain/previs/blocking";
 import { performanceAudioPlanForShot } from "@/domain/previs/audio-mix-shot";
-import { promotionStateFor } from "@/server/master-frame-promotion";
+import { masterFramePromotionState } from "@/domain/previs/spatial-status";
+import { currentSpatialStateFor } from "@/server/master-frame-promotion";
 import { getPrevisRepo } from "@/server/previs";
 import { requireProject } from "@/server/repo";
 
@@ -27,10 +28,17 @@ export default async function ShotPrepPage({
   // what the Shot's saved character blocking would currently show in a render (null = no visible proxies)
   const blocking = await previs.listShotBlocking(shotId);
   // the Shot's optional 3D Master Frames (none without a 3D set): only offered as a Production Frame SOURCE
-  // each with its stale / unknown status against the CURRENT 3D setup (display only; promotion recomputes it)
+  // each with its stale / unknown status against the CURRENT 3D setup (display only; promotion recomputes it). The
+  // current setup is read once per Location the frames were rendered in, not once per frame.
+  const currentByLocation = new Map<string, ReturnType<typeof currentSpatialStateFor>>();
   const masterFrames = await Promise.all(
     (await previs.listMasterFrames(shotId)).map(async (m) => {
-      const st = await promotionStateFor(previs, m);
+      if (!currentByLocation.has(m.locationId))
+        currentByLocation.set(m.locationId, currentSpatialStateFor(previs, m));
+      const st = masterFramePromotionState({
+        masterFrame: m,
+        current: await currentByLocation.get(m.locationId)!,
+      });
       return {
         id: m.id,
         assetId: m.assetId,
