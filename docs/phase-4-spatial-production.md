@@ -477,11 +477,11 @@ spot`; at most 16 lights; base modes `engine_default | replace`; `castShadow: tr
 - **Hosted acceptance:** migration gate if one exists, plus the E2E story against hosted.
 - **Non-goals:** a second scene system; replacing the Location route; making any step mandatory.
 
-#### 4C-A architecture (in review)
+#### 4C-A architecture — accepted
 
-Status: **architecture in review; owner decisions P1–P6 accepted (4C.13); nothing is implemented, migration 0049 is
-NOT created.** Implementation order: **camera capture correctness (P5) first**. Audited on `main` `070c1f1`,
-hosted head 0048. This section is the plan the 4C implementation will follow once the owner accepts it.
+Status: **architecture accepted (PR #49, merged as `b340bcd`); owner decisions P1–P6 accepted (4C.13).**
+Implementation order: **camera capture correctness (P5) first**. Audited on `main` `070c1f1`, hosted head 0048. This
+section is the plan the 4C implementation follows.
 
 ##### 4C.1 What the audit found
 
