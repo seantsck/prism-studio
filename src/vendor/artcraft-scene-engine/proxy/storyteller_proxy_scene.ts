@@ -132,6 +132,11 @@ export class StoryTellerProxyScene {
     // children alone left all of their GPU resources allocated.
     this.scene.disposeContents();
 
+    // PRISM PATCH (4B): the engine's base rig (hemisphere, directional, ambient) is engine state, not Set data. Rebuild
+    // it fresh on every load: upstream only did so when the JSON named a "DirectionalLight", otherwise the skybox pass
+    // re-added the PREVIOUS scene's light objects with whatever state they had.
+    const baseDirectional = this.scene._create_base_lighting();
+
     // Warm Scene's URL cache up front so per-asset loadObject() calls
     // never hit the network for token→URL resolution. One batch call
     // (or N parallel singles via the fallback) instead of an N+1
@@ -182,7 +187,8 @@ export class StoryTellerProxyScene {
           };
         }
         if (token === "DirectionalLight") {
-          return { json_object, obj: this.scene._create_base_lighting() };
+          // PRISM PATCH (4B): the entry names the base rig rebuilt above; it never creates a second one
+          return { json_object, obj: baseDirectional };
         }
         if (token.includes("m_")) {
           const obj = await this.scene.loadObject(
@@ -250,6 +256,14 @@ export class StoryTellerProxyScene {
       }
       const { obj, json_object } = result.value;
       if (!obj) continue;
+      if (obj === baseDirectional) {
+        // PRISM PATCH (4B): the saved transform and visibility of the base directional light are NOT applied. Prism
+        // offers no way to edit it and `sceneFingerprint` deliberately excludes it, so applying saved state here would
+        // change pixels behind identical scene and render-lighting provenance. Only its identity round-trips.
+        obj.uuid = json_object.object_uuid;
+        obj.name = json_object.object_name;
+        continue;
+      }
       obj.position.copy(json_object.position);
       obj.rotation.copy(
         new THREE.Euler(

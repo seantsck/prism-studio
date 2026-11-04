@@ -238,6 +238,91 @@ test.describe("renderer truth", () => {
   });
 });
 
+/** Largest per-channel difference between two `beautyGrid` renders. */
+const gridDiff = (a: number[][], b: number[][]) =>
+  Math.max(...a.map((cell, i) => Math.max(...cell.map((v, c) => Math.abs(v - b[i]![c]!)))));
+const grid = (page: Page) => hook<number[][]>(page, "beautyGrid", POSE);
+const setTheme = (page: Page, light: boolean) =>
+  page.evaluate((on) => document.documentElement.classList.toggle("theme-light", on), light);
+type EngineJson = { scene: Array<Record<string, unknown>>; [k: string]: unknown };
+
+test.describe("base environment truth", () => {
+  test("the application UI theme never changes production pixels, the scene or its fingerprint", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    await page.goto(shotA.setUrl);
+    await ready(page);
+    const set = page.getByTestId("virtual-set");
+    const saved = (await set.getAttribute("data-saved-fingerprint"))!;
+    const json = await hook<EngineJson>(page, "sceneJson");
+    const states: Array<[string, unknown]> = [
+      ["no rig", null],
+      ["engine_default + key", rigOf("engine_default", [pointLight("#ff0000", 200)])],
+      ["replace + key", rigOf("replace", [pointLight("#ff0000", 200)])],
+    ];
+    for (const [name, rig] of states) {
+      await setTheme(page, false);
+      await hook(page, "loadSceneJson", json);
+      await hook(page, "setLighting", rig);
+      const dark = await grid(page);
+      const applied = (await info(page)).applied;
+      await setTheme(page, true);
+      // a load (re)creates the skybox, which is where the engine used to read the UI theme; the overlay re-attaches
+      await hook(page, "loadSceneJson", json);
+      expect((await info(page)).applied, `${name}: the Shot rig is re-attached after the load`).toBe(applied);
+      const light = await grid(page);
+      expect(gridDiff(dark, light), `${name}: UI theme changed the production render`).toBeLessThanOrEqual(2);
+    }
+    await setTheme(page, false);
+    await hook(page, "setLighting", null);
+    await hook(page, "loadSceneJson", json);
+    expect(await hook<EngineJson>(page, "sceneJson")).toEqual(json);
+    await expect(set).toHaveAttribute("data-saved-fingerprint", saved);
+    await expect(set).toHaveAttribute("data-live-fingerprint", saved, { timeout: 10_000 });
+  });
+
+  test("saved base-light state cannot change pixels behind identical render-lighting provenance", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    await page.goto(shotA.setUrl);
+    await ready(page);
+    const json = await hook<EngineJson>(page, "sceneJson");
+    const isBase = (o: Record<string, unknown>) => o.media_file_token === "DirectionalLight";
+    expect(json.scene.filter(isBase)).toHaveLength(1);
+    // every variant keeps the skybox and the engine, so `baseEnvironment` is identical for all of them
+    const variants: Array<[string, EngineJson]> = [
+      ["hidden", { ...json, scene: json.scene.map((o) => (isBase(o) ? { ...o, visible: false } : o)) }],
+      [
+        "moved",
+        {
+          ...json,
+          scene: json.scene.map((o) => (isBase(o) ? { ...o, position: { x: -8, y: 1, z: -6 } } : o)),
+        },
+      ],
+      ["omitted", { ...json, scene: json.scene.filter((o) => !isBase(o)) }],
+    ];
+    await hook(page, "loadSceneJson", json);
+    const reference = await grid(page);
+    const referenceBase = (await info(page)).baseVisible;
+    for (const [name, variant] of variants) {
+      await hook(page, "loadSceneJson", variant);
+      expect(gridDiff(reference, await grid(page)), `${name}: base light changed pixels`).toBeLessThanOrEqual(
+        2,
+      );
+      expect((await info(page)).baseVisible, `${name}: base rig state`).toEqual(referenceBase);
+      // replace still suppresses the whole base and gives back exactly this state
+      await hook(page, "setLighting", rigOf("replace"));
+      expect((await info(page)).baseVisible.every((v) => v === false)).toBe(true);
+      await hook(page, "setLighting", null);
+      expect((await info(page)).baseVisible, `${name}: restored after replace`).toEqual(referenceBase);
+    }
+    await hook(page, "loadSceneJson", json);
+    expect(gridDiff(reference, await grid(page))).toBeLessThanOrEqual(2);
+  });
+});
+
 test.describe("the Shot Lighting story", () => {
   test("rig → provenance → stale → previs → isolation → package → exact Production Frame source", async ({
     page,

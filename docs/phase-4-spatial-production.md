@@ -423,6 +423,18 @@ spot`; at most 16 lights; base modes `engine_default | replace`; `castShadow: tr
   the saved rig and refuses a render whose claimed fingerprint differs; unsaved lighting cannot be captured. null/null
   means "no rig recorded"; nothing is backfilled. `masterFrameStaleReasons` (scene, blocking, lighting) and `lighting` in
   `previsStaleReasons` compare that provenance with the Shot now. Lighting never stales a control-pass bundle.
+- **Base environment (technical-review fix)**: **the application UI theme is never production visual truth.** Audit of
+  the engine's base rig: hemisphere (colour, ground colour, intensity), ambient (colour, intensity) and directional
+  (colour, intensity, target) are engine constants; their presence and the background depend on the skybox. Two inputs
+  varied behind identical provenance and are removed by vendor patch 15 (`UPSTREAM.md`): the page's `theme-light`
+  class switched the background and the base lights, and the saved `DirectionalLight` entry's transform and visibility
+  were applied on load (while `sceneFingerprint` excludes that light), with a load that omitted it re-adding the previous
+  scene's lights. The rig is now rebuilt fresh on every load and only its identity round-trips. So the base
+  environment is fully determined by `upstreamCommit` and the saved `skybox`, `prism.render-lighting.v1` keeps that
+  smaller shape, and 0048 is unchanged. Browser proof: the same Set renders the same production pixels with and without
+  `theme-light` (no rig, `engine_default` + a light, `replace` + a light; before the fix the difference was 208/255),
+  and a hidden, moved or omitted saved base light renders the same pixels as the saved default (31/255 before). Any
+  future Prism change to base-rig behaviour must change the recorded engine identity.
 - **Package**: optional `spatialReference.shotLighting`, frozen by value; **omitted, never `null`, without a rig**. A Shot
   whose only spatial data is a rig is still discovered. `productionFrameLightingFingerprint` follows the selected
   Production Frame → `source = previs_master` → its own `source_master_frame_id` → that Master Frame's

@@ -850,5 +850,6 @@ The selected Shot's lighting panel adds, edits, disables and deletes `ambient`, 
 overlay: **it never enters the scene document or `sceneFingerprint`**, and it never writes `Shot.lighting`. Shadows are not
 simulated in v1. Master Frames and previs record the rig they were lit by and show `STALE LIGHTING` when the Shot's rig
 moves on; control passes ignore lighting byte for byte. **Gaussian splats do not respond to Shot lights** (their colour is
-baked) and the panel says so when a visible splat is in the Set. Full notes:
+baked) and the panel says so when a visible splat is in the Set. The engine base rig and background depend only on
+the saved skybox, never on the application UI theme, and a saved scene cannot alter the base directional light. Full notes:
 [phase-4-spatial-production](phase-4-spatial-production.md#4b-implementation-notes).

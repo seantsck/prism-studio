@@ -194,6 +194,23 @@ describe("render lighting snapshot", () => {
   it("reads a scene with no skybox as null", () => {
     expect(baseEnvironmentOf({ scene: {}, upstreamCommit: "abc" }).skybox).toBeNull();
   });
+
+  it("is the same whatever the saved base light says: the engine normalises it (see the 4B vendor patch)", () => {
+    const base = {
+      media_file_token: "DirectionalLight",
+      object_uuid: "d",
+      visible: true,
+      position: { x: 5, y: 10, z: 3 },
+    };
+    const of = (s: unknown[]) =>
+      baseEnvironmentOf({ scene: { skybox: "m_1", scene: s }, upstreamCommit: "abc" });
+    const reference = of([base]);
+    expect(of([{ ...base, visible: false }])).toEqual(reference);
+    expect(of([{ ...base, position: { x: -8, y: 1, z: -6 } }])).toEqual(reference);
+    expect(of([])).toEqual(reference);
+    // the UI theme is not provenance: it is not an input at all
+    expect(Object.keys(reference).sort()).toEqual(["skybox", "upstreamCommit"]);
+  });
 });
 
 describe("staleness", () => {

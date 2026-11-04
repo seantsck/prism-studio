@@ -118,6 +118,10 @@ export interface PrevisTestHook {
   setLighting(rig: ShotLightingDraft | null): void;
   /** Mean RGB of a whole Master Frame style render through an explicit pose. */
   beautyMean(pose: { position: number[]; rotation: number[]; focalLengthMm: number }): Promise<number[]>;
+  /** The same render downsampled to a coarse grid of RGB cells (row-major), for per-region comparison. */
+  beautyGrid(pose: { position: number[]; rotation: number[]; focalLengthMm: number }): Promise<number[][]>;
+  /** Loads engine scene JSON through the real `loadScene` path (live only: nothing is saved). */
+  loadSceneJson(json: Record<string, unknown>): Promise<void>;
   spatial: SpatialTestHook;
   splat: SplatTestHook;
   /** Client-space (CSS px) position of a point `offsetWorld` away from the object's origin. */
@@ -195,6 +199,33 @@ export function installPrevisTestHook(adapter: SpatialSceneAdapter, canvas: HTML
       }
       const n = d.length / 4;
       return sum.map((v) => v / n);
+    },
+    async beautyGrid(pose) {
+      const frame = await adapter.captureMasterFrame(
+        bookmarkFromCamera({
+          id: "test",
+          label: "test",
+          position: { x: pose.position[0], y: pose.position[1], z: pose.position[2] },
+          rotation: { x: pose.rotation[0], y: pose.rotation[1], z: pose.rotation[2] },
+          focalLengthMm: pose.focalLengthMm,
+        }),
+      );
+      const bitmap = await createImageBitmap(frame.blob);
+      const [cols, rows] = [48, 20];
+      const c = document.createElement("canvas");
+      c.width = cols;
+      c.height = rows;
+      const g = c.getContext("2d", { willReadFrequently: true })!;
+      g.imageSmoothingQuality = "high";
+      g.drawImage(bitmap, 0, 0, cols, rows);
+      bitmap.close();
+      const d = g.getImageData(0, 0, cols, rows).data;
+      const out: number[][] = [];
+      for (let i = 0; i < d.length; i += 4) out.push([d[i], d[i + 1], d[i + 2]]);
+      return out;
+    },
+    async loadSceneJson(json) {
+      await adapter.loadScene(json);
     },
     spatial: {
       capture(pose) {

@@ -924,21 +924,9 @@ class Scene {
     // being replaced (skybox switches and New Scene used to leak it).
     this.disposeBackground();
 
-    // Theme-aware: in light mode, use a near-white background for better contrast with UI
-    try {
-      if (
-        typeof document !== "undefined" &&
-        document.documentElement.classList.contains("theme-light")
-      ) {
-        this.scene.background = new THREE.Color("#f5f6f8");
-        if (this.ambientLight) this.scene.add(this.ambientLight);
-        if (this.directional_light) this.scene.remove(this.directional_light);
-        if (this.hemisphereLight) this.scene.add(this.hemisphereLight);
-        return;
-      }
-    } catch (_) {
-      // no-op: fallback to defaults below
-    }
+    // PRISM PATCH (4B): upstream switched to a near-white background, added the ambient light and removed the
+    // directional light when the page carried `theme-light`. The application UI theme must never be production visual
+    // truth, so the background and the base rig now depend only on the saved skybox.
 
     if (this.skybox == "Default") {
       const texture = loader.load([

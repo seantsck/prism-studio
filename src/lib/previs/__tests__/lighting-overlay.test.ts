@@ -50,11 +50,16 @@ describe("LightingOverlay", () => {
     expect(e.overlay.appliedFingerprint()).toBe(lightingFingerprint(rig("engine_default")));
   });
 
-  it("replace suppresses the base rig, including the detached ambient, and spares authored lights", () => {
+  it("replace suppresses the base rig, including the detached ambient, and spares authored lights and the skybox", () => {
     const e = engine();
+    const sky = new THREE.Color("#282828");
+    e.scene.background = sky;
     e.overlay.setRig(rig("replace"));
     expect(baseVisibility(e.active)).toEqual([false, false, false]);
     expect(e.authoredLight.visible).toBe(true);
+    expect(e.scene.background).toBe(sky);
+    e.overlay.setRig(null);
+    expect(e.scene.background).toBe(sky);
   });
 
   it("restores the exact prior state, not a default", () => {
