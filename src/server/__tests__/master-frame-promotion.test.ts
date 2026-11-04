@@ -30,9 +30,15 @@ vi.mock("@/server/repo", () => ({
     const repo = world.repo as MemoryRepository;
     const data = await repo.loadProject(slug);
     if (!data) throw new Error("no project");
-    // what the real loader attaches (server/repo.ts withProductionFrames)
+    // what the real loader attaches (server/repo.ts withSpatialReferences + withProductionFrames)
+    const refs = await repo.previs.listSpatialReferences(data.project.id);
     const { frames, selections } = await repo.productionFrames.listForProject(data.project.id);
-    return { ...data, productionFrames: frames, productionFrameSelections: selections };
+    return {
+      ...data,
+      ...(Object.keys(refs).length ? { spatialReferences: refs } : {}),
+      productionFrames: frames,
+      productionFrameSelections: selections,
+    };
   },
 }));
 vi.mock("@/server/previs", () => ({ getPrevisRepo: async () => (world.repo as MemoryRepository).previs }));
@@ -175,16 +181,19 @@ async function setup() {
   const frames = async () =>
     (await repo.productionFrames.listForProject(project.id)).frames.filter((f) => f.shotId === shot.id);
   const selectedId = () => repo.productionFrames.selectedFrameId(project.id, shot.id);
+  /** exactly what the server's loader hands an action (spatial references + Production Frames attached) */
   const loaded = async () => {
     const d = (await repo.loadProject(project.slug))!;
-    const { frames: pfs, selections } = await repo.productionFrames.listForProject(d.project.id);
-    return { ...d, productionFrames: pfs, productionFrameSelections: selections };
-  };
-  const pkg = async () => {
-    const d = await loaded();
     const refs = await repo.previs.listSpatialReferences(d.project.id);
-    return assembleGenerationPackage(buildShotContext({ ...d, spatialReferences: refs }, shot.id), NOW);
+    const { frames: pfs, selections } = await repo.productionFrames.listForProject(d.project.id);
+    return {
+      ...d,
+      ...(Object.keys(refs).length ? { spatialReferences: refs } : {}),
+      productionFrames: pfs,
+      productionFrameSelections: selections,
+    };
   };
+  const pkg = async () => assembleGenerationPackage(buildShotContext(await loaded(), shot.id), NOW);
   return {
     repo,
     project,
@@ -360,10 +369,11 @@ describe("Master Frame promotion (Phase 4C-I1)", () => {
 
   it("dedup Case A: fresh first, stale + confirmed later → the same immutable frame, intrinsic A lineage", async () => {
     const w = await setup();
+    await w.light(10);
     const a = await w.capture();
     expect((await w.promote(a.id)).ok).toBe(true);
     const [first] = await w.frames();
-    await w.moveCamera(5);
+    await w.light(20); // lighting is not visual intent: the frame identity is unchanged
     const c = confirmationOf(await w.promote(a.id));
     const again = await w.promote(a.id, c.digest);
     expect(again.ok).toBe(true);
@@ -372,22 +382,47 @@ describe("Master Frame promotion (Phase 4C-I1)", () => {
     expect(all).toHaveLength(1);
     expect(all[0]).toEqual(first);
     expect(all[0]!.sourceCameraFingerprint).toBe(a.cameraFingerprint);
+    expect(all[0]!.sourceLightingFingerprint).toBe(a.lightingFingerprint);
   });
 
   it("dedup Case B: stale + confirmed first, fresh later → the same frame; no field records either attempt", async () => {
     const w = await setup();
+    await w.light(10);
     const a = await w.capture();
-    await w.moveCamera(5);
+    await w.light(20);
     const c = confirmationOf(await w.promote(a.id));
+    expect(c.stale).toEqual(["lighting"]);
     expect((await w.promote(a.id, c.digest)).ok).toBe(true);
     const [first] = await w.frames();
-    await w.moveCamera(1); // back to the setup A was rendered with
+    await w.light(10); // back to the lighting A was rendered with: A is fresh again
     const again = await w.promote(a.id);
     expect(again.ok).toBe(true);
     const all = await w.frames();
     expect(all).toHaveLength(1);
     expect(all[0]).toEqual(first);
     expect(JSON.stringify(all[0])).not.toMatch(/stale|unknown|confirm/i);
+  });
+
+  it("a scene edit between promotions is new visual intent (2G.1 rule): a new version, the identical A lineage", async () => {
+    const w = await setup();
+    const a = await w.capture();
+    expect((await w.promote(a.id)).ok).toBe(true);
+    await w.moveCamera(5); // the Shot's intent snapshot freezes the set fingerprint, so this is a different intent
+    const c = confirmationOf(await w.promote(a.id));
+    const r = await w.promote(a.id, c.digest);
+    expect(r.ok).toBe(true);
+    const all = await w.frames();
+    expect(all.map((f) => f.version).sort()).toEqual([1, 2]);
+    const lineage = (f: (typeof all)[number]) => [
+      f.sourceMasterFrameId,
+      f.sourceSceneFingerprint,
+      f.sourceCameraFingerprint,
+      f.sourceBlockingFingerprint,
+      f.sourceLightingFingerprint,
+    ];
+    expect(lineage(all[0]!)).toEqual(lineage(all[1]!));
+    expect(all[0]!.frameFingerprint).not.toBe(all[1]!.frameFingerprint);
+    for (const f of all) expect(JSON.stringify(f)).not.toMatch(/stale|unknown|confirm|promotedFresh/i);
   });
 
   it("a pre-4C duplicate is reselected untouched: its source provenance stays null", async () => {

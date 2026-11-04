@@ -4,21 +4,27 @@ import { persistenceMode } from "@/lib/supabase/config";
 import { getRepo } from "@/server/repo";
 
 /**
- * Development/test hook (Phase 4C): copies an existing Master Frame as a PRE-4C record, i.e. the same render facts
- * with NO camera provenance (what every frame captured before migration 0049 looks like), so memory-mode E2E can
- * exercise UNKNOWN CAMERA PROVENANCE. Memory mode only, and in a production build only when
+ * Development/test hook (Phase 4C). Memory mode only, and in a production build only when
  * PRISM_STUDIO_DEV_PREVIS_FIXTURES=1 (set by the E2E servers). Never available with a real database.
+ *   { action: "historical", masterFrameId }  copies the Master Frame as a PRE-4C record: the same render facts with
+ *                                            NO camera provenance (what every frame before migration 0049 looks like)
+ *   { action: "delete", masterFrameId }      removes the Master Frame row (as a database DELETE would; its Asset stays)
  */
 export async function POST(req: Request) {
   const allowed =
     persistenceMode() === "memory" &&
     (process.env.NODE_ENV !== "production" || process.env.PRISM_STUDIO_DEV_PREVIS_FIXTURES === "1");
   if (!allowed) return new Response("Not found", { status: 404 });
-  const body = (await req.json().catch(() => null)) as { masterFrameId?: unknown } | null;
+  const body = (await req.json().catch(() => null)) as { action?: unknown; masterFrameId?: unknown } | null;
   const id = typeof body?.masterFrameId === "string" ? body.masterFrameId : "";
   const previs = ((await getRepo()) as MemoryRepository).previs;
   const src = await previs.getMasterFrame(id);
   if (!src) return new Response("Not found", { status: 404 });
+  if (body?.action === "delete") {
+    previs.deleteMasterFrame(id);
+    return Response.json({ deleted: id });
+  }
+  if (body?.action !== "historical") return new Response("Bad request", { status: 400 });
   const copy = await previs.recordMasterFrame({
     id: randomUUID(),
     projectId: src.projectId,
