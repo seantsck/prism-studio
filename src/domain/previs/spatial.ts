@@ -1,5 +1,6 @@
 import type { CameraInterpolation, CameraKeyframe } from "./camera-path";
 import type { ShotBlockingReference } from "./blocking";
+import type { ShotLightingReference } from "./lighting";
 import type { ControlPassesReference } from "./spatial-passes";
 import { characterBlocking } from "./document";
 import {
@@ -53,6 +54,11 @@ export interface SpatialReference {
    * earlier packages are byte-identical.
    */
   spatialEnvironment?: SpatialEnvironmentReference;
+  /**
+   * The Shot's Shot Lighting Rig (Phase 4B), frozen by value. Optional and omitted when the Shot has none, so earlier
+   * packages are byte-identical. It sits beside the authored `lighting` text and never replaces it.
+   */
+  shotLighting?: ShotLightingReference;
 }
 
 export const CAMERA_MOTION_SCHEMA_VERSION = 1 as const;
@@ -99,6 +105,7 @@ export interface SpatialSources {
   controlPasses?: ControlPassesReference | null;
   /** the Location's reconstruction records (looked up by the splat object's reconstructionId) */
   reconstructions?: SpatialReconstructionRecord[];
+  shotLighting?: ShotLightingReference | null;
 }
 
 export function buildSpatialReference(src: SpatialSources): SpatialReference {
@@ -128,6 +135,7 @@ export function buildSpatialReference(src: SpatialSources): SpatialReference {
   const splat = src.scene.document.objects.find((o) => o.kind === "splat" && o.reconstructionId);
   const record = splat ? src.reconstructions?.find((r) => r.id === splat.reconstructionId) : undefined;
   if (splat && record) ref.spatialEnvironment = buildSpatialEnvironment(splat, record);
+  if (src.shotLighting) ref.shotLighting = structuredClone(src.shotLighting);
   return ref;
 }
 

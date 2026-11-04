@@ -21,6 +21,7 @@ import type { PageSceneAdapter } from "@/vendor/artcraft-scene-engine/adapter";
 import type { ControlCamera, ObjectManifest } from "@/domain/previs/spatial-passes";
 import { parseCalibration, SPLAT_USER_DATA, type SplatCalibration } from "@/domain/previs/splat";
 import { BlockingOverlay } from "./blocking-overlay";
+import { LightingOverlay } from "./lighting-overlay";
 import {
   SplatRuntime,
   type SplatAssetInfo,
@@ -149,6 +150,11 @@ export interface SpatialSceneAdapter {
    * the serialised set. It shares the editor's undo/redo, selection and gizmos.
    */
   readonly blocking: BlockingOverlay;
+  /**
+   * The selected Shot's lighting: a runtime overlay that is never part of the serialised set or its fingerprint.
+   * `setRig(null)` removes it and restores the engine's base lights exactly.
+   */
+  readonly lighting: LightingOverlay;
   undo(): Promise<void>;
   redo(): Promise<void>;
   canUndo(): boolean;
@@ -197,10 +203,15 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
   private notifyQueued = false;
   private expectedSplats: Array<{ id: string; assetId: string; name: string }> = [];
   readonly blocking: BlockingOverlay;
+  readonly lighting: LightingOverlay;
   private readonly splats: SplatRuntime;
 
   constructor(private readonly options: AdapterOptions) {
     this.blocking = new BlockingOverlay(
+      () => this.editor,
+      () => this.notify(),
+    );
+    this.lighting = new LightingOverlay(
       () => this.editor,
       () => this.notify(),
     );
@@ -354,6 +365,7 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     setCameraAspect(editor, PRODUCTION_ASPECT);
     // loading replaces every scene child; the Shot's blocking overlay is not part of the loaded set
     this.blocking.reattachAll();
+    this.lighting.reattach();
     this.notify();
   }
 
@@ -363,9 +375,13 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     const live = this.authoredCamera ? this.readCamera() : null;
     if (this.authoredCamera) this.writeCamera(this.authoredCamera);
     try {
-      return JSON.parse(
-        JSON.stringify(editor.save_manager.getSceneJson({ sceneGenerationMetadata: SCENE_META })),
-      ) as Record<string, unknown>;
+      // the base directional light is saved with its visibility: a Shot's `replace` must not reach the Set
+      return this.lighting.withBaseRestored(
+        () =>
+          JSON.parse(
+            JSON.stringify(editor.save_manager.getSceneJson({ sceneGenerationMetadata: SCENE_META })),
+          ) as Record<string, unknown>,
+      );
     } finally {
       if (live) this.writeCamera(live);
     }
@@ -824,6 +840,7 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
     this.setPathOverlay(null);
     this.splats.dispose();
     this.blocking.dispose();
+    this.lighting.dispose();
     this.authoredCamera = null;
     this.listeners.clear();
     const editor = this.editor;

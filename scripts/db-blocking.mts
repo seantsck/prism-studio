@@ -514,8 +514,18 @@ try {
     plain.blockingFingerprint === null && plain.blocking === null,
   );
   check(
-    "a fingerprint without its provenance json is rejected",
-    (await sqlErr("update scene_master_frames set blocking_json = null where id = $1", [frame.id])) !== null,
+    "a fingerprint without its provenance json is rejected (the CHECK itself, on an INSERT no guard can pre-empt)",
+    /scene_master_frames_blocking_check/.test(
+      (await sqlErr(
+        `insert into scene_master_frames (project_id, shot_id, location_id, scene_document_id, scene_revision,
+           scene_fingerprint, asset_id, render_width, render_height, production_aspect_ratio, captured_at,
+           blocking_fingerprint, blocking_json)
+         select project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint, asset_id,
+                render_width, render_height, production_aspect_ratio, captured_at, blocking_fingerprint, null
+           from scene_master_frames where id = $1`,
+        [frame.id],
+      )) ?? "",
+    ),
   );
 
   const path = await owner.saveCameraPath({
@@ -596,8 +606,19 @@ try {
     ),
   );
   check(
-    "a previs fingerprint without its provenance json is rejected",
-    (await sqlErr("update shot_previs_clips set blocking_json = null where id = $1", [clip.id])) !== null,
+    "a previs fingerprint without its provenance json is rejected (the CHECK itself, on an INSERT no guard can pre-empt)",
+    /shot_previs_clips_blocking_check/.test(
+      (await sqlErr(
+        `insert into shot_previs_clips (project_id, shot_id, location_id, path_revision, path_fingerprint,
+           scene_document_id, scene_revision, scene_fingerprint, asset_id, frame_rate, duration_ms, render_width,
+           render_height, container, codec, rendered_at, blocking_fingerprint, blocking_json)
+         select project_id, shot_id, location_id, path_revision, path_fingerprint, scene_document_id, scene_revision,
+                scene_fingerprint, asset_id, frame_rate, duration_ms, render_width, render_height, container, codec,
+                rendered_at, blocking_fingerprint, null
+           from shot_previs_clips where id = $1`,
+        [clip.id],
+      )) ?? "",
+    ),
   );
   const stored2 = await pool.query("select (blocking_json::text) as t from shot_previs_clips where id = $1", [
     clip.id,

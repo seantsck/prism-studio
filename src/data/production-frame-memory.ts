@@ -33,6 +33,13 @@ export class MemoryProductionFrameService implements ProductionFrameRepository {
     return this.access.all().find((p) => p.project.id === projectId);
   }
 
+  /** The frame the Shot's selection points at, read by the previs service for package provenance. */
+  selectedFrame(projectId: string, shotId: string): ProductionFrame | null {
+    const s = this.selections.get(shotId);
+    if (!s || s.projectId !== projectId) return null;
+    return this.frames.find((f) => f.id === s.productionFrameId) ?? null;
+  }
+
   async listForProject(projectId: string) {
     // a deleted Shot takes its frames and selection with it (the database cascades the same way)
     const shots = new Set(this.projectOf(projectId)?.shots.map((s) => s.id) ?? []);

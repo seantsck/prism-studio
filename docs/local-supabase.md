@@ -91,7 +91,9 @@ database name starts with `prism_disposable` (`scripts/lib/safety.mjs` `disposab
    proves 0047 (Phase 3A.4F).
 
 Limits: the shim is not Supabase (no PostgREST, no Storage API, no real Auth); `db:worker-role`'s generation
-end-to-end checks are wall-clock dependent and fail on loopback (identically before and after a migration);
+end-to-end checks are wall-clock dependent and fail on loopback (identically before and after a migration); `db:rls`
+does not run on the shim, because its Storage checks need Supabase's real `storage` schema (seen at 0047 and 0048 alike,
+Phase 4B), so table RLS for new tables is proven by their own verifier (for example `db:lighting`);
 hosted acceptance is still its own gate.
 
 ## Signed-in browser tests

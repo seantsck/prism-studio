@@ -78,6 +78,16 @@ commit, line endings normalised to LF). Summary:
     splat runtime: `@sparkjsdev/spark` 0.1.10 (MIT) is a Prism npm dependency used only from `src/lib/previs/splat-runtime.ts`
     on the editor's existing renderer. No upstream splat loader, selection helper or entrance effect was re-imported.
     Diff: [`patches/prism-m2d1.patch`](./patches/prism-m2d1.patch) (4 files, +38/-2).
+15. **Deterministic base environment (Phase 4B)**: production pixels must depend only on saved spatial truth and the
+    pinned engine, never on the application UI. (a) `Scene._create_skybox` no longer reads `theme-light` from the page:
+    upstream used it to switch to a near-white background, add the ambient light and remove the directional light.
+    (b) `StoryTellerProxyScene.loadFromSceneJson` rebuilds the base rig (hemisphere, directional, ambient) fresh on every
+    load, maps a saved `"DirectionalLight"` entry onto that light instead of creating a second rig, and applies only its
+    identity (uuid, name), not its saved transform or visibility. Upstream rebuilt the rig only when the JSON named the
+    light, so a load without it re-added the previous scene's light objects, and a saved transform or visibility
+    changed the shading while `sceneFingerprint` (which excludes the light) and the render-lighting snapshot stayed the
+    same. Prism has no UI that edits this light, and every Prism-saved scene holds the engine default, so no Prism scene
+    renders differently. Diff: [`patches/prism-4b.patch`](./patches/prism-4b.patch) (2 files, +18/-16).
 
 ## Removed after the first import (M1 hardening)
 

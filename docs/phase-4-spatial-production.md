@@ -1,8 +1,10 @@
 # Phase 4 — Spatial Production
 
-**Status: 4A architecture accepted by the owner (2026-11-01), decisions in [§12](#12-accepted-owner-decisions). 4B has not
-started. Nothing in this document is implemented yet unless it is listed under
-[Phase 2F foundation](#1-phase-2f-foundation). No migration 0048 exists. Hosted head is 0047.**
+**Status: 4A architecture accepted by the owner (2026-11-01), decisions in [§12](#12-accepted-owner-decisions). 4B
+(Shot Lighting Rigs) is implemented and in review; hosted 0048 acceptance is pending. Migration
+`0048_shot_lighting_rigs.sql` exists in the repository and has been verified on a disposable local PostgreSQL only.
+Hosted head is still 0047; 0048 is the only pending migration. 4C–4F have not started. What 4B actually shipped is
+recorded in [4B implementation notes](#4b-implementation-notes); elsewhere, design text describes intent.**
 
 Phase 4 finishes the optional spatial path into a Production Frame. It does not build a 3D system: Phase 2F already built
 one, in a different shape from the one the old roadmap described. What is missing is Shot-owned lighting, a workflow that
@@ -394,6 +396,68 @@ Each slice is its own branch, PR, review and gate. Provider and network calls ar
   restored after a failed capture; every permitted and refused guard mutation on real PostgreSQL; Postgres RLS and behaviour.
 - **Hosted acceptance:** apply 0048 through the standard dry-run gate, `db:validate`, `db:behavior`, `db:rls`, non-owner denial.
 - **Non-goals:** shadows; Shot route; templates; prose summary; relighting a Production Frame.
+
+#### 4B implementation notes
+
+Status: **implemented, in review; hosted 0048 acceptance pending.** Nothing below has touched the hosted project.
+
+- **Domain** (`src/domain/previs/lighting.ts`): `prism.shot-lighting.v1`; light types `ambient | point | directional |
+spot`; at most 16 lights; base modes `engine_default | replace`; `castShadow: true` refused (an explicit `false` is
+  dropped in normalisation). Every number is the Three.js engine value the renderer consumes (no lumens, Kelvin or
+  softness). `lightingFingerprint` covers `schema`, base mode and each light's pixel-affecting fields, sorted by id and
+  rounded to 1e-5; **label, role and authored intent do not affect it**, and a disabled light stays in it. The authored
+  intent (`Shot.lighting`, `continuity.lighting`, time of day, weather) is read server-side when a rig is saved and only
+  drives the non-blocking `REVIEW: authored lighting changed…` flag, as does `REVIEW: the set changed…`.
+- **Overlay** (`src/lib/previs/lighting-overlay.ts`): Shot lights carry no `media_id`, so the engine's save filter skips
+  them. Lights render on layer 0; markers are on layer 1 only, which production cameras disable. `replace` hides the
+  engine's base hemisphere, directional and ambient lights and spares authored Location lights. Serialising the Set runs
+  under `withBaseRestored` (on success and on a throw), so **a rig changes neither the scene document nor
+  `sceneFingerprint`**. A Shot switch, a clear or an editor unmount restores the exact prior base state. A scene load
+  re-attaches the overlay once, and first gives back what it suppressed, because a load whose JSON lacks the engine's
+  `DirectionalLight` (or a superseded load) keeps the same base-light objects (fixed during review; covered by unit tests).
+  Also fixed during review: the camera-path overlay effect depended on all of `CameraMotionPanel`'s props, so each state
+  update from the lighting panel rebuilt the overlay's meshes and materials; it now depends only on what it draws
+  (`spatial-passes` "a capture leaves the live scene… unchanged" caught it).
+- **Provenance**: Master Frames and previs clips record `lighting_fingerprint` + `lighting_json`
+  (`prism.render-lighting.v1`: the rig by value plus the base environment, upstream commit and skybox). The server reloads
+  the saved rig and refuses a render whose claimed fingerprint differs; unsaved lighting cannot be captured. null/null
+  means "no rig recorded"; nothing is backfilled. `masterFrameStaleReasons` (scene, blocking, lighting) and `lighting` in
+  `previsStaleReasons` compare that provenance with the Shot now. Lighting never stales a control-pass bundle.
+- **Base environment (technical-review fix)**: **the application UI theme is never production visual truth.** Audit of
+  the engine's base rig: hemisphere (colour, ground colour, intensity), ambient (colour, intensity) and directional
+  (colour, intensity, target) are engine constants; their presence and the background depend on the skybox. Two inputs
+  varied behind identical provenance and are removed by vendor patch 15 (`UPSTREAM.md`): the page's `theme-light`
+  class switched the background and the base lights, and the saved `DirectionalLight` entry's transform and visibility
+  were applied on load (while `sceneFingerprint` excludes that light), with a load that omitted it re-adding the previous
+  scene's lights. The rig is now rebuilt fresh on every load and only its identity round-trips. So the base
+  environment is fully determined by `upstreamCommit` and the saved `skybox`, `prism.render-lighting.v1` keeps that
+  smaller shape, and 0048 is unchanged. Browser proof: the same Set renders the same production pixels with and without
+  `theme-light` (no rig, `engine_default` + a light, `replace` + a light; before the fix the difference was 208/255),
+  and a hidden, moved or omitted saved base light renders the same pixels as the saved default (31/255 before). Any
+  future Prism change to base-rig behaviour must change the recorded engine identity.
+- **Package**: optional `spatialReference.shotLighting`, frozen by value; **omitted, never `null`, without a rig**. A Shot
+  whose only spatial data is a rig is still discovered. `productionFrameLightingFingerprint` follows the selected
+  Production Frame → `source = previs_master` → its own `source_master_frame_id` → that Master Frame's
+  `lighting_fingerprint`; never the current rig or the newest or adopted frame, and null when the chain does not apply.
+  No prompt changed.
+- **Splat observation** (synthetic `.splat` plane, memory mode, no provider or reconstruction call): sampled centre pixel
+  `[227,124,110]` with the engine base, with `replace` and no lights, and with a strong red point light. **Shot lights do
+  not affect a Gaussian splat's pixels**: splat colour is baked. The panel says so (`lighting-splat-note`). This is not
+  relighting, and the M2C refusal of splat control passes stands.
+- **Pixels**: `replace` with no lights darkens the beauty render below 75% of the base; a red point light then raises
+  the red channel by more than it raises green; clearing returns the base picture. Depth, object-id and Character-mask bytes are identical across materially
+  different rigs.
+- **0048**: `shot_light_rigs` (one current rig per Shot, CAS revision, owner-only RLS, `anon` and both worker roles hold
+  no privilege and are denied real SELECT/INSERT/UPDATE/DELETE); nullable lighting provenance pairs on
+  `scene_master_frames` and `shot_previs_clips`; deny-by-default provenance guards (D3) on both, allowing only adoption,
+  FK `SET NULL` of a deleted bookmark/path, DELETE and cascades. Legacy CHECK constraints previously proven through
+  UPDATE are now proven through INSERTs the guard cannot pre-empt. No grant to either worker role changed (catalogue
+  diff 0047 → 0048). `anon`'s Supabase-default table grants on the two render tables pre-date 0048 and are unchanged;
+  RLS still denies it rows.
+- **Local gate** (disposable PostgreSQL 17, 0001–0047 then 0048 after a rolled-back `--dry-run`): `db:lighting`,
+  `db:blocking`, `db:previs`, `db:validate`, `db:behavior`, `db:spatial-passes`, `db:production-frames`,
+  `db:reconstructions` green. `db:rls` cannot run on the shim (its minimal `storage` schema) and `db:worker-role` fails
+  its 6 generation end-to-end checks, **both identically on `main` at 0047**; both are part of hosted acceptance.
 
 ### 4C — Shot-centric Spatial Workspace and Production Frame handoff
 

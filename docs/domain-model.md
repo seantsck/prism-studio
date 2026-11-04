@@ -129,6 +129,18 @@ See [virtual-set](virtual-set.md).
 Blocking is **shot-specific**: it is never part of the Location's set. The proxy carries no identity. See
 [virtual-set](virtual-set.md#character-blocking-phase-2f-m2b).
 
+## Shot lighting (Phase 4B, in review; migration 0048 not yet on hosted)
+
+| Entity            | Table / column                                                                      | Nature                                                                                                                                                                                               |
+| ----------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ShotLightingRig   | `shot_light_rigs` (`rig_json`, `revision`, `lighting_fingerprint`)                  | ONE current `prism.shot-lighting.v1` rig per Shot: base mode and up to 16 lights; compare-and-set revision; tied to the set revision/fingerprint it was authored against; owner-only RLS; no shadows |
+| Render provenance | `scene_master_frames` / `shot_previs_clips` `lighting_fingerprint`, `lighting_json` | The rig a render was lit by, by value, plus the base environment (`prism.render-lighting.v1`); null/null = no rig recorded; immutable under the 0048 provenance guards                               |
+| ShotLightingRef   | `GenerationPackage.spatialReference.shotLighting`                                   | Frozen copy (by value) of the rig, plus the lighting of the Master Frame behind the selected Production Frame; optional and omitted without a rig; no prompt uses it                                 |
+
+Shot lighting is the **spatial implementation**; `Shot.lighting` stays the **authored intent** and is never written by a
+rig. A rig is never part of the Location's set or its scene fingerprint. See
+[phase-4-spatial-production](phase-4-spatial-production.md#4b-implementation-notes).
+
 ## Spatial control passes (Phase 2F M2C)
 
 | Entity            | Table / column                                                                                            | Nature                                                                                                                                                                                                                                                                    |

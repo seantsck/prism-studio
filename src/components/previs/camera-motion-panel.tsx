@@ -46,6 +46,7 @@ import {
 } from "@/lib/previs/previs-render";
 import type { PathOverlay, SpatialSceneAdapter } from "@/lib/previs/scene-adapter";
 import { browserSchedulerEnv, PerformanceAudioScheduler } from "@/lib/previs/performance-audio";
+import type { CurrentLightingState, RenderLighting } from "@/domain/previs/lighting";
 import { recordPrevisClip, saveShotCameraPath } from "@/server/previs-actions";
 
 export interface ShotTimingInfo {
@@ -85,6 +86,8 @@ export interface PrevisClipInfo {
   audioCodec: string | null;
   /** identity of the character blocking the previs showed (null = no visible character proxies) */
   blockingFingerprint: string | null;
+  lightingFingerprint: string | null;
+  lighting: Pick<RenderLighting, "baseEnvironment"> | null;
   renderedAt: string;
 }
 
@@ -171,6 +174,13 @@ export interface CameraMotionPanelProps {
    * and the live fingerprint (what a render made right now would actually show).
    */
   blocking: { savedFingerprint: string | null; dirty: boolean; liveFingerprint: () => string | null };
+  /** the Shot's saved lighting; `loaded` is false until this Shot's rig has been applied to the overlay */
+  lighting: {
+    loaded: boolean;
+    dirty: boolean;
+    current: CurrentLightingState;
+    appliedFingerprint: () => string | null;
+  };
   /** published when the saved path, its dirty state or the (paused) playhead changes */
   onMotionState?: (s: CameraMotionState) => void;
 }
@@ -413,7 +423,10 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
       })),
       current,
     });
-  }, [path, selectedId, timeMs, overlayOn, props]);
+    // Only what the overlay shows: depending on `props` rebuilt it (new meshes and materials) on every parent render,
+    // e.g. each time the Shot lighting panel published its state. `props.adapter()` always returns the same adapter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, selectedId, timeMs, overlayOn, props.ready]);
 
   useEffect(
     () => () => {
@@ -561,6 +574,7 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
       currentPathFingerprint: saved?.pathFingerprint ?? null,
       currentAudioMixFingerprint: currentMixFp,
       currentBlockingFingerprint: props.blocking.savedFingerprint,
+      currentLighting: props.lighting.current,
     });
   const clipStale = (c: PrevisClipInfo) => clipReasons(c).length > 0;
 
@@ -571,6 +585,8 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
     if (props.sceneDirty || !props.savedSceneFingerprint) reasons.push("Save the 3D set first.");
     if (dirty || !saved) reasons.push("Save the camera path first.");
     if (props.blocking.dirty) reasons.push("Save the character blocking first.");
+    if (!props.lighting.loaded) reasons.push("This Shot's lighting is still loading.");
+    if (props.lighting.dirty) reasons.push("Save or discard the Shot lighting first.");
     if (sceneStale) reasons.push("The set changed since this path was saved — re-save the path.");
     if (reasons.length > 0 || !path || !saved || !props.shotId)
       return setStatus({ tone: "error", text: reasons.join(" ") });
@@ -585,6 +601,7 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
       // the plan is built from the Shot's selected takes on the same timeline as the camera path
       const plan = includeAudio ? planFor(path.durationMs) : null;
       const blockingAtStart = props.blocking.liveFingerprint();
+      const lightingAtStart = props.lighting.appliedFingerprint();
       const support = await detectPrevisEncoding(
         PREVIS_RENDER_SIZE,
         plan ? { sampleRate: plan.sampleRate, channels: plan.channels } : null,
@@ -639,6 +656,7 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
       // the blocking the frames actually showed (static for the whole clip); the server checks it is the saved one
       const renderedBlocking = blockingAtStart;
       if (renderedBlocking) fd.set("blockingFingerprint", renderedBlocking);
+      if (lightingAtStart) fd.set("lightingFingerprint", lightingAtStart);
       const mixFp = plan && out.audioCodec ? audioMixFingerprint(plan) : null;
       if (mixFp && out.audioCodec) {
         fd.set("audioMixFingerprint", mixFp);
@@ -669,6 +687,10 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
           audioMixFingerprint: mixFp,
           audioCodec: mixFp ? out.audioCodec : null,
           blockingFingerprint: renderedBlocking,
+          lightingFingerprint: lightingAtStart,
+          lighting: props.lighting.current.baseEnvironment
+            ? { baseEnvironment: props.lighting.current.baseEnvironment }
+            : null,
           renderedAt: new Date().toISOString(),
         },
         ...c,

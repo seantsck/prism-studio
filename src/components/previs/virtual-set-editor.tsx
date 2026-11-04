@@ -6,6 +6,13 @@ import type { BlockingFigureData } from "@/domain/previs/blocking";
 import { buildPrevisDocument, sceneFingerprint } from "@/domain/previs/document";
 import { bookmarkFromCamera, cameraFromBookmark } from "@/domain/previs/camera";
 import { buildHotelCanopyEngineScene } from "@/domain/previs/hotel-canopy";
+import {
+  MASTER_FRAME_STALE_LABEL,
+  baseEnvironmentOf,
+  masterFrameStaleReasons,
+  type BaseEnvironment,
+  type RenderLighting,
+} from "@/domain/previs/lighting";
 import { PREVIS_PRODUCTION_FRAME, type CameraBookmarkValue, type PrevisCamera } from "@/domain/previs/types";
 import {
   ArtCraftSceneAdapter,
@@ -16,6 +23,8 @@ import {
 import { installPrevisTestHook } from "@/lib/previs/test-hook";
 import type { SpatialPassBundleRecord } from "@/data/previs-repository";
 import { CharacterBlockingPanel, type BlockingState } from "./character-blocking-panel";
+import { ShotLightingPanel, type LightingState } from "./shot-lighting-panel";
+import type { ShotLightingData } from "@/server/previs-actions";
 import {
   SplatAddPanel,
   SplatInspector,
@@ -66,11 +75,17 @@ export interface VirtualSetProps {
     id: string;
     assetId: string;
     sceneRevision: number;
+    sceneFingerprint: string;
     capturedAt: string;
     adopted: boolean;
     /** the character blocking the frame showed (null = no visible character proxies) */
     blockingFingerprint: string | null;
+    /** the rig the frame was lit by (null = no Shot Lighting Rig was recorded) */
+    lightingFingerprint: string | null;
+    lighting: Pick<RenderLighting, "baseEnvironment"> | null;
   }>;
+  /** the active shot's stored lighting rig and authored lighting text; null when no shot is active */
+  shotLighting: ShotLightingData | null;
   /** stored character blocking of the active shot (plain data; the server derived every fingerprint) */
   blocking: BlockingFigureData[];
   shotTiming: ShotTimingInfo | null;
@@ -117,6 +132,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
   const [sceneDocumentId, setSceneDocumentId] = useState<string | null>(props.scene.sceneDocumentId);
   const [savedFingerprint, setSavedFingerprint] = useState<string | null>(props.scene.fingerprint);
   const [liveFingerprint, setLiveFingerprint] = useState<string | null>(null);
+  const [liveBaseEnvironment, setLiveBaseEnvironment] = useState<BaseEnvironment | null>(null);
   const [status, setStatus] = useState<Status>({ tone: "idle", text: "" });
   const [shotId, setShotId] = useState<string | null>(props.activeShotId);
   const [bookmark, setBookmark] = useState(props.bookmark);
@@ -130,6 +146,12 @@ export function VirtualSetEditor(props: VirtualSetProps) {
   const onBlockingState = useCallback((b: BlockingState) => {
     blockingRef.current = b;
     setBlockingState(b);
+  }, []);
+  const [lightingState, setLightingState] = useState<LightingState | null>(null);
+  const lightingRef = useRef<LightingState | null>(null);
+  const onLightingState = useCallback((l: LightingState) => {
+    lightingRef.current = l;
+    setLightingState(l);
   }, []);
   // the camera timeline's saved path + playhead, read by the spatial control-pass panel
   const [motionState, setMotionState] = useState<CameraMotionState | null>(null);
@@ -225,8 +247,10 @@ export function VirtualSetEditor(props: VirtualSetProps) {
       try {
         const doc = buildPrevisDocument({ engineScene: adapterRef.current!.serializeScene() });
         setLiveFingerprint(sceneFingerprint(doc));
+        setLiveBaseEnvironment(baseEnvironmentOf(doc));
       } catch {
         setLiveFingerprint(null);
+        setLiveBaseEnvironment(null);
       }
     }, 200);
     return () => clearTimeout(t);
@@ -347,6 +371,13 @@ export function VirtualSetEditor(props: VirtualSetProps) {
       if (!b) return;
     }
     const renderedBlocking = blockingRef.current?.liveFingerprint() ?? null;
+    // unsaved lighting is never captured as if it were the Shot's lighting
+    const lighting = lightingRef.current;
+    if (!lighting?.loaded || lighting.shotId !== shotId)
+      return setStatus({ tone: "error", text: "This Shot's lighting is still loading." });
+    if (lighting.dirty)
+      return setStatus({ tone: "error", text: "Save or discard the Shot lighting before capturing." });
+    const renderedLighting = adapter().lighting.appliedFingerprint();
     setStatus({ tone: "busy", text: "Rendering master frame…" });
     try {
       const frame = await adapter().captureMasterFrame(bookmark.value);
@@ -356,6 +387,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
       fd.set("locationId", props.locationId);
       fd.set("sceneRevision", String(saved.revision));
       if (renderedBlocking) fd.set("blockingFingerprint", renderedBlocking);
+      if (renderedLighting) fd.set("lightingFingerprint", renderedLighting);
       fd.set("file", new File([frame.blob], "master-frame.png", { type: "image/png" }));
       const r = await captureMasterFrame(fd);
       if (!r.ok) return setStatus({ tone: "error", text: r.error });
@@ -364,9 +396,14 @@ export function VirtualSetEditor(props: VirtualSetProps) {
           id: r.masterFrameId,
           assetId: r.assetId,
           sceneRevision: saved.revision,
+          sceneFingerprint: saved.fingerprint,
           capturedAt: new Date().toISOString(),
           adopted: false,
           blockingFingerprint: renderedBlocking,
+          lightingFingerprint: renderedLighting,
+          lighting: lighting.current.baseEnvironment
+            ? { baseEnvironment: lighting.current.baseEnvironment }
+            : null,
         },
         ...f,
       ]);
@@ -831,6 +868,12 @@ export function VirtualSetEditor(props: VirtualSetProps) {
               savedSceneFingerprint={savedFingerprint}
               sceneDirty={dirty}
               ensureSceneSaved={ensureSaved}
+              lighting={{
+                loaded: lightingState?.loaded === true && lightingState.shotId === shotId,
+                dirty: lightingState?.dirty ?? false,
+                current: lightingState?.current ?? { lightingFingerprint: null, baseEnvironment: null },
+                appliedFingerprint: () => adapterRef.current?.lighting.appliedFingerprint() ?? null,
+              }}
               blocking={{
                 savedFingerprint: blockingState?.savedFingerprint ?? null,
                 dirty: blockingState?.dirty ?? false,
@@ -854,6 +897,25 @@ export function VirtualSetEditor(props: VirtualSetProps) {
               sceneDirty={dirty}
               ensureSceneSaved={ensureSaved}
               onState={onBlockingState}
+            />
+          ) : null}
+
+          {shotId ? (
+            <ShotLightingPanel
+              key={`lighting:${shotId}`}
+              adapter={adapter}
+              ready={ready}
+              projectSlug={props.projectSlug}
+              locationId={props.locationId}
+              shotId={shotId}
+              initial={shotId === props.activeShotId ? props.shotLighting : null}
+              savedSceneFingerprint={savedFingerprint}
+              sceneDocumentId={sceneDocumentId}
+              sceneDirty={dirty}
+              baseEnvironment={dirty ? null : liveBaseEnvironment}
+              ensureSceneSaved={ensureSaved}
+              hasVisibleSplat={objects.some((o) => o.kind === "splat" && o.visible)}
+              onState={onLightingState}
             />
           ) : null}
 
@@ -901,13 +963,24 @@ export function VirtualSetEditor(props: VirtualSetProps) {
                 <div className="text-muted">
                   revision {f.sceneRevision} · {new Date(f.capturedAt).toLocaleString()}
                 </div>
-                {blockingState &&
-                shotId === props.activeShotId &&
-                f.blockingFingerprint !== blockingState.savedFingerprint ? (
-                  <div className="text-warn" data-testid="master-frame-stale">
-                    STALE BLOCKING — the character blocking changed after this frame.
-                  </div>
-                ) : null}
+                {blockingState && lightingState?.loaded && shotId === props.activeShotId
+                  ? masterFrameStaleReasons({
+                      frame: { ...f, sceneFingerprint: f.sceneFingerprint },
+                      currentSceneFingerprint: savedFingerprint,
+                      currentBlockingFingerprint: blockingState.savedFingerprint,
+                      currentLighting: lightingState.current,
+                    }).map((reason) => (
+                      <div
+                        key={reason}
+                        className="text-warn"
+                        data-testid={
+                          reason === "blocking" ? "master-frame-stale" : `master-frame-stale-${reason}`
+                        }
+                      >
+                        {MASTER_FRAME_STALE_LABEL[reason]}
+                      </div>
+                    ))
+                  : null}
                 {f.adopted ? (
                   <span className="text-pass" data-testid="master-frame-adopted">
                     Master frame for this shot

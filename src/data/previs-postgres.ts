@@ -30,6 +30,13 @@ import {
   renderedBlockingFingerprint,
   type RenderedBlockingFigure,
 } from "@/domain/previs/blocking";
+import {
+  buildShotLightingReference,
+  lightingFingerprint,
+  parseShotLightingRig,
+  renderLightingSchema,
+  selectedProductionFrameLighting,
+} from "@/domain/previs/lighting";
 import { poseFingerprint } from "@/domain/previs/pose";
 import { bookmarkFromCamera } from "@/domain/previs/camera";
 import { cameraPathFingerprint, cameraPathSchema, validateCameraPath } from "@/domain/previs/camera-path";
@@ -63,6 +70,9 @@ import {
   type SpatialPassBundleRecord,
   type PrevisClipRecord,
   type SaveCameraPathInput,
+  type SaveLightingRigInput,
+  type ShotLightingRigRecord,
+  LIGHTING_RIG_ELSEWHERE,
   type SaveShotBlockingInput,
   type ShotBlockingRecord,
   type PrevisRepository,
@@ -75,6 +85,31 @@ type Row = Record<string, unknown>;
 const iso = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v));
 const isoOrNull = (v: unknown): string | null => (v == null ? null : iso(v));
 const str = (v: unknown): string | null => (v == null ? null : String(v));
+
+/** Absent columns read as null, so this code still reads a database that has not reached migration 0048. */
+const mapRenderLighting = (r: Row) => ({
+  lightingFingerprint: str(r.lighting_fingerprint),
+  lighting: r.lighting_json ? renderLightingSchema.parse(r.lighting_json) : null,
+});
+
+const mapLightingRig = (r: Row): ShotLightingRigRecord => ({
+  id: String(r.id),
+  projectId: String(r.project_id),
+  shotId: String(r.shot_id),
+  locationId: String(r.location_id),
+  sceneDocumentId: String(r.scene_document_id),
+  sceneRevision: Number(r.scene_revision),
+  sceneFingerprint: String(r.scene_fingerprint),
+  schemaVersion: String(r.schema_version),
+  revision: Number(r.revision),
+  rig: parseShotLightingRig(r.rig_json),
+  lightingFingerprint: String(r.lighting_fingerprint),
+  createdBy: str(r.created_by),
+  createdAt: iso(r.created_at),
+  updatedAt: iso(r.updated_at),
+});
+
+const NOT_MIGRATED_LIGHTING = "Shot lighting is not available until database migration 0048 is applied.";
 
 const mapScene = (r: Row): SceneDocumentRecord => ({
   id: String(r.id),
@@ -136,6 +171,7 @@ const mapFrame = (r: Row): MasterFrameRecord => ({
   adoptedFrameId: str(r.adopted_frame_id),
   blockingFingerprint: str(r.blocking_fingerprint),
   blocking: (r.blocking_json as RenderedBlockingFigure[] | null) ?? null,
+  ...mapRenderLighting(r),
   createdBy: str(r.created_by),
   createdAt: iso(r.created_at),
 });
@@ -214,6 +250,7 @@ const mapClip = (r: Row): PrevisClipRecord => ({
   audioMixFingerprint: str(r.audio_mix_fingerprint),
   blockingFingerprint: str(r.blocking_fingerprint),
   blocking: (r.blocking_json as RenderedBlockingFigure[] | null) ?? null,
+  ...mapRenderLighting(r),
   renderedAt: iso(r.rendered_at),
   createdBy: str(r.created_by),
   createdAt: iso(r.created_at),
@@ -523,8 +560,29 @@ export class PostgresPrevisData implements PrevisRepository {
       const b = await c.query("select * from shot_camera_bookmarks where project_id = $1", [projectId]);
       const p = await c.query("select * from shot_camera_paths where project_id = $1", [projectId]);
       const bl = await c.query("select * from shot_character_blocking where project_id = $1", [projectId]);
+      // to_regclass never raises, so a database before 0048 keeps working (a failed query would abort this transaction)
+      const lightingReady = (await c.query("select to_regclass('public.shot_light_rigs') is not null as ok"))
+        .rows[0]?.ok as boolean;
+      const lr = lightingReady
+        ? await c.query("select * from shot_light_rigs where project_id = $1", [projectId])
+        : { rows: [] as Row[] };
       const out: Record<string, SpatialReference> = {};
-      if (b.rows.length === 0 && p.rows.length === 0 && bl.rows.length === 0) return out;
+      if (b.rows.length === 0 && p.rows.length === 0 && bl.rows.length === 0 && lr.rows.length === 0)
+        return out;
+      const rigs = new Map(lr.rows.map((r) => [String(r.shot_id), mapLightingRig(r)]));
+      // the exact chain: selection -> that Production Frame -> its source -> that very Master Frame's own record
+      const pf = rigs.size
+        ? await c.query(
+            `select sel.shot_id, pf.source, pf.source_master_frame_id, mf.lighting_fingerprint
+               from shot_production_frame_selections sel
+               join shot_production_frames pf on pf.id = sel.production_frame_id
+               left join scene_master_frames mf
+                 on mf.id = pf.source_master_frame_id and mf.shot_id = pf.shot_id
+              where sel.project_id = $1`,
+            [projectId],
+          )
+        : { rows: [] as Row[] };
+      const selectedFrames = new Map(pf.rows.map((r) => [String(r.shot_id), r]));
       const blockingByShot = new Map<string, ShotBlockingRecord[]>();
       for (const r of bl.rows) {
         const rec = mapBlocking(r);
@@ -539,7 +597,7 @@ export class PostgresPrevisData implements PrevisRepository {
       const bookmarks = new Map(b.rows.map((r) => [String(r.shot_id), mapBookmark(r)]));
       const paths = new Map(p.rows.map((r) => [String(r.shot_id), mapPath(r)]));
       const sceneIds = [
-        ...new Set([...b.rows, ...p.rows, ...bl.rows].map((r) => String(r.scene_document_id))),
+        ...new Set([...b.rows, ...p.rows, ...bl.rows, ...lr.rows].map((r) => String(r.scene_document_id))),
       ];
       const s = await c.query("select * from location_scene_documents where id = any($1::uuid[])", [
         sceneIds,
@@ -569,7 +627,7 @@ export class PostgresPrevisData implements PrevisRepository {
       }
       const k = await c.query(
         `select shot_id, path_fingerprint, asset_id, has_audio, audio_mix_fingerprint, blocking_fingerprint,
-                rendered_at
+                ${lightingReady ? "lighting_fingerprint" : "null as lighting_fingerprint"}, rendered_at
            from shot_previs_clips where project_id = $1`,
         [projectId],
       );
@@ -582,6 +640,7 @@ export class PostgresPrevisData implements PrevisRepository {
           hasAudio: boolean;
           audioMixFingerprint: string | null;
           blockingFingerprint: string | null;
+          lightingFingerprint: string | null;
           renderedAt: string;
         }>
       >();
@@ -594,18 +653,28 @@ export class PostgresPrevisData implements PrevisRepository {
           hasAudio: Boolean(r.has_audio),
           audioMixFingerprint: str(r.audio_mix_fingerprint),
           blockingFingerprint: str(r.blocking_fingerprint),
+          lightingFingerprint: str(r.lighting_fingerprint),
           renderedAt: iso(r.rendered_at),
         });
         clipsByShot.set(String(r.shot_id), list);
       }
-      for (const shotId of new Set([...bookmarks.keys(), ...paths.keys(), ...blockingByShot.keys()])) {
+      for (const shotId of new Set([
+        ...bookmarks.keys(),
+        ...paths.keys(),
+        ...blockingByShot.keys(),
+        ...rigs.keys(),
+      ])) {
+        const rig = rigs.get(shotId) ?? null;
         const bm = bookmarks.get(shotId) ?? null;
         const path = paths.get(shotId) ?? null;
         const blockRecs = (blockingByShot.get(shotId) ?? []).sort((x, y) =>
           x.characterId < y.characterId ? -1 : 1,
         );
         const scene = scenes.get(
-          (bm?.sceneDocumentId ?? path?.sceneDocumentId ?? blockRecs[0]?.sceneDocumentId) as string,
+          (bm?.sceneDocumentId ??
+            path?.sceneDocumentId ??
+            blockRecs[0]?.sceneDocumentId ??
+            rig?.sceneDocumentId) as string,
         );
         if (!scene) continue;
         const currentBlockingFp = blockRecs.length
@@ -620,6 +689,7 @@ export class PostgresPrevisData implements PrevisRepository {
               path.pathFingerprint,
               currentAudioMix?.(shotId, path.durationMs) ?? null,
               currentBlockingFp,
+              rig?.lightingFingerprint ?? null,
             )
           : null;
         const cameraMotion: CameraMotionReference | null = path
@@ -677,6 +747,22 @@ export class PostgresPrevisData implements PrevisRepository {
             return cur ? buildControlPassesReference(cur) : null;
           })(),
           reconstructions: reconstructions.filter((rec) => rec.locationId === scene.locationId),
+          // a rig authored for another set does not describe this one
+          shotLighting:
+            rig && rig.sceneDocumentId === scene.id
+              ? buildShotLightingReference({
+                  rig,
+                  productionFrameLightingFingerprint: selectedProductionFrameLighting({
+                    selected: selectedFrames.has(shotId)
+                      ? {
+                          source: String(selectedFrames.get(shotId)!.source),
+                          sourceMasterFrameId: str(selectedFrames.get(shotId)!.source_master_frame_id),
+                        }
+                      : null,
+                    masterFrameLighting: () => str(selectedFrames.get(shotId)!.lighting_fingerprint),
+                  }),
+                })
+              : null,
         });
       }
       return out;
@@ -702,12 +788,15 @@ export class PostgresPrevisData implements PrevisRepository {
 
   async recordMasterFrame(input: NewMasterFrame) {
     return this.tx(async (c) => {
+      // the lighting columns are named only for a lit render, so a database before 0048 still captures without a rig
+      const lit = input.lighting ? ", lighting_fingerprint, lighting_json" : "";
+      const litValues = input.lighting ? ",$17,$18::jsonb" : "";
       const r = await c.query(
         `insert into scene_master_frames
            (id, project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint,
             camera_bookmark_id, asset_id, render_width, render_height, production_aspect_ratio, captured_at,
-            created_by, created_at, blocking_fingerprint, blocking_json)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$13,$15,$16::jsonb) returning *`,
+            created_by, created_at, blocking_fingerprint, blocking_json${lit})
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$13,$15,$16::jsonb${litValues}) returning *`,
         [
           input.id,
           input.projectId,
@@ -725,6 +814,7 @@ export class PostgresPrevisData implements PrevisRepository {
           input.userId,
           input.blockingFingerprint ?? null,
           input.blocking ? JSON.stringify(input.blocking) : null,
+          ...(input.lighting ? [input.lightingFingerprint ?? null, JSON.stringify(input.lighting)] : []),
         ],
       );
       return mapFrame(r.rows[0]);
@@ -825,6 +915,118 @@ export class PostgresPrevisData implements PrevisRepository {
         [shotId],
       );
       return r.rows.map(mapBlocking);
+    });
+  }
+
+  async getLightingRigForShot(shotId: string) {
+    return this.tx(async (c) => {
+      const ready = await c.query("select to_regclass('public.shot_light_rigs') is not null as ok");
+      if (!ready.rows[0]?.ok) return null;
+      const r = await c.query("select * from shot_light_rigs where shot_id = $1", [shotId]);
+      return r.rows[0] ? mapLightingRig(r.rows[0]) : null;
+    });
+  }
+
+  async listLightingRigsForProject(projectId: string) {
+    return this.tx(async (c) => {
+      const ready = await c.query("select to_regclass('public.shot_light_rigs') is not null as ok");
+      if (!ready.rows[0]?.ok) return [];
+      const r = await c.query("select * from shot_light_rigs where project_id = $1", [projectId]);
+      return r.rows.map(mapLightingRig);
+    });
+  }
+
+  async saveLightingRig(input: SaveLightingRigInput) {
+    let rig;
+    try {
+      rig = parseShotLightingRig(input.rig);
+    } catch (err) {
+      throw new PrevisError("invalid", `Invalid Shot lighting: ${(err as Error).message}`);
+    }
+    const fp = lightingFingerprint(rig);
+    const conflict = new PrevisError(
+      "conflict",
+      "This Shot's lighting was changed elsewhere. Reload before saving.",
+    );
+    return this.tx(async (c) => {
+      const ready = await c.query("select to_regclass('public.shot_light_rigs') is not null as ok");
+      if (!ready.rows[0]?.ok) throw new PrevisError("invalid", NOT_MIGRATED_LIGHTING);
+      const s = await c.query(
+        "select id from location_scene_documents where id = $1 and project_id = $2 and location_id = $3",
+        [input.sceneDocumentId, input.projectId, input.locationId],
+      );
+      if (!s.rows[0]) throw new PrevisError("not_found", "That 3D set was not found for this location.");
+      if (input.expectedRevision === null) {
+        const r = await c.query(
+          `insert into shot_light_rigs
+             (id, project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint,
+              schema_version, revision, rig_json, lighting_fingerprint, created_by, created_at, updated_at)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,1,$9::jsonb,$10,$11,$12,$12)
+           on conflict (shot_id) do nothing returning *`,
+          [
+            input.id,
+            input.projectId,
+            input.shotId,
+            input.locationId,
+            input.sceneDocumentId,
+            input.sceneRevision,
+            input.sceneFingerprint,
+            rig.schema,
+            JSON.stringify(rig),
+            fp,
+            input.userId,
+            input.now,
+          ],
+        );
+        if (!r.rows[0]) throw conflict;
+        return mapLightingRig(r.rows[0]);
+      }
+      const cur = await c.query(
+        "select location_id, scene_document_id from shot_light_rigs where shot_id = $1 and project_id = $2",
+        [input.shotId, input.projectId],
+      );
+      if (
+        cur.rows[0] &&
+        (String(cur.rows[0].location_id) !== input.locationId ||
+          String(cur.rows[0].scene_document_id) !== input.sceneDocumentId)
+      )
+        throw new PrevisError("invalid", LIGHTING_RIG_ELSEWHERE);
+      const r = await c.query(
+        `update shot_light_rigs
+            set revision = revision + 1, scene_revision = $3, scene_fingerprint = $4, rig_json = $5::jsonb,
+                lighting_fingerprint = $6
+          where shot_id = $1 and project_id = $2 and revision = $7 returning *`,
+        [
+          input.shotId,
+          input.projectId,
+          input.sceneRevision,
+          input.sceneFingerprint,
+          JSON.stringify(rig),
+          fp,
+          input.expectedRevision,
+        ],
+      );
+      if (!r.rows[0]) throw conflict;
+      return mapLightingRig(r.rows[0]);
+    });
+  }
+
+  async clearLightingRig(input: { projectId: string; shotId: string; expectedRevision: number }) {
+    return this.tx(async (c) => {
+      const r = await c.query(
+        "delete from shot_light_rigs where shot_id = $1 and project_id = $2 and revision = $3 returning id",
+        [input.shotId, input.projectId, input.expectedRevision],
+      );
+      if (r.rows[0]) return;
+      const exists = await c.query("select 1 from shot_light_rigs where shot_id = $1 and project_id = $2", [
+        input.shotId,
+        input.projectId,
+      ]);
+      if (!exists.rows[0]) throw new PrevisError("not_found", "This Shot has no lighting rig.");
+      throw new PrevisError(
+        "conflict",
+        "This Shot's lighting was changed elsewhere. Reload before clearing.",
+      );
     });
   }
 
@@ -981,13 +1183,15 @@ export class PostgresPrevisData implements PrevisRepository {
 
   async recordPrevisClip(input: NewPrevisClip) {
     return this.tx(async (c) => {
+      const lit = input.lighting ? ", lighting_fingerprint, lighting_json" : "";
+      const litValues = input.lighting ? ",$26,$27::jsonb" : "";
       const r = await c.query(
         `insert into shot_previs_clips
            (id, project_id, shot_id, location_id, camera_path_id, path_revision, path_fingerprint,
             scene_document_id, scene_revision, scene_fingerprint, asset_id, frame_rate, duration_ms,
             render_width, render_height, container, codec, has_audio, audio_asset_id, rendered_at,
-            created_by, created_at, audio_mix_json, audio_mix_fingerprint, blocking_fingerprint, blocking_json)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$20,$22,$23,$24,$25::jsonb)
+            created_by, created_at, audio_mix_json, audio_mix_fingerprint, blocking_fingerprint, blocking_json${lit})
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$20,$22,$23,$24,$25::jsonb${litValues})
          returning *`,
         [
           input.id,
@@ -1015,6 +1219,7 @@ export class PostgresPrevisData implements PrevisRepository {
           input.audioMixFingerprint,
           input.blockingFingerprint ?? null,
           input.blocking ? JSON.stringify(input.blocking) : null,
+          ...(input.lighting ? [input.lightingFingerprint ?? null, JSON.stringify(input.lighting)] : []),
         ],
       );
       return mapClip(r.rows[0]);

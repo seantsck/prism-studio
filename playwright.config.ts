@@ -75,6 +75,9 @@ const ISOLATED_3A4F = "zzzzzzzzzzzzzzzzzzzzzzzzzzz-sequence-automation.spec.ts";
 /** The Phase 3A.4D sequence-review spec: its own memory server (edit, two mock clips, consent, a transition run). */
 const ISOLATED_3A4D = "zzzzzzzzzzzzzzzzzzzzzzzzzz-sequence-review.spec.ts";
 
+/** The Phase 4B Shot Lighting spec: its own memory server (it saves a set, rigs, renders and a Production Frame). */
+const ISOLATED_4B = "zzzzzzzzzzzzzzzzzzzzzzzzzzzz-shot-lighting.spec.ts";
+
 /**
  * TEST SERVERS ONLY. Playwright's request client reuses keep-alive sockets; at Node's default idle-close boundary
  * (5 s + 1 s buffer) the server could close a socket while `page.request` was reusing it, giving ECONNRESET before
@@ -100,6 +103,7 @@ export default defineConfig({
         ISOLATED_3A4C,
         ISOLATED_3A4D,
         ISOLATED_3A4F,
+        ISOLATED_4B,
       ],
       use: { baseURL: "http://localhost:3102" },
     },
@@ -142,6 +146,11 @@ export default defineConfig({
       name: "memory-3a4f-isolated",
       testMatch: ISOLATED_3A4F,
       use: { baseURL: "http://localhost:3110" },
+    },
+    {
+      name: "memory-4b-isolated",
+      testMatch: ISOLATED_4B,
+      use: { baseURL: "http://localhost:3111" },
     },
   ],
   // Started in order: the first builds; the others serve the same build from separate processes (separate stores).
@@ -224,6 +233,13 @@ export default defineConfig({
         // honoured only in memory mode with the fake transport: production's window is frozen at 10 minutes
         PRISM_STUDIO_E2E_SEQUENCE_SETTLE_MS: "15000",
       },
+    },
+    {
+      command: `npx next start -p 3111 ${KEEP_ALIVE}`,
+      url: "http://localhost:3111",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: memoryEnv(3111),
     },
   ],
 });

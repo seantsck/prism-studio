@@ -37,6 +37,7 @@
     "db:candidates": "tsx --env-file=.env.local scripts/db-candidates.mts",
     "db:previs": "tsx --env-file=.env.local scripts/db-previs.mts",
     "db:blocking": "tsx --env-file=.env.local scripts/db-blocking.mts",
+    "db:lighting": "tsx --env-file=.env.local scripts/db-lighting.mts",
     "db:spatial-passes": "tsx --env-file=.env.local scripts/db-spatial-passes.mts",
     "db:reconstructions": "tsx --env-file=.env.local scripts/db-reconstructions.mts",
     "db:reconstruction-jobs": "tsx --env-file=.env.local scripts/db-reconstruction-jobs.mts",

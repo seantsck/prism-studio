@@ -9,6 +9,7 @@ import type { NewSpatialReconstruction, SpatialReconstructionRecord } from "@/do
 import type { StoredAudioMix } from "@/domain/previs/audio-mix";
 import type { RenderedBlockingFigure, ShotBlockingEntry } from "@/domain/previs/blocking";
 import type { CameraPath } from "@/domain/previs/camera-path";
+import type { RenderLighting, ShotLightingRig } from "@/domain/previs/lighting";
 import type { SpatialReference } from "@/domain/previs/spatial";
 import type {
   CharacterMasksJson,
@@ -19,6 +20,9 @@ import type {
   DEPTH_FORMAT,
 } from "@/domain/previs/spatial-passes";
 import type { CameraBookmarkValue, PrevisDocument } from "@/domain/previs/types";
+
+export const LIGHTING_RIG_ELSEWHERE =
+  "This Shot's lighting rig was authored for another 3D set. Clear it before lighting the Shot here.";
 
 /** One current editable 3D scene per Location (prism.previs.v1 wrapper). */
 export interface SceneDocumentRecord {
@@ -74,8 +78,49 @@ export interface MasterFrameRecord {
   blockingFingerprint: string | null;
   /** which stored blocking each figure was rendered from (by value; never a URL) */
   blocking: RenderedBlockingFigure[] | null;
+  /** the rig the picture was lit by (null = no Shot Lighting Rig was recorded for this render) */
+  lightingFingerprint: string | null;
+  lighting: RenderLighting | null;
   createdBy: string | null;
   createdAt: string;
+}
+
+/**
+ * The Shot's current spatial lighting (Phase 4B): an overlay on the set, tied to the scene state it was authored
+ * against. It is never part of the Location's scene document or scene fingerprint.
+ */
+export interface ShotLightingRigRecord {
+  id: string;
+  projectId: string;
+  shotId: string;
+  locationId: string;
+  sceneDocumentId: string;
+  sceneRevision: number;
+  sceneFingerprint: string;
+  schemaVersion: string;
+  revision: number;
+  rig: ShotLightingRig;
+  lightingFingerprint: string;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveLightingRigInput {
+  id: string;
+  projectId: string;
+  shotId: string;
+  locationId: string;
+  sceneDocumentId: string;
+  /** the LIVE set state the rig is being authored against (looked up server-side, never trusted from a client) */
+  sceneRevision: number;
+  sceneFingerprint: string;
+  /** complete, with the authored intent the server read from the Shot; the fingerprint is derived from it here */
+  rig: ShotLightingRig;
+  /** null = first save for this Shot; otherwise the revision the editor loaded */
+  expectedRevision: number | null;
+  userId: string | null;
+  now: string;
 }
 
 /** The Shot's current editable camera motion, tied to the scene state it was authored against. */
@@ -144,6 +189,9 @@ export interface PrevisClipRecord {
   /** identity of the character-blocking layer the previs showed (null = no character proxies) */
   blockingFingerprint: string | null;
   blocking: RenderedBlockingFigure[] | null;
+  /** the rig the frames were lit by (null = no Shot Lighting Rig was recorded for this render) */
+  lightingFingerprint: string | null;
+  lighting: RenderLighting | null;
   renderedAt: string;
   createdBy: string | null;
   createdAt: string;
@@ -151,10 +199,18 @@ export interface PrevisClipRecord {
 
 export type NewPrevisClip = Omit<
   PrevisClipRecord,
-  "source" | "createdAt" | "createdBy" | "blockingFingerprint" | "blocking"
+  | "source"
+  | "createdAt"
+  | "createdBy"
+  | "blockingFingerprint"
+  | "blocking"
+  | "lightingFingerprint"
+  | "lighting"
 > & {
   blockingFingerprint?: string | null;
   blocking?: RenderedBlockingFigure[] | null;
+  lightingFingerprint?: string | null;
+  lighting?: RenderLighting | null;
   userId: string | null;
 };
 
@@ -209,6 +265,8 @@ export interface NewMasterFrame {
   capturedAt: string;
   blockingFingerprint?: string | null;
   blocking?: RenderedBlockingFigure[] | null;
+  lightingFingerprint?: string | null;
+  lighting?: RenderLighting | null;
   userId: string | null;
 }
 
@@ -372,6 +430,13 @@ export interface PrevisRepository {
     userId: string | null;
     now: string;
   }): Promise<ShotBlockingRecord[]>;
+
+  getLightingRigForShot(shotId: string): Promise<ShotLightingRigRecord | null>;
+  listLightingRigsForProject(projectId: string): Promise<ShotLightingRigRecord[]>;
+  /** Insert or compare-and-set update of the Shot's one rig. A rig never moves to another Location or set. */
+  saveLightingRig(input: SaveLightingRigInput): Promise<ShotLightingRigRecord>;
+  /** Removes the Shot's current rig (CAS on revision). Renders keep the lighting they recorded. */
+  clearLightingRig(input: { projectId: string; shotId: string; expectedRevision: number }): Promise<void>;
 
   listPrevisClips(shotId: string): Promise<PrevisClipRecord[]>;
   getPrevisClip(id: string): Promise<PrevisClipRecord | null>;

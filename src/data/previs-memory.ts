@@ -25,6 +25,12 @@ import {
   parseBlockingEntry,
   renderedBlockingFingerprint,
 } from "@/domain/previs/blocking";
+import {
+  buildShotLightingReference,
+  lightingFingerprint,
+  parseShotLightingRig,
+  selectedProductionFrameLighting,
+} from "@/domain/previs/lighting";
 import { poseFingerprint } from "@/domain/previs/pose";
 import {
   bookmarkCameraFingerprint,
@@ -43,8 +49,11 @@ import {
 } from "@/domain/previs/spatial";
 import type { MemoryProjectsAccess } from "./generation-memory";
 import {
+  LIGHTING_RIG_ELSEWHERE,
   PrevisError,
   type AudioMixResolver,
+  type SaveLightingRigInput,
+  type ShotLightingRigRecord,
   type CameraBookmarkRecord,
   type CameraPathRecord,
   type MasterFrameRecord,
@@ -72,12 +81,21 @@ export class MemoryPrevisService implements PrevisRepository {
   private paths = new Map<string, CameraPathRecord>(); // by shot id
   private clips = new Map<string, PrevisClipRecord>();
   private blocking = new Map<string, ShotBlockingRecord>(); // by `${shotId}:${characterId}`
+  private lightingRigs = new Map<string, ShotLightingRigRecord>(); // by shot id
   private bundles = new Map<string, SpatialPassBundleRecord>();
   private reconstructions = new Map<string, SpatialReconstructionRecord>();
   private jobs = new Map<string, ReconstructionJobRecord>();
   private jobEvents: JobEventRecord[] = [];
 
-  constructor(private readonly access: MemoryProjectsAccess) {}
+  constructor(
+    private readonly access: MemoryProjectsAccess & {
+      /** the Shot's CURRENTLY selected Production Frame (Production Frames live in their own service) */
+      selectedProductionFrame?: (
+        projectId: string,
+        shotId: string,
+      ) => { source: string; sourceMasterFrameId: string | null } | null;
+    },
+  ) {}
 
   private project(projectId: string) {
     const p = this.access.all().find((x) => x.project.id === projectId);
@@ -205,6 +223,7 @@ export class MemoryPrevisService implements PrevisRepository {
       p.pathFingerprint,
       currentAudioMix?.(shotId, p.durationMs) ?? null,
       this.currentBlockingFingerprint(shotId),
+      this.lightingRigs.get(shotId)?.lightingFingerprint ?? null,
     );
     return {
       schemaVersion: CAMERA_MOTION_SCHEMA_VERSION,
@@ -256,11 +275,14 @@ export class MemoryPrevisService implements PrevisRepository {
     for (const [shotId, b] of this.bookmarks) if (b.projectId === projectId) shotIds.add(shotId);
     for (const [shotId, p] of this.paths) if (p.projectId === projectId) shotIds.add(shotId);
     for (const b of this.blocking.values()) if (b.projectId === projectId) shotIds.add(b.shotId);
+    for (const [shotId, r] of this.lightingRigs) if (r.projectId === projectId) shotIds.add(shotId);
     for (const shotId of shotIds) {
       const b = this.bookmarks.get(shotId) ?? null;
       const p = this.paths.get(shotId) ?? null;
       const blockRecs = this.blockingFor(shotId);
-      const sceneId = b?.sceneDocumentId ?? p?.sceneDocumentId ?? blockRecs[0]?.sceneDocumentId;
+      const rig = this.lightingRigs.get(shotId) ?? null;
+      const sceneId =
+        b?.sceneDocumentId ?? p?.sceneDocumentId ?? blockRecs[0]?.sceneDocumentId ?? rig?.sceneDocumentId;
       const scene = [...this.scenes.values()].find((x) => x.id === sceneId);
       if (!scene) continue;
       const adopted = [...this.frames.values()]
@@ -292,6 +314,20 @@ export class MemoryPrevisService implements PrevisRepository {
         ),
         controlPasses: this.currentControlPasses(shotId, scene.sceneFingerprint, p, b),
         reconstructions: [...this.reconstructions.values()].filter((r) => r.locationId === scene.locationId),
+        // a rig authored for another set does not describe this one
+        shotLighting:
+          rig && rig.sceneDocumentId === scene.id
+            ? buildShotLightingReference({
+                rig,
+                productionFrameLightingFingerprint: selectedProductionFrameLighting({
+                  selected: this.access.selectedProductionFrame?.(projectId, shotId) ?? null,
+                  masterFrameLighting: (id) => {
+                    const f = this.frames.get(id);
+                    return f && f.shotId === shotId ? f.lightingFingerprint : null;
+                  },
+                }),
+              })
+            : null,
       });
     }
     return structuredClone(out);
@@ -331,6 +367,8 @@ export class MemoryPrevisService implements PrevisRepository {
       adoptedFrameId: null,
       blockingFingerprint: input.blockingFingerprint ?? null,
       blocking: input.blocking ? clone(input.blocking) : null,
+      lightingFingerprint: input.lightingFingerprint ?? null,
+      lighting: input.lighting ? clone(input.lighting) : null,
       createdBy: input.userId,
       createdAt: input.capturedAt,
     };
@@ -396,6 +434,77 @@ export class MemoryPrevisService implements PrevisRepository {
 
   async listShotBlocking(shotId: string) {
     return this.blockingFor(shotId).map(clone);
+  }
+
+  async getLightingRigForShot(shotId: string) {
+    const r = this.lightingRigs.get(shotId);
+    return r ? clone(r) : null;
+  }
+
+  async listLightingRigsForProject(projectId: string) {
+    return [...this.lightingRigs.values()].filter((r) => r.projectId === projectId).map(clone);
+  }
+
+  async saveLightingRig(input: SaveLightingRigInput) {
+    this.requireShot(input.projectId, input.shotId);
+    this.requireLocation(input.projectId, input.locationId);
+    const scene = await this.getScene(input.sceneDocumentId);
+    if (!scene || scene.projectId !== input.projectId || scene.locationId !== input.locationId)
+      throw new PrevisError("not_found", "That 3D set was not found for this location.");
+    let rig;
+    try {
+      rig = parseShotLightingRig(input.rig);
+    } catch (err) {
+      throw new PrevisError("invalid", `Invalid Shot lighting: ${(err as Error).message}`);
+    }
+    const existing = this.lightingRigs.get(input.shotId);
+    const conflict = new PrevisError(
+      "conflict",
+      "This Shot's lighting was changed elsewhere. Reload before saving.",
+    );
+    const base = {
+      sceneRevision: input.sceneRevision,
+      sceneFingerprint: input.sceneFingerprint,
+      rig: clone(rig),
+      lightingFingerprint: lightingFingerprint(rig),
+      updatedAt: input.now,
+    };
+    if (!existing) {
+      if (input.expectedRevision !== null) throw conflict;
+      const rec: ShotLightingRigRecord = {
+        id: input.id,
+        projectId: input.projectId,
+        shotId: input.shotId,
+        locationId: input.locationId,
+        sceneDocumentId: scene.id,
+        schemaVersion: rig.schema,
+        revision: 1,
+        createdBy: input.userId,
+        createdAt: input.now,
+        ...base,
+      };
+      this.lightingRigs.set(input.shotId, rec);
+      return clone(rec);
+    }
+    if (input.expectedRevision !== existing.revision) throw conflict;
+    if (existing.projectId !== input.projectId) throw conflict;
+    if (existing.locationId !== input.locationId || existing.sceneDocumentId !== scene.id)
+      throw new PrevisError("invalid", LIGHTING_RIG_ELSEWHERE);
+    const next: ShotLightingRigRecord = { ...existing, ...base, revision: existing.revision + 1 };
+    this.lightingRigs.set(input.shotId, next);
+    return clone(next);
+  }
+
+  async clearLightingRig(input: { projectId: string; shotId: string; expectedRevision: number }) {
+    const existing = this.lightingRigs.get(input.shotId);
+    if (!existing || existing.projectId !== input.projectId)
+      throw new PrevisError("not_found", "This Shot has no lighting rig.");
+    if (existing.revision !== input.expectedRevision)
+      throw new PrevisError(
+        "conflict",
+        "This Shot's lighting was changed elsewhere. Reload before clearing.",
+      );
+    this.lightingRigs.delete(input.shotId);
   }
 
   async saveShotBlocking(input: SaveShotBlockingInput) {
@@ -746,6 +855,8 @@ export class MemoryPrevisService implements PrevisRepository {
       ...rest,
       blockingFingerprint: input.blockingFingerprint ?? null,
       blocking: input.blocking ? clone(input.blocking) : null,
+      lightingFingerprint: input.lightingFingerprint ?? null,
+      lighting: input.lighting ? clone(input.lighting) : null,
       source: "local_previs",
       createdBy: userId,
       createdAt: input.renderedAt,
