@@ -569,3 +569,64 @@ describe("asset usage", () => {
     expect(checksumOf("x")).toHaveLength(64);
   });
 });
+
+describe("Phase 4C spatial source provenance (lineage, never identity)", () => {
+  const src = {
+    sceneFingerprint: "a".repeat(64),
+    cameraFingerprint: null,
+    blockingFingerprint: "b".repeat(64),
+    lightingFingerprint: null,
+  };
+  const data = seed();
+  const asset = newUploadAsset(data.project.id);
+  data.assets.push(asset);
+  const draftMaster = (spatial: typeof src | null) => {
+    const ctx = contextOf(data, "3A");
+    return draftProductionFrame(ctx, {
+      id: "f1",
+      now: T,
+      userId: null,
+      source: "previs_master",
+      sourceMasterFrameId: "mf-1",
+      sourceSpatial: spatial,
+      asset,
+    });
+  };
+
+  it("frozen provenance does not change frameFingerprint (re-promotion reuses the same frame)", () => {
+    const a = draftMaster(null);
+    const b = draftMaster(src);
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(b.draft.frameFingerprint).toBe(a.draft.frameFingerprint);
+    expect(a.draft.sourceSceneFingerprint).toBeNull();
+    expect([
+      b.draft.sourceSceneFingerprint,
+      b.draft.sourceCameraFingerprint,
+      b.draft.sourceBlockingFingerprint,
+    ]).toEqual([src.sceneFingerprint, null, src.blockingFingerprint]);
+  });
+
+  it("a historical record without the four fields parses as not frozen", () => {
+    const a = draftMaster(null);
+    if (!a.ok) throw new Error("draft");
+    const legacy: Record<string, unknown> = { ...a.draft, version: 1 };
+    for (const k of [
+      "sourceSceneFingerprint",
+      "sourceCameraFingerprint",
+      "sourceBlockingFingerprint",
+      "sourceLightingFingerprint",
+    ])
+      delete legacy[k];
+    const parsed = productionFrameSchema.parse(legacy);
+    expect(parsed.sourceSceneFingerprint).toBeNull();
+    expect(parsed.sourceLightingFingerprint).toBeNull();
+  });
+
+  it("the package carries sourceSpatial only when frozen (no new key otherwise)", () => {
+    const { data: withFrame } = seedWithFrame();
+    const before = pkgOf(withFrame);
+    expect(before.references.productionFrame).toBeDefined();
+    expect("sourceSpatial" in before.references.productionFrame!).toBe(false);
+  });
+});

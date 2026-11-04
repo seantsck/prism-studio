@@ -14,8 +14,8 @@ import {
 } from "@/domain/production-frame";
 import { assetUrl } from "@/lib/utils";
 import { saveProductionFrameAsLocationView } from "@/server/location-view-actions";
+import { MasterFramePromoteForm } from "./master-frame-promote-form";
 import {
-  promoteMasterFrame,
   promoteStoryboardFrame,
   selectProductionFrame,
   uploadProductionFrame,
@@ -28,6 +28,11 @@ export interface MasterFrameChoice {
   capturedAt: string;
   width: number;
   height: number;
+  /**
+   * Phase 4C: how this Master Frame compares with the Shot's CURRENT 3D setup, computed server-side for display only
+   * (promotion recomputes it). Absent when not computed.
+   */
+  spatial?: { stale: string[]; unknown: string[]; messages: string[] };
 }
 
 const stamp = (iso: string) => `${iso.slice(0, 16).replace("T", " ")} UTC`;
@@ -219,26 +224,29 @@ export function ProductionFrameSection({
             {masterFrames.map((m) => {
               const check = assetPromotionStatus(ctx, ctx.assets.get(m.assetId) ?? null);
               return (
-                <ActionForm
+                <MasterFramePromoteForm
                   key={m.id}
-                  action={promoteMasterFrame}
-                  successMessage="Production Frame saved"
-                  className="flex items-center justify-between gap-3 border border-line px-2.5 py-1.5"
+                  slug={slug}
+                  shotId={shotId}
+                  masterFrameId={m.id}
+                  disabled={!check.ok}
                 >
-                  {hidden}
-                  <input type="hidden" name="masterFrameId" value={m.id} />
-                  <span className="text-[12px]">
-                    Use 3D Master Frame
-                    <span className="text-muted">
-                      {" "}
-                      · {m.width}×{m.height} · {stamp(m.capturedAt)}
-                    </span>
-                    {!check.ok ? <span className="block text-[11px] text-faint">{check.reason}</span> : null}
+                  Use 3D Master Frame
+                  <span className="text-muted">
+                    {" "}
+                    · {m.width}×{m.height} · {stamp(m.capturedAt)}
                   </span>
-                  <Button data-testid={`pf-use-master-${m.id}`} size="sm" type="submit" disabled={!check.ok}>
-                    Use 3D Master Frame
-                  </Button>
-                </ActionForm>
+                  {!check.ok ? <span className="block text-[11px] text-faint">{check.reason}</span> : null}
+                  {m.spatial?.messages.map((msg) => (
+                    <span
+                      key={msg}
+                      className="block text-[11px] text-warn"
+                      data-testid="pf-master-spatial-status"
+                    >
+                      {msg}
+                    </span>
+                  ))}
+                </MasterFramePromoteForm>
               );
             })}
           </div>

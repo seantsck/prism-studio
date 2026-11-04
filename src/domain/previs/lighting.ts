@@ -277,8 +277,9 @@ export function isRenderLightingStale(rendered: RenderedLightingState, now: Curr
 export type MasterFrameStaleReason = "scene" | "blocking" | "lighting";
 
 /**
- * What changed since a Master Frame was captured, using only provenance the frame really holds. There is no camera
- * reason: frames record a bookmark pointer, not a camera fingerprint (Phase 4C adds that).
+ * What changed since a Master Frame was captured, on the three 4B axes (scene, blocking, lighting). Kept for its
+ * existing callers. The canonical 4C status is `masterFrameSpatialStatus` (spatial-status.ts), which adds the camera
+ * axis and keeps UNKNOWN camera provenance separate from stale; this projection never reports a camera reason.
  */
 export function masterFrameStaleReasons(i: {
   frame: {
@@ -371,14 +372,26 @@ export function buildShotLightingReference(args: {
 }
 
 /**
- * Resolves `productionFrameLightingFingerprint` through the exact chain: selected frame, its source, that frame's
- * `source_master_frame_id`, that Master Frame's own record. Never the newest, latest or adopted Master Frame.
+ * Resolves `productionFrameLightingFingerprint` for the SELECTED Production Frame (Phase 4C, decision P3):
+ *   1. a frame with frozen spatial source provenance (`sourceSceneFingerprint` set) answers with its own frozen
+ *      `sourceLightingFingerprint` (null there = its source render had no rig), so the answer survives the deletion of
+ *      the source Master Frame;
+ *   2. otherwise (a historical frame) the exact 4B chain: its `source_master_frame_id` → that Master Frame's own record;
+ *   3. otherwise null.
+ * Never the current rig, the newest, the latest or the adopted Master Frame.
  */
 export function selectedProductionFrameLighting(args: {
-  selected: { source: string; sourceMasterFrameId: string | null } | null;
+  selected: {
+    source: string;
+    sourceMasterFrameId: string | null;
+    sourceSceneFingerprint?: string | null;
+    sourceLightingFingerprint?: string | null;
+  } | null;
   masterFrameLighting: (masterFrameId: string) => string | null | undefined;
 }): string | null {
   const s = args.selected;
-  if (!s || s.source !== "previs_master" || !s.sourceMasterFrameId) return null;
+  if (!s || s.source !== "previs_master") return null;
+  if (s.sourceSceneFingerprint) return s.sourceLightingFingerprint ?? null;
+  if (!s.sourceMasterFrameId) return null;
   return args.masterFrameLighting(s.sourceMasterFrameId) ?? null;
 }

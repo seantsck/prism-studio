@@ -6,6 +6,7 @@ import {
 } from "@/domain/production-frame";
 import type { ProjectData } from "@/domain/schemas";
 import type { MemoryProjectsAccess } from "./generation-memory";
+import type { MasterFrameRecord } from "./previs-repository";
 import {
   ProductionFrameError,
   type CreateProductionFrameResult,
@@ -27,7 +28,57 @@ export class MemoryProductionFrameService implements ProductionFrameRepository {
   private frames: ProductionFrame[] = [];
   private selections = new Map<string, ProductionFrameSelection>(); // by shot id
 
-  constructor(private readonly access: MemoryProjectsAccess) {}
+  constructor(
+    private readonly access: MemoryProjectsAccess & {
+      /** the Master Frame row as it exists NOW (the previs service), for the exact-source check of 0049 */
+      masterFrame?: (id: string) => MasterFrameRecord | null;
+    },
+  ) {}
+
+  /**
+   * What 0049's CHECK and `check_shot_production_frame_spatial_source` trigger say. Not frozen (marker null): all four
+   * null, the historical path. Frozen: a previs_master frame whose source Master Frame exists NOW, in the same Project,
+   * Shot and Asset, with exactly equal fingerprints (null equals null). Never derived from current state.
+   */
+  private assertExactSource(draft: NewProductionFrame["draft"]): void {
+    const hex = (v: string | null) => v === null || /^[0-9a-f]{64}$/.test(v);
+    const s = draft.sourceSceneFingerprint;
+    if (s === null) {
+      if (draft.sourceCameraFingerprint || draft.sourceBlockingFingerprint || draft.sourceLightingFingerprint)
+        throw new ProductionFrameError("invalid", "The Production Frame violates a constraint.");
+      return;
+    }
+    if (
+      draft.source !== "previs_master" ||
+      !draft.sourceMasterFrameId ||
+      !/^[0-9a-f]{64}$/.test(s) ||
+      !hex(draft.sourceCameraFingerprint) ||
+      !hex(draft.sourceBlockingFingerprint) ||
+      !hex(draft.sourceLightingFingerprint)
+    )
+      throw new ProductionFrameError("invalid", "The Production Frame violates a constraint.");
+    const mf = this.access.masterFrame?.(draft.sourceMasterFrameId) ?? null;
+    if (!mf)
+      throw new ProductionFrameError(
+        "invalid",
+        "the source Master Frame of this Production Frame does not exist",
+      );
+    if (mf.projectId !== draft.projectId || mf.shotId !== draft.shotId || mf.assetId !== draft.assetId)
+      throw new ProductionFrameError(
+        "invalid",
+        "the source Master Frame belongs to another project, shot or image",
+      );
+    if (
+      mf.sceneFingerprint !== s ||
+      (mf.cameraFingerprint ?? null) !== draft.sourceCameraFingerprint ||
+      (mf.blockingFingerprint ?? null) !== draft.sourceBlockingFingerprint ||
+      (mf.lightingFingerprint ?? null) !== draft.sourceLightingFingerprint
+    )
+      throw new ProductionFrameError(
+        "invalid",
+        "the Production Frame source provenance does not match its source Master Frame",
+      );
+  }
 
   private projectOf(projectId: string): ProjectData | undefined {
     return this.access.all().find((p) => p.project.id === projectId);
@@ -87,6 +138,7 @@ export class MemoryProductionFrameService implements ProductionFrameRepository {
       asset.height !== draft.height
     )
       throw new ProductionFrameError("invalid", "The Production Frame facts do not match its image.");
+    this.assertExactSource(draft);
 
     const version =
       this.frames.filter((f) => f.shotId === draft.shotId).reduce((m, f) => Math.max(m, f.version), 0) + 1;

@@ -75,6 +75,17 @@ export const productionFrameSchema = z.object({
   sourceStoryboardFrameId: id.nullable(),
   sourceMasterFrameId: id.nullable(),
   sourceGenerationAttemptId: id.nullable(),
+  /**
+   * Phase 4C (migration 0049): the EXACT spatial provenance of the source Master Frame, frozen at promotion and copied
+   * only from that Master Frame's own record (never current state). `sourceSceneFingerprint` is the marker: null = not
+   * frozen (every earlier frame, every non-3D frame, and a promotion while the database was still at 0048). The other
+   * three are null when the source frame legitimately had none (camera: not recorded; blocking: no proxies; lighting:
+   * no rig). They are lineage, not identity: `frameFingerprint` does not include them, and neither does freshness.
+   */
+  sourceSceneFingerprint: hex64.nullable().default(null),
+  sourceCameraFingerprint: hex64.nullable().default(null),
+  sourceBlockingFingerprint: hex64.nullable().default(null),
+  sourceLightingFingerprint: hex64.nullable().default(null),
   /** prism.production-frame-intent.v1: WHAT THIS FRAME WAS MADE TO REPRESENT, copied by value */
   intentSnapshot: z.record(z.string(), z.unknown()),
   intentFingerprint: hex64,
@@ -444,12 +455,56 @@ export interface ProductionFrameDraftInput {
   sourceStoryboardFrameId?: string | null;
   sourceMasterFrameId?: string | null;
   sourceGenerationAttemptId?: string | null;
+  /** 4C: the source Master Frame's own spatial provenance (previs_master only), copied from its record */
+  sourceSpatial?: ProductionFrameSourceSpatial | null;
   /** the Asset the frame shows; its checksum and size are frozen into the record */
   asset: Pick<Asset, "id" | "type" | "mime" | "objectPath" | "width" | "height" | "checksum" | "projectId">;
 }
 
 /** The record before the repository assigns its per-Shot version (inside the creating transaction). */
 export type ProductionFrameDraft = Omit<ProductionFrame, "version">;
+
+/** The four frozen source fingerprints of a 3D Master Frame (Phase 4C). */
+export interface ProductionFrameSourceSpatial {
+  sceneFingerprint: string;
+  cameraFingerprint: string | null;
+  blockingFingerprint: string | null;
+  lightingFingerprint: string | null;
+}
+
+/** The source provenance of a Master Frame record, field for field (the database trigger compares exactly these). */
+export function sourceSpatialOfMasterFrame(mf: {
+  sceneFingerprint: string;
+  cameraFingerprint: string | null;
+  blockingFingerprint: string | null;
+  lightingFingerprint: string | null;
+}): ProductionFrameSourceSpatial {
+  return {
+    sceneFingerprint: mf.sceneFingerprint,
+    cameraFingerprint: mf.cameraFingerprint ?? null,
+    blockingFingerprint: mf.blockingFingerprint ?? null,
+    lightingFingerprint: mf.lightingFingerprint ?? null,
+  };
+}
+
+/** The frame's frozen source provenance, or null when none was frozen. */
+export function frozenSourceSpatial(
+  f: Pick<
+    ProductionFrame,
+    | "sourceSceneFingerprint"
+    | "sourceCameraFingerprint"
+    | "sourceBlockingFingerprint"
+    | "sourceLightingFingerprint"
+  >,
+): ProductionFrameSourceSpatial | null {
+  if (!f.sourceSceneFingerprint) return null;
+  return {
+    sceneFingerprint: f.sourceSceneFingerprint,
+    cameraFingerprint: f.sourceCameraFingerprint ?? null,
+    blockingFingerprint: f.sourceBlockingFingerprint ?? null,
+    lightingFingerprint: f.sourceLightingFingerprint ?? null,
+  };
+}
 
 export type DraftResult =
   | { ok: true; draft: ProductionFrameDraft }
@@ -485,6 +540,12 @@ export function draftProductionFrame(ctx: ShotContext, input: ProductionFrameDra
     return {
       ok: false,
       problem: { code: "bad_source", message: "The Production Frame's origin is inconsistent." },
+    };
+  const spatial = input.sourceSpatial ?? null;
+  if (spatial && input.source !== "previs_master")
+    return {
+      ok: false,
+      problem: { code: "bad_source", message: "Only a 3D Master Frame carries spatial source provenance." },
     };
   const aspect = shotProductionAspect(ctx.shot, ctx.bible);
   const image = checkProductionImage(input.asset, aspect);
@@ -524,6 +585,11 @@ export function draftProductionFrame(ctx: ShotContext, input: ProductionFrameDra
       sourceStoryboardFrameId: sb,
       sourceMasterFrameId: mf,
       sourceGenerationAttemptId: ga,
+      // lineage only: deliberately NOT part of frameFingerprint (a re-promotion reuses the same immutable frame)
+      sourceSceneFingerprint: spatial?.sceneFingerprint ?? null,
+      sourceCameraFingerprint: spatial ? spatial.cameraFingerprint : null,
+      sourceBlockingFingerprint: spatial ? spatial.blockingFingerprint : null,
+      sourceLightingFingerprint: spatial ? spatial.lightingFingerprint : null,
       intentSnapshot: intent as unknown as Record<string, unknown>,
       intentFingerprint,
       // the Shot's 13 named parts, never another frame's selection part
@@ -591,6 +657,38 @@ export interface ProductionFramePackageRef {
   intentFingerprint: string;
   freshness: "fresh" | "stale";
   changedParts: FreshnessPart[];
+  /**
+   * Phase 4C: what spatial setup produced THIS approved image (the source Master Frame's frozen provenance). Present
+   * only when it was frozen; omitted, never null, otherwise. It may legitimately differ from the package's
+   * `spatialReference`, which describes the Shot's spatial setup NOW. Ids and fingerprints only.
+   */
+  sourceSpatial?: ProductionFrameSourceSpatialRef;
+}
+
+export const PRODUCTION_FRAME_SOURCE_SPATIAL_SCHEMA_VERSION = 1 as const;
+export interface ProductionFrameSourceSpatialRef extends ProductionFrameSourceSpatial {
+  schemaVersion: typeof PRODUCTION_FRAME_SOURCE_SPATIAL_SCHEMA_VERSION;
+  masterFrameId: string;
+}
+
+export function productionFrameSourceSpatialRef(
+  f: Pick<
+    ProductionFrame,
+    | "source"
+    | "sourceMasterFrameId"
+    | "sourceSceneFingerprint"
+    | "sourceCameraFingerprint"
+    | "sourceBlockingFingerprint"
+    | "sourceLightingFingerprint"
+  >,
+): ProductionFrameSourceSpatialRef | null {
+  const frozen = frozenSourceSpatial(f);
+  if (!frozen || f.source !== "previs_master" || !f.sourceMasterFrameId) return null;
+  return {
+    schemaVersion: PRODUCTION_FRAME_SOURCE_SPATIAL_SCHEMA_VERSION,
+    masterFrameId: f.sourceMasterFrameId,
+    ...frozen,
+  };
 }
 
 export function productionFramePackageRef(ctx: ShotContext): ProductionFramePackageRef | null {
@@ -605,6 +703,10 @@ export function productionFramePackageRef(ctx: ShotContext): ProductionFramePack
     intentFingerprint: f.intentFingerprint,
     freshness: fr.status === "stale" ? "stale" : "fresh",
     changedParts: fr.changedParts,
+    ...(() => {
+      const spatial = productionFrameSourceSpatialRef(f);
+      return spatial ? { sourceSpatial: spatial } : {};
+    })(),
   };
 }
 

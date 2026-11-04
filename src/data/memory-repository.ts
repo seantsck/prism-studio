@@ -93,6 +93,7 @@ export class MemoryRepository implements Repository {
     this.productionFrameService ??= new MemoryProductionFrameService({
       all: () => [...this.projects.values()],
       ownerUserId: () => LOCAL_USER_ID,
+      masterFrame: (id) => this.previs.masterFrameRecord(id),
     });
     return this.productionFrameService;
   }

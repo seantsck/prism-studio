@@ -576,9 +576,15 @@ export class PostgresPrevisData implements PrevisRepository {
         return out;
       const rigs = new Map(lr.rows.map((r) => [String(r.shot_id), mapLightingRig(r)]));
       // the exact chain: selection -> that Production Frame -> its source -> that very Master Frame's own record
+      const provenanceReady = rigs.size ? await spatialProvenanceReady(this.pool, c) : false;
       const pf = rigs.size
         ? await c.query(
-            `select sel.shot_id, pf.source, pf.source_master_frame_id, mf.lighting_fingerprint
+            `select sel.shot_id, pf.source, pf.source_master_frame_id, mf.lighting_fingerprint,
+                    ${
+                      provenanceReady
+                        ? "pf.source_scene_fingerprint, pf.source_lighting_fingerprint"
+                        : "null as source_scene_fingerprint, null as source_lighting_fingerprint"
+                    }
                from shot_production_frame_selections sel
                join shot_production_frames pf on pf.id = sel.production_frame_id
                left join scene_master_frames mf
@@ -762,6 +768,10 @@ export class PostgresPrevisData implements PrevisRepository {
                       ? {
                           source: String(selectedFrames.get(shotId)!.source),
                           sourceMasterFrameId: str(selectedFrames.get(shotId)!.source_master_frame_id),
+                          sourceSceneFingerprint: str(selectedFrames.get(shotId)!.source_scene_fingerprint),
+                          sourceLightingFingerprint: str(
+                            selectedFrames.get(shotId)!.source_lighting_fingerprint,
+                          ),
                         }
                       : null,
                     masterFrameLighting: () => str(selectedFrames.get(shotId)!.lighting_fingerprint),

@@ -196,6 +196,7 @@ export default async function VirtualSetPage({
           blockingFingerprint: f.blockingFingerprint,
           lightingFingerprint: f.lightingFingerprint,
           lighting: f.lighting ? { baseEnvironment: f.lighting.baseEnvironment } : null,
+          cameraFingerprint: f.cameraFingerprint,
         }))}
         spatialBundles={spatialBundles}
         shotLighting={shotLighting}

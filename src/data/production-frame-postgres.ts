@@ -7,6 +7,7 @@ import {
 } from "@/domain/production-frame";
 import { COLLECTIONS, flatToRow } from "./postgres-mapping";
 import { upsertRow } from "./postgres-repository";
+import { spatialProvenanceReady } from "./spatial-provenance-schema";
 import {
   ProductionFrameError,
   type CreateProductionFrameResult,
@@ -36,6 +37,11 @@ const mapFrame = (r: Row): ProductionFrame =>
     sourceStoryboardFrameId: str(r.source_storyboard_frame_id),
     sourceMasterFrameId: str(r.source_master_frame_id),
     sourceGenerationAttemptId: str(r.source_generation_attempt_id),
+    // absent before 0049 (select * has no such column): reads as "not frozen"
+    sourceSceneFingerprint: str(r.source_scene_fingerprint),
+    sourceCameraFingerprint: str(r.source_camera_fingerprint),
+    sourceBlockingFingerprint: str(r.source_blocking_fingerprint),
+    sourceLightingFingerprint: str(r.source_lighting_fingerprint),
     intentSnapshot: (r.intent_snapshot as Record<string, unknown>) ?? {},
     intentFingerprint: String(r.intent_fingerprint),
     parts: (r.parts as Record<string, string>) ?? {},
@@ -173,13 +179,20 @@ export class PostgresProductionFrameData implements ProductionFrameRepository {
           [draft.shotId],
         );
         const version = Number(next.rows[0].n);
+        // the four source columns are named only for frozen provenance on a database at 0049; before it the frame is
+        // stored without them (it then reads back as "not frozen", which is the truth about that row)
+        const frozen = !!draft.sourceSceneFingerprint && (await spatialProvenanceReady(this.pool, c));
+        const srcCols = frozen
+          ? ", source_scene_fingerprint, source_camera_fingerprint, source_blocking_fingerprint, source_lighting_fingerprint"
+          : "";
+        const srcValues = frozen ? ", $21, $22, $23, $24" : "";
         const inserted = await c.query(
           `insert into shot_production_frames
              (id, project_id, shot_id, version, schema_version, asset_id, asset_checksum, width, height,
               production_aspect_ratio, source, source_storyboard_frame_id, source_master_frame_id,
               source_generation_attempt_id, intent_snapshot, intent_fingerprint, parts, frame_fingerprint,
-              created_by, created_at)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17::jsonb, $18, $19, $20)
+              created_by, created_at${srcCols})
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17::jsonb, $18, $19, $20${srcValues})
            returning *`,
           [
             draft.id,
@@ -202,6 +215,14 @@ export class PostgresProductionFrameData implements ProductionFrameRepository {
             draft.frameFingerprint,
             draft.createdBy,
             draft.createdAt,
+            ...(frozen
+              ? [
+                  draft.sourceSceneFingerprint,
+                  draft.sourceCameraFingerprint,
+                  draft.sourceBlockingFingerprint,
+                  draft.sourceLightingFingerprint,
+                ]
+              : []),
           ],
         );
         const frame = mapFrame(inserted.rows[0]);

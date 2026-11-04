@@ -93,7 +93,12 @@ export class MemoryPrevisService implements PrevisRepository {
       selectedProductionFrame?: (
         projectId: string,
         shotId: string,
-      ) => { source: string; sourceMasterFrameId: string | null } | null;
+      ) => {
+        source: string;
+        sourceMasterFrameId: string | null;
+        sourceSceneFingerprint?: string | null;
+        sourceLightingFingerprint?: string | null;
+      } | null;
     },
   ) {}
 
@@ -338,6 +343,12 @@ export class MemoryPrevisService implements PrevisRepository {
     return true;
   }
 
+  /** Synchronous read of a Master Frame row as it exists now (the memory Production Frame exact-source check). */
+  masterFrameRecord(id: string): MasterFrameRecord | null {
+    const f = this.frames.get(id);
+    return f ? clone(f) : null;
+  }
+
   /** Test/maintenance seam: removes a Master Frame row (as a database DELETE or cascade would); its Asset stays. */
   deleteMasterFrame(id: string): void {
     this.frames.delete(id);
@@ -387,7 +398,11 @@ export class MemoryPrevisService implements PrevisRepository {
     // what 0049's scene_master_frames_camera_check says: both or neither, and the snapshot names its own fingerprint
     if ((rec.cameraFingerprint === null) !== (rec.camera === null))
       throw new PrevisError("invalid", "A Master Frame's camera provenance must be complete.");
-    if (rec.camera && (rec.camera.cameraFingerprint !== rec.cameraFingerprint || !/^[0-9a-f]{64}$/.test(rec.cameraFingerprint!)))
+    if (
+      rec.camera &&
+      (rec.camera.cameraFingerprint !== rec.cameraFingerprint ||
+        !/^[0-9a-f]{64}$/.test(rec.cameraFingerprint!))
+    )
       throw new PrevisError("invalid", "A Master Frame's camera provenance is inconsistent.");
     this.frames.set(rec.id, rec);
     return clone(rec);
