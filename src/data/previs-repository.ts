@@ -9,6 +9,7 @@ import type { NewSpatialReconstruction, SpatialReconstructionRecord } from "@/do
 import type { StoredAudioMix } from "@/domain/previs/audio-mix";
 import type { RenderedBlockingFigure, ShotBlockingEntry } from "@/domain/previs/blocking";
 import type { CameraPath } from "@/domain/previs/camera-path";
+import type { RenderCamera } from "@/domain/previs/camera-provenance";
 import type { RenderLighting, ShotLightingRig } from "@/domain/previs/lighting";
 import type { SpatialReference } from "@/domain/previs/spatial";
 import type {
@@ -81,6 +82,13 @@ export interface MasterFrameRecord {
   /** the rig the picture was lit by (null = no Shot Lighting Rig was recorded for this render) */
   lightingFingerprint: string | null;
   lighting: RenderLighting | null;
+  /**
+   * Phase 4C (migration 0049): the canonical camera the picture was rendered with, derived server-side from the Shot's
+   * bookmark at capture (`prism.render-camera.v1`). null/null = camera provenance was NOT frozen at capture (every
+   * frame before 4C, and every frame captured while the database was still at 0048): UNKNOWN, never fresh.
+   */
+  cameraFingerprint: string | null;
+  camera: RenderCamera | null;
   createdBy: string | null;
   createdAt: string;
 }
@@ -267,6 +275,9 @@ export interface NewMasterFrame {
   blocking?: RenderedBlockingFigure[] | null;
   lightingFingerprint?: string | null;
   lighting?: RenderLighting | null;
+  /** server-derived render camera (both or neither); dropped, not refused, by a database before 0049 */
+  cameraFingerprint?: string | null;
+  camera?: RenderCamera | null;
   userId: string | null;
 }
 
@@ -399,6 +410,11 @@ export interface PrevisRepository {
   /** Freezes the scene's CURRENT production camera for the shot. Throws "no_camera" when the scene has none. */
   setBookmark(input: SetBookmarkInput): Promise<CameraBookmarkRecord>;
 
+  /**
+   * Whether this store persists Phase 4C spatial provenance (migration 0049: Master Frame camera, Production Frame
+   * source fingerprints). Memory: always. Postgres: only once 0049 is applied (probed, never assumed).
+   */
+  spatialProvenancePersisted(): Promise<boolean>;
   listMasterFrames(shotId: string): Promise<MasterFrameRecord[]>;
   getMasterFrame(id: string): Promise<MasterFrameRecord | null>;
   recordMasterFrame(input: NewMasterFrame): Promise<MasterFrameRecord>;

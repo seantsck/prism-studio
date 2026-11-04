@@ -6,6 +6,7 @@ import type { BlockingFigureData } from "@/domain/previs/blocking";
 import { buildPrevisDocument, sceneFingerprint } from "@/domain/previs/document";
 import { bookmarkFromCamera, cameraFromBookmark } from "@/domain/previs/camera";
 import { buildHotelCanopyEngineScene } from "@/domain/previs/hotel-canopy";
+import { bookmarkCameraFingerprint } from "@/domain/previs/spatial-passes";
 import {
   MASTER_FRAME_STALE_LABEL,
   baseEnvironmentOf,
@@ -380,8 +381,11 @@ export function VirtualSetEditor(props: VirtualSetProps) {
     const renderedLighting = adapter().lighting.appliedFingerprint();
     setStatus({ tone: "busy", text: "Rendering master frame…" });
     try {
-      const frame = await adapter().captureMasterFrame(bookmark.value);
+      // the claim names the EXACT bookmark camera the render used; the server compares it with THIS Shot's bookmark
+      const renderedBookmark = bookmark.value;
+      const frame = await adapter().captureMasterFrame(renderedBookmark);
       const fd = new FormData();
+      fd.set("cameraFingerprint", bookmarkCameraFingerprint(renderedBookmark));
       fd.set("projectSlug", props.projectSlug);
       fd.set("shotId", shotId);
       fd.set("locationId", props.locationId);

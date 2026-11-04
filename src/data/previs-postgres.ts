@@ -58,6 +58,8 @@ import {
   type ObjectManifest,
 } from "@/domain/previs/spatial-passes";
 import { cameraBookmarkSchema, previsDocumentSchema } from "@/domain/previs/types";
+import { parseRenderCamera } from "@/domain/previs/camera-provenance";
+import { spatialProvenanceReady } from "./spatial-provenance-schema";
 import {
   PrevisError,
   type AudioMixResolver,
@@ -172,6 +174,9 @@ const mapFrame = (r: Row): MasterFrameRecord => ({
   blockingFingerprint: str(r.blocking_fingerprint),
   blocking: (r.blocking_json as RenderedBlockingFigure[] | null) ?? null,
   ...mapRenderLighting(r),
+  // absent before 0049 (select * then simply has no such column): reads as "not frozen at capture"
+  cameraFingerprint: str(r.camera_fingerprint),
+  camera: r.camera_json ? parseRenderCamera(r.camera_json) : null,
   createdBy: str(r.created_by),
   createdAt: iso(r.created_at),
 });
@@ -786,17 +791,28 @@ export class PostgresPrevisData implements PrevisRepository {
     });
   }
 
+  async spatialProvenancePersisted() {
+    return this.tx((c) => spatialProvenanceReady(this.pool, c));
+  }
+
   async recordMasterFrame(input: NewMasterFrame) {
     return this.tx(async (c) => {
       // the lighting columns are named only for a lit render, so a database before 0048 still captures without a rig
       const lit = input.lighting ? ", lighting_fingerprint, lighting_json" : "";
       const litValues = input.lighting ? ",$17,$18::jsonb" : "";
+      // the camera columns are named only when 0049 is installed: before it, the render is stored WITHOUT camera
+      // provenance (it reads back as unknown, which is the truth about that row); the capture check still ran
+      const withCamera = !!input.camera && (await spatialProvenanceReady(this.pool, c));
+      const n = input.lighting ? 19 : 17;
+      const cam = withCamera ? ", camera_fingerprint, camera_json" : "";
+      const camValues = withCamera ? `,$${n},$${n + 1}::jsonb` : "";
       const r = await c.query(
         `insert into scene_master_frames
            (id, project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint,
             camera_bookmark_id, asset_id, render_width, render_height, production_aspect_ratio, captured_at,
-            created_by, created_at, blocking_fingerprint, blocking_json${lit})
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$13,$15,$16::jsonb${litValues}) returning *`,
+            created_by, created_at, blocking_fingerprint, blocking_json${lit}${cam})
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$13,$15,$16::jsonb${litValues}${camValues})
+         returning *`,
         [
           input.id,
           input.projectId,
@@ -815,6 +831,7 @@ export class PostgresPrevisData implements PrevisRepository {
           input.blockingFingerprint ?? null,
           input.blocking ? JSON.stringify(input.blocking) : null,
           ...(input.lighting ? [input.lightingFingerprint ?? null, JSON.stringify(input.lighting)] : []),
+          ...(withCamera ? [input.cameraFingerprint ?? null, JSON.stringify(input.camera)] : []),
         ],
       );
       return mapFrame(r.rows[0]);

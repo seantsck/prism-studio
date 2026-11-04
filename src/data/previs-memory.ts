@@ -333,6 +333,16 @@ export class MemoryPrevisService implements PrevisRepository {
     return structuredClone(out);
   }
 
+  /** Memory mode models the full 0049 schema. */
+  async spatialProvenancePersisted() {
+    return true;
+  }
+
+  /** Test/maintenance seam: removes a Master Frame row (as a database DELETE or cascade would); its Asset stays. */
+  deleteMasterFrame(id: string): void {
+    this.frames.delete(id);
+  }
+
   async listMasterFrames(shotId: string) {
     return [...this.frames.values()]
       .filter((f) => f.shotId === shotId)
@@ -369,9 +379,16 @@ export class MemoryPrevisService implements PrevisRepository {
       blocking: input.blocking ? clone(input.blocking) : null,
       lightingFingerprint: input.lightingFingerprint ?? null,
       lighting: input.lighting ? clone(input.lighting) : null,
+      cameraFingerprint: input.cameraFingerprint ?? null,
+      camera: input.camera ? clone(input.camera) : null,
       createdBy: input.userId,
       createdAt: input.capturedAt,
     };
+    // what 0049's scene_master_frames_camera_check says: both or neither, and the snapshot names its own fingerprint
+    if ((rec.cameraFingerprint === null) !== (rec.camera === null))
+      throw new PrevisError("invalid", "A Master Frame's camera provenance must be complete.");
+    if (rec.camera && (rec.camera.cameraFingerprint !== rec.cameraFingerprint || !/^[0-9a-f]{64}$/.test(rec.cameraFingerprint!)))
+      throw new PrevisError("invalid", "A Master Frame's camera provenance is inconsistent.");
     this.frames.set(rec.id, rec);
     return clone(rec);
   }
