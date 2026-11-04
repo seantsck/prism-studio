@@ -1,9 +1,8 @@
 # Phase 4 — Spatial Production
 
-**Status: 4A architecture accepted by the owner (2026-11-01), decisions in [§12](#12-accepted-owner-decisions). 4B
-(Shot Lighting Rigs) is implemented and in review; hosted 0048 acceptance is pending. Migration
-`0048_shot_lighting_rigs.sql` exists in the repository and has been verified on a disposable local PostgreSQL only.
-Hosted head is still 0047; 0048 is the only pending migration. 4C–4F have not started. What 4B actually shipped is
+**Status: 4A complete (architecture accepted by the owner 2026-11-01, decisions in [§12](#12-accepted-owner-decisions)).
+4B (Shot Lighting Rigs) complete (PR #46); migration 0048 applied to and accepted on hosted DEV (hosted head 0048, nothing
+pending). 4C–4F have not started. What 4B actually shipped is
 recorded in [4B implementation notes](#4b-implementation-notes); elsewhere, design text describes intent.**
 
 Phase 4 finishes the optional spatial path into a Production Frame. It does not build a 3D system: Phase 2F already built
@@ -399,7 +398,14 @@ Each slice is its own branch, PR, review and gate. Provider and network calls ar
 
 #### 4B implementation notes
 
-Status: **implemented, in review; hosted 0048 acceptance pending.** Nothing below has touched the hosted project.
+Status: **complete** (PR #46). 0048 is applied to and accepted on hosted DEV; the record is in
+[migration-policy](migration-policy.md). The final implementation includes the deterministic base-environment fix (below):
+
+- the UI theme no longer affects production rendering;
+- the engine's base lights are rebuilt on every scene load;
+- the saved base directional light's visibility and position are not independent production authority.
+
+So `prism.render-lighting.v1` (`baseEnvironment {upstreamCommit, skybox}`) is enough for the accepted contract.
 
 - **Domain** (`src/domain/previs/lighting.ts`): `prism.shot-lighting.v1`; light types `ambient | point | directional |
 spot`; at most 16 lights; base modes `engine_default | replace`; `castShadow: true` refused (an explicit `false` is
@@ -457,7 +463,7 @@ spot`; at most 16 lights; base modes `engine_default | replace`; `castShadow: tr
 - **Local gate** (disposable PostgreSQL 17, 0001–0047 then 0048 after a rolled-back `--dry-run`): `db:lighting`,
   `db:blocking`, `db:previs`, `db:validate`, `db:behavior`, `db:spatial-passes`, `db:production-frames`,
   `db:reconstructions` green. `db:rls` cannot run on the shim (its minimal `storage` schema) and `db:worker-role` fails
-  its 6 generation end-to-end checks, **both identically on `main` at 0047**; both are part of hosted acceptance.
+  its 6 generation end-to-end checks, **both identically on `main` at 0047**; both passed on hosted (67/67, 63/63).
 
 ### 4C — Shot-centric Spatial Workspace and Production Frame handoff
 

@@ -216,7 +216,7 @@ request / package provenance. Extending generic revision coverage is a separate 
 
 ## Phase 3 — Automated Shot QA / AI Continuity Supervisor _(complete)_
 
-**Phase 3 — COMPLETE.** 3A.1–3A.4 are merged, and the hosted migration head is 0047. The specialised analyzers row below
+**Phase 3 — COMPLETE.** 3A.1–3A.4 are merged, and the hosted migration head was 0047 when Phase 3 closed (0048 since Phase 4B). The specialised analyzers row below
 is future optional work, not part of the completed scope. The Phase 2 backlog (2D.2, 2E.2, optional M2D.3D2 and the known
 gaps) stays open as independent follow-ups and does not block Phase 4.
 
@@ -236,7 +236,7 @@ vision; face embeddings; cross-Shot / cut-level continuity (3A.4); cross-Episode
 accepted on the verified calibration v2 (six temporal families). Lip sync stays unchecked and separately gated, and QA
 stays advisory.
 
-## Phase 4 — Spatial Production _(architecture accepted; 4B implementation in review)_
+## Phase 4 — Spatial Production _(architecture accepted; 4A–4B complete)_
 
 Design: [phase-4-spatial-production](phase-4-spatial-production.md). **3D is an optional construction tool for a Production
 Frame, never a prerequisite for one.**
@@ -249,14 +249,19 @@ the attachment, holds no data, and stays legacy and non-authoritative. `spatial.
 
 **Phase 4 work remaining:**
 
-| Slice | Scope                                                                                          | Status                                                      |
-| ----- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| 4A    | Architecture and consolidation                                                                 | complete, docs only                                         |
-| 4B    | Shot Lighting Rigs: `prism.shot-lighting.v1`, overlay, render provenance, optional package key | 4B implementation in review; hosted 0048 acceptance pending |
-| 4C    | Shot-centric Spatial Workspace and Production Frame handoff                                    | not started                                                 |
-| 4D    | Reusable setups: explicit copies, never live links                                             | not started                                                 |
-| 4E    | Splat control-pass refusal and environment limits                                              | not started                                                 |
-| 4F    | Production acceptance and roadmap close                                                        | not started                                                 |
+| Slice | Scope                                                                                          | Status                                                  |
+| ----- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| 4A    | Architecture and consolidation                                                                 | complete, docs only                                     |
+| 4B    | Shot Lighting Rigs: `prism.shot-lighting.v1`, overlay, render provenance, optional package key | complete (PR #46); migration 0048 applied to hosted DEV |
+| 4C    | Shot-centric Spatial Workspace and Production Frame handoff                                    | not started                                             |
+| 4D    | Reusable setups: explicit copies, never live links                                             | not started                                             |
+| 4E    | Splat control-pass refusal and environment limits                                              | not started                                             |
+| 4F    | Production acceptance and roadmap close                                                        | not started                                             |
+
+**4B — complete.** Shot Lighting Rigs (`prism.shot-lighting.v1`) shipped in PR #46. Migration 0048 is applied to hosted
+DEV: the hosted head is 0048 and no migration is pending. Shot Lighting is optional and Shot-owned. It has base modes
+`engine_default | replace` and no authored shadows. Gaussian splats are not relit (their colour is baked). Filmmaking with
+no 3D at all stays fully supported.
 
 Real reconstruction (M2D.3D2) stays optional and does not block any slice.
 
