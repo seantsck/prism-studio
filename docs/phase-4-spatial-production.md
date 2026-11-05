@@ -871,7 +871,8 @@ cameraFingerprint, blockingFingerprint, lightingFingerprint, baseEnvironmentFing
   Shot-centric route are I2.
 - **Tests.** Unit: `master-frame-camera`, `master-frame-promotion`, `camera-provenance`, production-frame lineage.
   DB: `npm run db:spatial-source`. E2E: `e2e/zzzzzzzzzzzzzzzzzzzzzzzzzzzzz-spatial-provenance.spec.ts` (own memory
-  server) with stories A–H; story C uses the memory-only, env-gated `/api/dev/previs/master-frame-fixture`.
+  server) with stories A–J (I: no-rig skybox-only change; J: Location A → B); stories C, G and I use the memory-only,
+  env-gated `/api/dev/previs/master-frame-fixture` (historical copy, delete, skybox-only set revision).
 
 ##### 4C-I1 technical-review remediation
 
