@@ -79,13 +79,16 @@ export const productionFrameSchema = z.object({
    * Phase 4C (migration 0049): the EXACT spatial provenance of the source Master Frame, frozen at promotion and copied
    * only from that Master Frame's own record (never current state). `sourceSceneFingerprint` is the marker: null = not
    * frozen (every earlier frame, every non-3D frame, and a promotion while the database was still at 0048). The other
-   * three are null when the source frame legitimately had none (camera: not recorded; blocking: no proxies; lighting:
-   * no rig). They are lineage, not identity: `frameFingerprint` does not include them, and neither does freshness.
+   * four are null when the source frame legitimately had none (camera / base environment: not recorded; blocking: no
+   * proxies; lighting: no rig). They are lineage, not identity: `frameFingerprint` does not include them, and neither
+   * does freshness. The complete source lighting lineage is `sourceLightingFingerprint` (the Shot Lighting Rig) plus
+   * `sourceBaseEnvironmentFingerprint` (the engine base environment, which the scene fingerprint does not cover).
    */
   sourceSceneFingerprint: hex64.nullable().default(null),
   sourceCameraFingerprint: hex64.nullable().default(null),
   sourceBlockingFingerprint: hex64.nullable().default(null),
   sourceLightingFingerprint: hex64.nullable().default(null),
+  sourceBaseEnvironmentFingerprint: hex64.nullable().default(null),
   /** prism.production-frame-intent.v1: WHAT THIS FRAME WAS MADE TO REPRESENT, copied by value */
   intentSnapshot: z.record(z.string(), z.unknown()),
   intentFingerprint: hex64,
@@ -464,12 +467,15 @@ export interface ProductionFrameDraftInput {
 /** The record before the repository assigns its per-Shot version (inside the creating transaction). */
 export type ProductionFrameDraft = Omit<ProductionFrame, "version">;
 
-/** The four frozen source fingerprints of a 3D Master Frame (Phase 4C). */
+/** The frozen source fingerprints of a 3D Master Frame (Phase 4C). */
 export interface ProductionFrameSourceSpatial {
   sceneFingerprint: string;
   cameraFingerprint: string | null;
   blockingFingerprint: string | null;
+  /** the Shot Lighting Rig (null = no rig) */
   lightingFingerprint: string | null;
+  /** the engine base environment (null = the source Master Frame did not freeze it) */
+  baseEnvironmentFingerprint: string | null;
 }
 
 /** The source provenance of a Master Frame record, field for field (the database trigger compares exactly these). */
@@ -478,12 +484,14 @@ export function sourceSpatialOfMasterFrame(mf: {
   cameraFingerprint: string | null;
   blockingFingerprint: string | null;
   lightingFingerprint: string | null;
+  baseEnvironmentFingerprint: string | null;
 }): ProductionFrameSourceSpatial {
   return {
     sceneFingerprint: mf.sceneFingerprint,
     cameraFingerprint: mf.cameraFingerprint ?? null,
     blockingFingerprint: mf.blockingFingerprint ?? null,
     lightingFingerprint: mf.lightingFingerprint ?? null,
+    baseEnvironmentFingerprint: mf.baseEnvironmentFingerprint ?? null,
   };
 }
 
@@ -495,6 +503,7 @@ export function frozenSourceSpatial(
     | "sourceCameraFingerprint"
     | "sourceBlockingFingerprint"
     | "sourceLightingFingerprint"
+    | "sourceBaseEnvironmentFingerprint"
   >,
 ): ProductionFrameSourceSpatial | null {
   if (!f.sourceSceneFingerprint) return null;
@@ -503,6 +512,7 @@ export function frozenSourceSpatial(
     cameraFingerprint: f.sourceCameraFingerprint ?? null,
     blockingFingerprint: f.sourceBlockingFingerprint ?? null,
     lightingFingerprint: f.sourceLightingFingerprint ?? null,
+    baseEnvironmentFingerprint: f.sourceBaseEnvironmentFingerprint ?? null,
   };
 }
 
@@ -590,6 +600,7 @@ export function draftProductionFrame(ctx: ShotContext, input: ProductionFrameDra
       sourceCameraFingerprint: spatial ? spatial.cameraFingerprint : null,
       sourceBlockingFingerprint: spatial ? spatial.blockingFingerprint : null,
       sourceLightingFingerprint: spatial ? spatial.lightingFingerprint : null,
+      sourceBaseEnvironmentFingerprint: spatial ? spatial.baseEnvironmentFingerprint : null,
       intentSnapshot: intent as unknown as Record<string, unknown>,
       intentFingerprint,
       // the Shot's 13 named parts, never another frame's selection part
@@ -680,6 +691,7 @@ export function productionFrameSourceSpatialRef(
     | "sourceCameraFingerprint"
     | "sourceBlockingFingerprint"
     | "sourceLightingFingerprint"
+    | "sourceBaseEnvironmentFingerprint"
   >,
 ): ProductionFrameSourceSpatialRef | null {
   const frozen = frozenSourceSpatial(f);

@@ -42,6 +42,7 @@ const mapFrame = (r: Row): ProductionFrame =>
     sourceCameraFingerprint: str(r.source_camera_fingerprint),
     sourceBlockingFingerprint: str(r.source_blocking_fingerprint),
     sourceLightingFingerprint: str(r.source_lighting_fingerprint),
+    sourceBaseEnvironmentFingerprint: str(r.source_base_environment_fingerprint),
     intentSnapshot: (r.intent_snapshot as Record<string, unknown>) ?? {},
     intentFingerprint: String(r.intent_fingerprint),
     parts: (r.parts as Record<string, string>) ?? {},
@@ -179,13 +180,13 @@ export class PostgresProductionFrameData implements ProductionFrameRepository {
           [draft.shotId],
         );
         const version = Number(next.rows[0].n);
-        // the four source columns are named only for frozen provenance on a database at 0049; before it the frame is
+        // the five source columns are named only for frozen provenance on a database at 0049; before it the frame is
         // stored without them (it then reads back as "not frozen", which is the truth about that row)
         const frozen = !!draft.sourceSceneFingerprint && (await spatialProvenanceReady(this.pool, c));
         const srcCols = frozen
-          ? ", source_scene_fingerprint, source_camera_fingerprint, source_blocking_fingerprint, source_lighting_fingerprint"
+          ? ", source_scene_fingerprint, source_camera_fingerprint, source_blocking_fingerprint, source_lighting_fingerprint, source_base_environment_fingerprint"
           : "";
-        const srcValues = frozen ? ", $21, $22, $23, $24" : "";
+        const srcValues = frozen ? ", $21, $22, $23, $24, $25" : "";
         const inserted = await c.query(
           `insert into shot_production_frames
              (id, project_id, shot_id, version, schema_version, asset_id, asset_checksum, width, height,
@@ -221,6 +222,7 @@ export class PostgresProductionFrameData implements ProductionFrameRepository {
                   draft.sourceCameraFingerprint,
                   draft.sourceBlockingFingerprint,
                   draft.sourceLightingFingerprint,
+                  draft.sourceBaseEnvironmentFingerprint,
                 ]
               : []),
           ],

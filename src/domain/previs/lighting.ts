@@ -225,6 +225,19 @@ export function baseEnvironmentOf(doc: Pick<PrevisDocument, "scene" | "upstreamC
   return { upstreamCommit: doc.upstreamCommit, skybox: typeof skybox === "string" ? skybox : null };
 }
 
+export const BASE_ENVIRONMENT_SCHEMA = "prism.base-environment.v1" as const;
+
+/**
+ * Phase 4C: the ONE canonical identity of the engine base environment (`{ upstreamCommit, skybox }`). It is
+ * pixel-affecting and deliberately NOT part of `sceneFingerprint` (which historical identities depend on), and it is
+ * NOT the `lightingFingerprint` (that stays the Shot Lighting Rig). A Master Frame freezes it at capture so a
+ * skybox-only change can never look fresh. Pure; the input is validated so a malformed value cannot be fingerprinted.
+ */
+export function baseEnvironmentFingerprint(env: BaseEnvironment): string {
+  const e = baseEnvironmentSchema.parse(env);
+  return fingerprint({ schema: BASE_ENVIRONMENT_SCHEMA, upstreamCommit: e.upstreamCommit, skybox: e.skybox });
+}
+
 export const renderLightingSchema = z.strictObject({
   schema: z.literal(RENDER_LIGHTING_SCHEMA),
   rigId: z.string().min(1),

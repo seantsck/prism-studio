@@ -28,17 +28,16 @@ export default async function ShotPrepPage({
   // what the Shot's saved character blocking would currently show in a render (null = no visible proxies)
   const blocking = await previs.listShotBlocking(shotId);
   // the Shot's optional 3D Master Frames (none without a 3D set): only offered as a Production Frame SOURCE
-  // each with its stale / unknown status against the CURRENT 3D setup (display only; promotion recomputes it). The
-  // current setup is read once per Location the frames were rendered in, not once per frame.
-  const currentByLocation = new Map<string, ReturnType<typeof currentSpatialStateFor>>();
+  // each with its stale / unknown status against the CURRENT 3D setup of the Shot's CURRENT Location (display only;
+  // promotion recomputes it). A frame captured in another Location is compared with this one, so it is never fresh.
+  const shotRecord = data.shots.find((s) => s.id === shotId);
+  const currentSpatial = await currentSpatialStateFor(previs, {
+    shotId,
+    locationId: shotRecord?.spatial.locationId ?? null,
+  });
   const masterFrames = await Promise.all(
     (await previs.listMasterFrames(shotId)).map(async (m) => {
-      if (!currentByLocation.has(m.locationId))
-        currentByLocation.set(m.locationId, currentSpatialStateFor(previs, m));
-      const st = masterFramePromotionState({
-        masterFrame: m,
-        current: await currentByLocation.get(m.locationId)!,
-      });
+      const st = masterFramePromotionState({ masterFrame: m, current: currentSpatial });
       return {
         id: m.id,
         assetId: m.assetId,

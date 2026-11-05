@@ -89,6 +89,12 @@ export interface MasterFrameRecord {
    */
   cameraFingerprint: string | null;
   camera: RenderCamera | null;
+  /**
+   * Phase 4C (migration 0049): `baseEnvironmentFingerprint` of the engine base environment (skybox + engine commit)
+   * the picture was rendered on, derived server-side at capture, rig or no rig. null = not frozen (every earlier frame,
+   * and every frame captured while the database was still at 0048).
+   */
+  baseEnvironmentFingerprint: string | null;
   createdBy: string | null;
   createdAt: string;
 }
@@ -278,6 +284,8 @@ export interface NewMasterFrame {
   /** server-derived render camera (both or neither); dropped, not refused, by a database before 0049 */
   cameraFingerprint?: string | null;
   camera?: RenderCamera | null;
+  /** server-derived base environment identity; dropped, not refused, by a database before 0049 */
+  baseEnvironmentFingerprint?: string | null;
   userId: string | null;
 }
 

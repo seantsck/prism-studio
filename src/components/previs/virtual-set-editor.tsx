@@ -12,7 +12,12 @@ import {
   SPATIAL_UNKNOWN_LABEL,
   masterFrameSpatialStatus,
 } from "@/domain/previs/spatial-status";
-import { baseEnvironmentOf, type BaseEnvironment, type RenderLighting } from "@/domain/previs/lighting";
+import {
+  baseEnvironmentFingerprint,
+  baseEnvironmentOf,
+  type BaseEnvironment,
+  type RenderLighting,
+} from "@/domain/previs/lighting";
 import { PREVIS_PRODUCTION_FRAME, type CameraBookmarkValue, type PrevisCamera } from "@/domain/previs/types";
 import {
   ArtCraftSceneAdapter,
@@ -85,6 +90,8 @@ export interface VirtualSetProps {
     lighting: Pick<RenderLighting, "baseEnvironment"> | null;
     /** the server-verified camera the frame was rendered with (null = not recorded: UNKNOWN camera provenance) */
     cameraFingerprint: string | null;
+    /** the base environment (skybox) the frame was rendered on (null = not recorded) */
+    baseEnvironmentFingerprint: string | null;
   }>;
   /** the active shot's stored lighting rig and authored lighting text; null when no shot is active */
   shotLighting: ShotLightingData | null;
@@ -410,6 +417,9 @@ export function VirtualSetEditor(props: VirtualSetProps) {
             ? { baseEnvironment: lighting.current.baseEnvironment }
             : null,
           cameraFingerprint: bookmarkCameraFingerprint(renderedBookmark),
+          baseEnvironmentFingerprint: lighting.current.baseEnvironment
+            ? baseEnvironmentFingerprint(lighting.current.baseEnvironment)
+            : null,
         },
         ...f,
       ]);

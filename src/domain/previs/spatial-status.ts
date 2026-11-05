@@ -1,12 +1,20 @@
 import { fingerprint } from "../hash";
-import { isRenderLightingStale, type CurrentLightingState, type RenderedLightingState } from "./lighting";
+import {
+  baseEnvironmentFingerprint,
+  type CurrentLightingState,
+  type RenderedLightingState,
+} from "./lighting";
 
 /**
  * MASTER FRAME SPATIAL STATUS (Phase 4C, decisions P2/P4). A Master Frame is compared with the Shot's CURRENT spatial
  * setup on four axes, using only provenance the frame really holds:
  *
  *   stale    the frame recorded this axis, and the current setup differs
- *   unknown  the frame never recorded this axis, so nobody can say (today only the camera of a pre-4C frame)
+ *   unknown  the frame never recorded this axis, so nobody can say (the camera of a pre-4C frame; the base
+ *            environment of a frame that froze neither its fingerprint nor a render-lighting snapshot)
+ *
+ * The LIGHTING axis covers both the Shot Lighting Rig (`lightingFingerprint`) and the engine base environment
+ * (`baseEnvironmentFingerprint`: skybox + engine commit, pixel-affecting and outside `sceneFingerprint`).
  *
  * UNKNOWN is never fresh and never silently turned into stale. Both are WORKFLOW state: computed per request, shown to
  * the person and bound into a promotion digest, never persisted on a Production Frame. Pure domain code.
@@ -19,6 +27,11 @@ export interface MasterFrameSpatialSource extends RenderedLightingState {
   /** null = camera provenance was not frozen at capture (pre-4C, or captured while the database was at 0048) */
   cameraFingerprint: string | null;
   blockingFingerprint: string | null;
+  /**
+   * `baseEnvironmentFingerprint` frozen at capture (0049). null = not frozen: the frozen render-lighting snapshot's
+   * base environment is used for status when present, otherwise the lighting axis is UNKNOWN (never fresh).
+   */
+  baseEnvironmentFingerprint: string | null;
 }
 
 export interface CurrentSpatialState {
@@ -52,23 +65,50 @@ export function masterFrameSpatialStatus(
   else if (frame.cameraFingerprint !== current.cameraFingerprint) stale.push("camera");
   // blocking: unchanged 4B semantics (no proxies then and now is fresh)
   if ((frame.blockingFingerprint ?? null) !== (current.blockingFingerprint ?? null)) stale.push("blocking");
-  // lighting: unchanged 4B semantics (no rig then and now is fresh)
-  if (isRenderLightingStale(frame, current.lighting)) stale.push("lighting");
+  // lighting: the rig (added / removed / changed is stale), then the base environment (changed is stale; never
+  // recorded is UNKNOWN, so "no rig then and now" is no longer enough to call a frame fresh)
+  const rigChanged = (frame.lightingFingerprint ?? null) !== (current.lighting.lightingFingerprint ?? null);
+  const thenEnv = frozenBaseEnvironmentFingerprint(frame);
+  if (rigChanged) stale.push("lighting");
+  else if (thenEnv === null) unknown.push("lighting");
+  else if (thenEnv !== currentBaseEnvironmentFingerprint(current)) stale.push("lighting");
   return { stale: canonical(stale), unknown: canonical(unknown) };
+}
+
+/**
+ * The base environment a frame rendered with: its frozen fingerprint, else (runtime only, never written back) the
+ * fingerprint of the base environment frozen inside its immutable render-lighting snapshot, else null (unknown).
+ */
+export function frozenBaseEnvironmentFingerprint(frame: MasterFrameSpatialSource): string | null {
+  if (frame.baseEnvironmentFingerprint) return frame.baseEnvironmentFingerprint;
+  const env = frame.lighting?.baseEnvironment;
+  if (!env) return null;
+  try {
+    return baseEnvironmentFingerprint(env);
+  } catch {
+    return null; // a malformed snapshot is not trustworthy provenance
+  }
+}
+
+export function currentBaseEnvironmentFingerprint(current: CurrentSpatialState): string | null {
+  return current.lighting.baseEnvironment
+    ? baseEnvironmentFingerprint(current.lighting.baseEnvironment)
+    : null;
 }
 
 export const SPATIAL_STALE_LABEL: Record<SpatialAxis, string> = {
   scene: "STALE SCENE — the set changed after this frame.",
   camera: "STALE CAMERA — the Shot's production camera changed after this frame.",
   blocking: "STALE BLOCKING — the character blocking changed after this frame.",
-  lighting: "STALE LIGHTING — the Shot's lighting changed after this frame.",
+  lighting: "STALE LIGHTING — the Shot's lighting or base environment (skybox) changed after this frame.",
 };
 
 export const SPATIAL_UNKNOWN_LABEL: Record<SpatialAxis, string> = {
   scene: "UNKNOWN SCENE PROVENANCE — this frame did not record its set.",
   camera: "UNKNOWN CAMERA PROVENANCE — this frame did not record which camera rendered it.",
   blocking: "UNKNOWN BLOCKING PROVENANCE — this frame did not record its blocking.",
-  lighting: "UNKNOWN LIGHTING PROVENANCE — this frame did not record its lighting.",
+  lighting:
+    "UNKNOWN LIGHTING PROVENANCE — this frame did not record its base environment (skybox), so its lighting cannot be confirmed.",
 };
 
 export function spatialStatusMessages(status: SpatialStatus): string[] {
@@ -90,6 +130,7 @@ export interface MasterFramePromotionState extends SpatialStatus {
     cameraFingerprint: string | null;
     blockingFingerprint: string | null;
     lightingFingerprint: string | null;
+    baseEnvironmentFingerprint: string | null;
   };
   /**
    * Deterministic identity of exactly what a person is asked to confirm: the Master Frame, every current value
@@ -110,6 +151,7 @@ export function masterFramePromotionState(args: {
     cameraFingerprint: args.current.cameraFingerprint ?? null,
     blockingFingerprint: args.current.blockingFingerprint ?? null,
     lightingFingerprint: args.current.lighting.lightingFingerprint ?? null,
+    baseEnvironmentFingerprint: currentBaseEnvironmentFingerprint(args.current),
   };
   const digest = fingerprint({
     schema: PROMOTION_STATE_SCHEMA,

@@ -44,7 +44,12 @@ export class MemoryProductionFrameService implements ProductionFrameRepository {
     const hex = (v: string | null) => v === null || /^[0-9a-f]{64}$/.test(v);
     const s = draft.sourceSceneFingerprint;
     if (s === null) {
-      if (draft.sourceCameraFingerprint || draft.sourceBlockingFingerprint || draft.sourceLightingFingerprint)
+      if (
+        draft.sourceCameraFingerprint ||
+        draft.sourceBlockingFingerprint ||
+        draft.sourceLightingFingerprint ||
+        draft.sourceBaseEnvironmentFingerprint
+      )
         throw new ProductionFrameError("invalid", "The Production Frame violates a constraint.");
       return;
     }
@@ -54,7 +59,8 @@ export class MemoryProductionFrameService implements ProductionFrameRepository {
       !/^[0-9a-f]{64}$/.test(s) ||
       !hex(draft.sourceCameraFingerprint) ||
       !hex(draft.sourceBlockingFingerprint) ||
-      !hex(draft.sourceLightingFingerprint)
+      !hex(draft.sourceLightingFingerprint) ||
+      !hex(draft.sourceBaseEnvironmentFingerprint)
     )
       throw new ProductionFrameError("invalid", "The Production Frame violates a constraint.");
     const mf = this.access.masterFrame?.(draft.sourceMasterFrameId) ?? null;
@@ -72,7 +78,8 @@ export class MemoryProductionFrameService implements ProductionFrameRepository {
       mf.sceneFingerprint !== s ||
       (mf.cameraFingerprint ?? null) !== draft.sourceCameraFingerprint ||
       (mf.blockingFingerprint ?? null) !== draft.sourceBlockingFingerprint ||
-      (mf.lightingFingerprint ?? null) !== draft.sourceLightingFingerprint
+      (mf.lightingFingerprint ?? null) !== draft.sourceLightingFingerprint ||
+      (mf.baseEnvironmentFingerprint ?? null) !== draft.sourceBaseEnvironmentFingerprint
     )
       throw new ProductionFrameError(
         "invalid",

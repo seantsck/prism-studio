@@ -76,5 +76,9 @@ export function parseRenderCamera(value: unknown): RenderCamera | null {
 }
 
 /** The message for a render whose claimed camera is not the Shot's production camera. */
+/** Capture refusal: the Shot is no longer on the Location the editor rendered (Phase 4C current-Location authority). */
+export const LOCATION_REASSIGNED_MESSAGE =
+  "This shot is now assigned to a different location. Open its current location's 3D set and capture there.";
+
 export const WRONG_CAMERA_MESSAGE =
   "This frame was rendered with a different camera than this Shot's production camera. Restore the Shot's production camera and capture again.";

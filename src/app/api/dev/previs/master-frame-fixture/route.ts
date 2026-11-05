@@ -7,7 +7,7 @@ import { getRepo } from "@/server/repo";
  * Development/test hook (Phase 4C). Memory mode only, and in a production build only when
  * PRISM_STUDIO_DEV_PREVIS_FIXTURES=1 (set by the E2E servers). Never available with a real database.
  *   { action: "historical", masterFrameId }  copies the Master Frame as a PRE-4C record: the same render facts with
- *                                            NO camera provenance (what every frame before migration 0049 looks like)
+ *                                            NO camera and NO base-environment provenance (what every frame before 0049 looks like)
  *   { action: "delete", masterFrameId }      removes the Master Frame row (as a database DELETE would; its Asset stays)
  */
 export async function POST(req: Request) {

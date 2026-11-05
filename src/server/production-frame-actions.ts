@@ -156,7 +156,11 @@ async function promoteMasterFrame_impl(form: FormData): Promise<ActionResult> {
 
   // Phase 4C: the server recomputes the WHOLE state from its own records immediately before promoting. The browser's
   // only input is the digest it was shown; its view of stale / unknown axes is never trusted.
-  const state = await promotionStateFor(await getPrevisRepo(), mf);
+  // Current truth is resolved against the Shot's CURRENTLY assigned Location; the frame's own Location is history.
+  const state = await promotionStateFor(await getPrevisRepo(), mf, {
+    shotId: ctx.shot.id,
+    locationId: ctx.shot.spatial.locationId ?? null,
+  });
   const supplied = str(form, "confirmDigest") || null;
   if (supplied !== null && supplied !== state.digest) return confirmationResult(state, true);
   if (supplied === null && state.requiresConfirmation) return confirmationResult(state, false);

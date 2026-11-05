@@ -23,12 +23,15 @@ import {
 import { cameraPathSchema, validateCameraPath } from "@/domain/previs/camera-path";
 import {
   buildRenderCamera,
+  LOCATION_REASSIGNED_MESSAGE,
   WRONG_CAMERA_MESSAGE,
   type RenderCamera,
 } from "@/domain/previs/camera-provenance";
 import { buildPrevisDocument } from "@/domain/previs/document";
 import {
   authoredLightingIntent,
+  baseEnvironmentFingerprint,
+  baseEnvironmentOf,
   buildRenderLighting,
   parseShotLightingDraft,
   parseShotLightingRig,
@@ -311,7 +314,15 @@ export async function captureMasterFrame(
 
     const user = await requireUser();
     const data = await requireProjectFresh(slug);
-    if (!data.shots.some((s) => s.id === shotId)) throw new UserFacingError("That shot no longer exists.");
+    const shot = data.shots.find((s) => s.id === shotId);
+    if (!shot) throw new UserFacingError("That shot no longer exists.");
+    // the Shot's CURRENT Location is the only one it may be captured in: a stale editor (or an old Location's
+    // leftover bookmark / rig / blocking rows) can never produce a Master Frame for a set the Shot is no longer on
+    if (!shot.spatial.locationId)
+      throw new UserFacingError(
+        "This shot is not assigned to a location. Assign its location before capturing.",
+      );
+    if (shot.spatial.locationId !== locationId) throw new UserFacingError(LOCATION_REASSIGNED_MESSAGE);
     const previs = await getPrevisRepo();
     const scene = await previs.getSceneForLocation(locationId);
     if (!scene || scene.projectId !== data.project.id)
@@ -337,6 +348,8 @@ export async function captureMasterFrame(
         "The character blocking changed after this frame was rendered. Save the blocking and capture again.",
       );
     const renderLighting = await authorizeRenderLighting(previs, { shotId, scene, claimed: claimedLighting });
+    // the engine base environment (skybox + engine commit) the render ran on, derived from the SAVED set, rig or no rig
+    const renderBaseEnvironment = baseEnvironmentFingerprint(baseEnvironmentOf(scene.document));
 
     const bytes = new Uint8Array(await file.arrayBuffer());
     const check = checkUpload(
@@ -396,6 +409,7 @@ export async function captureMasterFrame(
           cameraBookmarkId: renderCamera.bookmarkId,
           // the server-verified camera identity (the full snapshot lives on the Master Frame row, from 0049)
           cameraFingerprint: renderCamera.cameraFingerprint,
+          baseEnvironmentFingerprint: renderBaseEnvironment,
           renderWidth: dims.width,
           renderHeight: dims.height,
           productionAspectRatio: PREVIS_PRODUCTION_FRAME.ratio,
@@ -434,6 +448,7 @@ export async function captureMasterFrame(
         ...renderLighting,
         cameraFingerprint: renderCamera.cameraFingerprint,
         camera: renderCamera,
+        baseEnvironmentFingerprint: renderBaseEnvironment,
         userId: actorOf(user),
       });
       refresh(slug);
