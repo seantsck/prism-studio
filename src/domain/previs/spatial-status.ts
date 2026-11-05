@@ -24,6 +24,8 @@ export type SpatialAxis = (typeof SPATIAL_AXES)[number];
 
 export interface MasterFrameSpatialSource extends RenderedLightingState {
   sceneFingerprint: string;
+  /** the Location set (scene document) the frame was captured on; absent = not known to the caller */
+  sceneDocumentId?: string;
   /** null = camera provenance was not frozen at capture (pre-4C, or captured while the database was at 0048) */
   cameraFingerprint: string | null;
   blockingFingerprint: string | null;
@@ -37,6 +39,8 @@ export interface MasterFrameSpatialSource extends RenderedLightingState {
 export interface CurrentSpatialState {
   /** the Location's saved set now (null = none) */
   sceneFingerprint: string | null;
+  /** that set's scene document (null = none); absent = not known to the caller */
+  sceneDocumentId?: string | null;
   /** the Shot's production camera bookmark now, as `bookmarkCameraFingerprint` (null = none on this set) */
   cameraFingerprint: string | null;
   /** the rendered blocking layer now (null = no visible proxies) */
@@ -58,8 +62,14 @@ export function masterFrameSpatialStatus(
 ): SpatialStatus {
   const stale: SpatialAxis[] = [];
   const unknown: SpatialAxis[] = [];
-  // scene: a different or missing saved set is stale (unchanged 4B semantics)
-  if (frame.sceneFingerprint !== current.sceneFingerprint) stale.push("scene");
+  // scene: a different or missing saved set is stale (unchanged 4B semantics). 4C-I2: a frame captured on ANOTHER
+  // Location's set is stale too even when that set's content fingerprint happens to equal the current one (e.g. the
+  // same test set loaded into both): a frame from an old Location is never scene-fresh
+  const otherSet =
+    frame.sceneDocumentId !== undefined &&
+    current.sceneDocumentId !== undefined &&
+    frame.sceneDocumentId !== current.sceneDocumentId;
+  if (frame.sceneFingerprint !== current.sceneFingerprint || otherSet) stale.push("scene");
   // camera: known → same bookmark camera is fresh, a different or missing one is stale; not recorded → unknown
   if (frame.cameraFingerprint === null) unknown.push("camera");
   else if (frame.cameraFingerprint !== current.cameraFingerprint) stale.push("camera");

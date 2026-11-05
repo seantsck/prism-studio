@@ -23,6 +23,7 @@ import {
   blockingFingerprint,
   buildShotBlockingReference,
   parseBlockingEntry,
+  onCurrentSet,
   renderedBlockingFingerprint,
 } from "@/domain/previs/blocking";
 import {
@@ -127,13 +128,22 @@ export class MemoryPrevisService implements PrevisRepository {
       .sort((a, b) => (a.characterId < b.characterId ? -1 : 1));
   }
 
-  /** What the Shot's picture shows of its blocking right now (visible figures only; null = none). */
-  private currentBlockingFingerprint(shotId: string): string | null {
-    const recs = this.blockingFor(shotId);
+  /**
+   * What the Shot's picture shows of its blocking right now on its CURRENT set (visible figures only; null = none).
+   * Rows left on another Location's set are history (4C-I2): the same filter capture and render use.
+   */
+  private currentBlockingFingerprint(
+    shotId: string,
+    scene: { id: string; locationId: string },
+  ): string | null {
+    const recs = onCurrentSet(this.blockingFor(shotId), {
+      locationId: scene.locationId,
+      sceneDocumentId: scene.id,
+    });
     if (recs.length === 0) return null;
     return renderedBlockingFingerprint(
       recs.map((r) => r.entry),
-      { locationId: recs[0].locationId },
+      { locationId: scene.locationId },
     );
   }
 
@@ -220,14 +230,18 @@ export class MemoryPrevisService implements PrevisRepository {
     return clone(rec);
   }
 
-  private cameraMotionFor(shotId: string, currentAudioMix?: AudioMixResolver): CameraMotionReference | null {
+  private cameraMotionFor(
+    shotId: string,
+    scene: { id: string; locationId: string },
+    currentAudioMix?: AudioMixResolver,
+  ): CameraMotionReference | null {
     const p = this.paths.get(shotId);
     if (!p) return null;
     const clip = pickCurrentClip(
       [...this.clips.values()].filter((c) => c.shotId === shotId),
       p.pathFingerprint,
       currentAudioMix?.(shotId, p.durationMs) ?? null,
-      this.currentBlockingFingerprint(shotId),
+      this.currentBlockingFingerprint(shotId, scene),
       this.lightingRigs.get(shotId)?.lightingFingerprint ?? null,
     );
     return {
@@ -258,15 +272,15 @@ export class MemoryPrevisService implements PrevisRepository {
   /** The Shot's latest bundle that is exactly current for the saved scene, camera and rendered blocking. */
   private currentControlPasses(
     shotId: string,
-    sceneFingerprint: string,
+    scene: { id: string; locationId: string; sceneFingerprint: string },
     path: CameraPathRecord | null,
     bookmark: CameraBookmarkRecord | null,
   ) {
     const cur = pickCurrentBundle(
       [...this.bundles.values()].filter((x) => x.shotId === shotId),
       {
-        sceneFingerprint,
-        blockingFingerprint: this.currentBlockingFingerprint(shotId),
+        sceneFingerprint: scene.sceneFingerprint,
+        blockingFingerprint: this.currentBlockingFingerprint(shotId, scene),
         pathFingerprint: path?.pathFingerprint ?? null,
         bookmarkCameraFingerprint: bookmark ? bookmarkCameraFingerprint(bookmark.value) : null,
       },
@@ -317,13 +331,13 @@ export class MemoryPrevisService implements PrevisRepository {
             }
           : null,
         adoptedMasterFrameAssetId: adopted?.assetId ?? null,
-        cameraMotion: p ? this.cameraMotionFor(shotId, currentAudioMix) : null,
+        cameraMotion: p ? this.cameraMotionFor(shotId, scene, currentAudioMix) : null,
         shotBlocking: buildShotBlockingReference(
           blockRecs,
           Object.fromEntries(this.project(projectId).characters.map((c) => [c.id, c.name])),
           { locationId: scene.locationId },
         ),
-        controlPasses: this.currentControlPasses(shotId, scene.sceneFingerprint, p, b),
+        controlPasses: this.currentControlPasses(shotId, scene, p, b),
         reconstructions: [...this.reconstructions.values()].filter((r) => r.locationId === scene.locationId),
         // a rig authored for another set does not describe this one
         shotLighting: rig

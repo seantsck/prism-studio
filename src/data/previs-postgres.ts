@@ -694,12 +694,11 @@ export class PostgresPrevisData implements PrevisRepository {
           .filter((x) => x.sceneDocumentId === scene.id)
           .sort((x, y) => (x.characterId < y.characterId ? -1 : 1));
         if (!rig && !bm && !path && blockRecs.length === 0) continue; // only old-Location rows remain
-        // freshness inputs of clips / pass bundles are unchanged: every blocking row and rig of the Shot, as rendered
-        // (capture and render use the same derivation); only what is PROJECTED below is limited to the current set
-        const allBlockRecs = blockingByShot.get(shotId) ?? [];
-        const currentBlockingFp = allBlockRecs.length
+        // freshness inputs of clips / pass bundles: the blocking rows on the CURRENT set only (4C-I2), exactly the rows
+        // capture and render now use; rows left on another Location's set are history
+        const currentBlockingFp = blockRecs.length
           ? renderedBlockingFingerprint(
-              allBlockRecs.map((x) => x.entry),
+              blockRecs.map((x) => x.entry),
               { locationId: scene.locationId },
             )
           : null;
