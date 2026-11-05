@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { ShotPrepView } from "@/components/views/shot-prep-view";
 import { audioMixFingerprint } from "@/domain/previs/audio-mix";
-import { renderedBlockingFingerprint } from "@/domain/previs/blocking";
+import { onCurrentSet, renderedBlockingFingerprint } from "@/domain/previs/blocking";
 import { performanceAudioPlanForShot } from "@/domain/previs/audio-mix-shot";
 import { masterFramePromotionState } from "@/domain/previs/spatial-status";
 import { currentSpatialStateFor } from "@/server/master-frame-promotion";
@@ -25,8 +25,16 @@ export default async function ShotPrepPage({
   const path = await previs.getCameraPathForShot(shotId);
   // what the Shot's selected performance audio would currently render as (null = none): judges audio previs freshness
   const plan = path ? performanceAudioPlanForShot(data, shotId, path.durationMs) : null;
-  // what the Shot's saved character blocking would currently show in a render (null = no visible proxies)
-  const blocking = await previs.listShotBlocking(shotId);
+  // what the Shot's saved character blocking would currently show in a render (null = no visible proxies): only the
+  // rows on its CURRENT Location's saved set (rows left on another Location's set are history, 4C-I2)
+  const shotNow = data.shots.find((s) => s.id === shotId);
+  const sceneNow = shotNow?.spatial.locationId
+    ? await previs.getSceneForLocation(shotNow.spatial.locationId)
+    : null;
+  const blocking = onCurrentSet(
+    await previs.listShotBlocking(shotId),
+    sceneNow ? { locationId: sceneNow.locationId, sceneDocumentId: sceneNow.id } : null,
+  );
   // the Shot's optional 3D Master Frames (none without a 3D set): only offered as a Production Frame SOURCE
   // each with its stale / unknown status against the CURRENT 3D setup of the Shot's CURRENT Location (display only;
   // promotion recomputes it). A frame captured in another Location is compared with this one, so it is never fresh.
@@ -51,7 +59,7 @@ export default async function ShotPrepPage({
   const currentBlockingFingerprint = blocking.length
     ? renderedBlockingFingerprint(
         blocking.map((b) => b.entry),
-        { locationId: blocking[0]!.locationId },
+        { locationId: sceneNow!.locationId },
       )
     : null;
   return (

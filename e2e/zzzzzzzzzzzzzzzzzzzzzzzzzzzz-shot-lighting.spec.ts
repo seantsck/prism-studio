@@ -52,6 +52,22 @@ async function openSet(page: Page, code: string) {
   return { shotUrl, setUrl: page.url(), shotId: /\/shots\/([0-9a-f-]{36})/.exec(shotUrl)![1]! };
 }
 
+/** Phase 4C-I2: the Location page's Shot selector NAVIGATES; wait for the editor remounted for that Shot. */
+async function switchShot(page: Page, value: string) {
+  await page.getByTestId("shot-select").selectOption(value);
+  await expect(page).toHaveURL(new RegExp(`[?&]shot=${value}`), { timeout: 60_000 });
+  await expect(page.getByTestId("virtual-set")).toHaveAttribute("data-shot-id", value, { timeout: 60_000 });
+  await expect(page.getByTestId("virtual-set")).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
+}
+
+/** the selector option value of a Shot label (e.g. "Ep 1 · Shot 2B") */
+const optionValue = async (page: Page, label: string) =>
+  (await page
+    .getByTestId("shot-select")
+    .locator("option", { hasText: label })
+    .first()
+    .getAttribute("value"))!;
+
 async function ready(page: Page) {
   await expect(page.getByTestId("virtual-set")).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
   await expect(page.getByTestId("character-blocking")).toHaveAttribute("data-loaded", "true", {
@@ -412,7 +428,7 @@ test.describe("the Shot Lighting story", () => {
     expect(a.baseSuppressed).toBe(true);
     // authoring the path moved the production camera, which legitimately saved the Set: this is the baseline now
     const sceneAtSwitch = await page.getByTestId("virtual-set").getAttribute("data-saved-fingerprint");
-    await page.getByTestId("shot-select").selectOption({ label: "Ep 1 · Shot 2B" });
+    await switchShot(page, await optionValue(page, "Ep 1 · Shot 2B"));
     await expect(panel).toHaveAttribute("data-loaded", "true", { timeout: 30_000 });
     await expect(panel).toHaveAttribute("data-saved-fingerprint", "");
     await expect.poll(async () => (await info(page)).applied).toBeNull();
@@ -425,7 +441,7 @@ test.describe("the Shot Lighting story", () => {
     const meanB = await mean(page);
 
     // back to Shot A: its own rig, and the picture actually differs from Shot B's
-    await page.getByTestId("shot-select").selectOption({ label: "Ep 1 · Shot 2A" });
+    await switchShot(page, await optionValue(page, "Ep 1 · Shot 2A"));
     await expect(panel).toHaveAttribute("data-saved-fingerprint", fp2, { timeout: 30_000 });
     await expect.poll(async () => (await info(page)).applied).toBe(fp2);
     expect((await info(page)).baseSuppressed).toBe(true);

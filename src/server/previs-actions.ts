@@ -17,6 +17,7 @@ import {
   blockingFingerprint,
   parseBlockingEntry,
   type BlockingFigureData,
+  onCurrentSet,
   renderedBlockingProvenance,
   type ShotBlockingEntry,
 } from "@/domain/previs/blocking";
@@ -340,7 +341,11 @@ export async function captureMasterFrame(
     });
 
     // the character blocking the picture shows must be the SAVED blocking (the server derives it, the client claims)
-    const blockingRecords = await previs.listShotBlocking(shotId);
+    // only the blocking authored on THIS set (4C-I2): rows left on another Location's set are history, never rendered
+    const blockingRecords = onCurrentSet(await previs.listShotBlocking(shotId), {
+      locationId,
+      sceneDocumentId: scene.id,
+    });
     const blockingProv = renderedBlockingProvenance(blockingRecords, { locationId });
     if ((blockingProv?.fingerprint ?? null) !== claimedBlocking)
       throw new PrevisError(
@@ -552,6 +557,10 @@ export async function saveShotCameraPath(
     if (!scene || scene.projectId !== data.project.id)
       throw new UserFacingError("Save the 3D set before saving camera motion.");
 
+    // 4C-I2: a path left on ANOTHER Location's set is history the editor never loads as current, so the editor
+    // creates (expects none); that row is replaced. A path already on THIS set keeps strict compare-and-set.
+    const claimedRevision = expectedRaw === "" ? null : Number(expectedRaw);
+    const existingPath = claimedRevision === null ? await previs.getCameraPathForShot(shotId) : null;
     const saved = await previs.saveCameraPath({
       id: randomUUID(),
       projectId: data.project.id,
@@ -561,7 +570,8 @@ export async function saveShotCameraPath(
       sceneRevision: scene.revision,
       sceneFingerprint: scene.sceneFingerprint,
       path: parsed.data,
-      expectedRevision: expectedRaw === "" ? null : Number(expectedRaw),
+      expectedRevision:
+        existingPath && existingPath.sceneDocumentId !== scene.id ? existingPath.revision : claimedRevision,
       userId: actorOf(user),
       now: new Date().toISOString(),
     });
@@ -634,7 +644,10 @@ export async function recordPrevisClip(
       throw new UserFacingError("The set changed since this camera path was saved. Re-save the path first.");
 
     // the character blocking the previs shows must be the SAVED blocking (static pose for the whole clip)
-    const blockingProv = renderedBlockingProvenance(await previs.listShotBlocking(shotId), { locationId });
+    const blockingProv = renderedBlockingProvenance(
+      onCurrentSet(await previs.listShotBlocking(shotId), { locationId, sceneDocumentId: scene.id }),
+      { locationId },
+    );
     if ((blockingProv?.fingerprint ?? null) !== claimedBlocking)
       throw new PrevisError(
         "conflict",
@@ -965,9 +978,12 @@ export async function saveShotBlocking(
       }
       if (!data.characters.some((c) => c.id === entry.characterId))
         throw new UserFacingError("That character is not in this project.");
-      const expected = it.expectedRevision === null ? null : Number(it.expectedRevision);
-      if (expected !== null && !Number.isInteger(expected)) throw new UserFacingError("Invalid revision.");
+      const claimed = it.expectedRevision === null ? null : Number(it.expectedRevision);
+      if (claimed !== null && !Number.isInteger(claimed)) throw new UserFacingError("Invalid revision.");
       const cur = existing.get(entry.characterId);
+      // 4C-I2: a row left on ANOTHER Location's set is history the editor never loads as current, so the editor
+      // creates (expects none); that row is replaced. A row already on THIS set keeps strict compare-and-set.
+      const expected = claimed === null && cur && cur.sceneDocumentId !== scene.id ? cur.revision : claimed;
       // unchanged blocking is left alone: saving must never silently re-anchor a stale figure
       if (
         cur &&
@@ -1084,7 +1100,13 @@ export async function loadShotBlocking(
     const data = await requireProjectFresh(slug);
     if (!data.shots.some((x) => x.id === shotId)) throw new UserFacingError("That shot no longer exists.");
     const previs = await getPrevisRepo();
-    const recs = await previs.listShotBlocking(shotId);
+    // only the rows on the Shot's CURRENT set (4C-I2): rows left on another Location's set are history
+    const shot = data.shots.find((x) => x.id === shotId)!;
+    const scene = shot.spatial.locationId ? await previs.getSceneForLocation(shot.spatial.locationId) : null;
+    const recs = onCurrentSet(
+      await previs.listShotBlocking(shotId),
+      scene ? { locationId: scene.locationId, sceneDocumentId: scene.id } : null,
+    );
     return {
       ok: true,
       figures: recs.map((r) => ({

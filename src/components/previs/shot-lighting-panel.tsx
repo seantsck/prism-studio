@@ -83,7 +83,11 @@ export function ShotLightingPanel(props: ShotLightingPanelProps) {
     propsRef.current = props;
   });
 
-  const elsewhere = !!saved && !!props.sceneDocumentId && saved.sceneDocumentId !== props.sceneDocumentId;
+  // a rig authored for another set (another Location, or before this Location had a saved set) is never applied
+  const elsewhere =
+    !!saved &&
+    (saved.locationId !== props.locationId ||
+      (!!props.sceneDocumentId && saved.sceneDocumentId !== props.sceneDocumentId));
 
   // ── load this Shot's rig into the overlay; leaving the Shot removes it and restores the engine's base lights ──
   useEffect(() => {

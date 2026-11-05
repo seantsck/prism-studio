@@ -15,6 +15,8 @@ import {
 import { assetUrl } from "@/lib/utils";
 import { saveProductionFrameAsLocationView } from "@/server/location-view-actions";
 import { MasterFramePromoteForm } from "./master-frame-promote-form";
+import { SpatialAxisBadges } from "@/components/previs/spatial-axis-badges";
+import { productionFrameSourceLineage } from "@/domain/previs/spatial-workspace";
 import {
   promoteStoryboardFrame,
   selectProductionFrame,
@@ -57,10 +59,13 @@ export function ProductionFrameSection({
   masterFrames,
   candidates,
   openHref,
+  spatialHref,
 }: {
   ctx: ShotContext;
   slug: string;
   masterFrames: MasterFrameChoice[];
+  /** Phase 4C-I2: this Shot's Spatial Workspace (absent in tests of this section alone) */
+  spatialHref?: string;
   /** Where "Generate candidates" opens the planner when it is not rendered inline. */
   openHref?: string;
   /**
@@ -74,6 +79,8 @@ export function ProductionFrameSection({
   const aspect = shotProductionAspect(ctx.shot, ctx.bible);
   const freshOf = (f: ProductionFrame) => productionFrameFreshness(ctx, f);
   const selectedFresh = selected ? freshOf(selected) : null;
+  // 4C-I2: where the selected frame came from, as FROZEN at promotion (never the Shot's current spatial setup)
+  const lineage = selected ? productionFrameSourceLineage(selected, masterFrames) : null;
   const hidden = (
     <>
       <input type="hidden" name="projectSlug" value={slug} />
@@ -130,6 +137,50 @@ export function ProductionFrameSection({
               {selected.productionAspectRatio} · {selected.width}×{selected.height} · created{" "}
               {stamp(selected.createdAt)}
             </div>
+            {lineage ? (
+              <div data-testid="pf-lineage" className="text-[11.5px] text-muted">
+                {lineage.source ? (
+                  <span data-testid="pf-lineage-source">
+                    From 3D Master Frame captured {stamp(lineage.source.capturedAt)}
+                    {spatialHref ? (
+                      <>
+                        {" · "}
+                        <a
+                          href={spatialHref}
+                          className="text-accent hover:underline"
+                          data-testid="pf-lineage-open-workspace"
+                        >
+                          Open Spatial Workspace
+                        </a>
+                      </>
+                    ) : null}
+                  </span>
+                ) : lineage.missingMessage ? (
+                  <span data-testid="pf-lineage-missing">{lineage.missingMessage}</span>
+                ) : null}
+                {lineage.frozen ? (
+                  <details className="mt-1" data-testid="pf-lineage-provenance">
+                    <summary className="cursor-pointer select-none">
+                      Production Frame source provenance
+                    </summary>
+                    <p className="mt-1 text-[11px] text-faint">
+                      Frozen when this frame was promoted. It describes the setup that produced the image, not
+                      the Shot&apos;s current spatial setup, and it does not make this frame stale.
+                    </p>
+                    <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 font-mono text-[11px]">
+                      {lineage.fingerprints.map((f) => (
+                        <div key={f.label} className="contents">
+                          <dt className="font-sans text-muted">{f.label}</dt>
+                          <dd data-testid={`pf-lineage-fp-${f.label.toLowerCase().replace(" ", "-")}`}>
+                            {f.value ?? "not recorded"}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </details>
+                ) : null}
+              </div>
+            ) : null}
             {selectedFresh.status === "stale" ? (
               <div
                 data-testid="pf-stale"
@@ -231,10 +282,38 @@ export function ProductionFrameSection({
                   masterFrameId={m.id}
                   disabled={!check.ok}
                 >
-                  Use 3D Master Frame
-                  <span className="text-muted">
-                    {" "}
-                    · {m.width}×{m.height} · {stamp(m.capturedAt)}
+                  <span className="flex items-start gap-2">
+                    {assetUrl(ctx.assets.get(m.assetId)) ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={assetUrl(ctx.assets.get(m.assetId))!}
+                        alt=""
+                        data-testid="pf-master-thumb"
+                        className="h-9 shrink-0 border border-line object-cover"
+                        style={{ aspectRatio: `${m.width} / ${m.height}` }}
+                      />
+                    ) : null}
+                    <span className="min-w-0">
+                      3D Master Frame
+                      <span className="text-muted">
+                        {" "}
+                        · {m.width}×{m.height} · captured {stamp(m.capturedAt)}
+                      </span>
+                      {m.spatial ? (
+                        <span className="mt-0.5 block">
+                          <SpatialAxisBadges status={m.spatial} testIdPrefix={`pf-master-axes-${m.id}`} />
+                        </span>
+                      ) : null}
+                      {spatialHref ? (
+                        <a
+                          href={spatialHref}
+                          className="mt-0.5 block text-[11px] text-accent hover:underline"
+                          data-testid={`pf-master-open-workspace-${m.id}`}
+                        >
+                          Open Spatial Workspace
+                        </a>
+                      ) : null}
+                    </span>
                   </span>
                   {!check.ok ? <span className="block text-[11px] text-faint">{check.reason}</span> : null}
                   {m.spatial?.messages.map((msg) => (

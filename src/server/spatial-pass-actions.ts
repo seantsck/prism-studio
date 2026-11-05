@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { ZodError } from "zod";
 import { PrevisError, type SpatialPassBundleRecord } from "@/data/previs-repository";
-import { renderedBlockingProvenance } from "@/domain/previs/blocking";
+import { onCurrentSet, renderedBlockingProvenance } from "@/domain/previs/blocking";
 import { assetSchema } from "@/domain/schemas";
 import {
   CHARACTER_MASK_FORMAT,
@@ -136,7 +136,10 @@ export async function captureSpatialPassBundle(
       throw new UserFacingError("Save the 3D set before capturing control passes.");
 
     // the rendered blocking must be the SAVED blocking, anchored to the CURRENT set (server derives, client claims)
-    const blockingRecords = await previs.listShotBlocking(shotId);
+    const blockingRecords = onCurrentSet(await previs.listShotBlocking(shotId), {
+      locationId,
+      sceneDocumentId: scene.id,
+    });
     const blockingProv = renderedBlockingProvenance(blockingRecords, { locationId });
     const blockingFp = blockingProv?.fingerprint ?? null;
     if (blockingFp !== claimedBlocking)

@@ -274,7 +274,7 @@ export const locationSchema = z.object({
   recurringProps: z.array(text),
   referenceAssetIds: z.array(id),
   locked: z.boolean(),
-  /** Extension points for the future 3D Set; the location model itself needs no rewrite. */
+  /** Extension points kept from before the 3D Set existed; the 3D Set itself lives in `location_scene_documents`. */
   set3d: z
     .object({
       modelAssetId: nullableId,

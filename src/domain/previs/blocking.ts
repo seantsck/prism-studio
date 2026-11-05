@@ -368,3 +368,24 @@ export interface BlockingFigureData {
   sceneFingerprint: string;
   entry: ShotBlockingEntry;
 }
+
+/** The Location set a Shot is CURRENTLY on: its assigned Location and that Location's ONE saved scene document. */
+export interface CurrentSet {
+  locationId: string;
+  sceneDocumentId: string;
+}
+
+/**
+ * Phase 4C-I2: the Shot-owned rows (blocking, camera path, rig, renders) that describe the Shot's CURRENT set. A row
+ * authored on another Location's set (left behind by an A -> B reassignment) is history: it is never loaded, rendered,
+ * fingerprinted or compared as the Shot's working state on B. With no current set (no Location, or no saved scene)
+ * nothing is current. Every server derivation (capture, previs render, control passes, promotion state, spatial
+ * reference, clip freshness) and the editor's loader use this one filter.
+ */
+export function onCurrentSet<T extends { locationId: string; sceneDocumentId: string }>(
+  records: ReadonlyArray<T>,
+  set: CurrentSet | null,
+): T[] {
+  if (!set) return [];
+  return records.filter((r) => r.locationId === set.locationId && r.sceneDocumentId === set.sceneDocumentId);
+}

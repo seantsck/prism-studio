@@ -1,5 +1,5 @@
 import type { MasterFrameRecord, PrevisRepository } from "@/data/previs-repository";
-import { renderedBlockingProvenance } from "@/domain/previs/blocking";
+import { onCurrentSet, renderedBlockingProvenance } from "@/domain/previs/blocking";
 import { baseEnvironmentOf } from "@/domain/previs/lighting";
 import { bookmarkCameraFingerprint } from "@/domain/previs/spatial-passes";
 import {
@@ -17,6 +17,7 @@ export interface CurrentShotSpatial {
 
 const NO_SPATIAL_STATE: CurrentSpatialState = {
   sceneFingerprint: null,
+  sceneDocumentId: null,
   cameraFingerprint: null,
   blockingFingerprint: null,
   lighting: { lightingFingerprint: null, baseEnvironment: null },
@@ -27,7 +28,7 @@ const NO_SPATIAL_STATE: CurrentSpatialState = {
  * the Shot's CURRENTLY assigned Location, in exactly the terms a Master Frame recorded at capture:
  *   scene     that Location's saved set fingerprint
  *   camera    the Shot's bookmark camera (`bookmarkCameraFingerprint`) when it is on that set, else null
- *   blocking  the rendered blocking layer anchored at that Location (the same derivation capture uses)
+ *   blocking  the rendered blocking layer of the rows authored on that set (the same derivation capture uses)
  *   lighting  the Shot's rig on that set (a rig authored for another set does not light this one) + base environment
  * A Master Frame's own Location is historical source provenance only: after A -> B reassignment, a frame captured in A
  * is compared with B (so it can never look fresh), and with no Location at all every current value is absent.
@@ -41,7 +42,10 @@ export async function currentSpatialStateFor(
   const scene = await previs.getSceneForLocation(locationId);
   if (!scene) return structuredClone(NO_SPATIAL_STATE);
   const bookmark = await previs.getBookmarkForShot(shot.shotId);
-  const blocking = renderedBlockingProvenance(await previs.listShotBlocking(shot.shotId), { locationId });
+  const blocking = renderedBlockingProvenance(
+    onCurrentSet(await previs.listShotBlocking(shot.shotId), { locationId, sceneDocumentId: scene.id }),
+    { locationId },
+  );
   const rig = await previs.getLightingRigForShot(shot.shotId);
   let cameraFingerprint: string | null = null;
   if (bookmark && bookmark.locationId === locationId && bookmark.sceneDocumentId === scene.id) {
@@ -53,6 +57,7 @@ export async function currentSpatialStateFor(
   }
   return {
     sceneFingerprint: scene.sceneFingerprint,
+    sceneDocumentId: scene.id,
     cameraFingerprint,
     blockingFingerprint: blocking?.fingerprint ?? null,
     lighting: {
