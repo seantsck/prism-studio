@@ -70,6 +70,8 @@ const sqlErr = (sql: string, params: unknown[] = []) =>
   );
 
 const created = { projectIds: [] as string[], assetIds: [] as string[], locationIds: [] as string[] };
+// the suite's Shots' original Locations, restored on cleanup (see the tmpLocation assignment below)
+let restoreShotLocations: Array<{ id: string; location_id: string | null }> = [];
 
 try {
   const data = (await admin.loadProject("ojousama"))!;
@@ -122,6 +124,15 @@ try {
     [tmpLocation, projectId, "db:blocking set location"],
   );
   created.locationIds.push(tmpLocation);
+  // Phase 4C: a spatialReference describes a Shot's CURRENT Location only (old-Location rows are history, never
+  // projected), so the suite's Shot(s) are assigned to its private set for the run and restored afterwards
+  restoreShotLocations = (
+    await pool.query("select id, location_id from shots where id = any($1::uuid[])", [[shotA.id, shotB.id]])
+  ).rows as typeof restoreShotLocations;
+  await pool.query("update shots set location_id = $2 where id = any($1::uuid[])", [
+    [shotA.id, shotB.id],
+    tmpLocation,
+  ]);
   const sceneId = randomUUID();
   const scene1 = await owner.saveScene({
     id: sceneId,
@@ -655,6 +666,10 @@ try {
     ),
   );
 } finally {
+  for (const s of restoreShotLocations)
+    await pool
+      .query("update shots set location_id = $2 where id = $1", [s.id, s.location_id])
+      .catch(() => undefined);
   // cleanup: the temporary location cascades its scene → blocking rows, master frames, paths and clips
   for (const id of created.projectIds)
     await pool.query("delete from projects where id = $1", [id]).catch(() => undefined);

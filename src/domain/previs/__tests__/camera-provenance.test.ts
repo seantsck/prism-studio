@@ -12,6 +12,7 @@ import {
   controlCameraFromBookmark,
   controlCameraFromState,
 } from "../spatial-passes";
+import { baseEnvironmentFingerprint } from "../lighting";
 import {
   masterFramePromotionState,
   masterFrameSpatialStatus,
@@ -117,6 +118,7 @@ describe("canonical render camera (prism.render-camera.v1)", () => {
   });
 });
 
+const ENV = { upstreamCommit: "engine-1", skybox: "m_1" };
 const frame = (over: Partial<MasterFrameSpatialSource> = {}): MasterFrameSpatialSource & { id: string } => ({
   id: "mf-1",
   sceneFingerprint: "a".repeat(64),
@@ -124,13 +126,14 @@ const frame = (over: Partial<MasterFrameSpatialSource> = {}): MasterFrameSpatial
   blockingFingerprint: null,
   lightingFingerprint: null,
   lighting: null,
+  baseEnvironmentFingerprint: baseEnvironmentFingerprint(ENV),
   ...over,
 });
 const now = (over: Partial<CurrentSpatialState> = {}): CurrentSpatialState => ({
   sceneFingerprint: "a".repeat(64),
   cameraFingerprint: "c".repeat(64),
   blockingFingerprint: null,
-  lighting: { lightingFingerprint: null, baseEnvironment: null },
+  lighting: { lightingFingerprint: null, baseEnvironment: ENV },
   ...over,
 });
 
@@ -196,5 +199,63 @@ describe("promotion digest", () => {
     const s = masterFramePromotionState({ masterFrame: frame({ cameraFingerprint: null }), current: now() });
     expect(s.requiresConfirmation).toBe(true);
     expect(s.messages.join(" ")).toContain("UNKNOWN CAMERA PROVENANCE");
+  });
+});
+
+describe("base environment identity and the lighting axis (4C-I1 remediation)", () => {
+  it("baseEnvironmentFingerprint is canonical: deterministic, changed by skybox and engine commit only", () => {
+    const fp = baseEnvironmentFingerprint(ENV);
+    expect(fp).toMatch(/^[0-9a-f]{64}$/);
+    expect(baseEnvironmentFingerprint({ skybox: "m_1", upstreamCommit: "engine-1" })).toBe(fp);
+    expect(baseEnvironmentFingerprint({ ...ENV, skybox: "m_2" })).not.toBe(fp);
+    expect(baseEnvironmentFingerprint({ ...ENV, skybox: null })).not.toBe(fp);
+    expect(baseEnvironmentFingerprint({ ...ENV, upstreamCommit: "engine-2" })).not.toBe(fp);
+    expect(() => baseEnvironmentFingerprint({ ...ENV, extra: 1 } as never)).toThrow();
+  });
+
+  it("no rig + same base environment is fresh; a skybox-only change is STALE LIGHTING (scene untouched)", () => {
+    expect(masterFrameSpatialStatus(frame(), now())).toEqual({ stale: [], unknown: [] });
+    const s = masterFrameSpatialStatus(
+      frame(),
+      now({ lighting: { lightingFingerprint: null, baseEnvironment: { ...ENV, skybox: "m_2" } } }),
+    );
+    expect(s).toEqual({ stale: ["lighting"], unknown: [] });
+  });
+
+  it("a frame with no frozen base environment and no render-lighting snapshot is UNKNOWN lighting, never fresh", () => {
+    const s = masterFrameSpatialStatus(frame({ baseEnvironmentFingerprint: null }), now());
+    expect(s).toEqual({ stale: [], unknown: ["lighting"] });
+    // a rig change is still definitely stale
+    const r = masterFrameSpatialStatus(
+      frame({ baseEnvironmentFingerprint: null }),
+      now({ lighting: { lightingFingerprint: "e".repeat(64), baseEnvironment: ENV } }),
+    );
+    expect(r).toEqual({ stale: ["lighting"], unknown: [] });
+  });
+
+  it("a historical frame's frozen render-lighting snapshot is used for status when it exists", () => {
+    const hist = frame({
+      baseEnvironmentFingerprint: null,
+      lightingFingerprint: "e".repeat(64),
+      lighting: { baseEnvironment: ENV },
+    });
+    const rig = (env: typeof ENV) =>
+      now({ lighting: { lightingFingerprint: "e".repeat(64), baseEnvironment: env } });
+    expect(masterFrameSpatialStatus(hist, rig(ENV))).toEqual({ stale: [], unknown: [] });
+    expect(masterFrameSpatialStatus(hist, rig({ ...ENV, skybox: "m_5" }))).toEqual({
+      stale: ["lighting"],
+      unknown: [],
+    });
+  });
+
+  it("the promotion digest binds the current base environment", () => {
+    const a = masterFramePromotionState({ masterFrame: frame(), current: now() });
+    const b = masterFramePromotionState({
+      masterFrame: frame(),
+      current: now({ lighting: { lightingFingerprint: null, baseEnvironment: { ...ENV, skybox: "m_2" } } }),
+    });
+    expect(a.current.baseEnvironmentFingerprint).toBe(baseEnvironmentFingerprint(ENV));
+    expect(b.digest).not.toBe(a.digest);
+    expect(b.requiresConfirmation).toBe(true);
   });
 });

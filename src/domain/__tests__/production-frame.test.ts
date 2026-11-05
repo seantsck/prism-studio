@@ -576,6 +576,7 @@ describe("Phase 4C spatial source provenance (lineage, never identity)", () => {
     cameraFingerprint: null,
     blockingFingerprint: "b".repeat(64),
     lightingFingerprint: null,
+    baseEnvironmentFingerprint: "e".repeat(64),
   };
   const data = seed();
   const asset = newUploadAsset(data.project.id);
@@ -604,10 +605,14 @@ describe("Phase 4C spatial source provenance (lineage, never identity)", () => {
       b.draft.sourceSceneFingerprint,
       b.draft.sourceCameraFingerprint,
       b.draft.sourceBlockingFingerprint,
-    ]).toEqual([src.sceneFingerprint, null, src.blockingFingerprint]);
+      b.draft.sourceBaseEnvironmentFingerprint,
+    ]).toEqual([src.sceneFingerprint, null, src.blockingFingerprint, src.baseEnvironmentFingerprint]);
+    // a different base environment is lineage too, never identity
+    const c = draftMaster({ ...src, baseEnvironmentFingerprint: "f".repeat(64) });
+    if (c.ok) expect(c.draft.frameFingerprint).toBe(a.draft.frameFingerprint);
   });
 
-  it("a historical record without the four fields parses as not frozen", () => {
+  it("a historical record without the five fields parses as not frozen", () => {
     const a = draftMaster(null);
     if (!a.ok) throw new Error("draft");
     const legacy: Record<string, unknown> = { ...a.draft, version: 1 };
@@ -616,11 +621,13 @@ describe("Phase 4C spatial source provenance (lineage, never identity)", () => {
       "sourceCameraFingerprint",
       "sourceBlockingFingerprint",
       "sourceLightingFingerprint",
+      "sourceBaseEnvironmentFingerprint",
     ])
       delete legacy[k];
     const parsed = productionFrameSchema.parse(legacy);
     expect(parsed.sourceSceneFingerprint).toBeNull();
     expect(parsed.sourceLightingFingerprint).toBeNull();
+    expect(parsed.sourceBaseEnvironmentFingerprint).toBeNull();
   });
 
   it("the package carries sourceSpatial only when frozen (no new key otherwise)", () => {

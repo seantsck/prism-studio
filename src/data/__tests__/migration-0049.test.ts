@@ -24,7 +24,7 @@ describe("migration 0049: spatial camera and Production Frame source provenance"
     );
   });
 
-  it("only adds nullable columns, two CHECKs and one trigger: no table, row write, grant or destruction", () => {
+  it("only adds nullable columns, three CHECKs and one trigger: no table, row write, grant or destruction", () => {
     expect(code).not.toMatch(/\bcreate table\b/i);
     expect(code).not.toMatch(/\bdrop\s+(table|column|index|policy|function|trigger|constraint)\b/i);
     expect(code).not.toMatch(/\b(truncate|delete\s+from|insert\s+into)\b/i);
@@ -35,14 +35,21 @@ describe("migration 0049: spatial camera and Production Frame source provenance"
     const added = [...code.matchAll(/add column (\w+)/gi)].map((m) => m[1]).sort();
     expect(added).toEqual(
       [
+        "base_environment_fingerprint",
         "camera_fingerprint",
         "camera_json",
+        "source_base_environment_fingerprint",
         "source_blocking_fingerprint",
         "source_camera_fingerprint",
         "source_lighting_fingerprint",
         "source_scene_fingerprint",
       ].sort(),
     );
+    expect(code.match(/add constraint \w+/gi)).toEqual([
+      "add constraint scene_master_frames_camera_check",
+      "add constraint scene_master_frames_base_environment_check",
+      "add constraint shot_production_frames_spatial_source_check",
+    ]);
     expect(code.match(/create trigger \w+/gi)).toEqual([
       "create trigger shot_production_frames_spatial_source_check",
     ]);
@@ -54,8 +61,8 @@ describe("migration 0049: spatial camera and Production Frame source provenance"
     expect(code).not.toMatch(/text\[\]/i);
   });
 
-  it("the exact-source trigger compares the four fingerprints with IS DISTINCT FROM and never reads current state", () => {
-    for (const col of ["scene", "camera", "blocking", "lighting"])
+  it("the exact-source trigger compares the five fingerprints with IS DISTINCT FROM and never reads current state", () => {
+    for (const col of ["scene", "camera", "blocking", "lighting", "base_environment"])
       expect(code).toMatch(
         new RegExp(`mf\.${col}_fingerprint is distinct from new\.source_${col}_fingerprint`),
       );
@@ -65,5 +72,11 @@ describe("migration 0049: spatial camera and Production Frame source provenance"
     expect(code).not.toMatch(
       /shot_camera_bookmarks|shot_light_rigs|shot_character_blocking|location_scene_documents/,
     );
+  });
+
+  it("the source CHECK keeps every source column null without the marker, base environment included", () => {
+    const check = code.slice(code.indexOf("shot_production_frames_spatial_source_check check"));
+    expect(check).toMatch(/source_base_environment_fingerprint is null\)/);
+    expect(check).toMatch(/source_base_environment_fingerprint ~ '\^\[0-9a-f\]\{64\}\$'/);
   });
 });
