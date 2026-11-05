@@ -69,7 +69,7 @@ continuity workers have no grant** and receive Production Frame information only
 | Action in Shot Prep         | Source              | Requires                                                                                                         |
 | --------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | **Use approved Storyboard** | `storyboard`        | the Shot has an approved Storyboard Frame whose image is a stored image at the production aspect                 |
-| **Use 3D Master Frame**     | `previs_master`     | a 3D Master Frame of THIS Shot exists (the action is offered only then); its image passes the same rules         |
+| **Use as Production Frame** | `previs_master`     | a 3D Master Frame of THIS Shot exists (the action is offered only then); its image passes the same rules         |
 | **Upload Production Frame** | `upload`            | a PNG, JPEG or WebP at the production aspect, through the ONE shared upload pipeline                             |
 | _(none in 2G.1)_            | `generation_output` | accepted by the schema for Phase 2G.2 (image generation); **no action creates one and no image model is called** |
 
@@ -140,6 +140,10 @@ make one frame.
   **not** stored on the frame.
 - "Current" always means the Shot's CURRENT Location: a Master Frame captured on Location A after the Shot moved to B
   is compared with B (never fresh), and with no Location every current value is absent.
+- **Lineage display (4C-I2).** A selected `previs_master` frame shows "From 3D Master Frame captured …" with a link to
+  the Shot Spatial Workspace, or, once the source is deleted, "Source Master Frame no longer exists; frozen source
+  provenance retained." A collapsed "Production Frame source provenance" lists short forms of the five frozen
+  fingerprints. They describe the setup that produced the image, never the current one, and never stale the frame.
 - Package: `references.productionFrame.sourceSpatial` (only when frozen) = what produced the approved image;
   `spatialReference` = the Shot's spatial setup now, built only from rows on its current Location's set (absent when
   it has none). The two may differ.
@@ -195,7 +199,9 @@ writes nothing. The selection never writes into `shot.generation.startFrameAsset
 Section **16 · Production Frame** (after Storyboard): the selected frame's private preview, `Production Frame` heading,
 version, source badge, aspect and dimensions, fresh/stale badge with the changed parts, created time. Empty state: "No
 Production Frame yet. This is the approved image Prism will carry into image-to-video and continuity." with **Use
-approved Storyboard** and **Upload Production Frame**; **Use 3D Master Frame** appears only when a master frame exists;
+approved Storyboard** and **Upload Production Frame**; **Use as Production Frame** appears beside each 3D Master Frame
+only when one exists (Phase 4C-I2: thumbnail, capture time, Scene / Camera / Blocking / Lighting badges computed by
+the server, and **Open Spatial Workspace**; the same button in the Shot Spatial Workspace calls the same action);
 nothing mentions a 3D set or a GPU. History lists every frame newest first with thumbnail, version, source,
 freshness and **Use**. Previews use the private `/api/assets/:id` route: no public URL, no signed URL, no Storage path in
 client state.

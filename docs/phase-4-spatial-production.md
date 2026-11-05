@@ -2,8 +2,9 @@
 
 **Status: 4A complete (architecture accepted by the owner 2026-11-01, decisions in [§12](#12-accepted-owner-decisions)).
 4B (Shot Lighting Rigs) complete (PR #46); migration 0048 applied to and accepted on hosted DEV (hosted head 0048, nothing
-pending). 4C architecture is in review ([4C-A](#4c-a-architecture-in-review)); 4C implementation and 4D–4F have not
-started. What 4B actually shipped is
+pending). 4C: architecture accepted ([4C-A](#4c-a-architecture--accepted)); 4C-I1 complete (PR #50, migration 0049 in
+the repository and NOT applied to hosted); 4C-I2 (Shot-centric Spatial Workspace) implemented and in review; 4C-B
+(hosted acceptance) not started, so 4C is not complete. 4D–4F have not started. What 4B actually shipped is
 recorded in [4B implementation notes](#4b-implementation-notes); elsewhere, design text describes intent.**
 
 Phase 4 finishes the optional spatial path into a Production Frame. It does not build a 3D system: Phase 2F already built
@@ -815,19 +816,20 @@ automatic recapture, regeneration or approval; relighting or re-framing an exist
 copies (4D); splat changes (4E); NLE, mixer, grading, EDL (Phase 5); autonomous camera / lighting choice, routing or
 agents (Phase 6); any provider call (Runway / Gemini / OpenAI / reconstruction = 0; paid = 0).
 
-#### 4C-I1 implementation notes (in review)
+#### 4C-I1 implementation notes (complete)
 
-Status: **4C-I1 implemented on branch `phase-4c-spatial-provenance` (draft PR, in technical review).** Migration
-**0049 exists in the repository and is NOT applied to hosted**: hosted head is 0048 and 0049 is pending. The
-Shot-centric Spatial Workspace (I2) is **not** built yet, and P6 (Location-page selector as navigation) is **not**
-fixed yet; I1 only makes the wrong-camera capture impossible even while that UI leak exists.
+Status: **4C-I1 complete: merged in PR #50 (`4624209`).** Migration **0049 is in the repository and is NOT applied to
+hosted**: hosted head is 0048 and 0049 is pending. When I1 merged, the Shot-centric Spatial Workspace (I2) and P6
+(Location-page selector as navigation) were not built yet; I1 made the wrong-camera capture impossible even while that
+UI leak existed. Both are in [4C-I2](#4c-i2-implementation-notes-in-review).
 
 - **P5 camera correctness (release-blocking, first).** The browser sends `cameraFingerprint`, the
   `bookmarkCameraFingerprint` of the exact bookmark it rendered with. `captureMasterFrame` reloads the Shot's bookmark,
   checks Shot / Project / Location / saved set, derives the canonical camera server-side and refuses a missing or
   different claim **before any byte is stored** (no Asset row, no storage object, no Master Frame). The server then
   persists its own `prism.render-camera.v1` snapshot, never browser camera JSON. `master-frame-camera.test.ts` failed on
-  `b340bcd` and passes now; E2E story A proves it through the Location page Shot switcher.
+  `b340bcd` and passes now; at I1, E2E story A proved it through the Location page Shot switcher (since I2 that
+  switch reloads the Shot, so story A proves the leak is gone).
 - **One camera identity.** `prism.render-camera.v1` (`src/domain/previs/camera-provenance.ts`) is
   `{schema, cameraFingerprint, bookmarkId, bookmarkLabel, projection, focalLengthBasis, productionAspectRatio, camera}`
   with `camera` = the canonical `ControlCamera` (position, canonical-sign quaternion, focal length, sensor height,
@@ -916,7 +918,81 @@ base_environment_fingerprint`; marker unchanged), still lineage only (not in `fr
 - **Known residual (I2).** The Location page still lists every blocking row of the Shot (old-Location rows included)
   because blocking saves are compare-and-set on the row; capture and status keep the existing derivation (all the
   Shot's rows anchored at the CURRENT Location), consistent between client and server, while `spatialReference`
-  projects only current-set rows. The Location-page selector/navigation fix (P6) remains I2.
+  projects only current-set rows. The Location-page selector/navigation fix (P6) remains I2. (Resolved in 4C-I2:
+  every derivation now uses the current set's rows.)
+
+#### 4C-I2 implementation notes (in review)
+
+Status: **4C-I2 implemented on branch `phase-4c-shot-spatial-workspace` (draft PR, in technical review).** No
+migration: 0048 and 0049 are unchanged, there is no 0050, and 0049 is still NOT applied to hosted (hosted head 0048).
+Everything works at 0048 too (I1's migration-ahead compatibility: historical frames read camera / base environment
+UNKNOWN). 4C-B (hosted acceptance) has not started; 4C is not complete.
+
+- **Shot route.** `/projects/[project]/episodes/[ep]/shots/[shotId]/spatial` owns the Shot (no selector). It opens
+  the Shot's CURRENT Location only (`shot.spatial.locationId` → that Location's `location_scene_documents` row) and
+  cannot change the Location; assignment stays in Shot Prep. No Location: the editor is not mounted, the page says
+  "Assign a Location to use optional spatial tools." and links to Shot Prep's Location / set section; nothing is
+  created. A Location with no scene opens an empty set with **Create 3D Set**; that first save creates THE Location's
+  row, which the Location 3D page then opens (same id / revision / fingerprint).
+- **One loader, one editor.** `loadVirtualSetProps` (`src/server/virtual-set-props.ts`) is the only loader; both the
+  Location 3D page and the Shot route use it. `VirtualSetEditor` takes an explicit `mode` (`location` with its Shot
+  list, `shot` with the route's Shot), plus server-derived `sharedWith`. No second scene system, adapter or engine.
+- **Current-set rows (narrow I1 fix, reported).** The loader hands the editor the active Shot's bookmark, camera path,
+  blocking, renders and pass bundles only when they were authored on THIS Location's saved set (`onCurrentSet`). I1
+  had kept one derivation that re-anchored every blocking row of the Shot at its current Location (the known I1
+  residual), so after A → B an A-authored figure was shown, captured and compared on B. Now capture, previs render,
+  control passes, promotion state, `loadShotBlocking`, Shot Prep's clip freshness and both stores' clip / bundle
+  freshness use the rows on the current set. A first save on B of a blocking figure or camera path whose only row is
+  history from A replaces that row instead of failing compare-and-set (a row already on B keeps strict CAS). The rig
+  keeps I1's behaviour: handed over for compare-and-set, never applied on another set (now also before B has a saved
+  set), and a capture is refused until the Shot's lighting is authored on the current set.
+- **Old-set frames are never scene-fresh (narrow I1 fix, reported).** I1's status compared only content
+  fingerprints, so a frame captured on A read scene-fresh on B whenever B's set had the identical content (the same
+  test set loaded into both). `masterFrameSpatialStatus` now also compares the scene document when both sides know
+  it: a frame from another Location's set is scene-stale. The promotion digest schema is unchanged.
+- **P6 fixed.** The Location page selector is a navigation (`?shot=`); the editor is keyed by Location + Shot, so a
+  switch remounts one clean editor and adapter from the server's state (no A bookmark, path, blocking, lighting,
+  Master Frames, capture or promotion state can survive). The Shot route is keyed the same way. While the Set has
+  unsaved changes the in-product switch asks first ("You have unsaved 3D Set changes. Switching Shots will discard
+  them." · Stay · Discard and switch); nothing is ever autosaved. Scope: the selector only; browser Back / Forward,
+  reload and other links are not intercepted (the editor never autosaves, so they discard like before).
+- **Dirty rule.** `workingSetChanges`: the Set is dirty when the live `sceneFingerprint` differs from the clean
+  baseline OR the live `baseEnvironmentFingerprint` differs from the saved one. `sceneFingerprint` is unchanged; the
+  base-environment term means a skybox-only edit is a Set change too, and it is now saved before a capture, so the
+  capture's base environment cannot differ from the server's saved one (narrow fix). Shot bookmark, blocking, Shot
+  lighting and camera motion never reach it. The badge uses the debounced live fingerprint, but "save first?" before
+  **Use Production Camera for Shot** and **Capture** is decided from the adapter's scene at click time, so an edit
+  made just before the click is saved first (a lagging "clean" would freeze the old saved camera while the client
+  claims the new one; the server then correctly refuses the capture). A first save reads "Saved — revision 1 (3D Set
+  created)".
+- **Shot camera restore.** On the Shot route, a bookmark on the current set becomes the viewport's working production
+  camera BEFORE the clean baseline is taken: no save, no revision change, not dirty. If the saved Set's camera
+  differs, a quiet note says so. Moving the camera afterwards is a Set change as before, and the bookmark changes only
+  through **Use Production Camera for Shot** (which saves the working camera first, as before). **Restore Shot camera**
+  stays.
+- **Shared Set.** `sharedWith` = the other Shots currently assigned to the Location (never the active one). The Shot
+  route shows "This 3D Set is shared by N other Shots: …". Near **Save 3D Set**, while the Set is shared and dirty:
+  "Saving changes this Set for every Shot using this Location. Their Master Frames may become STALE SCENE." Never for
+  Shot-owned edits.
+- **Master Frame status.** Four badges (Scene · Camera · Blocking · Lighting: Fresh / STALE / UNKNOWN). Shot Prep shows
+  the server-computed state with a thumbnail, capture time, **Use as Production Frame** and **Open Spatial
+  Workspace**; the workspace shows the editor's live view with the same badges, **Use as Master Frame** (storyboard
+  adoption) and **Use as Production Frame**. Both promotion buttons are the same `MasterFramePromoteForm` and call
+  `promoteMasterFrame`; the server recomputes the state and the typed confirmation / digest flow is I1's.
+- **Lineage display.** A selected `previs_master` Production Frame shows "From 3D Master Frame captured …" with a
+  link to the workspace, or "Source Master Frame no longer exists; frozen source provenance retained." A collapsed
+  "Production Frame source provenance" lists short forms of the five frozen fingerprints, labelled as the source
+  setup, not the current one. Nothing invalidates the frame.
+- **Shot Prep.** The Location / set section's entry point is **Open Spatial Workspace**; a secondary link opens the
+  Location's 3D Set page (all Shots). Copy fixes: the Locations subtitle and the `set3d` schema comment no longer
+  speak of a future 3D Set.
+- **Tests.** Unit: `spatial-workspace.test.ts` (routes, switch decision, dirty rule, shared Set, axes, lineage,
+  `onCurrentSet`), `virtual-set-props.test.ts` (loader modes, no scene, old-Location rows, `sharedWith`),
+  `current-set-rows.test.ts` (the current-set and old-set fixes through the real actions; all five fail on `main`). E2E:
+  `e2e/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-shot-spatial-workspace.spec.ts` (own memory server, `memory-4c2-isolated`).
+  The I1 E2E story A no longer needs the P6 leak; it now proves the switch reloads B, and the forged-claim refusal
+  stays covered by `master-frame-camera.test.ts`. The blocking and lighting specs wait for the remount after a switch.
+  A webdriver-only test seam (`__prismSet.spatial.setSkyboxId`) changes the live skybox for the warning story.
 
 ### 4D — Reusable setups
 
