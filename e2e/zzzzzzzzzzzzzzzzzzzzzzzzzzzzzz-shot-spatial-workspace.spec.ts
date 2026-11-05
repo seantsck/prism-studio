@@ -446,6 +446,49 @@ test("C — dirty Set switch: Stay keeps the unsaved edit; Discard and switch na
   await expect(set(page)).toHaveAttribute("data-object-count", String(objects));
 });
 
+test("C2 — immediate switch (release blocker): an edit made just before choosing a Shot is never discarded silently", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  const confirm = page.getByTestId("shot-switch-confirm");
+  await openLocationPage(page, A);
+  const revision = await attr(page, "data-revision");
+  const objects = Number(await attr(page, "data-object-count"));
+
+  // geometry: choose B IMMEDIATELY after the edit. Deliberately no wait for data-dirty, the dirty badge or the
+  // debounced fingerprint: the switch must read the Set as it is at the click
+  await page.getByTestId("add-box").click();
+  await page.getByTestId("shot-select").selectOption(B.id);
+  await expect(confirm).toContainText("You have unsaved 3D Set changes. Switching Shots will discard them.");
+  await page.getByTestId("shot-switch-stay").click();
+  await expect(confirm).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`[?&]shot=${A.id}`));
+  await expect(set(page)).toHaveAttribute("data-shot-id", A.id);
+  await expect(set(page)).toHaveAttribute("data-object-count", String(objects + 1)); // the edit is still there
+
+  await page.getByTestId("shot-select").selectOption(B.id);
+  await expect(confirm).toBeVisible();
+  await page.getByTestId("shot-switch-discard").click();
+  await expect(page).toHaveURL(new RegExp(`[?&]shot=${B.id}`), { timeout: 60_000 });
+  await expect(set(page)).toHaveAttribute("data-shot-id", B.id, { timeout: 60_000 });
+  await ready(page);
+  await expect(set(page)).toHaveAttribute("data-dirty", "false");
+  await expect(set(page)).toHaveAttribute("data-revision", revision); // loaded from the saved set: nothing was saved
+  await expect(set(page)).toHaveAttribute("data-object-count", String(objects));
+
+  // skybox-only (base environment, Location-owned): the same immediate switch asks first
+  await hook(page, ["spatial", "setSkyboxId"], "e2e-sky-immediate");
+  await page.getByTestId("shot-select").selectOption(A.id);
+  await expect(confirm).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`[?&]shot=${B.id}`));
+  await page.getByTestId("shot-switch-discard").click();
+  await expect(page).toHaveURL(new RegExp(`[?&]shot=${A.id}`), { timeout: 60_000 });
+  await expect(set(page)).toHaveAttribute("data-shot-id", A.id, { timeout: 60_000 });
+  await ready(page);
+  await expect(set(page)).toHaveAttribute("data-dirty", "false");
+  await expect(set(page)).toHaveAttribute("data-revision", revision);
+});
+
 let bFrame = "";
 
 test("J — workspace Master Frame → Production Frame (the same promotion action as Shot Prep)", async ({

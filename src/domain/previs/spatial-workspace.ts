@@ -39,6 +39,20 @@ export function shotSwitchDecision(input: {
   return input.setDirty ? "confirm" : "navigate";
 }
 
+/**
+ * The in-product Shot switch, decided from the Set AS IT IS AT THE SWITCH: `readSetDirty` is called exactly once, at
+ * the switch itself (the editor serializes the adapter there), never a presentation flag that may lag an edit made just
+ * before. Choosing the same Shot is "none" without reading.
+ */
+export function shotSwitchDecisionNow(input: {
+  from: string | null;
+  to: string | null;
+  readSetDirty: () => boolean;
+}): "none" | "navigate" | "confirm" {
+  if ((input.from ?? null) === (input.to ?? null)) return "none";
+  return shotSwitchDecision({ from: input.from, to: input.to, setDirty: input.readSetDirty() });
+}
+
 export const SHOT_SWITCH_DIRTY_MESSAGE =
   "You have unsaved 3D Set changes. Switching Shots will discard them." as const;
 

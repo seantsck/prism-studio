@@ -17,7 +17,7 @@ import {
   SHOT_SWITCH_DIRTY_MESSAGE,
   locationSetHref,
   sharedSetMessage,
-  shotSwitchDecision,
+  shotSwitchDecisionNow,
   workingSetChanges,
   type SharedSetShot,
 } from "@/domain/previs/spatial-workspace";
@@ -568,7 +568,14 @@ export function VirtualSetEditor(props: VirtualSetProps) {
 
   // ── Location page Shot selector: a NAVIGATION to ?shot=, asked first while the Set has unsaved changes ──
   const switchShot = (to: string | null) => {
-    const decision = shotSwitchDecision({ from: shotId, to, setDirty: dirty });
+    // P6: decided from the Set at the click (the adapter, serialized now), never the debounced dirty badge: an edit
+    // made just before choosing a Shot must ask first. Location-owned truth only (the clean baseline includes a
+    // restored Shot camera, so opening a Shot does not look dirty).
+    const decision = shotSwitchDecisionNow({
+      from: shotId,
+      to,
+      readSetDirty: () => pendingSetChanges().dirty,
+    });
     if (decision === "none") return setPendingShot(null);
     if (decision === "confirm") return setPendingShot({ id: to });
     setPendingShot(null);

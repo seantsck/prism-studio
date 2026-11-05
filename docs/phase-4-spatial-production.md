@@ -541,7 +541,9 @@ next? }; sharedWith: ShotRef[] }`. Shot mode hides `shot-select`; everything els
   the working camera on open (a viewport change, not a save; the set is not marked dirty by it, because the dirty check
   already excludes navigation-only state and the restore is applied before the clean baseline is taken).
 - **Warning rule:** shown only for Location-owned truth, and only when the Location is shared — `sharedWith` = other Shots
-  whose `spatial.locationId` is this Location or that hold any bookmark / path / blocking / rig on this scene document.
+  whose `spatial.locationId` is this Location. (Refined after I1, see [4C-I2](#4c-i2-implementation-notes-in-review):
+  this text originally also counted Shots that only hold historical bookmark / path / blocking / rig rows on this
+  scene document; under I1's current-Location authority such a Shot is no longer a consumer of this Set.)
   - On open (Shot route, `sharedWith.length > 0`): a quiet line "This 3D Set is shared by N other Shots (2B, 3A…)."
   - When the Set itself is dirty (live `sceneFingerprint` ≠ saved), beside **Save Set**: "Saving changes the Set for
     every Shot in this Location: 2B, 3A. Their Master Frames will show STALE SCENE."
@@ -963,14 +965,20 @@ UNKNOWN). 4C-B (hosted acceptance) has not started; 4C is not complete.
   lighting and camera motion never reach it. The badge uses the debounced live fingerprint, but "save first?" before
   **Use Production Camera for Shot** and **Capture** is decided from the adapter's scene at click time, so an edit
   made just before the click is saved first (a lagging "clean" would freeze the old saved camera while the client
-  claims the new one; the server then correctly refuses the capture). A first save reads "Saved — revision 1 (3D Set
+  claims the new one; the server then correctly refuses the capture). The Location page Shot selector decides
+  "ask first?" the same way: at the switch it serializes the adapter (`shotSwitchDecisionNow` with
+  `pendingSetChanges().dirty`), so a geometry or skybox edit made just before choosing a Shot always asks first (found in
+  technical review: the debounced flag could still read clean and the edit was discarded without asking). A first save reads "Saved — revision 1 (3D Set
   created)".
 - **Shot camera restore.** On the Shot route, a bookmark on the current set becomes the viewport's working production
   camera BEFORE the clean baseline is taken: no save, no revision change, not dirty. If the saved Set's camera
   differs, a quiet note says so. Moving the camera afterwards is a Set change as before, and the bookmark changes only
   through **Use Production Camera for Shot** (which saves the working camera first, as before). **Restore Shot camera**
   stays.
-- **Shared Set.** `sharedWith` = the other Shots currently assigned to the Location (never the active one). The Shot
+- **Shared Set.** `sharedWith` = the other Shots currently assigned to the Location (never the active one). This is an
+  intentional post-I1 refinement of the 4C-A text, not a bug: a Shot moved to another Location is no longer a current
+  consumer of this Set, its rows here are history, and its old Master Frames are already compared with its new current
+  Location (scene-stale), so a save here cannot change what it currently uses. The Shot
   route shows "This 3D Set is shared by N other Shots: …". Near **Save 3D Set**, while the Set is shared and dirty:
   "Saving changes this Set for every Shot using this Location. Their Master Frames may become STALE SCENE." Never for
   Shot-owned edits.

@@ -8,6 +8,7 @@ import {
   sharedSetShots,
   shotSpatialHref,
   shotSwitchDecision,
+  shotSwitchDecisionNow,
   spatialAxisStates,
   workingSetChanges,
 } from "@/domain/previs/spatial-workspace";
@@ -29,6 +30,31 @@ describe("Shot switch on the Location page (P6)", () => {
     expect(shotSwitchDecision({ from: "A", to: "A", setDirty: true })).toBe("none");
     expect(shotSwitchDecision({ from: null, to: "B", setDirty: true })).toBe("confirm");
     expect(shotSwitchDecision({ from: "A", to: null, setDirty: false })).toBe("navigate");
+  });
+});
+
+describe("Shot switch reads the Set at the switch (immediate-switch race)", () => {
+  it("asks first when the Set read NOW is dirty, whatever a lagging presentation flag says", () => {
+    const presentationDirty = false; // the debounced badge has not caught up with the edit yet
+    let reads = 0;
+    const decision = shotSwitchDecisionNow({
+      from: "A",
+      to: "B",
+      readSetDirty: () => {
+        reads++;
+        return true; // the adapter, serialized at the click, already has the edit
+      },
+    });
+    expect(presentationDirty).toBe(false);
+    expect(decision).toBe("confirm");
+    expect(reads).toBe(1);
+  });
+  it("navigates when the Set read now is clean, and never reads for the same Shot", () => {
+    expect(shotSwitchDecisionNow({ from: "A", to: "B", readSetDirty: () => false })).toBe("navigate");
+    const never = () => {
+      throw new Error("must not read the Set for the same Shot");
+    };
+    expect(shotSwitchDecisionNow({ from: "A", to: "A", readSetDirty: never })).toBe("none");
   });
 });
 
