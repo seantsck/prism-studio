@@ -850,14 +850,15 @@ fixed yet; I1 only makes the wrong-camera capture impossible even while that UI 
   are copied from the immutable source Master Frame and re-verified at INSERT by the exact-source trigger (which also
   requires the source to exist). The digest closes the user-visible TOCTOU (a stale confirmation screen); full
   serializability of the assessment is not claimed and no broad advisory lock was added.
-- **Production Frame lineage.** Four nullable `source_*_fingerprint` fields, copied only from the exact source Master
-  Frame record. No stale/unknown arrays. Not in `frameFingerprint` and not in freshness, so 3D edits never stale an
+- **Production Frame lineage.** Five nullable `source_*_fingerprint` fields (base environment added in the review
+  remediation below), copied only from the exact source Master Frame record. No stale/unknown arrays. Not in `frameFingerprint` and not in freshness, so 3D edits never stale an
   approved Production Frame. **Dedup:** re-promoting the same Master Frame reselects the existing immutable frame when
   the visual intent is unchanged (camera, blocking or lighting edits do not change it). Because the 2G.1 intent
   snapshot freezes the Shot's set fingerprint, a **set edit** between promotions is new visual intent and makes a new
   version, whose lineage is identical. A pre-4C duplicate is reselected untouched (its lineage stays null).
 - **Package.** `references.productionFrame.sourceSpatial = {schemaVersion: 1, masterFrameId, sceneFingerprint,
-cameraFingerprint, blockingFingerprint, lightingFingerprint}` only when frozen (omitted otherwise).
+cameraFingerprint, blockingFingerprint, lightingFingerprint, baseEnvironmentFingerprint}` only when frozen (omitted
+  otherwise).
   `spatialReference` keeps its meaning (current state); the two may differ. No provider reads either.
 - **P3 lighting.** `productionFrameLightingFingerprint`: frozen `source_lighting_fingerprint` when frozen, else the 4B
   chain, else null; it survives source deletion for a 4C frame, and a historical frame whose source row is gone falls
@@ -871,6 +872,50 @@ cameraFingerprint, blockingFingerprint, lightingFingerprint}` only when frozen (
 - **Tests.** Unit: `master-frame-camera`, `master-frame-promotion`, `camera-provenance`, production-frame lineage.
   DB: `npm run db:spatial-source`. E2E: `e2e/zzzzzzzzzzzzzzzzzzzzzzzzzzzzz-spatial-provenance.spec.ts` (own memory
   server) with stories A–H; story C uses the memory-only, env-gated `/api/dev/previs/master-frame-fixture`.
+
+##### 4C-I1 technical-review remediation
+
+Review of `2945d20` found three correctness gaps; all are fixed on the same branch and 0049 was extended before it was
+ever applied hosted (0048 unchanged; revised 0049 checksum
+`9b4589caa4ed19bf92e6dc9f77217587bf3b08f99977578871c69113f9da19fb`, still NOT applied to hosted). Each release-blocking regression below failed against `2945d20` and passes now.
+
+- **Current-Location authority (capture).** `captureMasterFrame` loads the actual Shot and requires the submitted
+  `locationId` to equal the Shot's **current** `shot.spatial.locationId`; a Shot with no Location, or on another
+  Location, is refused before any byte is stored (no Asset, no storage object, no Master Frame). Bookmark / scene /
+  Project / Location agreement is still required. Old-Location bookmarks, rigs and blocking are kept as history, not
+  deleted.
+- **Current-Location authority (promotion).** `currentSpatialStateFor` / `promotionStateFor` take the Shot's CURRENT
+  Location from the caller's authoritative Shot record and never infer current truth from `mf.locationId` (which is
+  historical source provenance only). A frame captured on A after the Shot moved to B is compared with B: at least
+  `scene` is stale and camera / blocking / lighting reflect B. With no Location, every current value is absent. It
+  can still be used on purpose through the confirmation (the no-hard-block decision stands).
+- **Current-Location authority (`spatialReference`).** Memory and Postgres `listSpatialReferences` now resolve each
+  Shot's set from its CURRENT Location (Postgres reads `shots.location_id` in the same transaction; memory reads the
+  Project's Shot record) and project only rows on that set (bookmark, path, blocking, rig, adopted Master Frame). No
+  Location, or a Location with no compatible row: no current `spatialReference`. Freshness inputs of clips and pass
+  bundles are unchanged. So after A → B: `spatialReference` = the Shot's setup now (absent, or B), while
+  `references.productionFrame.sourceSpatial` = what produced the approved image (may truthfully still be A).
+- **Base-environment provenance.** The engine base environment (`{ upstreamCommit, skybox }`) is pixel-affecting and
+  outside `sceneFingerprint`, so a no-rig frame could hide a skybox-only change. One canonical pure identity,
+  `baseEnvironmentFingerprint(baseEnvironmentOf(scene.document))` (`prism.base-environment.v1`, in `lighting.ts`), is
+  NOT folded into `sceneFingerprint` and does NOT change `lightingFingerprint` (still the Shot Lighting Rig). Every new
+  capture persists it, rig or no rig (when 0049 is installed; at 0048 it is verified-but-not-stored and reads back
+  unknown).
+- **Lighting axis.** Still four axes. Lighting now covers the rig and the base environment: a rig change is stale; then
+  a frozen base environment that differs is stale; a frame that froze neither `base_environment_fingerprint` nor a
+  render-lighting snapshot is UNKNOWN lighting (never fresh merely because both rig fingerprints are null). A
+  historical frame whose immutable `lighting_json.baseEnvironment` exists is compared through it at runtime only;
+  nothing is written back. The promotion digest also binds the current base-environment fingerprint.
+- **Lineage.** Production Frame source columns are now five (`source_scene/camera/blocking/lighting/
+base_environment_fingerprint`; marker unchanged), still lineage only (not in `frameFingerprint`, not freshness). The
+  exact-source trigger (and its memory mirror) also compares the base environment. Package `sourceSpatial` keeps
+  `schemaVersion: 1` (unshipped) and gains `baseEnvironmentFingerprint` (null when the source never froze it). P3 is
+  unchanged: `productionFrameLightingFingerprint` stays the rig contract; full source lighting lineage is
+  `lightingFingerprint` + `baseEnvironmentFingerprint`.
+- **Known residual (I2).** The Location page still lists every blocking row of the Shot (old-Location rows included)
+  because blocking saves are compare-and-set on the row; capture and status keep the existing derivation (all the
+  Shot's rows anchored at the CURRENT Location), consistent between client and server, while `spatialReference`
+  projects only current-set rows. The Location-page selector/navigation fix (P6) remains I2.
 
 ### 4D — Reusable setups
 

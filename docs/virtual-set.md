@@ -77,6 +77,12 @@ migration 0049 the row stores the server-derived `prism.render-camera.v1` snapsh
 captured while the database was at 0048) has **unknown camera provenance**, shown separately from stale. The Master
 Frame list shows `STALE CAMERA` when the Shot's production camera changed after the frame.
 
+**Current Location and base environment (4C-I1 review).** Capture is refused unless the request's Location is the
+Shot's CURRENT Location (`shot.spatial.locationId`); an old Location's leftover rows can never produce a Master Frame.
+Every capture also records `base_environment_fingerprint` (`prism.base-environment.v1` of `{ upstreamCommit, skybox }`),
+rig or no rig, because the skybox changes pixels but is not in `sceneFingerprint`: a skybox-only change shows
+`STALE LIGHTING`, and a frame that recorded no base environment shows unknown lighting provenance.
+
 ## GenerationPackage
 
 `spatialReference` is optional and absent (key omitted, not null) when a Shot has no set, so those packages and their
