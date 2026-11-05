@@ -13,6 +13,8 @@ import { expect, test, type Page } from "@playwright/test";
  *   F  dedup both directions: the same immutable frame is reselected
  *   G  source deletion: the frozen sourceSpatial survives
  *   H  no-spatial: a Shot without 3D is unchanged (no new package key)
+ *   I  no-rig skybox-only change (RELEASE BLOCKER, review): stale LIGHTING (not scene), asked first
+ *   J  Location A → B (RELEASE BLOCKER, review): capture on old A refused; A's frame asks first; spatialReference is B
  */
 test.use({
   launchOptions: {
@@ -90,12 +92,17 @@ type SourceSpatial = {
   cameraFingerprint: string | null;
   blockingFingerprint: string | null;
   lightingFingerprint: string | null;
+  baseEnvironmentFingerprint?: string | null;
 };
 type Pkg = {
   references: {
     productionFrame?: { frameId: string; version: number; freshness: string; sourceSpatial?: SourceSpatial };
   };
-  spatialReference?: { sceneFingerprint: string; shotLighting?: { lightingFingerprint: string } };
+  spatialReference?: {
+    locationId: string;
+    sceneFingerprint: string;
+    shotLighting?: { lightingFingerprint: string };
+  };
 };
 const pkg = async (page: Page, shotId: string): Promise<Pkg> => {
   const r = await page.request.get(`/api/projects/ojousama/shots/${shotId}/package`);
@@ -118,6 +125,8 @@ const anywayBtn = (page: Page, id: string) => page.getByTestId(`pf-use-master-an
 const confirmBox = (page: Page, id: string) => page.getByTestId(`pf-master-confirm-${id}`);
 const promoted = (page: Page, id: string) =>
   page.getByTestId(`pf-master-row-${id}`).getByTestId("pf-master-promoted");
+
+const locationOf = (setUrl: string) => /\/locations\/([0-9a-f-]{36})\/3d/.exec(setUrl)![1]!;
 
 const fixture = async (page: Page, action: "historical" | "delete", masterFrameId: string) => {
   const r = await page.request.post("/api/dev/previs/master-frame-fixture", {
@@ -380,4 +389,101 @@ test("H — a Shot without 3D: a normal Production Frame, no new required packag
   expect(p.references.productionFrame).toBeDefined();
   expect("sourceSpatial" in p.references.productionFrame!).toBe(false);
   expect(p.spatialReference).toBeUndefined();
+});
+
+test("I — no-rig skybox-only change (release blocker): STALE LIGHTING, not stale scene; asked first", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  const s = await openSet(page, "6A"); // Sky-View Restaurant; no Shot Lighting Rig
+  await page.getByTestId("load-test-set").click();
+  await expect(page.getByTestId("set-status")).toContainText("Hotel Canopy", { timeout: 30_000 });
+  await saveSet(page);
+  await link(page);
+  await capture(page);
+  const [mf] = await masterIds(page, s.shotUrl);
+  await expect(page.getByTestId(`pf-master-row-${mf!}`)).not.toContainText("STALE");
+
+  // ONLY the skybox changes (no editor control exists yet: the memory-only fixture saves exactly that set revision)
+  const r = await page.request.post("/api/dev/previs/master-frame-fixture", {
+    data: { action: "skybox", locationId: locationOf(s.setUrl), skybox: "e2e-skybox-2" },
+  });
+  expect(r.ok()).toBe(true);
+  const saved = (await r.json()) as { sceneFingerprintBefore: string; sceneFingerprint: string };
+  expect(saved.sceneFingerprint).toBe(saved.sceneFingerprintBefore); // the scene fingerprint really did not move
+
+  await page.goto(`${s.shotUrl}?section=production_frame`);
+  const row = page.getByTestId(`pf-master-row-${mf!}`);
+  await expect(row).toContainText("STALE LIGHTING", { timeout: 30_000 });
+  await expect(row).not.toContainText("STALE SCENE");
+  await useBtn(page, mf!).click();
+  await expect(confirmBox(page, mf!)).toContainText("STALE LIGHTING", { timeout: 30_000 });
+  expect((await pkg(page, s.shotId)).references.productionFrame).toBeUndefined();
+  await anywayBtn(page, mf!).click();
+  await expect(promoted(page, mf!)).toContainText("Used anyway", { timeout: 30_000 });
+  const src = (await pkg(page, s.shotId)).references.productionFrame!.sourceSpatial!;
+  expect(src.masterFrameId).toBe(mf);
+  expect(src.lightingFingerprint).toBeNull(); // no rig
+  expect(src.baseEnvironmentFingerprint).toMatch(/^[0-9a-f]{64}$/); // the environment it was really rendered on
+});
+
+test("J — Location A → B (release blocker): old-A capture refused, A's frame asks first, spatialReference is B", async ({
+  page,
+}) => {
+  test.setTimeout(360_000);
+  const a = await openSet(page, "4B"); // Location A = the Sky-View Restaurant
+  const locA = locationOf(a.setUrl);
+  await page.getByTestId("load-test-set").click();
+  await expect(page.getByTestId("set-status")).toContainText("Hotel Canopy", { timeout: 30_000 });
+  await setInput(page, "camera-pos-x", "2.5"); // A's set differs from the one B will get
+  await saveSet(page);
+  await link(page);
+  await capture(page);
+  const [mfA] = await masterIds(page, a.shotUrl);
+  expect((await pkg(page, a.shotId)).spatialReference!.locationId).toBe(locA);
+
+  // reassign the Shot to Location B (the Hotel Hallway, no 3D set) through Shot Prep; A's rows stay as history
+  await page.goto(`${a.shotUrl}?section=set`);
+  const select = page.locator('select[name="spatial.locationId"]');
+  const locB = await select.evaluate(
+    (el) =>
+      [...(el as HTMLSelectElement).options].find((o) => o.textContent?.startsWith("Hotel Hallway"))!.value,
+  );
+  expect(locB).not.toBe(locA);
+  await select.selectOption(locB);
+  await page.getByRole("button", { name: "Save location / set" }).click();
+  await expect
+    .poll(async () => (await pkg(page, a.shotId)).spatialReference ?? null, { timeout: 30_000 })
+    .toBeNull(); // B has no spatial setup: A's leftover rows are NOT the Shot's current spatial reference
+
+  // a stale editor on old Location A (the page still accepts ?shot=) tries to capture: refused, nothing stored
+  await page.goto(a.setUrl);
+  await ready(page);
+  await page.getByTestId("capture-master-frame").click();
+  await expect(page.getByTestId("set-status")).toContainText("different location", { timeout: 60_000 });
+  expect(await masterIds(page, a.shotUrl)).toEqual([mfA]);
+
+  // A's old frame is compared with the Shot's CURRENT Location: never fresh, asked first, nothing created
+  const row = page.getByTestId(`pf-master-row-${mfA!}`);
+  await expect(row).toContainText("STALE SCENE", { timeout: 30_000 });
+  await useBtn(page, mfA!).click();
+  await expect(confirmBox(page, mfA!)).toContainText("STALE SCENE", { timeout: 30_000 });
+  expect((await pkg(page, a.shotId)).references.productionFrame).toBeUndefined();
+
+  // B gets its own set and camera: the package describes B, and capture on B succeeds
+  await page.goto(`${a.shotUrl}?section=set`);
+  await page.getByTestId("open-in-3d-set").click();
+  await page.waitForURL(new RegExp(`/locations/${locB}/3d\\?shot=`));
+  await ready(page);
+  await page.getByTestId("load-test-set").click();
+  await expect(page.getByTestId("set-status")).toContainText("Hotel Canopy", { timeout: 30_000 });
+  await saveSet(page);
+  await link(page);
+  expect((await pkg(page, a.shotId)).spatialReference!.locationId).toBe(locB);
+  await capture(page);
+  const ids = await masterIds(page, a.shotUrl);
+  expect(ids).toHaveLength(2);
+  const mfB = ids.find((id) => id !== mfA)!;
+  await expect(page.getByTestId(`pf-master-row-${mfB}`)).not.toContainText("STALE");
+  await expect(page.getByTestId(`pf-master-row-${mfA!}`)).toContainText("STALE SCENE");
 });
