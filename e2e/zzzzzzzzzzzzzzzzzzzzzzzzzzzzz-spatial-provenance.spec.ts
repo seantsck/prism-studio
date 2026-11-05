@@ -5,7 +5,8 @@ import { expect, test, type Page } from "@playwright/test";
  * Phase 4C-I1 — camera correctness, Master Frame spatial provenance and safe Production Frame promotion. Memory mode
  * (its own server), the real renderer (SwiftShader), the real UI and server actions. No provider call.
  *
- *   A  wrong camera (RELEASE BLOCKER): Shot A's camera rendered as Shot B is refused; B's own camera is accepted
+ *   A  wrong camera (RELEASE BLOCKER): switching A → B on the Location page reloads B (4C-I2), so a capture for B
+ *      records B's server-verified camera, never A's (the forged-claim refusal itself: master-frame-camera.test.ts)
  *   B  fresh → stale camera: the promotion asks first, the confirmed digest promotes
  *   C  unknown camera (a pre-4C fixture): asked first, shown apart from stale
  *   D  TOCTOU (RELEASE BLOCKER): an old digest after a lighting change promotes and selects nothing
@@ -167,7 +168,7 @@ let a1 = ""; // Shot A's first Master Frame (camera x = 1.2)
 let b1 = ""; // Shot B's first Master Frame
 let a1Source: SourceSpatial | null = null; // a1's frozen lineage, as first promoted
 
-test("A — wrong camera (release blocker): A's camera rendered as B is refused; B's own camera is accepted", async ({
+test("A — wrong camera (release blocker): A → B reloads B, so B is captured with B's own camera only", async ({
   page,
 }) => {
   test.setTimeout(300_000);
@@ -186,15 +187,18 @@ test("A — wrong camera (release blocker): A's camera rendered as B is refused;
   await link(page);
   await capture(page);
 
-  // the Location page switcher still holds A's bookmark after choosing B (the P6 leak, fixed in I2): the render uses
-  // A's camera while the request names Shot B. The server must refuse it.
-  await page.getByTestId("shot-select").selectOption({ label: "Ep 1 · Shot 2E" });
-  await expect(page.getByTestId("shot-lighting")).toHaveAttribute("data-loaded", "true", { timeout: 30_000 });
-  await expect(page.getByTestId("character-blocking")).toHaveAttribute("data-loaded", "true", {
-    timeout: 30_000,
-  });
-  await page.getByTestId("capture-master-frame").click();
-  await expect(page.getByTestId("set-status")).toContainText("different camera", { timeout: 60_000 });
+  // before 4C-I2 the Location page switcher kept A's bookmark after choosing B (the P6 leak) and the SERVER had to
+  // refuse A's camera named as B. The switch now NAVIGATES: B is reloaded from the server and A's camera is gone.
+  const bValue = (await page
+    .getByTestId("shot-select")
+    .locator("option", { hasText: "Ep 1 · Shot 2E" })
+    .first()
+    .getAttribute("value"))!;
+  await page.getByTestId("shot-select").selectOption(bValue);
+  await expect(page).toHaveURL(new RegExp(`[?&]shot=${bValue}`), { timeout: 60_000 });
+  await expect(page.getByTestId("virtual-set")).toHaveAttribute("data-shot-id", bValue, { timeout: 60_000 });
+  await ready(page);
+  await expect(page.getByTestId("master-frame")).toHaveCount(0); // none of A's frames came along
 
   // nothing was stored for B
   await page.goto(shotB.setUrl);
@@ -205,6 +209,8 @@ test("A — wrong camera (release blocker): A's camera rendered as B is refused;
   await capture(page);
   await expect(page.getByTestId("master-frame")).toHaveCount(1, { timeout: 30_000 });
   [b1] = await masterIds(page, shotB.shotUrl);
+  // the server compared it with B's CURRENT camera: B's own, so the camera axis is fresh (never A's camera)
+  await expect(page.getByTestId(`pf-master-axes-${b1!}-camera`)).toHaveAttribute("data-state", "fresh");
   [a1] = await masterIds(page, shotA.shotUrl);
   expect(a1 && b1).toBeTruthy();
 });

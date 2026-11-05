@@ -158,6 +158,14 @@ const meanDiff = (page: Page, a: string, b: string) =>
     [a, b],
   );
 
+/** Phase 4C-I2: the Location page's Shot selector NAVIGATES; wait for the editor remounted for that Shot. */
+async function switchShot(page: Page, value: string) {
+  await page.getByTestId("shot-select").selectOption(value);
+  await expect(page).toHaveURL(new RegExp(`[?&]shot=${value}`), { timeout: 60_000 });
+  await expect(page.getByTestId("virtual-set")).toHaveAttribute("data-shot-id", value, { timeout: 60_000 });
+  await expect(page.getByTestId("virtual-set")).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
+}
+
 const shotSelectValue = (page: Page) => page.getByTestId("shot-select").inputValue();
 const optionByText = async (page: Page, text: string) =>
   (await page
@@ -427,7 +435,7 @@ test.describe("shot character blocking", () => {
     const valueA = await shotSelectValue(page);
     const valueB = await optionByText(page, "Shot 2B");
     // switch to shot 2B (same Location, same base set): its blocking is independent (absent)
-    await page.getByTestId("shot-select").selectOption(valueB);
+    await switchShot(page, valueB);
     await expect(page.getByTestId("character-blocking")).toHaveAttribute("data-loaded", "true");
     await expect(page.getByTestId("blocking-figure")).toHaveCount(0);
     expect((await info(page)).proxyCount).toBe(0);
@@ -441,7 +449,7 @@ test.describe("shot character blocking", () => {
     });
 
     // back to 2A: its own blocking is restored, untouched by 2B's edits
-    await page.getByTestId("shot-select").selectOption(valueA);
+    await switchShot(page, valueA);
     await expect(page.getByTestId("blocking-figure")).toHaveCount(1);
     await page.getByTestId("blocking-figure").click();
     expect(await num(page, "blocking-pos-x")).toBeCloseTo(2, 2);
@@ -453,7 +461,7 @@ test.describe("shot character blocking", () => {
     await expect(page.getByTestId("character-blocking")).toHaveAttribute("data-loaded", "true", {
       timeout: 60_000,
     });
-    await page.getByTestId("shot-select").selectOption(valueB);
+    await switchShot(page, valueB);
     await expect(page.getByTestId("blocking-figure")).toHaveCount(1);
     await page.getByTestId("blocking-figure").click();
     expect(await num(page, "blocking-pos-x")).toBeCloseTo(-2, 2);
