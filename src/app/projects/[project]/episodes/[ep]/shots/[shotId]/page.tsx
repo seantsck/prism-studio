@@ -3,6 +3,8 @@ import { ShotPrepView } from "@/components/views/shot-prep-view";
 import { audioMixFingerprint } from "@/domain/previs/audio-mix";
 import { renderedBlockingFingerprint } from "@/domain/previs/blocking";
 import { performanceAudioPlanForShot } from "@/domain/previs/audio-mix-shot";
+import { masterFramePromotionState } from "@/domain/previs/spatial-status";
+import { currentSpatialStateFor } from "@/server/master-frame-promotion";
 import { getPrevisRepo } from "@/server/previs";
 import { requireProject } from "@/server/repo";
 
@@ -26,13 +28,26 @@ export default async function ShotPrepPage({
   // what the Shot's saved character blocking would currently show in a render (null = no visible proxies)
   const blocking = await previs.listShotBlocking(shotId);
   // the Shot's optional 3D Master Frames (none without a 3D set): only offered as a Production Frame SOURCE
-  const masterFrames = (await previs.listMasterFrames(shotId)).map((m) => ({
-    id: m.id,
-    assetId: m.assetId,
-    capturedAt: m.capturedAt,
-    width: m.renderWidth,
-    height: m.renderHeight,
-  }));
+  // each with its stale / unknown status against the CURRENT 3D setup of the Shot's CURRENT Location (display only;
+  // promotion recomputes it). A frame captured in another Location is compared with this one, so it is never fresh.
+  const shotRecord = data.shots.find((s) => s.id === shotId);
+  const currentSpatial = await currentSpatialStateFor(previs, {
+    shotId,
+    locationId: shotRecord?.spatial.locationId ?? null,
+  });
+  const masterFrames = await Promise.all(
+    (await previs.listMasterFrames(shotId)).map(async (m) => {
+      const st = masterFramePromotionState({ masterFrame: m, current: currentSpatial });
+      return {
+        id: m.id,
+        assetId: m.assetId,
+        capturedAt: m.capturedAt,
+        width: m.renderWidth,
+        height: m.renderHeight,
+        spatial: { stale: st.stale, unknown: st.unknown, messages: st.messages },
+      };
+    }),
+  );
   const currentBlockingFingerprint = blocking.length
     ? renderedBlockingFingerprint(
         blocking.map((b) => b.entry),

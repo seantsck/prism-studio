@@ -16,9 +16,30 @@ export class UserFacingError extends Error {
   }
 }
 
+/**
+ * A typed "ask the person first" answer (Phase 4C Master Frame promotion). Nothing was created or selected. The client
+ * may resubmit with `digest` to confirm exactly this state; the server recomputes it and refuses a digest that no
+ * longer matches. Machine state lives here, never in the message text.
+ */
+export interface ActionConfirmation {
+  digest: string;
+  stale: string[];
+  unknown: string[];
+  messages: string[];
+  /** true when the request carried a digest that no longer matches the current state */
+  changed: boolean;
+}
+
 export type ActionResult =
   | { ok: true; message?: string }
-  | { ok: false; error: string; fieldErrors?: Record<string, string>; reference?: string };
+  | {
+      ok: false;
+      error: string;
+      fieldErrors?: Record<string, string>;
+      reference?: string;
+      confirmationRequired?: true;
+      confirmation?: ActionConfirmation;
+    };
 
 export const OK: ActionResult = { ok: true };
 

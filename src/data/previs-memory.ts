@@ -93,7 +93,12 @@ export class MemoryPrevisService implements PrevisRepository {
       selectedProductionFrame?: (
         projectId: string,
         shotId: string,
-      ) => { source: string; sourceMasterFrameId: string | null } | null;
+      ) => {
+        source: string;
+        sourceMasterFrameId: string | null;
+        sourceSceneFingerprint?: string | null;
+        sourceLightingFingerprint?: string | null;
+      } | null;
     },
   ) {}
 
@@ -276,17 +281,23 @@ export class MemoryPrevisService implements PrevisRepository {
     for (const [shotId, p] of this.paths) if (p.projectId === projectId) shotIds.add(shotId);
     for (const b of this.blocking.values()) if (b.projectId === projectId) shotIds.add(b.shotId);
     for (const [shotId, r] of this.lightingRigs) if (r.projectId === projectId) shotIds.add(shotId);
+    const shots = new Map(this.project(projectId).shots.map((s) => [s.id, s]));
     for (const shotId of shotIds) {
-      const b = this.bookmarks.get(shotId) ?? null;
-      const p = this.paths.get(shotId) ?? null;
-      const blockRecs = this.blockingFor(shotId);
-      const rig = this.lightingRigs.get(shotId) ?? null;
-      const sceneId =
-        b?.sceneDocumentId ?? p?.sceneDocumentId ?? blockRecs[0]?.sceneDocumentId ?? rig?.sceneDocumentId;
-      const scene = [...this.scenes.values()].find((x) => x.id === sceneId);
-      if (!scene) continue;
+      // CURRENT state only: the Shot's CURRENTLY assigned Location decides the set. Rows left behind on an earlier
+      // Location (kept as history, never deleted here) are not projected as the Shot's spatial setup now; with no
+      // Location, or no compatible row on it, there is no current spatial reference at all.
+      const locationId = shots.get(shotId)?.spatial.locationId ?? null;
+      const scene = locationId ? (this.scenes.get(locationId) ?? null) : null;
+      if (!scene || scene.projectId !== projectId) continue;
+      const onScene = <T extends { sceneDocumentId: string }>(x: T | null | undefined): T | null =>
+        x && x.sceneDocumentId === scene.id ? x : null;
+      const b = onScene(this.bookmarks.get(shotId));
+      const p = onScene(this.paths.get(shotId));
+      const blockRecs = this.blockingFor(shotId).filter((x) => x.sceneDocumentId === scene.id);
+      const rig = onScene(this.lightingRigs.get(shotId));
+      if (!b && !p && blockRecs.length === 0 && !rig) continue;
       const adopted = [...this.frames.values()]
-        .filter((f) => f.shotId === shotId && f.adoptedAt)
+        .filter((f) => f.shotId === shotId && f.adoptedAt && f.sceneDocumentId === scene.id)
         .sort((x, y) => ((x.adoptedAt ?? "") < (y.adoptedAt ?? "") ? 1 : -1))[0];
       out[shotId] = buildSpatialReference({
         locationId: scene.locationId,
@@ -306,7 +317,7 @@ export class MemoryPrevisService implements PrevisRepository {
             }
           : null,
         adoptedMasterFrameAssetId: adopted?.assetId ?? null,
-        cameraMotion: this.cameraMotionFor(shotId, currentAudioMix),
+        cameraMotion: p ? this.cameraMotionFor(shotId, currentAudioMix) : null,
         shotBlocking: buildShotBlockingReference(
           blockRecs,
           Object.fromEntries(this.project(projectId).characters.map((c) => [c.id, c.name])),
@@ -315,22 +326,37 @@ export class MemoryPrevisService implements PrevisRepository {
         controlPasses: this.currentControlPasses(shotId, scene.sceneFingerprint, p, b),
         reconstructions: [...this.reconstructions.values()].filter((r) => r.locationId === scene.locationId),
         // a rig authored for another set does not describe this one
-        shotLighting:
-          rig && rig.sceneDocumentId === scene.id
-            ? buildShotLightingReference({
-                rig,
-                productionFrameLightingFingerprint: selectedProductionFrameLighting({
-                  selected: this.access.selectedProductionFrame?.(projectId, shotId) ?? null,
-                  masterFrameLighting: (id) => {
-                    const f = this.frames.get(id);
-                    return f && f.shotId === shotId ? f.lightingFingerprint : null;
-                  },
-                }),
-              })
-            : null,
+        shotLighting: rig
+          ? buildShotLightingReference({
+              rig,
+              productionFrameLightingFingerprint: selectedProductionFrameLighting({
+                selected: this.access.selectedProductionFrame?.(projectId, shotId) ?? null,
+                masterFrameLighting: (id) => {
+                  const f = this.frames.get(id);
+                  return f && f.shotId === shotId ? f.lightingFingerprint : null;
+                },
+              }),
+            })
+          : null,
       });
     }
     return structuredClone(out);
+  }
+
+  /** Memory mode models the full 0049 schema. */
+  async spatialProvenancePersisted() {
+    return true;
+  }
+
+  /** Synchronous read of a Master Frame row as it exists now (the memory Production Frame exact-source check). */
+  masterFrameRecord(id: string): MasterFrameRecord | null {
+    const f = this.frames.get(id);
+    return f ? clone(f) : null;
+  }
+
+  /** Test/maintenance seam: removes a Master Frame row (as a database DELETE or cascade would); its Asset stays. */
+  deleteMasterFrame(id: string): void {
+    this.frames.delete(id);
   }
 
   async listMasterFrames(shotId: string) {
@@ -369,9 +395,24 @@ export class MemoryPrevisService implements PrevisRepository {
       blocking: input.blocking ? clone(input.blocking) : null,
       lightingFingerprint: input.lightingFingerprint ?? null,
       lighting: input.lighting ? clone(input.lighting) : null,
+      cameraFingerprint: input.cameraFingerprint ?? null,
+      camera: input.camera ? clone(input.camera) : null,
+      baseEnvironmentFingerprint: input.baseEnvironmentFingerprint ?? null,
       createdBy: input.userId,
       createdAt: input.capturedAt,
     };
+    // what 0049's scene_master_frames_camera_check says: both or neither, and the snapshot names its own fingerprint
+    if ((rec.cameraFingerprint === null) !== (rec.camera === null))
+      throw new PrevisError("invalid", "A Master Frame's camera provenance must be complete.");
+    if (
+      rec.camera &&
+      (rec.camera.cameraFingerprint !== rec.cameraFingerprint ||
+        !/^[0-9a-f]{64}$/.test(rec.cameraFingerprint!))
+    )
+      throw new PrevisError("invalid", "A Master Frame's camera provenance is inconsistent.");
+    // 0049's scene_master_frames_base_environment_check
+    if (rec.baseEnvironmentFingerprint !== null && !/^[0-9a-f]{64}$/.test(rec.baseEnvironmentFingerprint))
+      throw new PrevisError("invalid", "A Master Frame's base environment provenance is malformed.");
     this.frames.set(rec.id, rec);
     return clone(rec);
   }

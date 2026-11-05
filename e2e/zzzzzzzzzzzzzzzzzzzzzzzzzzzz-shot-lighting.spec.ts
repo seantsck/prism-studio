@@ -455,11 +455,17 @@ test.describe("the Shot Lighting story", () => {
     await expect(page.getByTestId("master-frame")).toHaveCount(frames + 1, { timeout: 30_000 });
 
     await page.goto(`${shotA.shotUrl}?section=production_frame`);
-    const useButtons = page.locator('[data-testid^="pf-use-master-"]');
+    const useButtons = page.locator('[data-testid^="pf-use-master-"]:not([data-testid*="anyway"])');
     await expect(useButtons).toHaveCount(frames + 1, { timeout: 30_000 });
-    // newest first; the last is the first capture, lit by fp1
+    // newest first; the last is the first capture, lit by fp1. It is stale now, so Phase 4C asks first.
     await useButtons.last().click();
-    await expect(page.getByText("Production Frame saved").first()).toBeVisible({ timeout: 30_000 });
+    const anyway = page.locator('[data-testid^="pf-use-master-anyway-"]');
+    await expect(anyway).toHaveCount(1, { timeout: 30_000 });
+    await expect(page.getByTestId("pf-master-confirm-reason").first()).toContainText("STALE");
+    await anyway.click();
+    await expect(page.getByTestId("pf-master-promoted").first()).toContainText("Production Frame v", {
+      timeout: 30_000,
+    });
 
     const full = await pkg(page, shotA.shotId);
     const ref = full.spatialReference!.shotLighting!;

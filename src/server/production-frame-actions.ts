@@ -4,12 +4,19 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { ProductionFrameError } from "@/data/production-frame-repository";
 import { buildShotContext, type ShotContext } from "@/domain/context";
-import { draftProductionFrame, type ProductionFrameSource } from "@/domain/production-frame";
+import {
+  draftProductionFrame,
+  sourceSpatialOfMasterFrame,
+  type ProductionFrameSource,
+  type ProductionFrameSourceSpatial,
+} from "@/domain/production-frame";
+import type { MasterFramePromotionState } from "@/domain/previs/spatial-status";
 import type { Asset, ProjectData } from "@/domain/schemas";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { discardUpload, hasFile, ingestUpload } from "./ingest-upload";
 import { getGenerationRepo } from "./generation";
 import { getMediaQaRepo } from "./media-qa";
+import { promotionStateFor } from "./master-frame-promotion";
 import { getPrevisRepo } from "./previs";
 import { GeneratedFrameRefused, promoteGeneratedFrame } from "./production-frame-generated";
 import { persistUploadedFrame } from "./production-frame-upload";
@@ -61,9 +68,14 @@ function asUserError(err: unknown): never {
 async function promote(
   ctx: ShotContext,
   source: Exclude<ProductionFrameSource, "upload">,
-  ids: { sourceStoryboardFrameId?: string; sourceMasterFrameId?: string },
+  ids: {
+    sourceStoryboardFrameId?: string;
+    sourceMasterFrameId?: string;
+    sourceSpatial?: ProductionFrameSourceSpatial;
+  },
   asset: Asset | null,
   slug: string,
+  confirmedNote = "",
 ): Promise<ActionResult> {
   const repo = await getRepo();
   if (!asset || asset.projectId !== ctx.project.id)
@@ -90,13 +102,33 @@ async function promote(
     refresh(slug);
     return {
       ok: true,
-      message: result.created
-        ? `Production Frame v${result.frame.version} is now canonical.`
-        : `That frame already exists as Production Frame v${result.frame.version}; it is canonical again.`,
+      message:
+        (result.created
+          ? `Production Frame v${result.frame.version} is now canonical.`
+          : `That frame already exists as Production Frame v${result.frame.version}; it is canonical again.`) +
+        confirmedNote,
     };
   } catch (err) {
     return asUserError(err);
   }
+}
+
+/** The typed "confirm first" answer: nothing was created or selected. */
+function confirmationResult(state: MasterFramePromotionState, changed: boolean): ActionResult {
+  return {
+    ok: false,
+    error: changed
+      ? "The 3D setup changed after you confirmed. Nothing was promoted; review the current state and confirm again."
+      : "This Master Frame no longer matches the Shot's current 3D setup. Review and confirm to use it anyway.",
+    confirmationRequired: true,
+    confirmation: {
+      digest: state.digest,
+      stale: [...state.stale],
+      unknown: [...state.unknown],
+      messages: [...state.messages],
+      changed,
+    },
+  };
 }
 
 async function promoteStoryboardFrame_impl(form: FormData): Promise<ActionResult> {
@@ -121,12 +153,28 @@ async function promoteMasterFrame_impl(form: FormData): Promise<ActionResult> {
   // the master frame must be THIS shot's, in THIS project (RLS already limits what the user can see)
   if (!mf || mf.projectId !== data.project.id || mf.shotId !== ctx.shot.id)
     throw new UserFacingError("That 3D Master Frame does not belong to this Shot.");
+
+  // Phase 4C: the server recomputes the WHOLE state from its own records immediately before promoting. The browser's
+  // only input is the digest it was shown; its view of stale / unknown axes is never trusted.
+  // Current truth is resolved against the Shot's CURRENTLY assigned Location; the frame's own Location is history.
+  const state = await promotionStateFor(await getPrevisRepo(), mf, {
+    shotId: ctx.shot.id,
+    locationId: ctx.shot.spatial.locationId ?? null,
+  });
+  const supplied = str(form, "confirmDigest") || null;
+  if (supplied !== null && supplied !== state.digest) return confirmationResult(state, true);
+  if (supplied === null && state.requiresConfirmation) return confirmationResult(state, false);
+  const confirmedNote = state.requiresConfirmation
+    ? ` Used anyway (confirmed now): ${[...state.stale.map((a) => `stale ${a}`), ...state.unknown.map((a) => `unknown ${a}`)].join(", ")}.`
+    : "";
   return promote(
     ctx,
     "previs_master",
-    { sourceMasterFrameId: mf.id },
+    // the EXACT source Master Frame's own provenance, never current, package or browser state
+    { sourceMasterFrameId: mf.id, sourceSpatial: sourceSpatialOfMasterFrame(mf) },
     ctx.assets.get(mf.assetId) ?? null,
     slug,
+    confirmedNote,
   );
 }
 

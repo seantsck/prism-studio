@@ -58,6 +58,8 @@ import {
   type ObjectManifest,
 } from "@/domain/previs/spatial-passes";
 import { cameraBookmarkSchema, previsDocumentSchema } from "@/domain/previs/types";
+import { parseRenderCamera } from "@/domain/previs/camera-provenance";
+import { spatialProvenanceReady } from "./spatial-provenance-schema";
 import {
   PrevisError,
   type AudioMixResolver,
@@ -172,6 +174,10 @@ const mapFrame = (r: Row): MasterFrameRecord => ({
   blockingFingerprint: str(r.blocking_fingerprint),
   blocking: (r.blocking_json as RenderedBlockingFigure[] | null) ?? null,
   ...mapRenderLighting(r),
+  // absent before 0049 (select * then simply has no such column): reads as "not frozen at capture"
+  cameraFingerprint: str(r.camera_fingerprint),
+  camera: r.camera_json ? parseRenderCamera(r.camera_json) : null,
+  baseEnvironmentFingerprint: str(r.base_environment_fingerprint),
   createdBy: str(r.created_by),
   createdAt: iso(r.created_at),
 });
@@ -571,9 +577,15 @@ export class PostgresPrevisData implements PrevisRepository {
         return out;
       const rigs = new Map(lr.rows.map((r) => [String(r.shot_id), mapLightingRig(r)]));
       // the exact chain: selection -> that Production Frame -> its source -> that very Master Frame's own record
+      const provenanceReady = rigs.size ? await spatialProvenanceReady(this.pool, c) : false;
       const pf = rigs.size
         ? await c.query(
-            `select sel.shot_id, pf.source, pf.source_master_frame_id, mf.lighting_fingerprint
+            `select sel.shot_id, pf.source, pf.source_master_frame_id, mf.lighting_fingerprint,
+                    ${
+                      provenanceReady
+                        ? "pf.source_scene_fingerprint, pf.source_lighting_fingerprint"
+                        : "null as source_scene_fingerprint, null as source_lighting_fingerprint"
+                    }
                from shot_production_frame_selections sel
                join shot_production_frames pf on pf.id = sel.production_frame_id
                left join scene_master_frames mf
@@ -596,18 +608,24 @@ export class PostgresPrevisData implements PrevisRepository {
       const names = Object.fromEntries(nameRows.rows.map((r) => [String(r.id), String(r.name)]));
       const bookmarks = new Map(b.rows.map((r) => [String(r.shot_id), mapBookmark(r)]));
       const paths = new Map(p.rows.map((r) => [String(r.shot_id), mapPath(r)]));
-      const sceneIds = [
-        ...new Set([...b.rows, ...p.rows, ...bl.rows, ...lr.rows].map((r) => String(r.scene_document_id))),
-      ];
-      const s = await c.query("select * from location_scene_documents where id = any($1::uuid[])", [
-        sceneIds,
-      ]);
-      const scenes = new Map(s.rows.map((r) => [String(r.id), mapScene(r)]));
+      // CURRENT state only: each Shot's CURRENTLY assigned Location decides its set. Rows left behind on an earlier
+      // Location stay as history but are never projected as the Shot's spatial setup now.
+      const sh = await c.query("select id, location_id from shots where project_id = $1", [projectId]);
+      const shotLocation = new Map(sh.rows.map((r) => [String(r.id), str(r.location_id)]));
+      const locationIds = [...new Set([...shotLocation.values()].filter((x): x is string => !!x))];
+      const s = await c.query(
+        "select * from location_scene_documents where project_id = $1 and location_id = any($2::uuid[])",
+        [projectId, locationIds],
+      );
+      const sceneByLocation = new Map(s.rows.map((r) => [String(r.location_id), mapScene(r)]));
       const f = await c.query(
-        `select distinct on (shot_id) shot_id, asset_id from scene_master_frames
-          where project_id = $1 and adopted_at is not null order by shot_id, adopted_at desc`,
+        `select distinct on (mf.shot_id) mf.shot_id, mf.asset_id from scene_master_frames mf
+           join shots s on s.id = mf.shot_id
+           join location_scene_documents d on d.location_id = s.location_id and d.id = mf.scene_document_id
+          where mf.project_id = $1 and mf.adopted_at is not null order by mf.shot_id, mf.adopted_at desc`,
         [projectId],
       );
+      // the latest adopted Master Frame on the Shot's CURRENT set (one adopted on an earlier Location is history)
       const adopted = new Map(f.rows.map((r) => [String(r.shot_id), String(r.asset_id)]));
       const reconRows = await c.query(
         "select * from location_spatial_reconstructions where project_id = $1 order by created_at desc",
@@ -664,22 +682,24 @@ export class PostgresPrevisData implements PrevisRepository {
         ...blockingByShot.keys(),
         ...rigs.keys(),
       ])) {
-        const rig = rigs.get(shotId) ?? null;
-        const bm = bookmarks.get(shotId) ?? null;
-        const path = paths.get(shotId) ?? null;
-        const blockRecs = (blockingByShot.get(shotId) ?? []).sort((x, y) =>
-          x.characterId < y.characterId ? -1 : 1,
-        );
-        const scene = scenes.get(
-          (bm?.sceneDocumentId ??
-            path?.sceneDocumentId ??
-            blockRecs[0]?.sceneDocumentId ??
-            rig?.sceneDocumentId) as string,
-        );
-        if (!scene) continue;
-        const currentBlockingFp = blockRecs.length
+        const locationId = shotLocation.get(shotId) ?? null;
+        const scene = locationId ? (sceneByLocation.get(locationId) ?? null) : null;
+        if (!scene) continue; // no Location now, or no saved set on it: no current spatial reference
+        const onScene = <T extends { sceneDocumentId: string }>(x: T | null | undefined): T | null =>
+          x && x.sceneDocumentId === scene.id ? x : null;
+        const rig = onScene(rigs.get(shotId));
+        const bm = onScene(bookmarks.get(shotId));
+        const path = onScene(paths.get(shotId));
+        const blockRecs = (blockingByShot.get(shotId) ?? [])
+          .filter((x) => x.sceneDocumentId === scene.id)
+          .sort((x, y) => (x.characterId < y.characterId ? -1 : 1));
+        if (!rig && !bm && !path && blockRecs.length === 0) continue; // only old-Location rows remain
+        // freshness inputs of clips / pass bundles are unchanged: every blocking row and rig of the Shot, as rendered
+        // (capture and render use the same derivation); only what is PROJECTED below is limited to the current set
+        const allBlockRecs = blockingByShot.get(shotId) ?? [];
+        const currentBlockingFp = allBlockRecs.length
           ? renderedBlockingFingerprint(
-              blockRecs.map((x) => x.entry),
+              allBlockRecs.map((x) => x.entry),
               { locationId: scene.locationId },
             )
           : null;
@@ -689,7 +709,7 @@ export class PostgresPrevisData implements PrevisRepository {
               path.pathFingerprint,
               currentAudioMix?.(shotId, path.durationMs) ?? null,
               currentBlockingFp,
-              rig?.lightingFingerprint ?? null,
+              rigs.get(shotId)?.lightingFingerprint ?? null,
             )
           : null;
         const cameraMotion: CameraMotionReference | null = path
@@ -748,21 +768,24 @@ export class PostgresPrevisData implements PrevisRepository {
           })(),
           reconstructions: reconstructions.filter((rec) => rec.locationId === scene.locationId),
           // a rig authored for another set does not describe this one
-          shotLighting:
-            rig && rig.sceneDocumentId === scene.id
-              ? buildShotLightingReference({
-                  rig,
-                  productionFrameLightingFingerprint: selectedProductionFrameLighting({
-                    selected: selectedFrames.has(shotId)
-                      ? {
-                          source: String(selectedFrames.get(shotId)!.source),
-                          sourceMasterFrameId: str(selectedFrames.get(shotId)!.source_master_frame_id),
-                        }
-                      : null,
-                    masterFrameLighting: () => str(selectedFrames.get(shotId)!.lighting_fingerprint),
-                  }),
-                })
-              : null,
+          shotLighting: rig
+            ? buildShotLightingReference({
+                rig,
+                productionFrameLightingFingerprint: selectedProductionFrameLighting({
+                  selected: selectedFrames.has(shotId)
+                    ? {
+                        source: String(selectedFrames.get(shotId)!.source),
+                        sourceMasterFrameId: str(selectedFrames.get(shotId)!.source_master_frame_id),
+                        sourceSceneFingerprint: str(selectedFrames.get(shotId)!.source_scene_fingerprint),
+                        sourceLightingFingerprint: str(
+                          selectedFrames.get(shotId)!.source_lighting_fingerprint,
+                        ),
+                      }
+                    : null,
+                  masterFrameLighting: () => str(selectedFrames.get(shotId)!.lighting_fingerprint),
+                }),
+              })
+            : null,
         });
       }
       return out;
@@ -786,17 +809,41 @@ export class PostgresPrevisData implements PrevisRepository {
     });
   }
 
+  async spatialProvenancePersisted() {
+    return this.tx((c) => spatialProvenanceReady(this.pool, c));
+  }
+
   async recordMasterFrame(input: NewMasterFrame) {
     return this.tx(async (c) => {
       // the lighting columns are named only for a lit render, so a database before 0048 still captures without a rig
       const lit = input.lighting ? ", lighting_fingerprint, lighting_json" : "";
       const litValues = input.lighting ? ",$17,$18::jsonb" : "";
+      // the camera and base-environment columns are named only when 0049 is installed: before it, the render is
+      // stored WITHOUT that provenance (it reads back as unknown, which is the truth about that row); the capture
+      // checks still ran
+      const ready =
+        !!(input.camera || input.baseEnvironmentFingerprint) && (await spatialProvenanceReady(this.pool, c));
+      const withCamera = ready && !!input.camera;
+      const withEnv = ready && !!input.baseEnvironmentFingerprint;
+      let n = input.lighting ? 19 : 17;
+      let cam = "";
+      let camValues = "";
+      if (withCamera) {
+        cam += ", camera_fingerprint, camera_json";
+        camValues += `,$${n},$${n + 1}::jsonb`;
+        n += 2;
+      }
+      if (withEnv) {
+        cam += ", base_environment_fingerprint";
+        camValues += `,$${n}`;
+      }
       const r = await c.query(
         `insert into scene_master_frames
            (id, project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint,
             camera_bookmark_id, asset_id, render_width, render_height, production_aspect_ratio, captured_at,
-            created_by, created_at, blocking_fingerprint, blocking_json${lit})
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$13,$15,$16::jsonb${litValues}) returning *`,
+            created_by, created_at, blocking_fingerprint, blocking_json${lit}${cam})
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$13,$15,$16::jsonb${litValues}${camValues})
+         returning *`,
         [
           input.id,
           input.projectId,
@@ -815,6 +862,8 @@ export class PostgresPrevisData implements PrevisRepository {
           input.blockingFingerprint ?? null,
           input.blocking ? JSON.stringify(input.blocking) : null,
           ...(input.lighting ? [input.lightingFingerprint ?? null, JSON.stringify(input.lighting)] : []),
+          ...(withCamera ? [input.cameraFingerprint ?? null, JSON.stringify(input.camera)] : []),
+          ...(withEnv ? [input.baseEnvironmentFingerprint] : []),
         ],
       );
       return mapFrame(r.rows[0]);

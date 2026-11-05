@@ -10,6 +10,8 @@ const memoryEnv = (port: number) => ({
   PRISM_STUDIO_MOCK_STAGE_DELAY_MS: "400",
   PRISM_STUDIO_WORKER_IDLE_POLL_MS: "250",
   PRISM_STUDIO_DEV_GENERATION_TICK: "1",
+  // Phase 4C: lets memory-mode E2E create a pre-4C (no camera provenance) Master Frame fixture
+  PRISM_STUDIO_DEV_PREVIS_FIXTURES: "1",
   // Continuity analysis: the free Mock analyzer runs; Gemini is listed but has NO credential and paid
   // analysis stays off, so no E2E can ever reach an external analyzer even if .env.local holds a key.
   PRISM_STUDIO_CONTINUITY_ANALYZERS: "mock,gemini,openai",
@@ -78,6 +80,9 @@ const ISOLATED_3A4D = "zzzzzzzzzzzzzzzzzzzzzzzzzz-sequence-review.spec.ts";
 /** The Phase 4B Shot Lighting spec: its own memory server (it saves a set, rigs, renders and a Production Frame). */
 const ISOLATED_4B = "zzzzzzzzzzzzzzzzzzzzzzzzzzzz-shot-lighting.spec.ts";
 
+/** The Phase 4C-I1 spatial-provenance spec: its own memory server (sets, bookmarks, Master Frames, Production Frames). */
+const ISOLATED_4C = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzz-spatial-provenance.spec.ts";
+
 /**
  * TEST SERVERS ONLY. Playwright's request client reuses keep-alive sockets; at Node's default idle-close boundary
  * (5 s + 1 s buffer) the server could close a socket while `page.request` was reusing it, giving ECONNRESET before
@@ -104,6 +109,7 @@ export default defineConfig({
         ISOLATED_3A4D,
         ISOLATED_3A4F,
         ISOLATED_4B,
+        ISOLATED_4C,
       ],
       use: { baseURL: "http://localhost:3102" },
     },
@@ -151,6 +157,11 @@ export default defineConfig({
       name: "memory-4b-isolated",
       testMatch: ISOLATED_4B,
       use: { baseURL: "http://localhost:3111" },
+    },
+    {
+      name: "memory-4c-isolated",
+      testMatch: ISOLATED_4C,
+      use: { baseURL: "http://localhost:3112" },
     },
   ],
   // Started in order: the first builds; the others serve the same build from separate processes (separate stores).
@@ -240,6 +251,13 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 120_000,
       env: memoryEnv(3111),
+    },
+    {
+      command: `npx next start -p 3112 ${KEEP_ALIVE}`,
+      url: "http://localhost:3112",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: memoryEnv(3112),
     },
   ],
 });

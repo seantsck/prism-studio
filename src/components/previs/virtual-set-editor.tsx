@@ -6,10 +6,15 @@ import type { BlockingFigureData } from "@/domain/previs/blocking";
 import { buildPrevisDocument, sceneFingerprint } from "@/domain/previs/document";
 import { bookmarkFromCamera, cameraFromBookmark } from "@/domain/previs/camera";
 import { buildHotelCanopyEngineScene } from "@/domain/previs/hotel-canopy";
+import { bookmarkCameraFingerprint } from "@/domain/previs/spatial-passes";
 import {
-  MASTER_FRAME_STALE_LABEL,
+  SPATIAL_STALE_LABEL,
+  SPATIAL_UNKNOWN_LABEL,
+  masterFrameSpatialStatus,
+} from "@/domain/previs/spatial-status";
+import {
+  baseEnvironmentFingerprint,
   baseEnvironmentOf,
-  masterFrameStaleReasons,
   type BaseEnvironment,
   type RenderLighting,
 } from "@/domain/previs/lighting";
@@ -83,6 +88,10 @@ export interface VirtualSetProps {
     /** the rig the frame was lit by (null = no Shot Lighting Rig was recorded) */
     lightingFingerprint: string | null;
     lighting: Pick<RenderLighting, "baseEnvironment"> | null;
+    /** the server-verified camera the frame was rendered with (null = not recorded: UNKNOWN camera provenance) */
+    cameraFingerprint: string | null;
+    /** the base environment (skybox) the frame was rendered on (null = not recorded) */
+    baseEnvironmentFingerprint: string | null;
   }>;
   /** the active shot's stored lighting rig and authored lighting text; null when no shot is active */
   shotLighting: ShotLightingData | null;
@@ -380,8 +389,11 @@ export function VirtualSetEditor(props: VirtualSetProps) {
     const renderedLighting = adapter().lighting.appliedFingerprint();
     setStatus({ tone: "busy", text: "Rendering master frame…" });
     try {
-      const frame = await adapter().captureMasterFrame(bookmark.value);
+      // the claim names the EXACT bookmark camera the render used; the server compares it with THIS Shot's bookmark
+      const renderedBookmark = bookmark.value;
+      const frame = await adapter().captureMasterFrame(renderedBookmark);
       const fd = new FormData();
+      fd.set("cameraFingerprint", bookmarkCameraFingerprint(renderedBookmark));
       fd.set("projectSlug", props.projectSlug);
       fd.set("shotId", shotId);
       fd.set("locationId", props.locationId);
@@ -403,6 +415,10 @@ export function VirtualSetEditor(props: VirtualSetProps) {
           lightingFingerprint: renderedLighting,
           lighting: lighting.current.baseEnvironment
             ? { baseEnvironment: lighting.current.baseEnvironment }
+            : null,
+          cameraFingerprint: bookmarkCameraFingerprint(renderedBookmark),
+          baseEnvironmentFingerprint: lighting.current.baseEnvironment
+            ? baseEnvironmentFingerprint(lighting.current.baseEnvironment)
             : null,
         },
         ...f,
@@ -433,6 +449,11 @@ export function VirtualSetEditor(props: VirtualSetProps) {
   const selected = objects.find((o) => o.id === selectedId) ?? null;
   const shotLabel = props.shots.find((s) => s.id === shotId)?.label ?? null;
   const bookmarkStale = !!bookmark && !!savedFingerprint && bookmark.sceneFingerprint !== savedFingerprint;
+  // the ACTIVE Shot's production camera (the page loaded it for that Shot), for the Master Frame camera axis
+  const activeBookmarkCamera = useMemo(
+    () => (props.bookmark ? bookmarkCameraFingerprint(props.bookmark.value) : null),
+    [props.bookmark],
+  );
 
   return (
     <div
@@ -964,22 +985,36 @@ export function VirtualSetEditor(props: VirtualSetProps) {
                   revision {f.sceneRevision} · {new Date(f.capturedAt).toLocaleString()}
                 </div>
                 {blockingState && lightingState?.loaded && shotId === props.activeShotId
-                  ? masterFrameStaleReasons({
-                      frame: { ...f, sceneFingerprint: f.sceneFingerprint },
-                      currentSceneFingerprint: savedFingerprint,
-                      currentBlockingFingerprint: blockingState.savedFingerprint,
-                      currentLighting: lightingState.current,
-                    }).map((reason) => (
-                      <div
-                        key={reason}
-                        className="text-warn"
-                        data-testid={
-                          reason === "blocking" ? "master-frame-stale" : `master-frame-stale-${reason}`
-                        }
-                      >
-                        {MASTER_FRAME_STALE_LABEL[reason]}
-                      </div>
-                    ))
+                  ? (() => {
+                      const status = masterFrameSpatialStatus(f, {
+                        sceneFingerprint: savedFingerprint,
+                        cameraFingerprint: activeBookmarkCamera,
+                        blockingFingerprint: blockingState.savedFingerprint,
+                        lighting: lightingState.current,
+                      });
+                      return [
+                        ...status.stale.map((reason) => (
+                          <div
+                            key={reason}
+                            className="text-warn"
+                            data-testid={
+                              reason === "blocking" ? "master-frame-stale" : `master-frame-stale-${reason}`
+                            }
+                          >
+                            {SPATIAL_STALE_LABEL[reason]}
+                          </div>
+                        )),
+                        ...status.unknown.map((axis) => (
+                          <div
+                            key={`u:${axis}`}
+                            className="text-muted"
+                            data-testid={`master-frame-unknown-${axis}`}
+                          >
+                            {SPATIAL_UNKNOWN_LABEL[axis]}
+                          </div>
+                        )),
+                      ];
+                    })()
                   : null}
                 {f.adopted ? (
                   <span className="text-pass" data-testid="master-frame-adopted">

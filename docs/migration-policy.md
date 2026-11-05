@@ -135,6 +135,47 @@ worker role, 0 policies with `direct_video_allowed = true`; `db:validate` STRUCT
 67/67, `db:worker-role` 60/60 (REAL LOGIN), `db:continuity-analysis` 80/80, `db:media-qa` 39/39, narrow repository
 acceptance on a disposable Project 15/15, hosted browser E2E 40/40; counts and Storage back to baseline afterwards.
 
+**0049** (Phase 4C-I1, **in the repository, NOT applied to hosted**; hosted head 0048, 0049 pending; checksum
+`9b4589caa4ed19bf92e6dc9f77217587bf3b08f99977578871c69113f9da19fb`). Revised in the 4C-I1 technical-review remediation
+before it was ever applied anywhere but a disposable database (the first review draft was
+`6ebcb8639e7fcab65fcf35c07ed39d9613d35ae83a79459b530529b8c883679b`); 0048 is byte-identical.
+
+- **`scene_master_frames`:** nullable `camera_fingerprint` / `camera_json` (`prism.render-camera.v1`) with a pair CHECK
+  (null/null, or a 64-hex fingerprint equal to the JSON's own `cameraFingerprint`, schema and minimal camera shape).
+  null/null means camera provenance was not frozen at capture. Plus nullable `base_environment_fingerprint`
+  (`prism.base-environment.v1` of the engine `{ upstreamCommit, skybox }`, pixel-affecting and outside
+  `scene_fingerprint`; 64-hex CHECK `scene_master_frames_base_environment_check`; null = not frozen). Immutable without
+  new trigger logic: 0048's `guard_scene_master_frame_provenance` is deny-by-default.
+- **`shot_production_frames`:** exactly five nullable `source_{scene,camera,blocking,lighting,base_environment}_fingerprint`
+  columns.
+  The marker is `source_scene_fingerprint`; the CHECK allows all-null, or `previs_master` + 64-hex values. The
+  SECURITY INVOKER `BEFORE INSERT` trigger `check_shot_production_frame_spatial_source` requires, when frozen, that the
+  source Master Frame exists, has the same Project, Shot and Asset, and that all five fingerprints are equal
+  (`IS DISTINCT FROM`, nulls included). It never derives anything from current state.
+- **Unchanged:** no FK on `source_master_frame_id`; no stale / unknown arrays; no backfill or row write; no table,
+  grant, revoke, policy or SECURITY DEFINER.
+- **Migration-ahead-of-code:** every new column is nullable and the trigger is a no-op without the marker, so `main` at
+  `b340bcd` keeps working on 0049. Proven locally: main's own `db:previs` 60/60, `db:lighting` 119/119,
+  `db:production-frames` 71/71, `db:blocking` 57/57 and `db:behavior` 61/61 against a 0049 database.
+- **Code-ahead-of-migration:** the 4C branch probes the columns once per pool and runs on 0048 (proven against a 0048
+  database): the camera check still runs; the new values are just not persisted.
+
+**Disposable gate (local only, not hosted proof; revised 0049).** A freshly reset database at exactly 0001–0048, then
+the revised 0049 applied once by `db:migrate` (a second run skips it; `--check` OK). Branch at 0048 first: the camera
+and current-Location checks refuse with nothing stored, a capture reads back camera / base environment as unknown,
+promotion confirms and works without frozen lineage. After 0049: `db:spatial-source` 63/63 (including no backfill of
+the pre-0049 rows, base-environment immutability and exact-source match, and `spatialReference` current-Location
+authority), `db:validate` STRUCTURE OK, `db:behavior` 61/61, `db:previs` 60/60, `db:lighting` 119/119,
+`db:production-frames` 71/71, `db:blocking` 57/57, `db:spatial-passes` 80/80. (The previs / lighting / blocking /
+spatial-passes fixtures now assign their Shot to the suite's private Location, because a `spatialReference` describes
+the Shot's current Location only.) Unmodified `main` (`b340bcd`) on the revised 0049: its own `db:previs` 60/60,
+`db:lighting` 119/119, `db:production-frames` 71/71, `db:blocking` 57/57, `db:spatial-passes` 80/80, `db:behavior`
+61/61. The grant diff before and after shows no table grant or relation ACL change; the only new entries are column
+rows derived from existing table ACLs (8 columns × anon / authenticated × 4) and the trigger function's schema-default
+EXECUTE (SECURITY INVOKER), the same pattern as 0048. Local harness limits, identical for `main` on the same database:
+`db:rls` stops at the `storage.objects` shim and `db:worker-role` 57/63 (local ingest). Hosted acceptance belongs to
+4C-B.
+
 **0048** (Phase 4B, **applied to hosted DEV on 2026-11-04T02:10:30.580Z**, checksum
 `d59c8ef800ce83f78492b4e030a07d6349d06fb1c2e04daeec195384860034b1`; hosted head 0048, nothing pending).
 

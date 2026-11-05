@@ -13,7 +13,8 @@ async function setup() {
   const repo = new MemoryRepository();
   const data = (await repo.loadProject("ojousama"))!;
   const shot = data.shots.find((s) => s.shotCode === "3A")!;
-  const location = data.locations[0]!;
+  // the Shot's OWN Location: a spatialReference describes only the Shot's current Location (Phase 4C)
+  const location = data.locations.find((l) => l.id === shot.spatial.locationId)!;
   const character = data.characters[0]!;
   return { repo, data, shot, location, character, project: data.project };
 }

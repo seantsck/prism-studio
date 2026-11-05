@@ -21,9 +21,17 @@ import {
   type ShotBlockingEntry,
 } from "@/domain/previs/blocking";
 import { cameraPathSchema, validateCameraPath } from "@/domain/previs/camera-path";
+import {
+  buildRenderCamera,
+  LOCATION_REASSIGNED_MESSAGE,
+  WRONG_CAMERA_MESSAGE,
+  type RenderCamera,
+} from "@/domain/previs/camera-provenance";
 import { buildPrevisDocument } from "@/domain/previs/document";
 import {
   authoredLightingIntent,
+  baseEnvironmentFingerprint,
+  baseEnvironmentOf,
   buildRenderLighting,
   parseShotLightingDraft,
   parseShotLightingRig,
@@ -249,9 +257,45 @@ export async function linkShotCamera(
 }
 
 /**
+ * The camera a Master Frame may claim (Phase 4C, P5). The Shot's bookmark is reloaded and must belong to this Shot,
+ * Project, Location and saved set; its canonical camera is derived HERE. The browser states only which camera
+ * fingerprint it rendered with: a missing or different claim (e.g. another Shot's bookmark still loaded in the editor)
+ * refuses the capture before a byte is stored. The snapshot persisted is always this server-derived one.
+ */
+function authorizeRenderCamera(args: {
+  bookmark: Awaited<ReturnType<PrevisRepository["getBookmarkForShot"]>>;
+  projectId: string;
+  shotId: string;
+  locationId: string;
+  scene: SceneDocumentRecord;
+  claimed: string | null;
+}): RenderCamera {
+  const b = args.bookmark;
+  if (
+    !b ||
+    b.projectId !== args.projectId ||
+    b.shotId !== args.shotId ||
+    b.locationId !== args.locationId ||
+    b.sceneDocumentId !== args.scene.id
+  )
+    throw new UserFacingError("Use the production camera for this shot before capturing.");
+  let camera: RenderCamera;
+  try {
+    camera = buildRenderCamera(b);
+  } catch {
+    throw new UserFacingError(
+      "This Shot's production camera cannot be rendered. Link the production camera again.",
+    );
+  }
+  if (args.claimed !== camera.cameraFingerprint) throw new PrevisError("conflict", WRONG_CAMERA_MESSAGE);
+  return camera;
+}
+
+/**
  * Stores a locally rendered master frame in the PRIVATE asset store with scene provenance. The render happens in
  * the browser from the editor's scene; the server re-derives revision/fingerprint from the saved scene (a client
- * value is only a claim that must match) and verifies the image really is a production-frame render.
+ * value is only a claim that must match) and verifies the image really is a production-frame render. Every claim
+ * (set revision, camera, blocking, lighting) is checked BEFORE the image is stored.
  */
 export async function captureMasterFrame(
   form: FormData,
@@ -263,13 +307,22 @@ export async function captureMasterFrame(
     const claimedRevision = Number(str(form, "sceneRevision"));
     const claimedBlocking = optStr(form, "blockingFingerprint");
     const claimedLighting = optStr(form, "lightingFingerprint");
+    const claimedCamera = optStr(form, "cameraFingerprint");
     const file = form.get("file");
     if (!(file instanceof File) || file.size === 0)
       throw new UserFacingError("No rendered frame was received.");
 
     const user = await requireUser();
     const data = await requireProjectFresh(slug);
-    if (!data.shots.some((s) => s.id === shotId)) throw new UserFacingError("That shot no longer exists.");
+    const shot = data.shots.find((s) => s.id === shotId);
+    if (!shot) throw new UserFacingError("That shot no longer exists.");
+    // the Shot's CURRENT Location is the only one it may be captured in: a stale editor (or an old Location's
+    // leftover bookmark / rig / blocking rows) can never produce a Master Frame for a set the Shot is no longer on
+    if (!shot.spatial.locationId)
+      throw new UserFacingError(
+        "This shot is not assigned to a location. Assign its location before capturing.",
+      );
+    if (shot.spatial.locationId !== locationId) throw new UserFacingError(LOCATION_REASSIGNED_MESSAGE);
     const previs = await getPrevisRepo();
     const scene = await previs.getSceneForLocation(locationId);
     if (!scene || scene.projectId !== data.project.id)
@@ -277,8 +330,14 @@ export async function captureMasterFrame(
     if (scene.revision !== claimedRevision)
       throw new PrevisError("conflict", "The set changed after this frame was rendered. Capture again.");
     const bookmark = await previs.getBookmarkForShot(shotId);
-    if (!bookmark || bookmark.sceneDocumentId !== scene.id)
-      throw new UserFacingError("Use the production camera for this shot before capturing.");
+    const renderCamera = authorizeRenderCamera({
+      bookmark,
+      projectId: data.project.id,
+      shotId,
+      locationId,
+      scene,
+      claimed: claimedCamera,
+    });
 
     // the character blocking the picture shows must be the SAVED blocking (the server derives it, the client claims)
     const blockingRecords = await previs.listShotBlocking(shotId);
@@ -289,6 +348,8 @@ export async function captureMasterFrame(
         "The character blocking changed after this frame was rendered. Save the blocking and capture again.",
       );
     const renderLighting = await authorizeRenderLighting(previs, { shotId, scene, claimed: claimedLighting });
+    // the engine base environment (skybox + engine commit) the render ran on, derived from the SAVED set, rig or no rig
+    const renderBaseEnvironment = baseEnvironmentFingerprint(baseEnvironmentOf(scene.document));
 
     const bytes = new Uint8Array(await file.arrayBuffer());
     const check = checkUpload(
@@ -345,7 +406,10 @@ export async function captureMasterFrame(
           sceneDocumentId: scene.id,
           sceneRevision: scene.revision,
           sceneFingerprint: scene.sceneFingerprint,
-          cameraBookmarkId: bookmark.id,
+          cameraBookmarkId: renderCamera.bookmarkId,
+          // the server-verified camera identity (the full snapshot lives on the Master Frame row, from 0049)
+          cameraFingerprint: renderCamera.cameraFingerprint,
+          baseEnvironmentFingerprint: renderBaseEnvironment,
           renderWidth: dims.width,
           renderHeight: dims.height,
           productionAspectRatio: PREVIS_PRODUCTION_FRAME.ratio,
@@ -373,7 +437,7 @@ export async function captureMasterFrame(
         sceneDocumentId: scene.id,
         sceneRevision: scene.revision,
         sceneFingerprint: scene.sceneFingerprint,
-        cameraBookmarkId: bookmark.id,
+        cameraBookmarkId: renderCamera.bookmarkId,
         assetId,
         renderWidth: dims.width,
         renderHeight: dims.height,
@@ -382,6 +446,9 @@ export async function captureMasterFrame(
         blockingFingerprint: blockingProv?.fingerprint ?? null,
         blocking: blockingProv?.figures ?? null,
         ...renderLighting,
+        cameraFingerprint: renderCamera.cameraFingerprint,
+        camera: renderCamera,
+        baseEnvironmentFingerprint: renderBaseEnvironment,
         userId: actorOf(user),
       });
       refresh(slug);
