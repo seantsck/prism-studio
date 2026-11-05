@@ -13,6 +13,17 @@ import {
   masterFrameSpatialStatus,
 } from "@/domain/previs/spatial-status";
 import {
+  SHARED_SET_SAVE_WARNING,
+  SHOT_SWITCH_DIRTY_MESSAGE,
+  locationSetHref,
+  sharedSetMessage,
+  shotSwitchDecision,
+  workingSetChanges,
+  type SharedSetShot,
+} from "@/domain/previs/spatial-workspace";
+import { MasterFramePromoteForm } from "@/components/views/master-frame-promote-form";
+import { SpatialAxisBadges } from "./spatial-axis-badges";
+import {
   baseEnvironmentFingerprint,
   baseEnvironmentOf,
   type BaseEnvironment,
@@ -55,6 +66,19 @@ import {
   saveLocationScene,
 } from "@/server/previs-actions";
 
+/**
+ * Phase 4C-I2: where the ONE editor is opened from. The editor internals are shared; only the Shot affordances differ.
+ *   location  Location-first set management: a Shot selector that NAVIGATES (`?shot=`), never switches in place
+ *   shot      the Shot Spatial Workspace: the route owns the Shot (no selector) and opens its current Location only
+ */
+export type VirtualSetMode =
+  | { kind: "location"; shots: Array<{ id: string; label: string }> }
+  | {
+      kind: "shot";
+      shot: { id: string; label: string; code: string };
+      shotPrepHref: string;
+    };
+
 export interface VirtualSetProps {
   projectSlug: string;
   locationId: string;
@@ -63,11 +87,16 @@ export interface VirtualSetProps {
     sceneDocumentId: string | null;
     revision: number | null;
     fingerprint: string | null;
+    /** the SAVED set's base environment identity (skybox + engine); `sceneFingerprint` does not cover it */
+    baseEnvironmentFingerprint: string | null;
     engineScene: Record<string, unknown> | null;
   };
+  mode: VirtualSetMode;
+  /** the OTHER Shots currently assigned to this Location (server-derived; never the active Shot) */
+  sharedWith: SharedSetShot[];
   characters: Array<{ id: string; name: string }>;
   glbAssets: Array<{ id: string; name: string; checksum: string | null }>;
-  shots: Array<{ id: string; label: string }>;
+  /** the Shot this editor is mounted for (constant for the mount: a Shot change remounts the editor) */
   activeShotId: string | null;
   bookmark: {
     id: string;
@@ -92,6 +121,10 @@ export interface VirtualSetProps {
     cameraFingerprint: string | null;
     /** the base environment (skybox) the frame was rendered on (null = not recorded) */
     baseEnvironmentFingerprint: string | null;
+    /** the Location set (scene document) it was captured on */
+    sceneDocumentId?: string;
+    /** captured on another Location's set (history after a reassignment); compared with this set like any other */
+    otherSet?: boolean;
   }>;
   /** the active shot's stored lighting rig and authored lighting text; null when no shot is active */
   shotLighting: ShotLightingData | null;
@@ -135,15 +168,25 @@ export function VirtualSetEditor(props: VirtualSetProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [camera, setCamera] = useState<PrevisCamera | null>(null);
   const [looking, setLooking] = useState(false);
+  // bumped on every adapter notification, so a change outside objects / camera (e.g. the skybox) re-checks dirty
+  const [sceneTick, setSceneTick] = useState(0);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [revision, setRevision] = useState<number | null>(props.scene.revision);
   const [sceneDocumentId, setSceneDocumentId] = useState<string | null>(props.scene.sceneDocumentId);
   const [savedFingerprint, setSavedFingerprint] = useState<string | null>(props.scene.fingerprint);
+  // the clean baseline of the dirty rule: the saved fingerprint, or the saved set WITH the restored Shot camera
+  const [cleanFingerprint, setCleanFingerprint] = useState<string | null>(props.scene.fingerprint);
+  const [savedBaseEnvironmentFp, setSavedBaseEnvironmentFp] = useState<string | null>(
+    props.scene.baseEnvironmentFingerprint,
+  );
   const [liveFingerprint, setLiveFingerprint] = useState<string | null>(null);
   const [liveBaseEnvironment, setLiveBaseEnvironment] = useState<BaseEnvironment | null>(null);
   const [status, setStatus] = useState<Status>({ tone: "idle", text: "" });
-  const [shotId, setShotId] = useState<string | null>(props.activeShotId);
+  // the Shot is the identity of this mount: switching Shots NAVIGATES and the page remounts the editor (4C-I2, P6)
+  const shotId = props.activeShotId;
+  const [pendingShot, setPendingShot] = useState<{ id: string | null } | null>(null);
+  const [cameraRestored, setCameraRestored] = useState(false);
   const [bookmark, setBookmark] = useState(props.bookmark);
   const [frames, setFrames] = useState(props.masterFrames);
   const [characterId, setCharacterId] = useState<string>(props.characters[0]?.id ?? "");
@@ -191,12 +234,40 @@ export function VirtualSetEditor(props: VirtualSetProps) {
       setCanRedo(adapter.canRedo());
       setSplatFailures(adapter.splatFailures().map((f) => ({ assetId: f.assetId, message: f.message })));
     };
-    const unsubscribe = adapter.subscribe(sync);
+    const unsubscribe = adapter.subscribe(() => {
+      sync();
+      if (!cancelled) setSceneTick((n) => n + 1);
+    });
 
     adapter
       .mount({ container, editorCanvas, camViewCanvas }, props.scene.engineScene)
-      .then(() => {
+      .then(async () => {
         if (cancelled) return;
+        // Shot workspace: the Shot's bookmark is the Shot's camera authority, so it becomes the working production
+        // camera of the viewport. That is NOT a Set edit: nothing is saved, the revision does not move, and the clean
+        // baseline is taken AFTER the restore, so the Set is not dirty merely because the Shot camera was restored.
+        // The saved scene (its own camera included) is applied asynchronously after `mount`: restore only after it.
+        const bm = props.mode.kind === "shot" && props.scene.engineScene ? props.bookmark : null;
+        if (bm) {
+          const loaded = await Promise.race([
+            adapter.sceneLoaded(),
+            new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 20_000)),
+          ]);
+          if (cancelled) return;
+          const cam = adapter.getProductionCamera();
+          if (loaded && cam) {
+            adapter.setProductionCamera(cameraFromBookmark(cam.id, bm.cameraLabel, bm.value));
+            try {
+              const restored = sceneFingerprint(
+                buildPrevisDocument({ engineScene: adapter.serializeScene() }),
+              );
+              setCleanFingerprint(restored);
+              setCameraRestored(restored !== props.scene.fingerprint);
+            } catch {
+              /* an unserialisable scene keeps the saved baseline (it shows as unsaved) */
+            }
+          }
+        }
         setEditor(adapter.getEditor());
         setCanvasEl(editorCanvas);
         removeTestHook = installPrevisTestHook(adapter, editorCanvas);
@@ -263,8 +334,20 @@ export function VirtualSetEditor(props: VirtualSetProps) {
       }
     }, 200);
     return () => clearTimeout(t);
-  }, [ready, objects, camera]);
-  const dirty = liveFingerprint !== null && liveFingerprint !== savedFingerprint;
+  }, [ready, objects, camera, sceneTick]);
+  const liveBaseEnvironmentFp = useMemo(
+    () => (liveBaseEnvironment ? baseEnvironmentFingerprint(liveBaseEnvironment) : null),
+    [liveBaseEnvironment],
+  );
+  // Location-owned truth only (scene + base environment); a restored Shot camera is part of the clean baseline
+  const { dirty } = workingSetChanges({
+    liveFingerprint,
+    cleanFingerprint,
+    liveBaseEnvironmentFingerprint: liveBaseEnvironmentFp,
+    savedBaseEnvironmentFingerprint: savedBaseEnvironmentFp,
+  });
+  // what the SERVER's saved set does not have yet (a restored Shot camera included): linking freezes the saved camera
+  const unsaved = dirty || (liveFingerprint !== null && liveFingerprint !== savedFingerprint);
 
   // ── keyboard shortcuts (movement keys belong to the free camera) ──
   useEffect(() => {
@@ -311,7 +394,14 @@ export function VirtualSetEditor(props: VirtualSetProps) {
       fd.set("projectSlug", props.projectSlug);
       fd.set("locationId", props.locationId);
       fd.set("expectedRevision", revision === null ? "" : String(revision));
-      fd.set("sceneJson", JSON.stringify(adapter().serializeScene()));
+      const engineScene = adapter().serializeScene();
+      fd.set("sceneJson", JSON.stringify(engineScene));
+      let savedEnv: string | null = null;
+      try {
+        savedEnv = baseEnvironmentFingerprint(baseEnvironmentOf(buildPrevisDocument({ engineScene })));
+      } catch {
+        savedEnv = null; // the server refuses an unbuildable scene anyway
+      }
       const r = await saveLocationScene(fd);
       if (!r.ok) {
         setStatus({
@@ -323,15 +413,43 @@ export function VirtualSetEditor(props: VirtualSetProps) {
       setRevision(r.revision);
       setSceneDocumentId(r.sceneDocumentId);
       setSavedFingerprint(r.fingerprint);
-      setStatus({ tone: "ok", text: `Saved — revision ${r.revision}` });
+      setCleanFingerprint(r.fingerprint);
+      setSavedBaseEnvironmentFp(savedEnv);
+      setCameraRestored(false);
+      setStatus({
+        tone: "ok",
+        text:
+          revision === null
+            ? `Saved — revision ${r.revision} (3D Set created)`
+            : `Saved — revision ${r.revision}`,
+      });
       return { id: r.sceneDocumentId, revision: r.revision, fingerprint: r.fingerprint };
     } finally {
       savingRef.current = false;
     }
   }, [props.projectSlug, props.locationId, revision]);
 
+  // "save first?" is decided from the adapter NOW: the debounced live fingerprint can lag an edit made just before a
+  // click (link / capture), and a stale "clean" would freeze the OLD saved camera while the client claims the new one
+  const pendingSetChanges = () => {
+    try {
+      const doc = buildPrevisDocument({ engineScene: adapter().serializeScene() });
+      const fp = sceneFingerprint(doc);
+      const { dirty: changed } = workingSetChanges({
+        liveFingerprint: fp,
+        cleanFingerprint,
+        liveBaseEnvironmentFingerprint: baseEnvironmentFingerprint(baseEnvironmentOf(doc)),
+        savedBaseEnvironmentFingerprint: savedBaseEnvironmentFp,
+      });
+      return { dirty: changed, unsaved: changed || fp !== savedFingerprint };
+    } catch {
+      return { dirty, unsaved };
+    }
+  };
+
   const ensureSaved = async () => {
-    if (!dirty && revision !== null && sceneDocumentId) return { revision, fingerprint: savedFingerprint! };
+    if (!pendingSetChanges().dirty && revision !== null && sceneDocumentId)
+      return { revision, fingerprint: savedFingerprint! };
     const r = await save();
     return r ? { revision: r.revision, fingerprint: r.fingerprint } : null;
   };
@@ -339,7 +457,8 @@ export function VirtualSetEditor(props: VirtualSetProps) {
   const linkCamera = async () => {
     if (!shotId) return setStatus({ tone: "error", text: "Choose a shot first." });
     if (!camera) return setStatus({ tone: "error", text: "This set has no production camera." });
-    const saved = await ensureSaved();
+    // the server freezes the SAVED set's camera: the working camera must be saved first (as before 4C-I2)
+    const saved = pendingSetChanges().unsaved ? await save() : await ensureSaved();
     if (!saved) return;
     setStatus({ tone: "busy", text: "Linking camera…" });
     const fd = new FormData();
@@ -409,6 +528,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
           assetId: r.assetId,
           sceneRevision: saved.revision,
           sceneFingerprint: saved.fingerprint,
+          sceneDocumentId: sceneDocumentId ?? undefined,
           capturedAt: new Date().toISOString(),
           adopted: false,
           blockingFingerprint: renderedBlocking,
@@ -446,8 +566,29 @@ export function VirtualSetEditor(props: VirtualSetProps) {
     setStatus({ tone: "ok", text: "Hotel Canopy Test Set loaded — save to keep it" });
   };
 
+  // ── Location page Shot selector: a NAVIGATION to ?shot=, asked first while the Set has unsaved changes ──
+  const switchShot = (to: string | null) => {
+    const decision = shotSwitchDecision({ from: shotId, to, setDirty: dirty });
+    if (decision === "none") return setPendingShot(null);
+    if (decision === "confirm") return setPendingShot({ id: to });
+    setPendingShot(null);
+    router.push(locationSetHref(props.projectSlug, props.locationId, to));
+  };
+  const discardAndSwitch = () => {
+    if (!pendingShot) return;
+    const to = pendingShot.id;
+    setPendingShot(null);
+    // nothing is saved: leaving remounts the editor from the server's saved set
+    router.push(locationSetHref(props.projectSlug, props.locationId, to));
+  };
+
   const selected = objects.find((o) => o.id === selectedId) ?? null;
-  const shotLabel = props.shots.find((s) => s.id === shotId)?.label ?? null;
+  const shotLabel =
+    props.mode.kind === "shot"
+      ? props.mode.shot.label
+      : (props.mode.shots.find((s) => s.id === shotId)?.label ?? null);
+  const shared = props.sharedWith.length > 0;
+  const sharedMessage = sharedSetMessage(props.sharedWith);
   const bookmarkStale = !!bookmark && !!savedFingerprint && bookmark.sceneFingerprint !== savedFingerprint;
   // the ACTIVE Shot's production camera (the page loaded it for that Shot), for the Master Frame camera axis
   const activeBookmarkCamera = useMemo(
@@ -466,6 +607,10 @@ export function VirtualSetEditor(props: VirtualSetProps) {
       data-looking={looking ? "true" : "false"}
       data-saved-fingerprint={savedFingerprint ?? ""}
       data-live-fingerprint={liveFingerprint ?? ""}
+      data-mode={props.mode.kind}
+      data-shot-id={shotId ?? ""}
+      data-scene-document-id={sceneDocumentId ?? ""}
+      data-camera-restored={cameraRestored ? "true" : "false"}
     >
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2 text-sm">
         <span className="font-medium">{props.locationName}</span>
@@ -502,10 +647,21 @@ export function VirtualSetEditor(props: VirtualSetProps) {
             disabled={!ready || status.tone === "busy" || splatFailures.length > 0}
             data-testid="save-set"
           >
-            Save 3D set
+            {revision === null ? "Create 3D Set" : "Save 3D Set"}
           </button>
         </span>
       </div>
+      {shared && dirty ? (
+        <div className="border-b border-warn/40 px-4 py-1 text-xs text-warn" data-testid="shared-set-warning">
+          {SHARED_SET_SAVE_WARNING}
+        </div>
+      ) : null}
+      {revision === null ? (
+        <div className="border-b border-line px-4 py-1 text-xs text-muted" data-testid="new-set-state">
+          {props.locationName} has no 3D Set yet. Build one here, then Create 3D Set: it becomes this
+          Location&apos;s set for every Shot assigned to it.
+        </div>
+      ) : null}
       <div
         role="status"
         aria-live="polite"
@@ -830,22 +986,54 @@ export function VirtualSetEditor(props: VirtualSetProps) {
           )}
 
           <h2 className="mb-1 mt-4 text-xs uppercase tracking-wide text-muted">Shot</h2>
-          <label className="block text-xs text-muted">
-            Shot
-            <select
-              className="mt-1 w-full"
-              value={shotId ?? ""}
-              onChange={(e) => setShotId(e.target.value || null)}
-              data-testid="shot-select"
+          {props.mode.kind === "location" ? (
+            <label className="block text-xs text-muted">
+              Shot
+              <select
+                className="mt-1 w-full"
+                value={pendingShot ? (pendingShot.id ?? "") : (shotId ?? "")}
+                onChange={(e) => switchShot(e.target.value || null)}
+                data-testid="shot-select"
+              >
+                <option value="">(choose a shot)</option>
+                {props.mode.shots.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <div className="text-xs" data-testid="workspace-shot">
+              <div className="font-medium text-fg">{props.mode.shot.label}</div>
+              {sharedMessage ? (
+                <div className="mt-1 text-muted" data-testid="shared-set-context">
+                  {sharedMessage}
+                </div>
+              ) : null}
+            </div>
+          )}
+          {pendingShot ? (
+            <div
+              role="alert"
+              className="mt-2 rounded border border-warn p-2 text-xs"
+              data-testid="shot-switch-confirm"
             >
-              <option value="">(choose a shot)</option>
-              {props.shots.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              <div className="text-warn">{SHOT_SWITCH_DIRTY_MESSAGE}</div>
+              <div className="mt-1.5 flex gap-1.5">
+                <button
+                  className="btn flex-1"
+                  onClick={() => setPendingShot(null)}
+                  data-testid="shot-switch-stay"
+                >
+                  Stay
+                </button>
+                <button className="btn flex-1" onClick={discardAndSwitch} data-testid="shot-switch-discard">
+                  Discard and switch
+                </button>
+              </div>
+            </div>
+          ) : null}
           <button
             className="btn btn-primary mt-2 w-full"
             disabled={!ready || !shotId}
@@ -866,8 +1054,14 @@ export function VirtualSetEditor(props: VirtualSetProps) {
                 </div>
               ) : null}
               <button className="btn mt-1.5 w-full" onClick={restoreCamera} data-testid="restore-camera">
-                Restore production camera{shotLabel ? ` for ${shotLabel}` : ""}
+                Restore Shot camera{shotLabel ? ` for ${shotLabel}` : ""}
               </button>
+              {cameraRestored ? (
+                <div className="mt-1 text-muted" data-testid="camera-restored-note">
+                  Viewing this Shot&apos;s camera. The Set&apos;s saved working camera differs; it changes
+                  only when you save the Set or use the production camera for this Shot.
+                </div>
+              ) : null}
             </div>
           ) : (
             <p className="mt-2 text-xs text-muted">No production camera is linked to this shot yet.</p>
@@ -883,9 +1077,9 @@ export function VirtualSetEditor(props: VirtualSetProps) {
               shotId={shotId}
               camera={camera}
               looking={looking}
-              timing={shotId === props.activeShotId ? props.shotTiming : null}
-              initialPath={shotId === props.activeShotId ? props.cameraPath : null}
-              initialClips={shotId === props.activeShotId ? props.previsClips : []}
+              timing={props.shotTiming}
+              initialPath={props.cameraPath}
+              initialClips={props.previsClips}
               savedSceneFingerprint={savedFingerprint}
               sceneDirty={dirty}
               ensureSceneSaved={ensureSaved}
@@ -913,7 +1107,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
               locationId={props.locationId}
               shotId={shotId}
               characters={props.characters}
-              initial={shotId === props.activeShotId ? props.blocking : null}
+              initial={props.blocking}
               savedSceneFingerprint={savedFingerprint}
               sceneDirty={dirty}
               ensureSceneSaved={ensureSaved}
@@ -929,7 +1123,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
               projectSlug={props.projectSlug}
               locationId={props.locationId}
               shotId={shotId}
-              initial={shotId === props.activeShotId ? props.shotLighting : null}
+              initial={props.shotLighting}
               savedSceneFingerprint={savedFingerprint}
               sceneDocumentId={sceneDocumentId}
               sceneDirty={dirty}
@@ -949,7 +1143,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
               locationId={props.locationId}
               shotId={shotId}
               characters={props.characters}
-              initialBundles={shotId === props.activeShotId ? props.spatialBundles : null}
+              initialBundles={props.spatialBundles}
               scene={{ documentId: sceneDocumentId, revision, fingerprint: savedFingerprint, dirty }}
               bookmark={
                 bookmark
@@ -982,17 +1176,27 @@ export function VirtualSetEditor(props: VirtualSetProps) {
                   data-testid="master-frame-image"
                 />
                 <div className="text-muted">
-                  revision {f.sceneRevision} · {new Date(f.capturedAt).toLocaleString()}
+                  revision {f.sceneRevision} ·{" "}
+                  <time dateTime={f.capturedAt} data-testid="master-frame-captured">
+                    {new Date(f.capturedAt).toLocaleString()}
+                  </time>
+                  {f.otherSet ? (
+                    <span className="ml-1 text-warn" data-testid="master-frame-other-set">
+                      · captured on another Location
+                    </span>
+                  ) : null}
                 </div>
-                {blockingState && lightingState?.loaded && shotId === props.activeShotId
+                {blockingState && lightingState?.loaded
                   ? (() => {
                       const status = masterFrameSpatialStatus(f, {
                         sceneFingerprint: savedFingerprint,
+                        sceneDocumentId,
                         cameraFingerprint: activeBookmarkCamera,
                         blockingFingerprint: blockingState.savedFingerprint,
                         lighting: lightingState.current,
                       });
                       return [
+                        <SpatialAxisBadges key="axes" status={status} testIdPrefix={`mf-axis-${f.id}`} />,
                         ...status.stale.map((reason) => (
                           <div
                             key={reason}
@@ -1029,6 +1233,17 @@ export function VirtualSetEditor(props: VirtualSetProps) {
                     Use as Master Frame
                   </button>
                 )}
+                {shotId ? (
+                  // the SAME server action and confirmation flow as Shot Prep (the server recomputes the state)
+                  <div className="mt-1" data-testid={`workspace-promote-${f.id}`}>
+                    <MasterFramePromoteForm
+                      slug={props.projectSlug}
+                      shotId={shotId}
+                      masterFrameId={f.id}
+                      disabled={!ready}
+                    />
+                  </div>
+                ) : null}
               </li>
             ))}
           </ul>

@@ -23,7 +23,7 @@ export default async function LocationsPage({ params }: { params: Promise<{ proj
     <div>
       <PageHeader
         title="Locations & sets"
-        subtitle="Zones and entrances give shots a spatial vocabulary. A future 3D Set plugs into `set3d` without changing this model."
+        subtitle="Zones and entrances give shots a spatial vocabulary. Each Location can have one optional 3D Set, shared by every Shot set there."
       />
       <div className="space-y-3 p-6">
         {[...data.locations, null].map((l) => (

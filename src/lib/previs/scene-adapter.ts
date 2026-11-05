@@ -161,6 +161,11 @@ export interface SpatialSceneAdapter {
   canRedo(): boolean;
   subscribe(listener: () => void): () => void;
   getEditor(): Editor | null;
+  /**
+   * Resolves once the mounted scene JSON has actually been applied (its production camera included): `mount` returns
+   * before the engine's asynchronous load finishes. Resolves `false` if the editor unmounts first.
+   */
+  sceneLoaded(): Promise<boolean>;
   dispose(): void;
 }
 
@@ -293,6 +298,7 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
       editor.bus.subscribe(OutlinerRefreshedEvent, this.notify),
       editor.bus.subscribe(SelectionChangedEvent, this.notify),
       editor.bus.subscribe(SceneLoadedEvent, this.verifySplats),
+      editor.bus.subscribe(SceneLoadedEvent, (e) => this.resolveSceneLoaded?.(e.loaded)),
       usePageSceneStore.subscribe(this.notifyFromStore),
     );
     if (this.disposed) this.dispose();
@@ -300,6 +306,18 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
 
   getEditor() {
     return this.editor;
+  }
+
+  private resolveSceneLoaded: ((loaded: boolean) => void) | null = null;
+  private readonly sceneLoadedPromise = new Promise<boolean>((resolve) => {
+    this.resolveSceneLoaded = (loaded) => {
+      this.resolveSceneLoaded = null;
+      resolve(loaded);
+    };
+  });
+
+  sceneLoaded() {
+    return this.sceneLoadedPromise;
   }
 
   /** The splat environments the scene JSON names, so a load that drops one is noticed instead of saved over. */
@@ -836,6 +854,7 @@ export class ArtCraftSceneAdapter implements SpatialSceneAdapter {
 
   dispose() {
     this.disposed = true;
+    this.resolveSceneLoaded?.(false);
     for (const u of this.unsubscribers.splice(0)) u();
     this.setPathOverlay(null);
     this.splats.dispose();

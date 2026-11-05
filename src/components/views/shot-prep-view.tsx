@@ -39,6 +39,7 @@ import { previsStaleReasons, STALE_REASON_LABEL } from "@/domain/previs/audio-mi
 import { isShotBlockingStale } from "@/domain/previs/spatial";
 import { PRODUCTION_FRAME_SOURCE_LABEL, selectedProductionFrameFreshness } from "@/domain/production-frame";
 import { episodePath, shotPath } from "@/lib/paths";
+import { shotSpatialHref } from "@/domain/previs/spatial-workspace";
 import { assetUrl, cn } from "@/lib/utils";
 import {
   addStoryboardFrame,
@@ -785,11 +786,19 @@ export function ShotPrepView({
                 ) : null}
                 <div className="mt-2 flex flex-wrap items-center gap-2" data-testid="shot-3d-set">
                   <Link
-                    href={`/projects/${slug}/locations/${ctx.location.id}/3d?shot=${shot.id}`}
+                    href={shotSpatialHref(slug, episode.slug, shot.id)}
                     className="inline-flex h-7 items-center rounded border border-line2 px-3 text-xs text-fg hover:bg-panel2"
+                    data-testid="open-spatial-workspace"
+                  >
+                    Open Spatial Workspace
+                  </Link>
+                  {/* Location-first set management stays available (a secondary link, not the Shot's entry point) */}
+                  <Link
+                    href={`/projects/${slug}/locations/${ctx.location.id}/3d?shot=${shot.id}`}
+                    className="text-[11.5px] text-muted underline hover:text-fg"
                     data-testid="open-in-3d-set"
                   >
-                    Open in 3D Set
+                    {ctx.location.name} 3D Set (all Shots)
                   </Link>
                   {ctx.spatial?.cameraBookmark ? (
                     <span data-testid="shot-camera-link">
@@ -867,7 +876,11 @@ export function ShotPrepView({
                   </div>
                 ) : null}
               </div>
-            ) : null}
+            ) : (
+              <p className="border-t border-line pt-3 text-[12px] text-muted" data-testid="shot-no-location">
+                Assign a Location to use optional spatial tools.
+              </p>
+            )}
           </SectionChrome>
 
           {/* 7 Camera, 8 Composition */}
@@ -1059,6 +1072,7 @@ export function ShotPrepView({
               ctx={ctx}
               slug={slug}
               masterFrames={masterFrames}
+              spatialHref={shotSpatialHref(slug, episode.slug, shotId)}
               // the planner is rendered only when this section is the open one: it carries the same model-compare
               // controls as the Generate workspace, and one page must never hold two of them at once
               candidates={

@@ -2,15 +2,17 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/ui";
 import { VirtualSetLoader } from "@/components/previs/virtual-set-loader";
-import { buildShotContext } from "@/domain/context";
-import type { TimelineCue } from "@/domain/previs/audio-mix";
-import { shotTimelineCues } from "@/domain/previs/audio-mix-shot";
-import { authoredLightingIntent } from "@/domain/previs/lighting";
 import { getPrevisRepo } from "@/server/previs";
 import { requireProject } from "@/server/repo";
+import { loadVirtualSetProps } from "@/server/virtual-set-props";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Location-first 3D Set management (Phase 2F onwards). Phase 4C-I2: the props come from the ONE shared loader, the
+ * Shot selector NAVIGATES to `?shot=`, and the editor is keyed by Location + Shot, so a Shot change remounts it from
+ * the server's state and can never keep another Shot's camera, blocking, lighting or Master Frames.
+ */
 export default async function VirtualSetPage({
   params,
   searchParams,
@@ -24,194 +26,27 @@ export default async function VirtualSetPage({
   const location = data.locations.find((l) => l.id === locationId);
   if (!location) notFound();
 
-  const previs = await getPrevisRepo();
-  const scene = await previs.getSceneForLocation(location.id);
-
-  // Shots set in this location (plus the shot the user came from, whatever its location currently is).
-  const episodeOf = new Map(data.episodes.map((e) => [e.id, e]));
-  const shots = data.shots
-    .filter((s) => s.spatial.locationId === location.id || s.id === shotParam)
-    .map((s) => ({
-      id: s.id,
-      label: `Ep ${episodeOf.get(s.episodeId)?.number ?? "?"} · Shot ${s.shotCode}`,
-    }));
-  const activeShotId = shotParam && shots.some((s) => s.id === shotParam) ? shotParam : null;
-
-  const bookmark = activeShotId ? await previs.getBookmarkForShot(activeShotId) : null;
-  const frames = activeShotId ? await previs.listMasterFrames(activeShotId) : [];
-  const cameraPath = activeShotId ? await previs.getCameraPathForShot(activeShotId) : null;
-  const clips = activeShotId ? await previs.listPrevisClips(activeShotId) : [];
-  const blockingRecords = activeShotId ? await previs.listShotBlocking(activeShotId) : [];
-  const spatialBundles = activeShotId ? await previs.listSpatialPassBundles(activeShotId) : [];
-  const activeShot = activeShotId ? data.shots.find((s) => s.id === activeShotId) : undefined;
-  const shotLighting = activeShot
-    ? {
-        rig: await previs.getLightingRigForShot(activeShot.id),
-        currentIntent: authoredLightingIntent(activeShot),
-      }
-    : null;
-
-  // Gaussian-splat environments of this Location: immutable reconstruction records + their private result Assets
-  const assetById = new Map(data.assets.map((a) => [a.id, a]));
-  const splatEnvironments = (await previs.listReconstructions(location.id)).flatMap((r) => {
-    const asset = assetById.get(r.resultAssetId);
-    if (!asset || !asset.objectPath) return [];
-    return [
-      {
-        assetId: asset.id,
-        reconstructionId: r.id,
-        name: asset.name,
-        format: r.resultFormat,
-        byteSize: asset.byteSize ?? null,
-        gaussianCount: r.gaussianCount,
-        checksum: asset.checksum ?? null,
-        method: r.method,
-        sources: r.sources.map((s) => ({
-          assetId: s.assetId,
-          name: assetById.get(s.assetId)?.name ?? s.assetId,
-          checksum: s.checksum,
-        })),
-        createdAt: r.createdAt,
-      },
-    ];
+  const props = await loadVirtualSetProps({
+    slug,
+    data,
+    previs: await getPrevisRepo(),
+    location,
+    activeShotId: shotParam ?? null,
+    context: { kind: "location" },
   });
-  const referenceImages = data.assets
-    .filter(
-      (a) =>
-        a.type === "image" &&
-        a.objectPath &&
-        (location.referenceAssetIds.includes(a.id) || a.purpose === "location_ref"),
-    )
-    .map((a) => ({ id: a.id, name: a.name }));
-
-  // Shot timing authority: the canonical Shot duration (selected performance, else manual target) and the
-  // Shot's own frame rate. Camera motion aligns to these; nothing here invents a duration.
-  let shotTiming: {
-    durationMs: number;
-    source: string;
-    frameRate: number;
-    timelineCues: TimelineCue[];
-    assetNames: Record<string, string>;
-  } | null = null;
-  if (activeShotId) {
-    const shot = data.shots.find((s) => s.id === activeShotId);
-    if (shot) {
-      const ctx = buildShotContext(data, activeShotId);
-      // the one Shot-timeline arithmetic (layoutPerformance): interactive playback and the previs mix both use it
-      const { cues } = shotTimelineCues(data, activeShotId);
-      const assetNames: Record<string, string> = {};
-      for (const line of ctx.lines)
-        if (line.selectedAudioAsset) assetNames[line.selectedAudioAsset.id] = line.selectedAudioAsset.name;
-      shotTiming = {
-        durationMs: ctx.duration.durationMs,
-        source: ctx.duration.source,
-        frameRate: shot.generation.fps,
-        timelineCues: cues,
-        assetNames,
-      };
-    }
-  }
 
   return (
     <div>
       <PageHeader
         title={`3D Set — ${location.name}`}
-        subtitle="A persistent virtual set for this location. Place objects and character blocking, frame the production camera, and render a master frame."
+        subtitle="A persistent virtual set for this location, shared by every Shot set here. Place objects and character blocking, frame the production camera, and render a master frame."
       />
       <div className="px-6 pb-1 text-xs text-muted">
         <Link href={`/projects/${slug}/locations`} className="underline">
           ← Locations
         </Link>
       </div>
-      <VirtualSetLoader
-        projectSlug={slug}
-        locationId={location.id}
-        locationName={location.name}
-        scene={{
-          sceneDocumentId: scene?.id ?? null,
-          revision: scene?.revision ?? null,
-          fingerprint: scene?.sceneFingerprint ?? null,
-          engineScene: scene ? (scene.document.scene as Record<string, unknown>) : null,
-        }}
-        characters={data.characters.map((c) => ({ id: c.id, name: c.name }))}
-        glbAssets={data.assets
-          .filter((a) => a.mime === "model/gltf-binary" && a.objectPath)
-          .map((a) => ({ id: a.id, name: a.name, checksum: a.checksum ?? null }))}
-        splatEnvironments={splatEnvironments}
-        referenceImages={referenceImages}
-        shots={shots}
-        activeShotId={activeShotId}
-        bookmark={
-          bookmark
-            ? {
-                id: bookmark.id,
-                cameraLabel: bookmark.cameraLabel,
-                sceneRevision: bookmark.sceneRevision,
-                sceneFingerprint: bookmark.sceneFingerprint,
-                value: bookmark.value,
-              }
-            : null
-        }
-        shotTiming={shotTiming}
-        cameraPath={
-          cameraPath
-            ? {
-                id: cameraPath.id,
-                revision: cameraPath.revision,
-                sceneRevision: cameraPath.sceneRevision,
-                sceneFingerprint: cameraPath.sceneFingerprint,
-                pathFingerprint: cameraPath.pathFingerprint,
-                path: cameraPath.path,
-              }
-            : null
-        }
-        previsClips={clips.map((c) => ({
-          id: c.id,
-          assetId: c.assetId,
-          pathRevision: c.pathRevision,
-          pathFingerprint: c.pathFingerprint,
-          sceneRevision: c.sceneRevision,
-          sceneFingerprint: c.sceneFingerprint,
-          frameRate: c.frameRate,
-          durationMs: c.durationMs,
-          renderWidth: c.renderWidth,
-          renderHeight: c.renderHeight,
-          container: c.container,
-          codec: c.codec,
-          hasAudio: c.hasAudio,
-          audioMixFingerprint: c.audioMixFingerprint,
-          audioCodec: c.audioMix?.codec ?? null,
-          blockingFingerprint: c.blockingFingerprint,
-          lightingFingerprint: c.lightingFingerprint,
-          lighting: c.lighting ? { baseEnvironment: c.lighting.baseEnvironment } : null,
-          renderedAt: c.renderedAt,
-        }))}
-        masterFrames={frames.map((f) => ({
-          id: f.id,
-          assetId: f.assetId,
-          sceneRevision: f.sceneRevision,
-          sceneFingerprint: f.sceneFingerprint,
-          capturedAt: f.capturedAt,
-          adopted: f.adoptedAt !== null,
-          blockingFingerprint: f.blockingFingerprint,
-          lightingFingerprint: f.lightingFingerprint,
-          lighting: f.lighting ? { baseEnvironment: f.lighting.baseEnvironment } : null,
-          cameraFingerprint: f.cameraFingerprint,
-          baseEnvironmentFingerprint: f.baseEnvironmentFingerprint,
-        }))}
-        spatialBundles={spatialBundles}
-        shotLighting={shotLighting}
-        blocking={blockingRecords.map((r) => ({
-          characterId: r.characterId,
-          name: data.characters.find((c) => c.id === r.characterId)?.name ?? "Character",
-          blockingId: r.id,
-          revision: r.revision,
-          fingerprint: r.blockingFingerprint,
-          sceneRevision: r.sceneRevision,
-          sceneFingerprint: r.sceneFingerprint,
-          entry: r.entry,
-        }))}
-      />
+      <VirtualSetLoader key={`${location.id}:${props.activeShotId ?? "none"}`} {...props} />
     </div>
   );
 }

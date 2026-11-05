@@ -7,7 +7,8 @@ import type { ActionConfirmation, ActionResult } from "@/server/action-result";
 import { promoteMasterFrame } from "@/server/production-frame-actions";
 
 /**
- * "Use 3D Master Frame" with the Phase 4C confirmation contract. A fresh frame promotes at once. A stale or
+ * "Use as Production Frame" for a 3D Master Frame, with the Phase 4C confirmation contract. The ONE promotion UI: Shot
+ * Prep and the Shot Spatial Workspace both render it, and both call `promoteMasterFrame`. A fresh frame promotes at once. A stale or
  * unknown-provenance frame comes back as a typed confirmation (nothing created or selected); "Use anyway" resubmits
  * with the digest of exactly what was shown. If the 3D setup changed meanwhile, the server refuses that digest and
  * returns the current state, which is shown for a new decision. The browser never sends its own stale / unknown view.
@@ -23,7 +24,8 @@ export function MasterFramePromoteForm({
   shotId: string;
   masterFrameId: string;
   disabled: boolean;
-  children: React.ReactNode;
+  /** what the row describes (Shot Prep: thumbnail, time, status); absent in the 3D workspace's compact row */
+  children?: React.ReactNode;
 }) {
   const [state, run, pending] = useActionState<ActionResult | null, FormData>(
     async (_prev, form) => promoteMasterFrame(form),
@@ -48,7 +50,7 @@ export function MasterFramePromoteForm({
       aria-busy={pending}
     >
       <div className="flex items-center justify-between gap-3">
-        <span className="text-[12px]">{children}</span>
+        <span className="min-w-0 text-[12px]">{children}</span>
         <Button
           data-testid={`pf-use-master-${masterFrameId}`}
           size="sm"
@@ -56,7 +58,7 @@ export function MasterFramePromoteForm({
           disabled={disabled || pending}
           onClick={() => submit(null)}
         >
-          Use 3D Master Frame
+          Use as Production Frame
         </Button>
       </div>
       {confirmation ? (

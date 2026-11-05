@@ -60,6 +60,11 @@ export interface SpatialTestHook {
   setFigureVisible(characterId: string, visible: boolean): void;
   /** Re-selects a Set object (selection outline) so tests can prove selection never reaches a pass. */
   selectObject(id: string | null): void;
+  /**
+   * Phase 4C-I2: changes ONLY the live scene's skybox id (the base environment; `sceneFingerprint` does not cover it).
+   * The editor has no skybox control yet; this seam proves a skybox-only edit still counts as an unsaved Set change.
+   */
+  setSkyboxId(id: string): void;
 }
 
 /** Gaussian-splat acceptance helpers (M2D.1). */
@@ -384,6 +389,12 @@ export function installPrevisTestHook(adapter: SpatialSceneAdapter, canvas: HTML
       },
       selectObject(id) {
         adapter.select(id);
+      },
+      setSkyboxId(id) {
+        const scene = adapter.getEditor()?.activeScene as { skybox?: string } | undefined;
+        if (!scene) throw new Error("The 3D set is not mounted.");
+        scene.skybox = id;
+        adapter.select(adapter.selectedId()); // notify the editor (no object, camera or selection change)
       },
       renderInfo() {
         const r = adapter.getEditor()?.renderer;
