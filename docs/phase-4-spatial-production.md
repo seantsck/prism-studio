@@ -4,7 +4,7 @@
 4B (Shot Lighting Rigs) complete (PR #46); migration 0048 applied to and accepted on hosted DEV (hosted head 0048, nothing
 pending at the time). 4C complete: architecture accepted ([4C-A](#4c-a-architecture--accepted)); 4C-I1 complete (PR
 #50); 4C-I2 (Shot-centric Spatial Workspace) complete (PR #51); [4C-B](#4c-b--hosted-acceptance) hosted acceptance
-passed, with migration 0049 applied to hosted DEV (hosted head 0049, nothing pending). 4D-I1 (explicit Shot-to-Shot setup copy, no migration) is complete (PR #53). 4D-I2 (named setup templates and copy provenance, migration 0050 in the repository and NOT applied to hosted DEV) is implemented and in review ([notes](#4d-i2-implementation-notes-in-review)); 4D is not complete. 4E–4F have not started. What 4B actually shipped is
+passed, with migration 0049 applied to hosted DEV (hosted head 0049, nothing pending). 4D-I1 (explicit Shot-to-Shot setup copy, no migration) is complete (PR #53). 4D-I2 (named setup templates and copy provenance, PR #55, awaiting merge) is implemented ([notes](#4d-i2-implementation-notes)); [4D-B](#4d-b--hosted-acceptance) hosted acceptance passed, with migration 0050 applied to hosted DEV (hosted head 0050, nothing pending). 4D is complete. 4E–4F have not started. What 4B actually shipped is
 recorded in [4B implementation notes](#4b-implementation-notes); elsewhere, design text describes intent.**
 
 Phase 4 finishes the optional spatial path into a Production Frame. It does not build a 3D system: Phase 2F already built
@@ -334,7 +334,7 @@ since other Shots share it.
 
 **Decision (4D): explicit copy-by-value templates.** _(4D-I1 delivered the first step without a migration: an explicit
 Shot-to-Shot copy into the destination's own rows; 4D-I2 then added the templates table and copy provenance (migration 0050), see
-[4D-I1](#4d-i1-implementation-notes-complete) and [4D-I2](#4d-i2-implementation-notes-in-review).)_ A template is a saved camera, lighting or blocking value that a person
+[4D-I1](#4d-i1-implementation-notes-complete) and [4D-I2](#4d-i2-implementation-notes).)_ A template is a saved camera, lighting or blocking value that a person
 applies to a Shot. Applying writes a normal revision of the Shot's own row and records `applied_from_template_id` and the
 template revision as provenance. **There is no live link: editing or deleting a template rewrites nothing**, neither Shots
 nor renders nor packages. Scope is Location for anything in world coordinates, since coordinates mean nothing in another set.
@@ -1167,11 +1167,11 @@ destination, and the reverse also holds.
   - **Not run:** hosted acceptance of 4D. The DB suites ran on a disposable local database only; hosted DEV was not
     touched.
 
-#### 4D-I2 implementation notes (in review)
+#### 4D-I2 implementation notes
 
-Status: **4D-I2 implemented on branch `phase-4d-named-setup-templates` (draft PR, in review). 4D is not complete.**
-Migration **0050** (`0050_shot_setup_templates.sql`) is in the repository and was tested on disposable local databases only.
-It is **NOT applied to hosted DEV**: the hosted head stays 0049. Hosted migration acceptance is a separate 4D-B gate.
+Status: **4D-I2 implemented on branch `phase-4d-named-setup-templates` (PR #55).** Migration **0050**
+(`0050_shot_setup_templates.sql`) was first tested on disposable local databases, then applied to and accepted on hosted
+DEV in [4D-B](#4d-b--hosted-acceptance) (hosted head 0050, nothing pending). 4D is complete.
 
 **Invariant: templates are sources for copies, never runtime dependencies.** A Shot may say "copied from template
 X". It never "uses" template X: nothing that renders, captures, promotes or packages a Shot reads a template or the
@@ -1268,7 +1268,7 @@ template })`):
     - fingerprints and staleness, and partial templates;
     - atomicity, stale reviews (template, destination, Location), set compatibility, names, CAS, and I1 provenance;
     - cross-Project, malformed and unreadable Project.
-  - **DB** (`npm run db:setup-templates`, 65 checks, disposable 0050):
+  - **DB** (`npm run db:setup-templates`, 69 checks, disposable 0050):
     - structure, RLS policies and the security-invoker guard, indexes;
     - real-statement grants for the owner, a stranger, `anon` and both worker roles; append-only provenance;
     - every shape constraint and the guard;
@@ -1278,7 +1278,9 @@ template })`):
     - exact cleanup.
   - **E2E** (same isolated server, stories E–H): save a template on 1A; review and copy it into 1B with the
     ownership notice and a history line; a destination edit leaves the template unchanged; replacing the template's
-    values leaves 1B unchanged.
+    values leaves 1B unchanged. The local production-server browser run at the 4D-I2 commit was 39/39: 4B 9, 4C
+    provenance 10, 4C workspace 12, 4D setup copy and templates 8 (an earlier summary misstated the first two as 11 and
+    13).
 - **Robustness.** A stored template that no longer validates (a hand-edited row that passes the CHECKs, or a later,
   stricter schema) never blocks a Shot. Listings skip it (logged), addressing it is refused (`TEMPLATE_UNREADABLE`),
   and the Shot Spatial Workspace loads its template library inside its own guard, so the editor always opens.
@@ -1290,8 +1292,54 @@ template })`):
   - The destination's authored lighting text, which is placed in the copied rig, is read just before the
     transaction, as in 4D-I1. A concurrent edit of that text can be missed. It is outside every fingerprint, so
     freshness is unaffected.
-  - Hosted acceptance (4D-B: apply 0050 to hosted DEV and repeat the DB and browser gates with a real owner and
-    non-owner) is not done.
+  - Hosted acceptance is recorded separately in [4D-B](#4d-b--hosted-acceptance).
+
+#### 4D-B — hosted acceptance
+
+Status: **passed on 2026-11-06 against hosted DEV; 4D is complete.** Run locally against hosted from PR #55 head
+`521b732` (Webpack production build, local server, `playwright.supabase.config.ts`). Nothing was deployed, the mock
+providers were the only providers enabled, and no provider was called (job counts unchanged). The migration record is in
+[migration-policy](migration-policy.md) under 0050.
+
+- **Migration.** 0050 applied exactly once at 2026-11-06T19:09:21.691Z (checksum `19cdbc22…`, byte-identical to the
+  tested file), 0001–0049 unchanged, `MIGRATION CHECKSUMS OK`, head 0050, nothing pending, no backfill. RLS on both
+  tables, owner-only policies, append-only copies for every API role, a SECURITY INVOKER guard and no new SECURITY
+  DEFINER function. Both tables were empty and no existing row count changed.
+- **DB suites on hosted at 0050.** `db:validate` STRUCTURE OK, `db:setup-templates` 69/69, `db:setup-copy` 26/26,
+  `db:behavior` 61/61, `db:previs` 60/60, `db:blocking` 57/57, `db:lighting` 119/119, `db:spatial-source` 63/63,
+  `db:spatial-passes` 80/80, `db:production-frames` 71/71, `db:rls` 67/67, `db:worker-role` 63/63 (real worker
+  logins). Hosted counts were identical before and after.
+- **Hosted browser: 17/17** (one run, 10.5 min): `e2e/supabase-setup-templates.spec.ts` 13/13 and the 4C regression
+  `e2e/supabase-nonowner-isolation.spec.ts` 4/4.
+- **Owner story** (real owner session, `e2e/supabase-setup-templates.spec.ts`): anonymous redirect; 1A builds a
+  setup on Tokyo Night Streets' set (camera link, blocking, lighting); 1A saves "4D-B Night key" (revision 1,
+  provenance 1A); 1B reviews and applies it, shows the ownership notice and a "(revision 1)" history line, and holds
+  its own three rows plus one `template` copy record; editing 1B leaves the template unchanged; replacing the template
+  from 1A (revision 2) leaves 1B unchanged; 1C on another Location's set is not offered the template, and the server
+  refuses preview and copy (`TEMPLATE_OTHER_SET`); deleting the template leaves 1B complete and its copy record keeps
+  the name with a null pointer ("template since deleted"); 1B then captures a Master Frame whose lighting fingerprint
+  is 1B's own rig.
+- **Real non-owner.** A fresh temporary Supabase Auth user the owner created in the Dashboard (not the deleted 4C
+  user, not through the Admin API, never with a worker secret), using only its own sessions, while the owner's
+  template and copy history existed. It owned 0 projects. Its browser saw no project title, template name or history.
+  All eight setup actions (`saveSetupTemplate`, `renameSetupTemplate`, `replaceSetupTemplateContent`,
+  `deleteSetupTemplate`, `previewTemplateSetupCopy`, `copyTemplateSetup`, `previewShotSetupCopy`, `copyShotSetup`)
+  were refused with the same "That project no longer exists." for a real id, a random UUID and a malformed id.
+  Through the Data API with its own JWT, template and copy reads returned 0 rows, inserts were refused, and updates
+  and deletes changed 0 rows. A read-only fingerprint of the owner's project across 10 tables was identical before
+  and after.
+- **Cleanup.** The temporary user was signed out globally (0 sessions, 0 live refresh tokens), then deleted by the
+  owner in the Dashboard; one sign-in with its old credentials returned `invalid_credentials` with no session and no
+  user, and a final read-only check found no user, identity, session, refresh token or project for it. Temporary
+  fixtures were removed. Against the pre-apply baseline, the only differences are the ledger (49 → 50 rows) and the
+  two new, empty tables; Storage (15 objects) and job counts are unchanged.
+
+Caveats:
+
+- `auth.sessions` (and live refresh tokens) for the owner rose 21 → 35, one per owner browser sign-in across the
+  hosted runs. No data changed; they expire normally or can be revoked by signing out everywhere.
+- The spec checks Shots 1A, 1B and 1C by content only; `shots_updated` may stamp `shots.updated_at`, as in 4C-B.
+- The legacy anon table grants (#47) and worker-secret breadth (#42) are unchanged by 4D and stay open.
 
 ### 4E — Splat control-pass refusal and environment limits
 
