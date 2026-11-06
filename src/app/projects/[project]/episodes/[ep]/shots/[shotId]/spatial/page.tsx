@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/ui";
+import { CopySetupPanel } from "@/components/previs/copy-setup-panel";
 import { VirtualSetLoader } from "@/components/previs/virtual-set-loader";
+import { SETUP_COMPONENT_LABEL, SETUP_COMPONENTS } from "@/domain/previs/setup-copy";
 import { shotPrepSetHref } from "@/domain/previs/spatial-workspace";
 import { shotPath } from "@/lib/paths";
 import { getPrevisRepo } from "@/server/previs";
@@ -18,10 +20,13 @@ export const dynamic = "force-dynamic";
  */
 export default async function ShotSpatialWorkspacePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ project: string; ep: string; shotId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { project: slug, ep, shotId } = await params;
+  const query = await searchParams;
   const data = await requireProject(slug);
   const episode = data.episodes.find((e) => e.slug === ep);
   const shot = data.shots.find((s) => s.id === shotId);
@@ -79,9 +84,34 @@ export default async function ShotSpatialWorkspacePage({
     context: { kind: "shot", shotPrepHref: prepHref },
   });
 
+  // Phase 4D: other Shots set in the SAME Location are the only copy sources (coordinates mean nothing elsewhere)
+  const episodeNumber = new Map(data.episodes.map((e) => [e.id, e.number]));
+  const sources = data.shots
+    .filter((s) => s.id !== shot.id && s.spatial.locationId === location.id)
+    .map((s) => ({
+      id: s.id,
+      label: `Shot ${s.shotCode} · Episode ${episodeNumber.get(s.episodeId) ?? "?"}`,
+    }));
+  // the one-time notice after a copy; the source is resolved here, never echoed from the URL
+  const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
+  const copiedFrom = data.shots.find((s) => s.id === one(query.copiedFrom)) ?? null;
+  const copiedParts = SETUP_COMPONENTS.filter((c) => one(query.copied).split(",").includes(c));
+
   return (
     <div>
       {header}
+      {copiedFrom && copiedParts.length > 0 ? (
+        <div
+          className="mx-6 mb-3 rounded-[3px] border border-line2 p-2 text-[12px]"
+          role="status"
+          data-testid="copy-setup-done"
+        >
+          Copied {copiedParts.map((c) => SETUP_COMPONENT_LABEL[c].toLowerCase()).join(", ")} from Shot{" "}
+          {copiedFrom.shotCode}. Shot {shot.shotCode} now owns its own copy: editing or deleting Shot{" "}
+          {copiedFrom.shotCode} will not change it.
+        </div>
+      ) : null}
+      <CopySetupPanel projectSlug={slug} shotId={shot.id} shotCode={shot.shotCode} sources={sources} />
       {/* keyed by the Shot AND its current Location: either change remounts one clean editor + adapter */}
       <VirtualSetLoader key={`${location.id}:${shot.id}`} {...props} />
     </div>

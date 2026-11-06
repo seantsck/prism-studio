@@ -4,7 +4,7 @@
 4B (Shot Lighting Rigs) complete (PR #46); migration 0048 applied to and accepted on hosted DEV (hosted head 0048, nothing
 pending at the time). 4C complete: architecture accepted ([4C-A](#4c-a-architecture--accepted)); 4C-I1 complete (PR
 #50); 4C-I2 (Shot-centric Spatial Workspace) complete (PR #51); [4C-B](#4c-b--hosted-acceptance) hosted acceptance
-passed, with migration 0049 applied to hosted DEV (hosted head 0049, nothing pending). 4D–4F have not started. What 4B actually shipped is
+passed, with migration 0049 applied to hosted DEV (hosted head 0049, nothing pending). 4D-I1 (explicit Shot-to-Shot setup copy, no migration) is implemented and in review ([notes](#4d-i1-implementation-notes-in-review)); 4D is not complete. 4E–4F have not started. What 4B actually shipped is
 recorded in [4B implementation notes](#4b-implementation-notes); elsewhere, design text describes intent.**
 
 Phase 4 finishes the optional spatial path into a Production Frame. It does not build a 3D system: Phase 2F already built
@@ -332,7 +332,9 @@ since other Shots share it.
 
 ## 7. Reusable setups
 
-**Decision (4D): explicit copy-by-value templates.** A template is a saved camera, lighting or blocking value that a person
+**Decision (4D): explicit copy-by-value templates.** _(4D-I1 delivered the first step without a migration: an explicit
+Shot-to-Shot copy into the destination's own rows; the templates table below is deferred, see
+[4D-I1](#4d-i1-implementation-notes-in-review).)_ A template is a saved camera, lighting or blocking value that a person
 applies to a Shot. Applying writes a normal revision of the Shot's own row and records `applied_from_template_id` and the
 template revision as provenance. **There is no live link: editing or deleting a template rewrites nothing**, neither Shots
 nor renders nor packages. Scope is Location for anything in world coordinates, since coordinates mean nothing in another set.
@@ -1054,6 +1056,116 @@ Caveats:
 - **Tests:** editing or deleting a template changes no Shot, render or package.
 - **Hosted acceptance:** migration gate.
 - **Non-goals:** live-linked templates; automatic application; a global marketplace.
+
+#### 4D-I1 implementation notes (in review)
+
+Status: **4D-I1 implemented on branch `phase-4d-reusable-setups` (draft PR, in review). 4D is not complete.** No
+migration: the repository head and the hosted head stay at 0049, and hosted DEV was not touched.
+
+**Contract: copy values, never references.** Reusing a setup writes the DESTINATION Shot's own normal rows. No row,
+column or application lookup on the destination refers to the source afterwards. Rendering, capture, promotion and
+the package read the destination's own rows only, so editing or deleting the source changes nothing on the
+destination, and the reverse also holds.
+
+- **What is reusable (I1).** Three Shot-owned parts, each chosen separately:
+  - **camera:** the `shot_camera_bookmarks` value and label;
+  - **lighting:** the `shot_light_rigs` lights and base mode;
+  - **blocking:** the `shot_character_blocking` figures.
+
+  These are the existing Shot-owned rows. The Location's set (`location_scene_documents`) is shared already and is
+  not a copied part. Camera motion paths, control passes, Master Frames and Production Frames are not copied: they
+  are renders or Shot history, not setup.
+
+- **Scope.** The copy is within one Project and one Location's current saved set. The source and destination must
+  both be set in that Location, because world coordinates mean nothing in another set. A cross-Location copy is
+  refused (`SAME_LOCATION_ONLY`), never translated. A Shot cannot copy onto itself. Rows a Shot left on another
+  Location's set are history (4C-I2): they are never offered as a source and never removed from a destination.
+- **What is copied, part by part.**
+  - **The scene anchor travels with the value.** The anchor is the set revision/fingerprint the source row was
+    authored against. A source that is stale against the set is therefore copied as visibly stale; the copy never
+    silently re-anchors it.
+  - **Lighting copies only the lights and base mode.** The destination keeps its own authored lighting text
+    (`authoredLightingIntent(destination)`), which is outside `lightingFingerprint`.
+  - **Blocking replaces the destination's current-set figures** with the source's. Figures for a character the
+    source does not block are removed, and the review lists them by name.
+  - **Lighting row replacement.** A destination rig left on another set is replaced by a new row (revision 1),
+    because `guard_shot_light_rig` forbids moving a rig between sets. A rig on the current set advances by exactly
+    one revision.
+- **Review, then explicit confirmation.** `previewShotSetupCopy` is read-only. It returns a `prism.setup-copy-plan.v1`
+  plan for each chosen part: what is copied, what it replaces or removes, and whether it is already identical. The
+  plan also carries a token, the fingerprint of the plan. `copyShotSetup` must send that token.
+  - The repository recomputes the plan from the rows it locks and refuses (`SETUP_CHANGED`) when the token differs.
+    The token differs when either Shot changed after the review.
+  - A copy therefore never silently overwrites what the person reviewed. A forged or missing token is refused the
+    same way.
+- **Atomic.** `PrevisRepository.copyShotSetup` is one operation:
+  - **Postgres:** one transaction. Both Shots' rows are locked `FOR UPDATE` in a fixed order and the set row
+    `FOR SHARE`; every write is a compare-and-set, and any failure rolls back all parts. The transaction also rechecks that both Shots are still set in the Location (a Shot moved after the review is refused), and never upserts over a destination row that did not exist when the rows were locked (a concurrently created row refuses the copy instead of being overwritten).
+  - **Memory:** validates and builds every record before touching a map.
+
+  A camera-without-lighting partial copy cannot happen.
+
+- **Ownership and authorization.**
+  - **Server-side resolution.** Both Shots are resolved server-side from the caller's own Project
+    (`requireProjectFresh`, RLS-bound in Supabase mode). IDs from the form are never trusted beyond that lookup.
+  - **One indistinguishable answer.** An unknown Shot, a deleted Shot and another Project's Shot all get
+    `SETUP_SHOT_GONE`. An unreadable Project gets the usual "That project no longer exists." Nothing reveals whether
+    another owner's Shot exists.
+  - **Repository checks.** The repository checks again that both Shots belong to `projectId`; under RLS a stranger
+    sees no Shot and is refused.
+  - **No new privileges.** No grant, policy, function or SECURITY DEFINER was added.
+- **Fingerprints and provenance.**
+  - **Unchanged content-only fingerprints.** The camera (`bookmarkCameraFingerprint`), lighting (lights and base,
+    with authored intent excluded) and blocking (character and Location) fingerprints are already content-only. An
+    identical copy therefore has identical fingerprints.
+  - **Staleness follows the right Shot.** A later edit stales only the edited Shot's Master Frames. A later copy over
+    the destination stales the destination's own earlier Master Frames, because it changed them.
+  - **4C provenance unchanged.** Capture still freezes the destination's own bookmark as `prism.render-camera.v1`,
+    and promotion still freezes exact-source provenance, both unchanged from 4C.
+  - **No stored attribution in I1.** The UI shows a one-time "Copied … from Shot X; this Shot now owns its own copy"
+    notice after the reload (the source is resolved server-side, never echoed from the URL). Nothing is stored, so
+    attribution cannot enter semantic state.
+- **UI.** The Shot Spatial Workspace has a "Copy setup from…" panel offering only other Shots in the same Location,
+  with separate Copy camera / Copy lighting / Copy blocking choices.
+  - The review lines say what each choice replaces. The confirm button is disabled when the copy would change
+    nothing ("Already identical").
+  - Confirming reloads the workspace so the editor remounts on the destination's new rows. The panel warns that
+    unsaved editor edits are discarded.
+  - The wording never says link, attach or sync.
+- **Database impact: none.** No migration, no new table, column, trigger, policy or grant. `db:setup-copy` asserts
+  that the head is 0049, that no setup/template/preset table exists, and that no source/copied/template column
+  exists on the three tables.
+- **Tests.**
+  - **Unit, domain** (`setup-copy.test.ts`): plan, token sensitivity, history rows, refusals, no-op.
+  - **Unit, server** (`server/__tests__/setup-copy.test.ts`, the real actions on the memory store):
+    - copy by value into the destination's own rows, with identical fingerprints and the destination's own lighting
+      notes;
+    - independence both ways, and deletion of the source Shot;
+    - no live link: a spy proves that after the copy the destination's capture and spatial state read only the
+      destination's rows;
+    - Master Frame staleness;
+    - chosen parts only, and blocking replace/remove;
+    - stale review, both source-changed and destination-changed;
+    - forged token, atomicity under a mid-copy failure, cross-Location, cross-Project and unreadable Project with
+      one answer, and a repository-level Project check.
+  - **DB** (`npm run db:setup-copy`, 26 checks, real RLS and transactions):
+    - stranger refused and wrote nothing, cross-Project refused, stale token refused, a destination moved off the
+      Location after review refused;
+    - an injected fault on the last write rolls back the camera and lighting already written;
+    - own rows with identical fingerprints, independence both ways, revisions advance by exactly one on a re-copy;
+    - deleting the source Shot cascades only its own rows and leaves the destination byte-for-byte intact;
+    - exact cleanup.
+  - **E2E** (`e2e/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-setup-copy.spec.ts`, own memory server `memory-4d-isolated`, port
+    3114): build on 1A, review and copy into 1B, identical values, no-op re-review, independence both ways, and a
+    Master Frame captured from the copy.
+- **Deferred (not in I1):**
+  - **Named templates.** The §7 design: a templates table independent of any Shot, `applied_from_*` attribution
+    columns, "save as template" and a persistent "copied from" note. This needs migration 0050 and a hosted migration
+    gate, so it is a separate slice that needs explicit authorization.
+  - **Not copied:** camera motion paths.
+  - **Not offered:** Project-wide lens-only presets.
+  - **Not run:** hosted acceptance of 4D. The DB suites ran on a disposable local database only; hosted DEV was not
+    touched.
 
 ### 4E — Splat control-pass refusal and environment limits
 

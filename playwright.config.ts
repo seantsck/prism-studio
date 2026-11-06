@@ -86,6 +86,9 @@ const ISOLATED_4C = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzz-spatial-provenance.spec.ts";
 /** The Phase 4C-I2 Shot Spatial Workspace spec: its own memory server (sets, Shot reassignment, Production Frames). */
 const ISOLATED_4C2 = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-shot-spatial-workspace.spec.ts";
 
+/** The Phase 4D setup-copy spec: its own memory server (a shared set, two Shots' setups, a copy, a Master Frame). */
+const ISOLATED_4D = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-setup-copy.spec.ts";
+
 /**
  * TEST SERVERS ONLY. Playwright's request client reuses keep-alive sockets; at Node's default idle-close boundary
  * (5 s + 1 s buffer) the server could close a socket while `page.request` was reusing it, giving ECONNRESET before
@@ -114,6 +117,7 @@ export default defineConfig({
         ISOLATED_4B,
         ISOLATED_4C,
         ISOLATED_4C2,
+        ISOLATED_4D,
       ],
       use: { baseURL: "http://localhost:3102" },
     },
@@ -171,6 +175,11 @@ export default defineConfig({
       name: "memory-4c2-isolated",
       testMatch: ISOLATED_4C2,
       use: { baseURL: "http://localhost:3113" },
+    },
+    {
+      name: "memory-4d-isolated",
+      testMatch: ISOLATED_4D,
+      use: { baseURL: "http://localhost:3114" },
     },
   ],
   // Started in order: the first builds; the others serve the same build from separate processes (separate stores).
@@ -274,6 +283,13 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 120_000,
       env: memoryEnv(3113),
+    },
+    {
+      command: `npx next start -p 3114 ${KEEP_ALIVE}`,
+      url: "http://localhost:3114",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: memoryEnv(3114),
     },
   ],
 });
