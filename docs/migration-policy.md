@@ -135,8 +135,41 @@ worker role, 0 policies with `direct_video_allowed = true`; `db:validate` STRUCT
 67/67, `db:worker-role` 60/60 (REAL LOGIN), `db:continuity-analysis` 80/80, `db:media-qa` 39/39, narrow repository
 acceptance on a disposable Project 15/15, hosted browser E2E 40/40; counts and Storage back to baseline afterwards.
 
+**0050** (Phase 4D-I2, **applied to hosted DEV on 2026-11-06T19:09:21.691Z** in 4D-B, checksum
+`19cdbc22592756dd6749ab6aba900b9f94380f64a249f4a48fa07b91353debe0`; hosted head 0050, nothing pending). Additive: two
+new tables, nothing else changes, nothing is backfilled.
+
+- **`shot_setup_templates`:** a named, Project- and Location/set-scoped snapshot of reusable setup values (camera,
+  lighting without authored text, blocking), with a content fingerprint, a revision and display-only source
+  provenance. CHECK constraints bound the name and shape. A security-invoker guard keeps a template on its Project,
+  Location and set and advances the revision by exactly one; it permits the FK's own `SET NULL` of `source_shot_id`.
+- **`shot_setup_copies`:** append-only provenance of every explicit copy into a Shot (template or Shot source, the
+  parts, the reviewed token). Deleting a template or source Shot only nulls that pointer (`ON DELETE SET NULL
+(column)`), so provenance can never become a dependency. The record leaves only with its Shot or Project.
+- **Security:** owner-only RLS (`is_project_owner`) on both tables, no SECURITY DEFINER. `authenticated` gets
+  select/insert/update/delete on templates and select/insert only on copies; the migration revokes from
+  `authenticated` first because default privileges would grant more, and takes update/delete/truncate on copies from
+  `service_role` too. `anon` and both worker roles hold nothing.
+- **Compatibility:** post-#53 `main` passes its behaviour suites on 0050. Only its schema-at-head assertions differ
+  (`db:validate` lists the new tables as unexpected; `db:setup-copy` asserts head 0049). The 4D-I2 code runs on 0049:
+  templates read as unavailable and 4D-I1 copies skip provenance. `db:validate` expects the 0050 objects only once
+  the ledger records 0050.
+- **Disposable gate:** a rolled-back `--dry-run`, then `db:migrate` applied exactly 0050 (`MIGRATION CHECKSUMS OK`);
+  `db:validate` STRUCTURE OK; `db:setup-templates` 69/69; `db:setup-copy` 26/26.
+- **Hosted gate (4D-B, 2026-11-06):** PR #55 head `521b732`; the file was byte-identical to the tested copy. Pre-apply
+  baseline: 49 ledger rows, head 0049, both tables absent. A rolled-back `--dry-run`, then `db:migrate` applied exactly
+  0050 (one ledger row, 0001–0049 unchanged, `MIGRATION CHECKSUMS OK`, nothing pending). Afterwards: RLS on both
+  tables; three policies (`shot_setup_templates_owner` ALL, `shot_setup_copies_owner_read` SELECT,
+  `shot_setup_copies_owner_insert` INSERT); `authenticated` holds DELETE/INSERT/SELECT/UPDATE on templates and
+  INSERT/SELECT on copies; `service_role` holds no UPDATE/DELETE/TRUNCATE on copies; the guard is SECURITY INVOKER and
+  no new SECURITY DEFINER function exists; both tables empty; no existing row count changed. Hosted suites at 0050:
+  `db:validate` STRUCTURE OK, `db:setup-templates` 69/69, `db:setup-copy` 26/26, `db:behavior` 61/61, `db:previs`
+  60/60, `db:blocking` 57/57, `db:lighting` 119/119, `db:spatial-source` 63/63, `db:spatial-passes` 80/80,
+  `db:production-frames` 71/71, `db:rls` 67/67, `db:worker-role` 63/63; hosted browser 17/17 (owner and real non-owner,
+  [4D-B](phase-4-spatial-production.md#4d-b--hosted-acceptance)); counts and Storage back to baseline afterwards.
+
 **0049** (Phase 4C-I1, **applied to hosted DEV on 2026-11-05T23:28:01.818Z** in 4C-B, checksum
-`9b4589caa4ed19bf92e6dc9f77217587bf3b08f99977578871c69113f9da19fb`; hosted head 0049, nothing pending). Revised in the 4C-I1 technical-review remediation
+`9b4589caa4ed19bf92e6dc9f77217587bf3b08f99977578871c69113f9da19fb`; hosted head 0049 until 4D-B applied 0050). Revised in the 4C-I1 technical-review remediation
 before it was ever applied anywhere but a disposable database (the first review draft was
 `6ebcb8639e7fcab65fcf35c07ed39d9613d35ae83a79459b530529b8c883679b`); 0048 is byte-identical.
 

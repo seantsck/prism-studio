@@ -8,6 +8,10 @@ import { expect, test, type Page } from "@playwright/test";
  *   B  Shot 1B reviews the copy (what is copied, what it replaces), confirms, and owns identical values
  *   C  editing the source afterwards does not change the destination; editing the destination does not change the source
  *   D  the destination captures a Master Frame from its own copied state
+ *   E  (4D-I2) Shot 1A saves its setup as a named template
+ *   F  Shot 1B reviews "Copy from template", applies it, and is told it now owns its own copy; history records it
+ *   G  editing the destination leaves the template unchanged
+ *   H  replacing the template's values leaves the destination unchanged
  */
 test.use({
   launchOptions: {
@@ -160,4 +164,71 @@ test("D — the destination captures a Master Frame from its own copied state", 
   await page.getByTestId("capture-master-frame").click();
   await expect(page.getByTestId("set-status")).toContainText("Master frame saved", { timeout: 60_000 });
   await expect(page.getByTestId("master-frame")).toHaveCount(1, { timeout: 30_000 });
+});
+
+const templateRow = (page: Page) => page.getByTestId("setup-template").filter({ hasText: "Night key" });
+const templateFp = async (page: Page) =>
+  (await templateRow(page).getAttribute("data-content-fingerprint")) ?? "";
+let tFp = "";
+
+test("E — the source Shot saves its setup as a named template", async ({ page }) => {
+  test.setTimeout(300_000);
+  await open(page, A);
+  await page.getByTestId("template-name").fill("Night key");
+  for (const c of ["camera", "lighting", "blocking"])
+    await expect(page.getByTestId(`template-include-${c}`)).toBeChecked();
+  await page.getByTestId("template-save").click();
+  await expect(templateRow(page)).toHaveCount(1, { timeout: 30_000 });
+  await expect(templateRow(page)).toContainText("camera, lighting, blocking");
+  await expect(templateRow(page)).toContainText("saved from Shot 1A");
+  tFp = await templateFp(page);
+  expect(tFp).toMatch(/^[0-9a-f]{64}$/);
+});
+
+test("F — the destination copies from the template after a review, and owns its own copy", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await open(page, B);
+  const bBefore = await lightingFp(page);
+  const source = page.getByTestId("copy-setup-source");
+  await source.selectOption({ label: "Template: Night key" });
+  await expect(page.getByTestId("copy-setup-preview")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("copy-setup-from")).toContainText("Night key");
+  await expect(page.getByTestId("copy-setup-lighting-line")).toContainText("replaces this Shot's lighting");
+  expect(await lightingFp(page)).toBe(bBefore); // the review wrote nothing
+  await page.getByTestId("copy-setup-confirm").click();
+  await page.waitForURL(/copiedTemplate=/, { timeout: 30_000 });
+  await expect(page.getByTestId("copy-setup-done")).toContainText(
+    "from Night key; this Shot now owns its own copy",
+  );
+  await expect(set(page)).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
+  await expect(page.getByTestId("shot-lighting")).toHaveAttribute("data-loaded", "true", { timeout: 30_000 });
+  await open(page, A);
+  const aLightNow = await lightingFp(page);
+  await open(page, B);
+  expect(await lightingFp(page)).toBe(aLightNow); // the template held A's values when it was saved
+  await expect(page.getByTestId("setup-copy-history-line").first()).toContainText(
+    "copied from template “Night key”",
+  );
+});
+
+test("G — editing the destination leaves the template unchanged", async ({ page }) => {
+  test.setTimeout(300_000);
+  await open(page, B);
+  await saveLight(page, "7");
+  await open(page, A);
+  expect(await templateFp(page)).toBe(tFp);
+});
+
+test("H — replacing the template's values leaves the destination unchanged", async ({ page }) => {
+  test.setTimeout(300_000);
+  await open(page, B);
+  const bLight = await lightingFp(page);
+  await open(page, A);
+  await saveLight(page, "900");
+  await templateRow(page).getByTestId("template-replace").click();
+  await expect.poll(() => templateFp(page), { timeout: 30_000 }).not.toBe(tFp);
+  await open(page, B);
+  expect(await lightingFp(page)).toBe(bLight);
 });

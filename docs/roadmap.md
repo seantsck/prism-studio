@@ -236,7 +236,7 @@ vision; face embeddings; cross-Shot / cut-level continuity (3A.4); cross-Episode
 accepted on the verified calibration v2 (six temporal families). Lip sync stays unchecked and separately gated, and QA
 stays advisory.
 
-## Phase 4 — Spatial Production _(architecture accepted; 4A–4C complete; 4D-I1 in review)_
+## Phase 4 — Spatial Production _(architecture accepted; 4A–4D complete; 4E next)_
 
 Design: [phase-4-spatial-production](phase-4-spatial-production.md). **3D is an optional construction tool for a Production
 Frame, never a prerequisite for one.**
@@ -249,14 +249,14 @@ the attachment, holds no data, and stays legacy and non-authoritative. `spatial.
 
 **Phase 4 work remaining:**
 
-| Slice | Scope                                                                                          | Status                                                                                                                                       |
-| ----- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| 4A    | Architecture and consolidation                                                                 | complete, docs only                                                                                                                          |
-| 4B    | Shot Lighting Rigs: `prism.shot-lighting.v1`, overlay, render provenance, optional package key | complete (PR #46); migration 0048 applied to hosted DEV                                                                                      |
-| 4C    | Shot-centric Spatial Workspace and Production Frame handoff                                    | complete (PRs #49, #50, #51; 4C-B hosted acceptance); migration 0049 applied to hosted DEV                                                   |
-| 4D    | Reusable setups: explicit copies, never live links                                             | 4D-I1 in review: explicit Shot-to-Shot copy of camera / lighting / blocking into the Shot's own rows, no migration; named templates deferred |
-| 4E    | Splat control-pass refusal and environment limits                                              | not started                                                                                                                                  |
-| 4F    | Production acceptance and roadmap close                                                        | not started                                                                                                                                  |
+| Slice | Scope                                                                                          | Status                                                                                                 |
+| ----- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| 4A    | Architecture and consolidation                                                                 | complete, docs only                                                                                    |
+| 4B    | Shot Lighting Rigs: `prism.shot-lighting.v1`, overlay, render provenance, optional package key | complete (PR #46); migration 0048 applied to hosted DEV                                                |
+| 4C    | Shot-centric Spatial Workspace and Production Frame handoff                                    | complete (PRs #49, #50, #51; 4C-B hosted acceptance); migration 0049 applied to hosted DEV             |
+| 4D    | Reusable setups: explicit copies, never live links                                             | complete (PR #53; PR #55 awaiting merge; 4D-B hosted acceptance); migration 0050 applied to hosted DEV |
+| 4E    | Splat control-pass refusal and environment limits                                              | not started                                                                                            |
+| 4F    | Production acceptance and roadmap close                                                        | not started                                                                                            |
 
 **4B — complete.** Shot Lighting Rigs (`prism.shot-lighting.v1`) shipped in PR #46. Migration 0048 is applied to hosted
 DEV (the hosted head was 0048 when 4B closed; 0049 since 4C-B). Shot Lighting is optional and Shot-owned. It has base modes
@@ -272,11 +272,16 @@ discover, read or change the owner's project through the browser, the server act
 called and nothing was deployed. Caveats and evidence: [phase-4-spatial-production](phase-4-spatial-production.md#4c-b--hosted-acceptance).
 4E–4F are not started.
 
-**4D — in progress.** 4D-I1 (in review, no migration) adds "Copy setup from…" on the Shot Spatial Workspace: another
-Shot's camera, lighting and/or blocking on the same Location's set is copied by value into this Shot's own rows, after
-a review, in one transaction. There is no live link: editing or deleting the source changes nothing on the
-destination. Named templates (a templates table and `applied_from_*` attribution, migration 0050) are deferred. 4D is
-not complete. Details: [phase-4-spatial-production](phase-4-spatial-production.md#4d-i1-implementation-notes-in-review).
+**4D — complete.** 4D-I1 (PR #53, no migration) added "Copy setup from…": another Shot's camera, lighting and/or
+blocking on the same Location's set is copied by value into a Shot's own rows, after a review, in one transaction.
+4D-I2 (PR #55, awaiting the owner's merge) added named setup templates (snapshots of those values, per set) that are copied the same way, and an
+append-only copy history. Templates are sources for copies, never runtime dependencies: editing or deleting a template
+never changes a Shot that copied it. 4D-B, the hosted acceptance, passed on 2026-11-06: migration **0050** is applied to
+hosted DEV once, the hosted head is 0050 and no migration is pending. The hosted DB suites, the owner template story and
+a real authenticated non-owner (a temporary Auth user, since deleted) passed; the non-owner could not see, read, change
+or apply the owner's templates or copy history through the browser, the server actions or the Data API. No provider was
+called and nothing was deployed. Caveats and evidence:
+[phase-4-spatial-production](phase-4-spatial-production.md#4d-b--hosted-acceptance). Next: **4E** (not started).
 
 Real reconstruction (M2D.3D2) stays optional and does not block any slice.
 

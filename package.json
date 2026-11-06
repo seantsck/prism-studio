@@ -55,6 +55,7 @@
     "db:production-frames": "tsx --env-file=.env.local scripts/db-production-frames.mts",
     "db:spatial-source": "tsx --env-file=.env.local scripts/db-spatial-source.mts",
     "db:setup-copy": "tsx --env-file=.env.local scripts/db-setup-copy.mts",
+    "db:setup-templates": "tsx --env-file=.env.local scripts/db-setup-templates.mts",
     "db:image-shot-generator": "tsx --env-file=.env.local scripts/db-image-shot-generator.mts",
     "db:location-views": "tsx --env-file=.env.local scripts/db-location-views.mts",
     "db:character-continuity": "tsx --env-file=.env.local scripts/db-character-continuity.mts",

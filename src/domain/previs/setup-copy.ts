@@ -43,7 +43,8 @@ export interface SetupCameraRow extends Anchor {
 }
 export interface SetupLightingRow extends Anchor {
   revision: number;
-  rig: ShotLightingRig;
+  /** the reusable part of a rig: a Shot's own authored lighting text is never copied (see the repositories) */
+  rig: Pick<ShotLightingRig, "schema" | "base" | "lights">;
   lightingFingerprint: string;
 }
 export interface SetupBlockingRow extends Anchor {
@@ -93,9 +94,18 @@ export interface PlannedBlocking {
   unchanged: boolean;
 }
 
+/** Phase 4D-I2: a named template as the copy's origin. Its revision is reviewed, so an edited template refuses. */
+export interface SetupCopyTemplateOrigin {
+  id: string;
+  revision: number;
+  contentFingerprint: string;
+}
+
 export interface SetupCopyPlan {
   schema: typeof SETUP_COPY_PLAN_SCHEMA;
-  sourceShotId: string;
+  /** exactly one origin: another Shot (4D-I1) or a named template (4D-I2) */
+  sourceShotId: string | null;
+  template: SetupCopyTemplateOrigin | null;
   destinationShotId: string;
   locationId: string;
   sceneDocumentId: string;
@@ -147,7 +157,8 @@ export function parseSetupComponents(input: readonly unknown[]): SetupComponent[
  * (same Shot, nothing chosen, or a chosen part the source does not have on the current set).
  */
 export function planSetupCopy(args: {
-  sourceShotId: string;
+  sourceShotId: string | null;
+  template?: SetupCopyTemplateOrigin | null;
   destinationShotId: string;
   set: CurrentSetupSet;
   source: SetupRows;
@@ -155,6 +166,9 @@ export function planSetupCopy(args: {
   components: readonly SetupComponent[];
 }): SetupCopyPlan {
   const { set, source, destination } = args;
+  const template = args.template ?? null;
+  if ((args.sourceShotId === null) === (template === null))
+    throw new SetupCopyRefusal("A copy needs exactly one source: a Shot or a template.");
   if (args.sourceShotId === args.destinationShotId)
     throw new SetupCopyRefusal("A Shot's setup cannot be copied onto itself.");
   const components = parseSetupComponents(args.components);
@@ -163,7 +177,9 @@ export function planSetupCopy(args: {
   for (const c of components)
     if (!available[c])
       throw new SetupCopyRefusal(
-        `The source Shot has no ${SETUP_COMPONENT_LABEL[c].toLowerCase()} on this 3D set to copy.`,
+        template
+          ? `This template has no ${SETUP_COMPONENT_LABEL[c].toLowerCase()} to copy.`
+          : `The source Shot has no ${SETUP_COMPONENT_LABEL[c].toLowerCase()} on this 3D set to copy.`,
       );
 
   let camera: PlannedCamera | null = null;
@@ -234,6 +250,7 @@ export function planSetupCopy(args: {
   const body = {
     schema: SETUP_COPY_PLAN_SCHEMA,
     sourceShotId: args.sourceShotId,
+    template,
     destinationShotId: args.destinationShotId,
     locationId: set.locationId,
     sceneDocumentId: set.sceneDocumentId,

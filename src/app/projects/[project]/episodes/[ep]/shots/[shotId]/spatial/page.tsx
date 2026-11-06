@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/ui";
 import { CopySetupPanel } from "@/components/previs/copy-setup-panel";
 import { VirtualSetLoader } from "@/components/previs/virtual-set-loader";
-import { SETUP_COMPONENT_LABEL, SETUP_COMPONENTS } from "@/domain/previs/setup-copy";
+import { availableSetup, SETUP_COMPONENT_LABEL, SETUP_COMPONENTS } from "@/domain/previs/setup-copy";
+import { templateParts } from "@/domain/previs/setup-template";
 import { shotPrepSetHref } from "@/domain/previs/spatial-workspace";
 import { shotPath } from "@/lib/paths";
 import { getPrevisRepo } from "@/server/previs";
@@ -75,10 +76,11 @@ export default async function ShotSpatialWorkspacePage({
     );
   }
 
+  const previs = await getPrevisRepo();
   const props = await loadVirtualSetProps({
     slug,
     data,
-    previs: await getPrevisRepo(),
+    previs,
     location,
     activeShotId: shot.id,
     context: { kind: "shot", shotPrepHref: prepHref },
@@ -97,6 +99,64 @@ export default async function ShotSpatialWorkspacePage({
   const copiedFrom = data.shots.find((s) => s.id === one(query.copiedFrom)) ?? null;
   const copiedParts = SETUP_COMPONENTS.filter((c) => one(query.copied).split(",").includes(c));
 
+  // Phase 4D-I2: named templates on this set (null before migration 0050), what this Shot can save, its copy history.
+  // None of this is read by the editor, capture, promotion or the package: it only feeds the copy panel.
+  // a template problem must never block this Shot's editor: on any failure the library is hidden, the editor still opens
+  let templatesReady = false;
+  let templateRecords: Awaited<ReturnType<typeof previs.listSetupTemplates>> = [];
+  let copyRecords: Awaited<ReturnType<typeof previs.listSetupCopies>> = [];
+  try {
+    templatesReady = await previs.setupTemplatesReady();
+    if (templatesReady) {
+      templateRecords = await previs.listSetupTemplates(data.project.id, location.id);
+      copyRecords = await previs.listSetupCopies(data.project.id, shot.id);
+    }
+  } catch (err) {
+    templatesReady = false;
+    console.error("[setup-templates] unavailable for this page:", err instanceof Error ? err.message : err);
+  }
+  const scene = await previs.getSceneForLocation(location.id);
+  const ownAvailable = scene
+    ? availableSetup(
+        {
+          camera: await previs.getBookmarkForShot(shot.id),
+          lighting: await previs.getLightingRigForShot(shot.id),
+          blocking: await previs.listShotBlocking(shot.id),
+        },
+        { locationId: location.id, sceneDocumentId: scene.id },
+      )
+    : { camera: false, lighting: false, blocking: false };
+  const templates = templatesReady
+    ? templateRecords
+        .filter((t) => scene && t.sceneDocumentId === scene.id)
+        .map((t) => ({
+          id: t.id,
+          name: t.name,
+          description: t.description,
+          revision: t.revision,
+          parts: templateParts(t.content),
+          contentFingerprint: t.contentFingerprint,
+          sourceShotCode: t.sourceShotCode,
+          updatedAt: t.updatedAt,
+        }))
+    : null;
+  const copies = copyRecords.slice(0, 5);
+  const partsText = (ps: readonly string[]) =>
+    SETUP_COMPONENTS.filter((c) => ps.includes(c))
+      .map((c) => SETUP_COMPONENT_LABEL[c].toLowerCase())
+      .join(", ");
+  const history = copies.map((c) => ({
+    id: c.id,
+    text:
+      c.sourceKind === "template"
+        ? `${partsText(c.components)} copied from template “${c.templateName}” (revision ${c.templateRevision})${c.templateId ? "" : " — template since deleted"} · ${c.copiedAt.slice(0, 16).replace("T", " ")}`
+        : `${partsText(c.components)} copied from Shot ${c.sourceShotCode}${c.sourceShotId ? "" : " — Shot since deleted"} · ${c.copiedAt.slice(0, 16).replace("T", " ")}`,
+  }));
+  const copiedTemplate =
+    templatesReady && one(query.copiedTemplate)
+      ? (templateRecords.find((t) => t.id === one(query.copiedTemplate)) ?? null)
+      : null;
+
   return (
     <div>
       {header}
@@ -111,7 +171,26 @@ export default async function ShotSpatialWorkspacePage({
           {copiedFrom.shotCode} will not change it.
         </div>
       ) : null}
-      <CopySetupPanel projectSlug={slug} shotId={shot.id} shotCode={shot.shotCode} sources={sources} />
+      {copiedTemplate && copiedParts.length > 0 ? (
+        <div
+          className="mx-6 mb-3 rounded-[3px] border border-line2 p-2 text-[12px]"
+          role="status"
+          data-testid="copy-setup-done"
+        >
+          Copied {copiedParts.map((c) => SETUP_COMPONENT_LABEL[c].toLowerCase()).join(", ")} from{" "}
+          {copiedTemplate.name}; this Shot now owns its own copy. Editing or deleting the template will not
+          change it.
+        </div>
+      ) : null}
+      <CopySetupPanel
+        projectSlug={slug}
+        shotId={shot.id}
+        shotCode={shot.shotCode}
+        sources={sources}
+        templates={templates}
+        ownAvailable={ownAvailable}
+        history={history}
+      />
       {/* keyed by the Shot AND its current Location: either change remounts one clean editor + adapter */}
       <VirtualSetLoader key={`${location.id}:${shot.id}`} {...props} />
     </div>

@@ -43,7 +43,25 @@ import {
 import { bookmarkFromCamera } from "@/domain/previs/camera";
 import { cameraPathFingerprint, validateCameraPath } from "@/domain/previs/camera-path";
 import { sceneFingerprint } from "@/domain/previs/document";
-import { planSetupCopy, SETUP_CHANGED, SetupCopyRefusal } from "@/domain/previs/setup-copy";
+import {
+  planSetupCopy,
+  SETUP_CHANGED,
+  SetupCopyRefusal,
+  type SetupComponent,
+  type SetupCopyPlan,
+  type SetupRows,
+} from "@/domain/previs/setup-copy";
+import {
+  SETUP_TEMPLATE_SCHEMA,
+  setupTemplateContentFingerprint,
+  snapshotSetupTemplate,
+  templateAsSetupRows,
+  TEMPLATE_CHANGED,
+  TEMPLATE_CHARACTER_GONE,
+  TEMPLATE_GONE,
+  TEMPLATE_NAME_TAKEN,
+  TEMPLATE_OTHER_SET,
+} from "@/domain/previs/setup-template";
 import {
   buildSpatialReference,
   CAMERA_MOTION_SCHEMA_VERSION,
@@ -57,6 +75,11 @@ import {
   type AudioMixResolver,
   type CopyShotSetupInput,
   type CopyShotSetupResult,
+  type CopyTemplateSetupInput,
+  type CreateSetupTemplateInput,
+  type SetupCopyRecord,
+  type SetupTemplateRecord,
+  type UpdateSetupTemplateInput,
   type SaveLightingRigInput,
   type ShotLightingRigRecord,
   type CameraBookmarkRecord,
@@ -91,6 +114,8 @@ export class MemoryPrevisService implements PrevisRepository {
   private reconstructions = new Map<string, SpatialReconstructionRecord>();
   private jobs = new Map<string, ReconstructionJobRecord>();
   private jobEvents: JobEventRecord[] = [];
+  private setupTemplates = new Map<string, SetupTemplateRecord>(); // Phase 4D-I2
+  private setupCopies: SetupCopyRecord[] = []; // append-only provenance
 
   constructor(
     private readonly access: MemoryProjectsAccess & {
@@ -591,43 +616,125 @@ export class MemoryPrevisService implements PrevisRepository {
     this.requireShot(input.projectId, input.sourceShotId);
     this.requireShot(input.projectId, input.destinationShotId);
     this.requireLocation(input.projectId, input.locationId);
+    const scene = this.currentSetupScene(input);
+    this.requireShotsOnLocation(
+      input.projectId,
+      [input.sourceShotId, input.destinationShotId],
+      input.locationId,
+    );
+    const source = this.setupRows(input.projectId, input.sourceShotId);
+    const destination = this.setupRows(input.projectId, input.destinationShotId);
+    const plan = this.planOrRefuse({
+      sourceShotId: input.sourceShotId,
+      destinationShotId: input.destinationShotId,
+      set: { locationId: input.locationId, sceneDocumentId: scene.id },
+      source,
+      destination,
+      components: input.components,
+    });
+    if (plan.token !== input.expectedToken) throw new PrevisError("conflict", SETUP_CHANGED);
+    const built = this.buildSetupCopy({ input, plan, source, destination });
+    const sourceShot = this.project(input.projectId).shots.find((s) => s.id === input.sourceShotId)!;
+    const record = this.copyRecord(input, plan, {
+      sourceKind: "shot",
+      sourceShotId: sourceShot.id,
+      sourceShotCode: sourceShot.shotCode,
+      templateId: null,
+      templateName: null,
+      templateRevision: null,
+      templateContentFingerprint: null,
+    });
+    // ── commit (cannot throw) ──
+    built.commit();
+    this.setupCopies.push(record);
+    return { plan, ...built.result };
+  }
+
+  private currentSetupScene(input: { projectId: string; locationId: string; sceneDocumentId: string }) {
     const scene = this.scenes.get(input.locationId);
     if (!scene || scene.projectId !== input.projectId || scene.id !== input.sceneDocumentId)
       throw new PrevisError("not_found", "That 3D set was not found for this location.");
-    const shots = this.project(input.projectId).shots;
-    if (
-      [input.sourceShotId, input.destinationShotId].some(
-        (id) => shots.find((s) => s.id === id)?.spatial.locationId !== input.locationId,
-      )
-    )
+    return scene;
+  }
+
+  /** Both Shots must STILL be set in this Location (the action checked; the store checks again). */
+  private requireShotsOnLocation(projectId: string, shotIds: string[], locationId: string) {
+    const shots = this.project(projectId).shots;
+    if (shotIds.some((id) => shots.find((s) => s.id === id)?.spatial.locationId !== locationId))
       throw new PrevisError("conflict", SETUP_CHANGED);
-    const source = this.setupRows(input.projectId, input.sourceShotId);
-    const destination = this.setupRows(input.projectId, input.destinationShotId);
-    let plan;
+  }
+
+  private planOrRefuse(args: Parameters<typeof planSetupCopy>[0]) {
     try {
-      plan = planSetupCopy({
-        sourceShotId: input.sourceShotId,
-        destinationShotId: input.destinationShotId,
-        set: { locationId: input.locationId, sceneDocumentId: scene.id },
-        source,
-        destination,
-        components: input.components,
-      });
+      return planSetupCopy(args);
     } catch (err) {
       if (err instanceof SetupCopyRefusal) throw new PrevisError("invalid", err.message);
       throw err;
     }
-    if (plan.token !== input.expectedToken) throw new PrevisError("conflict", SETUP_CHANGED);
+  }
 
+  private copyRecord(
+    input: {
+      projectId: string;
+      destinationShotId: string;
+      locationId: string;
+      sceneDocumentId: string;
+      userId: string | null;
+      now: string;
+    },
+    plan: SetupCopyPlan,
+    origin: Pick<
+      SetupCopyRecord,
+      | "sourceKind"
+      | "sourceShotId"
+      | "sourceShotCode"
+      | "templateId"
+      | "templateName"
+      | "templateRevision"
+      | "templateContentFingerprint"
+    >,
+  ): SetupCopyRecord {
+    return {
+      id: randomUUID(),
+      projectId: input.projectId,
+      shotId: input.destinationShotId,
+      locationId: input.locationId,
+      sceneDocumentId: input.sceneDocumentId,
+      ...origin,
+      components: [...plan.components],
+      planToken: plan.token,
+      copiedAt: input.now,
+      createdBy: input.userId,
+    };
+  }
+
+  /**
+   * Builds every destination record of a copy from the SOURCE VALUES (a Shot's rows or a template's snapshot) without
+   * touching a map; `commit` then writes them and cannot throw.
+   */
+  private buildSetupCopy(args: {
+    input: {
+      projectId: string;
+      destinationShotId: string;
+      locationId: string;
+      sceneDocumentId: string;
+      destinationIntent: CopyShotSetupInput["destinationIntent"];
+      userId: string | null;
+      now: string;
+    };
+    plan: SetupCopyPlan;
+    source: SetupRows;
+    destination: ReturnType<MemoryPrevisService["setupRows"]>;
+  }) {
+    const { input, plan, source, destination } = args;
     const dest = input.destinationShotId;
     const anchorOf = (r: { sceneRevision: number; sceneFingerprint: string }) => ({
       locationId: input.locationId,
-      sceneDocumentId: scene.id,
+      sceneDocumentId: input.sceneDocumentId,
       sceneRevision: r.sceneRevision,
       sceneFingerprint: r.sceneFingerprint,
     });
 
-    // ── build (may throw; nothing written yet) ──
     let camera: CameraBookmarkRecord | null = null;
     if (plan.camera) {
       const s = source.camera!;
@@ -654,7 +761,13 @@ export class MemoryPrevisService implements PrevisRepository {
       else {
         let rig;
         try {
-          rig = parseShotLightingRig({ ...s.rig, authoredIntent: input.destinationIntent });
+          // only the lights and base mode travel: the destination keeps its own authored lighting text
+          rig = parseShotLightingRig({
+            schema: s.rig.schema,
+            base: s.rig.base,
+            lights: s.rig.lights,
+            authoredIntent: input.destinationIntent,
+          });
         } catch (err) {
           throw new PrevisError("invalid", `Invalid Shot lighting: ${(err as Error).message}`);
         }
@@ -682,7 +795,7 @@ export class MemoryPrevisService implements PrevisRepository {
       blocking = plan.blocking.figures.map((f) => {
         this.requireCharacter(input.projectId, f.characterId);
         const s = source.blocking.find(
-          (b) => b.characterId === f.characterId && b.sceneDocumentId === scene.id,
+          (b) => b.characterId === f.characterId && b.sceneDocumentId === input.sceneDocumentId,
         )!;
         const d = byChar.get(f.characterId);
         if (f.unchanged) return clone(d!);
@@ -692,11 +805,11 @@ export class MemoryPrevisService implements PrevisRepository {
           shotId: dest,
           characterId: f.characterId,
           ...anchorOf(s),
-          schemaVersion: s.schemaVersion,
-          rigVersion: s.rigVersion,
+          schemaVersion: s.entry.schema,
+          rigVersion: s.entry.pose.rig,
           revision: d ? d.revision + 1 : 1,
           entry: clone(s.entry),
-          poseFingerprint: s.poseFingerprint,
+          poseFingerprint: poseFingerprint(s.entry.pose),
           blockingFingerprint: blockingFingerprint(s.entry, { locationId: input.locationId }),
           createdBy: d?.createdBy ?? input.userId,
           createdAt: d?.createdAt ?? input.now,
@@ -705,15 +818,189 @@ export class MemoryPrevisService implements PrevisRepository {
       });
       for (const r of plan.blocking.removes) removeKeys.push(`${dest}:${r.characterId}`);
     }
+    return {
+      result: { camera, lighting, blocking },
+      commit: () => {
+        if (camera && !plan.camera!.unchanged) this.bookmarks.set(dest, clone(camera));
+        if (lighting && !plan.lighting!.unchanged) this.lightingRigs.set(dest, clone(lighting));
+        if (blocking) {
+          for (const b of blocking) this.blocking.set(`${dest}:${b.characterId}`, clone(b));
+          for (const k of removeKeys) this.blocking.delete(k);
+        }
+      },
+    };
+  }
 
-    // ── commit (cannot throw) ──
-    if (camera && !plan.camera!.unchanged) this.bookmarks.set(dest, clone(camera));
-    if (lighting && !plan.lighting!.unchanged) this.lightingRigs.set(dest, clone(lighting));
-    if (blocking) {
-      for (const b of blocking) this.blocking.set(`${dest}:${b.characterId}`, clone(b));
-      for (const k of removeKeys) this.blocking.delete(k);
+  // ── Phase 4D-I2: named setup templates and copy provenance ──
+
+  async setupTemplatesReady() {
+    return true;
+  }
+
+  /** A deleted source Shot reads as null (the memory twin of ON DELETE SET NULL); its code snapshot survives. */
+  private templateOut(t: SetupTemplateRecord): SetupTemplateRecord {
+    const alive =
+      !!t.sourceShotId && this.access.all().some((p) => p.shots.some((s) => s.id === t.sourceShotId));
+    return clone({ ...t, sourceShotId: alive ? t.sourceShotId : null });
+  }
+
+  async listSetupTemplates(projectId: string, locationId: string) {
+    return [...this.setupTemplates.values()]
+      .filter((t) => t.projectId === projectId && t.locationId === locationId)
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+      .map((t) => this.templateOut(t));
+  }
+
+  async getSetupTemplate(id: string) {
+    const t = this.setupTemplates.get(id);
+    return t ? this.templateOut(t) : null;
+  }
+
+  /** Snapshots a Shot's current-set values for a template (refuses a part the Shot does not have on this set). */
+  private snapshotFromShot(
+    projectId: string,
+    shotId: string,
+    set: { locationId: string; sceneDocumentId: string },
+    components: SetupComponent[],
+  ) {
+    this.requireShot(projectId, shotId);
+    this.requireShotsOnLocation(projectId, [shotId], set.locationId);
+    try {
+      return snapshotSetupTemplate({ rows: this.setupRows(projectId, shotId), set, components });
+    } catch (err) {
+      if (err instanceof SetupCopyRefusal) throw new PrevisError("invalid", err.message);
+      throw err;
     }
-    return { plan, camera, lighting, blocking };
+  }
+
+  private requireUniqueTemplateName(t: { projectId: string; locationId: string; name: string; id: string }) {
+    for (const o of this.setupTemplates.values())
+      if (o.id !== t.id && o.projectId === t.projectId && o.locationId === t.locationId && o.name === t.name)
+        throw new PrevisError("conflict", TEMPLATE_NAME_TAKEN);
+  }
+
+  async createSetupTemplate(input: CreateSetupTemplateInput) {
+    this.requireLocation(input.projectId, input.locationId);
+    const scene = this.currentSetupScene(input);
+    const set = { locationId: input.locationId, sceneDocumentId: scene.id };
+    const content = this.snapshotFromShot(input.projectId, input.shotId, set, input.components);
+    const shot = this.project(input.projectId).shots.find((s) => s.id === input.shotId)!;
+    const rec: SetupTemplateRecord = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      ...set,
+      schemaVersion: SETUP_TEMPLATE_SCHEMA,
+      name: input.name,
+      description: input.description,
+      revision: 1,
+      content,
+      contentFingerprint: setupTemplateContentFingerprint(content, set),
+      sourceShotId: shot.id,
+      sourceShotCode: shot.shotCode,
+      createdBy: input.userId,
+      createdAt: input.now,
+      updatedAt: input.now,
+    };
+    this.requireUniqueTemplateName(rec);
+    this.setupTemplates.set(rec.id, clone(rec));
+    return this.templateOut(rec);
+  }
+
+  private ownTemplate(projectId: string, templateId: string) {
+    const t = this.setupTemplates.get(templateId);
+    if (!t || t.projectId !== projectId) throw new PrevisError("not_found", TEMPLATE_GONE);
+    return t;
+  }
+
+  async updateSetupTemplate(input: UpdateSetupTemplateInput) {
+    const t = this.ownTemplate(input.projectId, input.templateId);
+    if (t.revision !== input.expectedRevision) throw new PrevisError("conflict", TEMPLATE_CHANGED);
+    const next: SetupTemplateRecord = {
+      ...t,
+      name: input.name ?? t.name,
+      description: input.description ?? t.description,
+      revision: t.revision + 1,
+      updatedAt: input.now,
+    };
+    if (input.contentFrom) {
+      const scene = this.scenes.get(t.locationId);
+      if (!scene || scene.id !== t.sceneDocumentId) throw new PrevisError("invalid", TEMPLATE_OTHER_SET);
+      const set = { locationId: t.locationId, sceneDocumentId: t.sceneDocumentId };
+      next.content = this.snapshotFromShot(
+        input.projectId,
+        input.contentFrom.shotId,
+        set,
+        input.contentFrom.components,
+      );
+      next.contentFingerprint = setupTemplateContentFingerprint(next.content, set);
+      const shot = this.project(input.projectId).shots.find((s) => s.id === input.contentFrom!.shotId)!;
+      next.sourceShotId = shot.id;
+      next.sourceShotCode = shot.shotCode;
+    }
+    this.requireUniqueTemplateName(next);
+    this.setupTemplates.set(t.id, clone(next));
+    return this.templateOut(next);
+  }
+
+  async deleteSetupTemplate(input: { projectId: string; templateId: string; expectedRevision: number }) {
+    const t = this.ownTemplate(input.projectId, input.templateId);
+    if (t.revision !== input.expectedRevision) throw new PrevisError("conflict", TEMPLATE_CHANGED);
+    this.setupTemplates.delete(t.id);
+    // provenance keeps the name and revision; only the pointer goes (ON DELETE SET NULL)
+    for (const c of this.setupCopies) if (c.templateId === t.id) c.templateId = null;
+  }
+
+  async copyTemplateSetup(input: CopyTemplateSetupInput): Promise<CopyShotSetupResult> {
+    this.requireShot(input.projectId, input.destinationShotId);
+    this.requireLocation(input.projectId, input.locationId);
+    const scene = this.currentSetupScene(input);
+    this.requireShotsOnLocation(input.projectId, [input.destinationShotId], input.locationId);
+    const t = this.ownTemplate(input.projectId, input.templateId);
+    if (t.locationId !== input.locationId || t.sceneDocumentId !== scene.id)
+      throw new PrevisError("invalid", TEMPLATE_OTHER_SET);
+    const set = { locationId: input.locationId, sceneDocumentId: scene.id };
+    const source = templateAsSetupRows(t.content, set);
+    // the same answer as Postgres when one of the template's characters has left the Project
+    const characters = this.project(input.projectId).characters;
+    if (
+      input.components.includes("blocking") &&
+      source.blocking.some((b) => !characters.some((c) => c.id === b.characterId))
+    )
+      throw new PrevisError("invalid", TEMPLATE_CHARACTER_GONE);
+    const destination = this.setupRows(input.projectId, input.destinationShotId);
+    const plan = this.planOrRefuse({
+      sourceShotId: null,
+      template: { id: t.id, revision: t.revision, contentFingerprint: t.contentFingerprint },
+      destinationShotId: input.destinationShotId,
+      set,
+      source,
+      destination,
+      components: input.components,
+    });
+    if (plan.token !== input.expectedToken) throw new PrevisError("conflict", SETUP_CHANGED);
+    const built = this.buildSetupCopy({ input, plan, source, destination });
+    const record = this.copyRecord(input, plan, {
+      sourceKind: "template",
+      sourceShotId: null,
+      sourceShotCode: null,
+      templateId: t.id,
+      templateName: t.name,
+      templateRevision: t.revision,
+      templateContentFingerprint: t.contentFingerprint,
+    });
+    built.commit();
+    this.setupCopies.push(record);
+    return { plan, ...built.result };
+  }
+
+  async listSetupCopies(projectId: string, shotId: string) {
+    const alive = (id: string | null) =>
+      !!id && this.project(projectId).shots.some((s) => s.id === id) ? id : null;
+    return this.setupCopies
+      .filter((c) => c.projectId === projectId && c.shotId === shotId)
+      .sort((a, b) => (a.copiedAt < b.copiedAt ? 1 : a.copiedAt > b.copiedAt ? -1 : 0))
+      .slice(0, 50)
+      .map((c) => clone({ ...c, sourceShotId: alive(c.sourceShotId) }));
   }
 
   async saveShotBlocking(input: SaveShotBlockingInput) {

@@ -88,6 +88,11 @@ const expectedTables = [
   // Phase 3A.4C: the frozen subject of a transition (cut) continuity run
   "continuity_transition_subjects",
 ];
+// 0050 (Phase 4D-I2) is expected only once the ledger records it: this script also validates databases still at 0049
+const has0050 =
+  (await rows("select 1 from public.prism_migrations where name = '0050_shot_setup_templates.sql'"))
+    .length === 1;
+if (has0050) expectedTables.push("shot_setup_templates", "shot_setup_copies");
 const tables = (await rows("select tablename, rowsecurity from pg_tables where schemaname='public'")).filter(
   (t) => t.tablename !== "prism_migrations",
 );
@@ -208,6 +213,7 @@ const must = {
     "shot_previs_clips_provenance_guard",
   ],
 };
+if (has0050) must.triggers.push("shot_setup_templates_guard", "shot_setup_templates_set_updated_at");
 const missingIdx = must.indexes.filter((i) => !idx.some((x) => x.indexname === i));
 const missingTrig = must.triggers.filter((t) => !trig.some((x) => x.tgname === t));
 const fn = await rows(
