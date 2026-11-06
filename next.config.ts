@@ -24,6 +24,18 @@ const nextConfig: NextConfig = {
     // library uploads: upload-policy MAX_BYTES).
     proxyClientMaxBodySize: "55mb",
   },
+  // Webpack production builds (package.json `build` runs `next build --webpack`): Spark (@sparkjsdev/spark) embeds its
+  // WASM as `new URL("data:application/wasm;base64,...", import.meta.url)`, which Webpack's Asset Modules reject under
+  // Next's asset generator options. Spark documents the Webpack fix: disable `new URL()` parsing so the data URL is
+  // resolved at runtime. Scoped to Spark's own files only; every other module keeps Webpack's default URL handling.
+  // Revisit when Turbopack becomes the production builder again (Turbopack ignores this callback).
+  webpack(config) {
+    config.module.rules.push({
+      test: /[\\/]node_modules[\\/]@sparkjsdev[\\/]spark[\\/]/,
+      parser: { url: false },
+    });
+    return config;
+  },
   async headers() {
     return [
       {
