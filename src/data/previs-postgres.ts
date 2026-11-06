@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import {
   applyJobPatch,
@@ -41,6 +42,7 @@ import { poseFingerprint } from "@/domain/previs/pose";
 import { bookmarkFromCamera } from "@/domain/previs/camera";
 import { cameraPathFingerprint, cameraPathSchema, validateCameraPath } from "@/domain/previs/camera-path";
 import { sceneFingerprint } from "@/domain/previs/document";
+import { planSetupCopy, SETUP_CHANGED, SetupCopyRefusal } from "@/domain/previs/setup-copy";
 import {
   buildSpatialReference,
   CAMERA_MOTION_SCHEMA_VERSION,
@@ -65,6 +67,8 @@ import {
   type AudioMixResolver,
   type CameraBookmarkRecord,
   type CameraPathRecord,
+  type CopyShotSetupInput,
+  type CopyShotSetupResult,
   type MasterFrameRecord,
   type NewMasterFrame,
   type NewPrevisClip,
@@ -1075,6 +1079,276 @@ export class PostgresPrevisData implements PrevisRepository {
         "conflict",
         "This Shot's lighting was changed elsewhere. Reload before clearing.",
       );
+    });
+  }
+
+  /**
+   * Phase 4D: the explicit copy in ONE transaction. Both Shots' setup rows are locked (FOR UPDATE, in a fixed order),
+   * the plan is recomputed from them and must carry the reviewed token, then every write runs on the destination's own
+   * rows. Any error rolls back all of them. RLS (the caller's JWT) scopes every statement to the owner's rows.
+   */
+  async copyShotSetup(input: CopyShotSetupInput): Promise<CopyShotSetupResult> {
+    const shotIds = [input.sourceShotId, input.destinationShotId];
+    return this.tx(async (c) => {
+      const shots = await c.query(
+        "select id, location_id from shots where project_id = $1 and id = any($2::uuid[]) for share",
+        [input.projectId, shotIds],
+      );
+      if (shots.rowCount !== 2) throw new PrevisError("not_found", "That shot is not in this project.");
+      // both Shots must STILL be set in this Location (rechecked under lock, not only by the caller)
+      if (shots.rows.some((r) => String(r.location_id) !== input.locationId))
+        throw new PrevisError("conflict", SETUP_CHANGED);
+      const sc = await c.query(
+        `select id from location_scene_documents where id = $1 and project_id = $2 and location_id = $3
+           for share`,
+        [input.sceneDocumentId, input.projectId, input.locationId],
+      );
+      if (!sc.rows[0]) throw new PrevisError("not_found", "That 3D set was not found for this location.");
+
+      const lock = async (table: string) =>
+        (
+          await c.query(
+            `select * from ${table} where project_id = $1 and shot_id = any($2::uuid[])
+              order by shot_id, id for update`,
+            [input.projectId, shotIds],
+          )
+        ).rows;
+      const bookmarks = (await lock("shot_camera_bookmarks")).map(mapBookmark);
+      const lightingReady = (await c.query("select to_regclass('public.shot_light_rigs') is not null as ok"))
+        .rows[0]?.ok;
+      if (!lightingReady && input.components.includes("lighting"))
+        throw new PrevisError("invalid", NOT_MIGRATED_LIGHTING);
+      const rigs = lightingReady ? (await lock("shot_light_rigs")).map(mapLightingRig) : [];
+      const figures = (await lock("shot_character_blocking")).map(mapBlocking);
+      const rowsOf = (shotId: string) => ({
+        camera: bookmarks.find((b) => b.shotId === shotId) ?? null,
+        lighting: rigs.find((r) => r.shotId === shotId) ?? null,
+        blocking: figures
+          .filter((f) => f.shotId === shotId)
+          .sort((a, b) => (a.characterId < b.characterId ? -1 : 1)),
+      });
+      const source = rowsOf(input.sourceShotId);
+      const destination = rowsOf(input.destinationShotId);
+      let plan;
+      try {
+        plan = planSetupCopy({
+          sourceShotId: input.sourceShotId,
+          destinationShotId: input.destinationShotId,
+          set: { locationId: input.locationId, sceneDocumentId: input.sceneDocumentId },
+          source,
+          destination,
+          components: input.components,
+        });
+      } catch (err) {
+        if (err instanceof SetupCopyRefusal) throw new PrevisError("invalid", err.message);
+        throw err;
+      }
+      if (plan.token !== input.expectedToken) throw new PrevisError("conflict", SETUP_CHANGED);
+      const dest = input.destinationShotId;
+      const changed = () => new PrevisError("conflict", SETUP_CHANGED);
+
+      let camera: CameraBookmarkRecord | null = null;
+      if (plan.camera) {
+        const s = source.camera!;
+        const v = s.value;
+        if (plan.camera.unchanged) camera = destination.camera;
+        else {
+          const r = await c.query(
+            `insert into shot_camera_bookmarks
+               (id, project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint,
+                camera_label, position, rotation, target, projection, fov_vertical_degrees, focal_length_mm,
+                focal_length_basis, production_aspect_ratio, production_aspect_value, created_by, created_at,
+                updated_at)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19,$19)
+             on conflict (shot_id) do update set
+               location_id = excluded.location_id, scene_document_id = excluded.scene_document_id,
+               scene_revision = excluded.scene_revision, scene_fingerprint = excluded.scene_fingerprint,
+               camera_label = excluded.camera_label, position = excluded.position, rotation = excluded.rotation,
+               target = excluded.target, fov_vertical_degrees = excluded.fov_vertical_degrees,
+               focal_length_mm = excluded.focal_length_mm, focal_length_basis = excluded.focal_length_basis,
+               production_aspect_ratio = excluded.production_aspect_ratio,
+               production_aspect_value = excluded.production_aspect_value
+             where shot_camera_bookmarks.project_id = excluded.project_id and $20::boolean
+             returning *`,
+            [
+              randomUUID(),
+              input.projectId,
+              dest,
+              input.locationId,
+              input.sceneDocumentId,
+              s.sceneRevision,
+              s.sceneFingerprint,
+              s.cameraLabel,
+              JSON.stringify(v.position),
+              JSON.stringify(v.rotation),
+              JSON.stringify(v.target),
+              v.projection,
+              v.fovVerticalDegrees,
+              v.focalLengthMm,
+              v.focalLengthBasis,
+              v.productionAspectRatio,
+              v.productionAspectValue,
+              input.userId,
+              input.now,
+              // a row that did not exist under lock was created concurrently: never overwrite it
+              destination.camera !== null,
+            ],
+          );
+          if (!r.rows[0]) throw changed();
+          camera = mapBookmark(r.rows[0]);
+        }
+      }
+
+      let lighting: ShotLightingRigRecord | null = null;
+      if (plan.lighting) {
+        const s = source.lighting!;
+        const d = destination.lighting;
+        if (plan.lighting.unchanged) lighting = d;
+        else {
+          let rig;
+          try {
+            rig = parseShotLightingRig({ ...s.rig, authoredIntent: input.destinationIntent });
+          } catch (err) {
+            throw new PrevisError("invalid", `Invalid Shot lighting: ${(err as Error).message}`);
+          }
+          const fp = lightingFingerprint(rig);
+          let r;
+          if (d && plan.lighting.replaces?.onCurrentSet) {
+            r = await c.query(
+              `update shot_light_rigs
+                  set revision = revision + 1, scene_revision = $3, scene_fingerprint = $4, rig_json = $5::jsonb,
+                      lighting_fingerprint = $6
+                where shot_id = $1 and project_id = $2 and revision = $7 returning *`,
+              [
+                dest,
+                input.projectId,
+                s.sceneRevision,
+                s.sceneFingerprint,
+                JSON.stringify(rig),
+                fp,
+                d.revision,
+              ],
+            );
+          } else {
+            // a rig never moves sets (guard_shot_light_rig): a destination rig on another set is replaced by a new row
+            if (d) {
+              const del = await c.query(
+                "delete from shot_light_rigs where shot_id = $1 and project_id = $2 and revision = $3 returning id",
+                [dest, input.projectId, d.revision],
+              );
+              if (!del.rows[0]) throw changed();
+            }
+            r = await c.query(
+              `insert into shot_light_rigs
+                 (id, project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint,
+                  schema_version, revision, rig_json, lighting_fingerprint, created_by, created_at, updated_at)
+               values ($1,$2,$3,$4,$5,$6,$7,$8,1,$9::jsonb,$10,$11,$12,$12)
+               on conflict (shot_id) do nothing returning *`,
+              [
+                randomUUID(),
+                input.projectId,
+                dest,
+                input.locationId,
+                input.sceneDocumentId,
+                s.sceneRevision,
+                s.sceneFingerprint,
+                rig.schema,
+                JSON.stringify(rig),
+                fp,
+                input.userId,
+                input.now,
+              ],
+            );
+          }
+          if (!r.rows[0]) throw changed();
+          lighting = mapLightingRig(r.rows[0]);
+        }
+      }
+
+      let blocking: ShotBlockingRecord[] | null = null;
+      if (plan.blocking) {
+        blocking = [];
+        for (const f of plan.blocking.figures) {
+          const s = source.blocking.find(
+            (b) => b.characterId === f.characterId && b.sceneDocumentId === input.sceneDocumentId,
+          )!;
+          const d = destination.blocking.find((b) => b.characterId === f.characterId);
+          if (f.unchanged) {
+            blocking.push(d!);
+            continue;
+          }
+          const e = s.entry;
+          const fp = blockingFingerprint(e, { locationId: input.locationId });
+          const r = d
+            ? await c.query(
+                `update shot_character_blocking
+                    set revision = revision + 1, location_id = $4, scene_document_id = $5, scene_revision = $6,
+                        scene_fingerprint = $7, root_position = $8::jsonb, root_orientation = $9::jsonb,
+                        root_scale = $10, pose_json = $11::jsonb, visible = $12, pose_fingerprint = $13,
+                        blocking_fingerprint = $14
+                  where shot_id = $1 and character_id = $2 and project_id = $3 and revision = $15
+                  returning *`,
+                [
+                  dest,
+                  f.characterId,
+                  input.projectId,
+                  input.locationId,
+                  input.sceneDocumentId,
+                  s.sceneRevision,
+                  s.sceneFingerprint,
+                  JSON.stringify(e.root.position),
+                  JSON.stringify(e.root.orientation),
+                  e.root.scale,
+                  JSON.stringify(e.pose),
+                  e.visibility,
+                  poseFingerprint(e.pose),
+                  fp,
+                  d.revision,
+                ],
+              )
+            : await c.query(
+                `insert into shot_character_blocking
+                   (id, project_id, shot_id, character_id, location_id, scene_document_id, scene_revision,
+                    scene_fingerprint, schema_version, rig_version, revision, root_position, root_orientation,
+                    root_scale, pose_json, visible, pose_fingerprint, blocking_fingerprint, created_by, created_at,
+                    updated_at)
+                 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11::jsonb,$12::jsonb,$13,$14::jsonb,$15,$16,$17,$18,$19,$19)
+                 on conflict (shot_id, character_id) do nothing returning *`,
+                [
+                  randomUUID(),
+                  input.projectId,
+                  dest,
+                  f.characterId,
+                  input.locationId,
+                  input.sceneDocumentId,
+                  s.sceneRevision,
+                  s.sceneFingerprint,
+                  e.schema,
+                  e.pose.rig,
+                  JSON.stringify(e.root.position),
+                  JSON.stringify(e.root.orientation),
+                  e.root.scale,
+                  JSON.stringify(e.pose),
+                  e.visibility,
+                  poseFingerprint(e.pose),
+                  fp,
+                  input.userId,
+                  input.now,
+                ],
+              );
+          if (!r.rows[0]) throw changed();
+          blocking.push(mapBlocking(r.rows[0]));
+        }
+        for (const rm of plan.blocking.removes) {
+          const r = await c.query(
+            `delete from shot_character_blocking
+              where shot_id = $1 and character_id = $2 and project_id = $3 and revision = $4 returning id`,
+            [dest, rm.characterId, input.projectId, rm.revision],
+          );
+          if (!r.rows[0]) throw changed();
+        }
+      }
+      return { plan, camera, lighting, blocking };
     });
   }
 

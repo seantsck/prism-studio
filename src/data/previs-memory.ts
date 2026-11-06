@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   applyJobPatch,
   JobTransitionError,
@@ -42,6 +43,7 @@ import {
 import { bookmarkFromCamera } from "@/domain/previs/camera";
 import { cameraPathFingerprint, validateCameraPath } from "@/domain/previs/camera-path";
 import { sceneFingerprint } from "@/domain/previs/document";
+import { planSetupCopy, SETUP_CHANGED, SetupCopyRefusal } from "@/domain/previs/setup-copy";
 import {
   buildSpatialReference,
   CAMERA_MOTION_SCHEMA_VERSION,
@@ -53,6 +55,8 @@ import {
   LIGHTING_RIG_ELSEWHERE,
   PrevisError,
   type AudioMixResolver,
+  type CopyShotSetupInput,
+  type CopyShotSetupResult,
   type SaveLightingRigInput,
   type ShotLightingRigRecord,
   type CameraBookmarkRecord,
@@ -560,6 +564,156 @@ export class MemoryPrevisService implements PrevisRepository {
         "This Shot's lighting was changed elsewhere. Reload before clearing.",
       );
     this.lightingRigs.delete(input.shotId);
+  }
+
+  private setupRows(
+    projectId: string,
+    shotId: string,
+  ): {
+    camera: CameraBookmarkRecord | null;
+    lighting: ShotLightingRigRecord | null;
+    blocking: ShotBlockingRecord[];
+  } {
+    const camera = this.bookmarks.get(shotId);
+    const lighting = this.lightingRigs.get(shotId);
+    return {
+      camera: camera && camera.projectId === projectId ? camera : null,
+      lighting: lighting && lighting.projectId === projectId ? lighting : null,
+      blocking: this.blockingFor(shotId).filter((b) => b.projectId === projectId),
+    };
+  }
+
+  /**
+   * Phase 4D: the explicit copy. Everything is validated and every new record is built BEFORE the first map is
+   * touched, so a refusal at any point leaves both Shots exactly as they were (the memory twin of one transaction).
+   */
+  async copyShotSetup(input: CopyShotSetupInput): Promise<CopyShotSetupResult> {
+    this.requireShot(input.projectId, input.sourceShotId);
+    this.requireShot(input.projectId, input.destinationShotId);
+    this.requireLocation(input.projectId, input.locationId);
+    const scene = this.scenes.get(input.locationId);
+    if (!scene || scene.projectId !== input.projectId || scene.id !== input.sceneDocumentId)
+      throw new PrevisError("not_found", "That 3D set was not found for this location.");
+    const shots = this.project(input.projectId).shots;
+    if (
+      [input.sourceShotId, input.destinationShotId].some(
+        (id) => shots.find((s) => s.id === id)?.spatial.locationId !== input.locationId,
+      )
+    )
+      throw new PrevisError("conflict", SETUP_CHANGED);
+    const source = this.setupRows(input.projectId, input.sourceShotId);
+    const destination = this.setupRows(input.projectId, input.destinationShotId);
+    let plan;
+    try {
+      plan = planSetupCopy({
+        sourceShotId: input.sourceShotId,
+        destinationShotId: input.destinationShotId,
+        set: { locationId: input.locationId, sceneDocumentId: scene.id },
+        source,
+        destination,
+        components: input.components,
+      });
+    } catch (err) {
+      if (err instanceof SetupCopyRefusal) throw new PrevisError("invalid", err.message);
+      throw err;
+    }
+    if (plan.token !== input.expectedToken) throw new PrevisError("conflict", SETUP_CHANGED);
+
+    const dest = input.destinationShotId;
+    const anchorOf = (r: { sceneRevision: number; sceneFingerprint: string }) => ({
+      locationId: input.locationId,
+      sceneDocumentId: scene.id,
+      sceneRevision: r.sceneRevision,
+      sceneFingerprint: r.sceneFingerprint,
+    });
+
+    // ── build (may throw; nothing written yet) ──
+    let camera: CameraBookmarkRecord | null = null;
+    if (plan.camera) {
+      const s = source.camera!;
+      const d = destination.camera;
+      camera = plan.camera.unchanged
+        ? clone(d!)
+        : {
+            id: d?.id ?? randomUUID(),
+            projectId: input.projectId,
+            shotId: dest,
+            ...anchorOf(s),
+            cameraLabel: s.cameraLabel,
+            value: clone(s.value),
+            createdBy: d?.createdBy ?? input.userId,
+            createdAt: d?.createdAt ?? input.now,
+            updatedAt: input.now,
+          };
+    }
+    let lighting: ShotLightingRigRecord | null = null;
+    if (plan.lighting) {
+      const s = source.lighting!;
+      const d = destination.lighting;
+      if (plan.lighting.unchanged) lighting = clone(d!);
+      else {
+        let rig;
+        try {
+          rig = parseShotLightingRig({ ...s.rig, authoredIntent: input.destinationIntent });
+        } catch (err) {
+          throw new PrevisError("invalid", `Invalid Shot lighting: ${(err as Error).message}`);
+        }
+        // a rig never moves sets: a destination rig on another set is replaced by a new one (revision 1)
+        const keep = d && plan.lighting.replaces?.onCurrentSet ? d : null;
+        lighting = {
+          id: keep?.id ?? randomUUID(),
+          projectId: input.projectId,
+          shotId: dest,
+          ...anchorOf(s),
+          schemaVersion: rig.schema,
+          revision: keep ? keep.revision + 1 : 1,
+          rig: clone(rig),
+          lightingFingerprint: lightingFingerprint(rig),
+          createdBy: keep?.createdBy ?? input.userId,
+          createdAt: keep?.createdAt ?? input.now,
+          updatedAt: input.now,
+        };
+      }
+    }
+    let blocking: ShotBlockingRecord[] | null = null;
+    const removeKeys: string[] = [];
+    if (plan.blocking) {
+      const byChar = new Map(destination.blocking.map((b) => [b.characterId, b]));
+      blocking = plan.blocking.figures.map((f) => {
+        this.requireCharacter(input.projectId, f.characterId);
+        const s = source.blocking.find(
+          (b) => b.characterId === f.characterId && b.sceneDocumentId === scene.id,
+        )!;
+        const d = byChar.get(f.characterId);
+        if (f.unchanged) return clone(d!);
+        return {
+          id: d?.id ?? randomUUID(),
+          projectId: input.projectId,
+          shotId: dest,
+          characterId: f.characterId,
+          ...anchorOf(s),
+          schemaVersion: s.schemaVersion,
+          rigVersion: s.rigVersion,
+          revision: d ? d.revision + 1 : 1,
+          entry: clone(s.entry),
+          poseFingerprint: s.poseFingerprint,
+          blockingFingerprint: blockingFingerprint(s.entry, { locationId: input.locationId }),
+          createdBy: d?.createdBy ?? input.userId,
+          createdAt: d?.createdAt ?? input.now,
+          updatedAt: input.now,
+        };
+      });
+      for (const r of plan.blocking.removes) removeKeys.push(`${dest}:${r.characterId}`);
+    }
+
+    // ── commit (cannot throw) ──
+    if (camera && !plan.camera!.unchanged) this.bookmarks.set(dest, clone(camera));
+    if (lighting && !plan.lighting!.unchanged) this.lightingRigs.set(dest, clone(lighting));
+    if (blocking) {
+      for (const b of blocking) this.blocking.set(`${dest}:${b.characterId}`, clone(b));
+      for (const k of removeKeys) this.blocking.delete(k);
+    }
+    return { plan, camera, lighting, blocking };
   }
 
   async saveShotBlocking(input: SaveShotBlockingInput) {

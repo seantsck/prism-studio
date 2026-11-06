@@ -10,7 +10,8 @@ import type { StoredAudioMix } from "@/domain/previs/audio-mix";
 import type { RenderedBlockingFigure, ShotBlockingEntry } from "@/domain/previs/blocking";
 import type { CameraPath } from "@/domain/previs/camera-path";
 import type { RenderCamera } from "@/domain/previs/camera-provenance";
-import type { RenderLighting, ShotLightingRig } from "@/domain/previs/lighting";
+import type { AuthoredLightingIntent, RenderLighting, ShotLightingRig } from "@/domain/previs/lighting";
+import type { SetupComponent, SetupCopyPlan } from "@/domain/previs/setup-copy";
 import type { SpatialReference } from "@/domain/previs/spatial";
 import type {
   CharacterMasksJson,
@@ -360,6 +361,34 @@ export type NewSpatialPassBundle = Omit<SpatialPassBundleRecord, "createdBy" | "
   userId: string | null;
 };
 
+/**
+ * Phase 4D "Copy setup from…": copies VALUES from the source Shot's current camera / lighting / blocking rows into the
+ * destination Shot's OWN rows, in ONE transaction. The plan is recomputed from the locked rows and must carry the token
+ * the person reviewed. Nothing on the destination refers to the source afterwards.
+ */
+export interface CopyShotSetupInput {
+  projectId: string;
+  sourceShotId: string;
+  destinationShotId: string;
+  /** the destination's (and source's) current Location and its current saved set, looked up server-side */
+  locationId: string;
+  sceneDocumentId: string;
+  components: SetupComponent[];
+  /** `SetupCopyPlan.token` from the reviewed preview; a different recomputed plan refuses the copy */
+  expectedToken: string;
+  /** the DESTINATION Shot's authored lighting text (read from the destination Shot, never copied from the source) */
+  destinationIntent: AuthoredLightingIntent;
+  userId: string | null;
+  now: string;
+}
+export interface CopyShotSetupResult {
+  plan: SetupCopyPlan;
+  /** the destination's rows after the copy, for each copied part (null when that part was not copied) */
+  camera: CameraBookmarkRecord | null;
+  lighting: ShotLightingRigRecord | null;
+  blocking: ShotBlockingRecord[] | null;
+}
+
 export interface PrevisRepository {
   /** Newest first. Immutable origin records of the Location's spatial reconstructions (M2D.1). */
   listReconstructions(locationId: string): Promise<SpatialReconstructionRecord[]>;
@@ -461,6 +490,12 @@ export interface PrevisRepository {
   saveLightingRig(input: SaveLightingRigInput): Promise<ShotLightingRigRecord>;
   /** Removes the Shot's current rig (CAS on revision). Renders keep the lighting they recorded. */
   clearLightingRig(input: { projectId: string; shotId: string; expectedRevision: number }): Promise<void>;
+
+  /**
+   * Phase 4D: the atomic explicit copy (see CopyShotSetupInput). Throws PrevisError("conflict") when the recomputed plan
+   * differs from the reviewed one, PrevisError("invalid") for a refused copy; on any failure nothing is written.
+   */
+  copyShotSetup(input: CopyShotSetupInput): Promise<CopyShotSetupResult>;
 
   listPrevisClips(shotId: string): Promise<PrevisClipRecord[]>;
   getPrevisClip(id: string): Promise<PrevisClipRecord | null>;
