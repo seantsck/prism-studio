@@ -135,8 +135,8 @@ worker role, 0 policies with `direct_video_allowed = true`; `db:validate` STRUCT
 67/67, `db:worker-role` 60/60 (REAL LOGIN), `db:continuity-analysis` 80/80, `db:media-qa` 39/39, narrow repository
 acceptance on a disposable Project 15/15, hosted browser E2E 40/40; counts and Storage back to baseline afterwards.
 
-**0049** (Phase 4C-I1, **in the repository, NOT applied to hosted**; hosted head 0048, 0049 pending; checksum
-`9b4589caa4ed19bf92e6dc9f77217587bf3b08f99977578871c69113f9da19fb`). Revised in the 4C-I1 technical-review remediation
+**0049** (Phase 4C-I1, **applied to hosted DEV on 2026-11-05T23:28:01.818Z** in 4C-B, checksum
+`9b4589caa4ed19bf92e6dc9f77217587bf3b08f99977578871c69113f9da19fb`; hosted head 0049, nothing pending). Revised in the 4C-I1 technical-review remediation
 before it was ever applied anywhere but a disposable database (the first review draft was
 `6ebcb8639e7fcab65fcf35c07ed39d9613d35ae83a79459b530529b8c883679b`); 0048 is byte-identical.
 
@@ -174,7 +174,17 @@ the Shot's current Location only.) Unmodified `main` (`b340bcd`) on the revised 
 rows derived from existing table ACLs (8 columns × anon / authenticated × 4) and the trigger function's schema-default
 EXECUTE (SECURITY INVOKER), the same pattern as 0048. Local harness limits, identical for `main` on the same database:
 `db:rls` stops at the `storage.objects` shim and `db:worker-role` 57/63 (local ingest). Hosted acceptance belongs to
-4C-B.
+4C-B, below.
+
+**Hosted gate (4C-B, 2026-11-05).** `--dry-run` rolled back cleanly, then `db:migrate` applied exactly 0049 once: the
+recorded checksum matches the file, 0048 (`d59c8ef8…`) and every earlier ledger row are unchanged, `--check` prints
+`MIGRATION CHECKSUMS OK` with nothing pending. No row was backfilled (hosted held 0 Master Frames and 0 Production
+Frames). The exact-source trigger function is SECURITY INVOKER, and the whole-schema grant, policy and function
+fingerprints show no privilege expansion. Hosted suites at 0049: `db:validate` OK, `db:behavior` 61/61,
+`db:spatial-source` 63/63, `db:previs` 60/60, `db:blocking` 57/57, `db:lighting` 119/119, `db:spatial-passes` 80/80,
+`db:production-frames` 71/71, `db:rls` 67/67 and `db:worker-role` 63/63 (real worker logins, neither superuser nor
+BYPASSRLS). The legacy anon table grants that pre-date 0049 are unchanged and stay tracked in #47; worker-secret breadth
+stays tracked in #42.
 
 **0048** (Phase 4B, **applied to hosted DEV on 2026-11-04T02:10:30.580Z**, checksum
 `d59c8ef800ce83f78492b4e030a07d6349d06fb1c2e04daeec195384860034b1`; hosted head 0048, nothing pending).

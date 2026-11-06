@@ -236,7 +236,7 @@ vision; face embeddings; cross-Shot / cut-level continuity (3A.4); cross-Episode
 accepted on the verified calibration v2 (six temporal families). Lip sync stays unchecked and separately gated, and QA
 stays advisory.
 
-## Phase 4 — Spatial Production _(architecture accepted; 4A–4B complete; 4C-A and 4C-I1 complete, 4C-I2 in review)_
+## Phase 4 — Spatial Production _(architecture accepted; 4A–4C complete; 4D next)_
 
 Design: [phase-4-spatial-production](phase-4-spatial-production.md). **3D is an optional construction tool for a Production
 Frame, never a prerequisite for one.**
@@ -249,25 +249,28 @@ the attachment, holds no data, and stays legacy and non-authoritative. `spatial.
 
 **Phase 4 work remaining:**
 
-| Slice | Scope                                                                                          | Status                                                                                                                                  |
-| ----- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| 4A    | Architecture and consolidation                                                                 | complete, docs only                                                                                                                     |
-| 4B    | Shot Lighting Rigs: `prism.shot-lighting.v1`, overlay, render provenance, optional package key | complete (PR #46); migration 0048 applied to hosted DEV                                                                                 |
-| 4C    | Shot-centric Spatial Workspace and Production Frame handoff                                    | 4C-A architecture complete; 4C-I1 complete (PR #50; 0049 in repo, not applied hosted); 4C-I2 implementation in review; 4C-B not started |
-| 4D    | Reusable setups: explicit copies, never live links                                             | not started                                                                                                                             |
-| 4E    | Splat control-pass refusal and environment limits                                              | not started                                                                                                                             |
-| 4F    | Production acceptance and roadmap close                                                        | not started                                                                                                                             |
+| Slice | Scope                                                                                          | Status                                                                                     |
+| ----- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 4A    | Architecture and consolidation                                                                 | complete, docs only                                                                        |
+| 4B    | Shot Lighting Rigs: `prism.shot-lighting.v1`, overlay, render provenance, optional package key | complete (PR #46); migration 0048 applied to hosted DEV                                    |
+| 4C    | Shot-centric Spatial Workspace and Production Frame handoff                                    | complete (PRs #49, #50, #51; 4C-B hosted acceptance); migration 0049 applied to hosted DEV |
+| 4D    | Reusable setups: explicit copies, never live links                                             | not started                                                                                |
+| 4E    | Splat control-pass refusal and environment limits                                              | not started                                                                                |
+| 4F    | Production acceptance and roadmap close                                                        | not started                                                                                |
 
 **4B — complete.** Shot Lighting Rigs (`prism.shot-lighting.v1`) shipped in PR #46. Migration 0048 is applied to hosted
-DEV: the hosted head is 0048 and no migration is pending. Shot Lighting is optional and Shot-owned. It has base modes
+DEV (the hosted head was 0048 when 4B closed; 0049 since 4C-B). Shot Lighting is optional and Shot-owned. It has base modes
 `engine_default | replace` and no authored shadows. Gaussian splats are not relit (their colour is baked). Filmmaking with
 no 3D at all stays fully supported.
 
-**4C — in progress.** The 4C-A architecture is complete (PR #49). 4C-I1 (camera correctness, Master Frame spatial
-provenance, safe Production Frame promotion) is complete (PR #50). Migration **0049** is in the repository and **not
-applied to hosted**: the hosted head is still 0048, with 0049 pending. 4C-I2 (the Shot-centric Spatial Workspace,
-including P6) is implemented and in review, with no migration. 4C is not complete: the hosted acceptance (4C-B) has
-not started.
+**4C — complete.** The 4C-A architecture is complete (PR #49). 4C-I1 (camera correctness, Master Frame spatial
+provenance, safe Production Frame promotion) is complete (PR #50). 4C-I2 (the Shot-centric Spatial Workspace, including
+P6) is complete (PR #51), with no migration. 4C-B, the hosted acceptance, passed: migration **0049** is applied to hosted
+DEV once, the hosted head is 0049 and no migration is pending. The DB gates, the hosted Supabase browser suites and the
+4C hosted workspace story passed, and a real authenticated non-owner (a temporary Auth user, since deleted) could not
+discover, read or change the owner's project through the browser, the server actions or the Data API. No provider was
+called and nothing was deployed. Caveats and evidence: [phase-4-spatial-production](phase-4-spatial-production.md#4c-b--hosted-acceptance).
+4D–4F are not started.
 
 Real reconstruction (M2D.3D2) stays optional and does not block any slice.
 

@@ -2,9 +2,9 @@
 
 **Status: 4A complete (architecture accepted by the owner 2026-11-01, decisions in [§12](#12-accepted-owner-decisions)).
 4B (Shot Lighting Rigs) complete (PR #46); migration 0048 applied to and accepted on hosted DEV (hosted head 0048, nothing
-pending). 4C: architecture accepted ([4C-A](#4c-a-architecture--accepted)); 4C-I1 complete (PR #50, migration 0049 in
-the repository and NOT applied to hosted); 4C-I2 (Shot-centric Spatial Workspace) implemented and in review; 4C-B
-(hosted acceptance) not started, so 4C is not complete. 4D–4F have not started. What 4B actually shipped is
+pending at the time). 4C complete: architecture accepted ([4C-A](#4c-a-architecture--accepted)); 4C-I1 complete (PR
+#50); 4C-I2 (Shot-centric Spatial Workspace) complete (PR #51); [4C-B](#4c-b--hosted-acceptance) hosted acceptance
+passed, with migration 0049 applied to hosted DEV (hosted head 0049, nothing pending). 4D–4F have not started. What 4B actually shipped is
 recorded in [4B implementation notes](#4b-implementation-notes); elsewhere, design text describes intent.**
 
 Phase 4 finishes the optional spatial path into a Production Frame. It does not build a 3D system: Phase 2F already built
@@ -787,7 +787,7 @@ package `sourceSpatial` are domain functions shared by both modes; memory mode d
     blocking, lighting and Master Frames load, and none of A's survive.
 - Existing 4B tests stay green unchanged.
 
-##### 4C.12 Hosted acceptance (4C-B, later, not executed now)
+##### 4C.12 Hosted acceptance (4C-B; executed, see [4C-B](#4c-b--hosted-acceptance))
 
 0049 `--dry-run` → exact checksum → apply → `db:validate`, `db:behavior`, `db:rls`, `db:spatial-source`, `db:lighting`,
 `db:previs`, worker-role checks with real logins; current-`main` compatibility on hosted (its suites, a `main`-shaped
@@ -923,12 +923,11 @@ base_environment_fingerprint`; marker unchanged), still lineage only (not in `fr
   projects only current-set rows. The Location-page selector/navigation fix (P6) remains I2. (Resolved in 4C-I2:
   every derivation now uses the current set's rows.)
 
-#### 4C-I2 implementation notes (in review)
+#### 4C-I2 implementation notes (complete)
 
-Status: **4C-I2 implemented on branch `phase-4c-shot-spatial-workspace` (draft PR, in technical review).** No
-migration: 0048 and 0049 are unchanged, there is no 0050, and 0049 is still NOT applied to hosted (hosted head 0048).
+Status: **4C-I2 complete: merged in PR #51 (`fd6646d`).** No migration: 0048 and 0049 are unchanged and there is no 0050. (When I2 merged, 0049 was not yet applied to hosted; 4C-B applied it, below.)
 Everything works at 0048 too (I1's migration-ahead compatibility: historical frames read camera / base environment
-UNKNOWN). 4C-B (hosted acceptance) has not started; 4C is not complete.
+UNKNOWN).
 
 - **Shot route.** `/projects/[project]/episodes/[ep]/shots/[shotId]/spatial` owns the Shot (no selector). It opens
   the Shot's CURRENT Location only (`shot.spatial.locationId` → that Location's `location_scene_documents` row) and
@@ -1001,6 +1000,49 @@ UNKNOWN). 4C-B (hosted acceptance) has not started; 4C is not complete.
   The I1 E2E story A no longer needs the P6 leak; it now proves the switch reloads B, and the forged-claim refusal
   stays covered by `master-frame-camera.test.ts`. The blocking and lighting specs wait for the remount after a switch.
   A webdriver-only test seam (`__prismSet.spatial.setSkyboxId`) changes the live skybox for the warning story.
+
+#### 4C-B — hosted acceptance
+
+Status: **passed on 2026-11-05 against hosted DEV; 4C is complete.** Run locally against hosted from `main` `fd6646d`
+(production build, local server). Nothing was deployed, every provider key was blanked and the paid gates were forced
+off, so no provider was called. The migration record is in [migration-policy](migration-policy.md) under 0049.
+
+- **Migration.** 0049 applied exactly once (checksum `9b4589ca…`), 0048 unchanged, `MIGRATION CHECKSUMS OK`, head 0049,
+  nothing pending, no backfill, exact-source trigger SECURITY INVOKER, no privilege expansion.
+- **DB suites on hosted at 0049.** `db:validate` OK, `db:behavior` 61/61, `db:spatial-source` 63/63, `db:previs` 60/60,
+  `db:blocking` 57/57, `db:lighting` 119/119, `db:spatial-passes` 80/80, `db:production-frames` 71/71, `db:rls` 67/67,
+  `db:worker-role` 63/63 (real worker logins).
+- **Hosted browser.** The Supabase E2E suites 40/40 (the episode-edit spec's beforeAll asserted the old head 0045; it
+  passed 8/8 with the head corrected, and the assertion is fixed to 0049 in the closeout). The Shot-centric workspace
+  story `e2e/supabase-spatial-workspace.spec.ts` 8/8 with the real owner session: anon refusal, the Shot route and
+  Location route, camera link, lighting and blocking saves, Master Frame capture and promotion, Production Frame
+  exact-source provenance, and restoration of every touched row.
+- **Real non-owner.** `e2e/supabase-nonowner-isolation.spec.ts` 4/4 with a temporary Supabase Auth user the owner
+  created in the Dashboard (not through the Admin API, and never with a worker secret). The user owned 0 projects and
+  no row referenced it. Through its own browser session, every owner page (project, Episode, Shot Prep, Production
+  Frame section, Spatial Workspace, Location 3D, Locations) and the package and Asset APIs returned 404 with no owner
+  data rendered; the seven spatial server actions (`saveShotSection`, `saveLocationScene`, `linkShotCamera`,
+  `saveShotLighting`, `saveShotBlocking`, `promoteMasterFrame`, `selectProductionFrame`) were refused at authorization;
+  through the Data API with its own JWT, reads of ten owner tables returned 0 rows, updates and deletes changed 0 rows
+  and inserts were refused (42501). A read-only fingerprint of the owner's project across 12 tables was identical
+  before and after. The user was signed out globally (0 sessions, 0 live refresh tokens) and then deleted by the owner;
+  its credentials no longer sign in (`invalid_credentials`). The spec skips unless `PRISM_STUDIO_NONOWNER_EMAIL` /
+  `PRISM_STUDIO_NONOWNER_PASSWORD` name a fresh temporary user. The server actions are invoked from inside the page
+  with the browser's own `fetch` and FormData (Playwright's multipart request did not deliver the encoded fields); an
+  owner-session control proved that wire format reaches each action's own validation.
+- **Cleanup.** Temporary fixtures removed; every hosted row count is back to the pre-run baseline except
+  `auth.sessions`, below.
+
+Caveats:
+
+- The owner's global sign-out in the browser suites revoked earlier owner sessions: `auth.sessions` 24 → 21. Other
+  signed-in browsers must sign in again; no data changed.
+- `shots_updated` stamps `shots.updated_at` on every update, so restoring a Shot after the story restores its content
+  (`location_id`, `spatial`) but not its original `updated_at`. The spec compares content only.
+- The Master Frame and Production Frame read checks for the non-owner are weaker than the rest: the owner held none on
+  hosted after the fixtures were removed, so 0 rows would be returned either way. Their isolation rests on the same
+  owner-only RLS, `db:rls` 67/67 and the refused promote and select actions.
+- The legacy anon table grants (#47) and worker-secret breadth (#42) are unchanged by 4C and stay open.
 
 ### 4D — Reusable setups
 
