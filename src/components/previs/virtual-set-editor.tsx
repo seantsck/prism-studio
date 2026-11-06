@@ -48,6 +48,8 @@ import {
   type SplatEnvironmentInfo,
 } from "./splat-environment-panel";
 import { ReconstructionJobsPanel } from "./reconstruction-jobs-panel";
+import { EnvironmentStatusPanel } from "./environment-status-panel";
+import { environmentSaveIssues } from "@/domain/previs/environment-capability";
 import { SpatialPassesPanel } from "./spatial-passes-panel";
 import {
   CameraMotionPanel,
@@ -396,6 +398,16 @@ export function VirtualSetEditor(props: VirtualSetProps) {
       fd.set("expectedRevision", revision === null ? "" : String(revision));
       const engineScene = adapter().serializeScene();
       fd.set("sceneJson", JSON.stringify(engineScene));
+      // 4E: the same environment limits the server enforces, explained before a round trip (the server still decides)
+      try {
+        const [limit] = environmentSaveIssues(engineScene, buildPrevisDocument({ engineScene }).objects);
+        if (limit) {
+          setStatus({ tone: "error", text: limit.message });
+          return null;
+        }
+      } catch {
+        // an unbuildable scene is refused by the server with its own message
+      }
       let savedEnv: string | null = null;
       try {
         savedEnv = baseEnvironmentFingerprint(baseEnvironmentOf(buildPrevisDocument({ engineScene })));
@@ -877,6 +889,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
 
         {/* ── right: inspector, camera, shot ── */}
         <aside className="overflow-auto border-l border-line p-3 text-sm" aria-label="Inspector">
+          <EnvironmentStatusPanel objects={objects} />
           <h2 className="mb-1 text-xs uppercase tracking-wide text-muted">Tool</h2>
           <div className="mb-3 flex gap-1.5">
             {(["move", "rotate", "scale"] as const).map((m, i) => (

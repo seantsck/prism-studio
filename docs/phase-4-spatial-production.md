@@ -4,7 +4,7 @@
 4B (Shot Lighting Rigs) complete (PR #46); migration 0048 applied to and accepted on hosted DEV (hosted head 0048, nothing
 pending at the time). 4C complete: architecture accepted ([4C-A](#4c-a-architecture--accepted)); 4C-I1 complete (PR
 #50); 4C-I2 (Shot-centric Spatial Workspace) complete (PR #51); [4C-B](#4c-b--hosted-acceptance) hosted acceptance
-passed, with migration 0049 applied to hosted DEV (hosted head 0049, nothing pending). 4D-I1 (explicit Shot-to-Shot setup copy, no migration) is complete (PR #53). 4D-I2 (named setup templates and copy provenance, PR #55, awaiting merge) is implemented ([notes](#4d-i2-implementation-notes)); [4D-B](#4d-b--hosted-acceptance) hosted acceptance passed, with migration 0050 applied to hosted DEV (hosted head 0050, nothing pending). 4D is complete. 4E–4F have not started. What 4B actually shipped is
+passed, with migration 0049 applied to hosted DEV (hosted head 0049, nothing pending). 4D-I1 (explicit Shot-to-Shot setup copy, no migration) is complete (PR #53). 4D-I2 (named setup templates and copy provenance, PR #55, merged as `40e8996`) is implemented ([notes](#4d-i2-implementation-notes)); [4D-B](#4d-b--hosted-acceptance) hosted acceptance passed, with migration 0050 applied to hosted DEV (hosted head 0050, nothing pending). 4D is complete. 4E (splat control-pass refusal and environment limits, no migration) is implemented and in review ([notes](#4e-implementation-notes-in-review)). 4F has not started. What 4B actually shipped is
 recorded in [4B implementation notes](#4b-implementation-notes); elsewhere, design text describes intent.**
 
 Phase 4 finishes the optional spatial path into a Production Frame. It does not build a 3D system: Phase 2F already built
@@ -1352,6 +1352,102 @@ Caveats:
 - **Hosted acceptance:** none.
 - **Non-goals:** a real-GPU spike, unless a concrete production requirement appears before 4E; approximate passes; real COLMAP
   or Brush acceptance (M2D.3D2); new reconstruction providers.
+
+#### 4E implementation notes (in review)
+
+Status: **implemented on branch `phase-4e-splat-control-environment-limits` (draft PR, in review). No migration.** The
+repository and hosted heads stay 0050. 4F has not started.
+
+**Rule: an environment can be viewable without being safe for every production control.** The Location's Gaussian
+splat renders with its baked colour and can be framed and blocked against. It never produces exact control passes, it
+is never relit, and its real-world size is only what a calibration says. 4E makes those facts explicit, enforces the
+limits that keep the Set truthful, and does not make 3D mandatory.
+
+- **What the code already modelled (discovery).** `splat.ts` holds the calibration (`unknown` / `manual` /
+  `provider_estimated`; metres only when a human or a provider estimate says so) and the M2C control-pass refusal,
+  enforced in the panel (`spatial-passes-panel.tsx`), the client capture (`spatial-capture.ts`) and the server
+  (`spatial-pass-actions.ts`). Import already refuses unsupported formats, files over 50 MB and more than 8M Gaussians.
+  `saveLocationScene` already allows one splat per Set, bound to a reconstruction of this Location with the same Asset
+  and checksum. The lighting panel already says lights do not affect the splat (4B). Two gaps: `buildPrevisDocument`
+  silently turns a missing or non-finite transform component into 0, and nothing noticed when a calibrated splat was
+  scaled afterwards, so a Set could be saved claiming "1 source unit = 0.5 m" while its scale said otherwise.
+- **Capability model (`src/domain/previs/environment-capability.ts`, derived only).** Computed from the splat scene
+  object (visibility, transform, calibration); nothing is stored, so there is no migration and nothing can drift. A
+  Set without a splat gets no report.
+
+  | Operation                         | State                                                         | Why                                                                               |
+  | --------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+  | Viewing, Master Frames and previs | available (limited when hidden)                               | Rendered with its baked colour (M2D.1).                                           |
+  | Camera framing and blocking       | available with a manual scale; limited when estimated/unknown | Figures and lenses are in metres; the splat is only as metric as its calibration. |
+  | Shot lighting                     | limited                                                       | Lights affect meshes and Characters; the splat keeps its baked appearance (4B).   |
+  | Control passes                    | unavailable while visible; available when hidden              | D6: no exact depth, object-id or mask semantics for splats (message unchanged).   |
+  | Saving the set                    | unavailable while an environment limit is violated            | Below.                                                                            |
+
+  The headline is "View and framing only — no control passes", "Environment hidden" or "Environment needs attention".
+
+- **Refusal model.** Typed codes with creator-facing messages, raised as the existing `UserFacingError` (so
+  `{ ok: false, error }`, as every previs action):
+  - `SPLAT_CONTROL_PASSES_UNSUPPORTED`: the M2C refusal, now one shared rule (`controlPassRefusal`) used by the panel and
+    the server; the client capture keeps its own engine-level check.
+  - `SPLAT_TRANSFORM_NOT_FINITE`: a splat's position, rotation or scale is not a finite number in the raw scene
+    (`JSON.stringify` sends Infinity/NaN as null; `1e999` parses to Infinity). Checked before the parser could coerce it
+    to 0.
+  - `SPLAT_SCALE_DEGENERATE`: a scale component that rounds to 0 at the Set's fingerprint precision (5 decimals, the
+    rounding `sceneFingerprint` already applies), so the environment would vanish while still counted as visible.
+    Negative (mirrored) scales are allowed: nothing in the product forbids them.
+  - `SPLAT_CALIBRATION_STALE`: a metric calibration whose scale is no longer the uniform factor it set ("Apply scale"
+    and the provider-estimate placement both set scale = metres per source unit on every axis), compared at the same
+    precision. The fix is named: apply the scale again, or choose "Scale unknown".
+- **Environment limits.** No new numbers were invented: the only numeric limit is the existing 5-decimal transform
+  precision, centralised as `SPLAT_TRANSFORM_DECIMALS`. Import limits (50 MB, 8M Gaussians, formats) are unchanged.
+  `saveLocationScene` checks the limits after authorization and the existing ownership checks and before any write: a
+  refused save leaves no new revision and the stored document unchanged. The editor runs the same check before the
+  round trip and shows the reason; the server still decides.
+- **What does not change.** Sets without a splat, glb and primitive parsing, the scene fingerprint, packages
+  (`spatialEnvironment` is frozen exactly as before), Master Frame capture and provenance, Production Frame promotion
+  and 4C/4D provenance. Existing Production Frames and packages stay valid. A Set saved before 4E with a stale
+  calibration still loads; it is shown as needing attention and cannot be saved again until fixed. No RLS, grant or
+  service-role change.
+- **UI.** An Environment panel at the top of the set editor's inspector (Location 3D and the Shot Spatial Workspace),
+  shown only when the Set has a splat: the headline, any limit with its fix, and each operation's state and reason.
+- **Deliberately unsupported.** Approximate splat depth, ids or masks (any future one needs a new pass schema, D6); a
+  real-GPU spike; automatic scale or ground detection; refusing framing or blocking for an uncalibrated splat (they
+  work and are labelled instead); a stored capability state; non-splat environment types; real COLMAP or Brush
+  acceptance (M2D.3D2).
+- **Existing fixture corrected.** The 2F Gaussian-splat browser story reset a splat calibrated "1 source unit =
+  0.5 m" to scale 1 and saved it, so the Set (and the package test after it) carried a metric claim the transform
+  contradicted. 4E refuses that save, as designed. The story now also chooses "Scale unknown" when it resets the
+  fixture, and the package test expects that truthful calibration. No application code changed for this.
+- **Tests.**
+  - **Unit, domain** (`environment-capability.test.ts`, 11): no report and no limits without a splat; glb and
+    primitive parsing unchanged; the control-pass refusal and its unchanged message, visible vs hidden; manual,
+    estimated and unknown scale in the report; non-finite transforms (NaN, Infinity, JSON null, missing, strings);
+    the zero-scale and stale-calibration limits at fingerprint precision, mirrored scale allowed; the report never
+    changes the Set's identity.
+  - **Unit, server** (`environment-limits.test.ts`, 6, the real `saveLocationScene` on the memory store): a valid splat
+    saves; a stale calibration, a zero scale and `1e999` on the wire are refused with no new revision and the stored
+    document unchanged (no Set created on a first save); a foreign asset and an unknown Project are refused by the
+    existing checks before any limit; a Set without a splat saves as before. The M2C server gate test still passes.
+  - **E2E** (`zzzz…-environment-limits.spec.ts`, own memory server `memory-4e-isolated`, 5): no Environment panel
+    without a splat; an imported splat is view and framing only, framing limited without a scale, control passes
+    refused; calibrate and save, then a one-axis rescale is stale and the save is refused with the saved fingerprint
+    unchanged, re-applying the scale clears it; a zero scale is refused and hiding the splat makes control passes
+    available; image-first, the same Shot takes an uploaded Production Frame with no 3D step.
+- **Evidence** (base `main` `40e8996`):
+  - Unit: 190 files, 2763 tests; 2761 passed in the full run, and the 2 others (`continuity/openai-security`,
+    `continuity/security`, repository-scanning tests) hit the 5 s timeout under full-suite load and pass alone (2
+    files, 18/18).
+  - Browser: 4E 5/5; the Gaussian-splat suite 13/13 (Spark import, render, gizmos, calibration, Master Frame and previs
+    with the splat, the control-pass refusal, package freeze, corrupt-asset reporting, runtime cleanup).
+  - Production build (`next build --webpack`): pass.
+  - Hosted DEV regression at 0050 (schema unchanged): `db:validate` STRUCTURE OK, `db:setup-copy` 26/26,
+    `db:setup-templates` 69/69, `db:rls` 67/67, `db:behavior` 61/61, `db:previs` 60/60, `db:blocking` 57/57,
+    `db:lighting` 119/119, `db:spatial-source` 63/63, `db:spatial-passes` 80/80, `db:production-frames` 71/71;
+    hosted counts, Storage, jobs and Auth identical before and after. Hosted holds 0 saved Sets and 0 reconstructions,
+    so the new limits affect no stored row.
+  - Typecheck, lint (0 errors), Prettier and `git diff --check`: clean.
+- **Status.** 4E is implemented and passes its gates; it is complete when its PR is reviewed and merged. No hosted
+  acceptance is required (no migration, D6). 4F has not started.
 
 ### 4F — Production acceptance and roadmap close
 

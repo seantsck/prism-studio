@@ -236,7 +236,7 @@ vision; face embeddings; cross-Shot / cut-level continuity (3A.4); cross-Episode
 accepted on the verified calibration v2 (six temporal families). Lip sync stays unchecked and separately gated, and QA
 stays advisory.
 
-## Phase 4 — Spatial Production _(architecture accepted; 4A–4D complete; 4E next)_
+## Phase 4 — Spatial Production _(architecture accepted; 4A–4D complete; 4E in review)_
 
 Design: [phase-4-spatial-production](phase-4-spatial-production.md). **3D is an optional construction tool for a Production
 Frame, never a prerequisite for one.**
@@ -249,14 +249,14 @@ the attachment, holds no data, and stays legacy and non-authoritative. `spatial.
 
 **Phase 4 work remaining:**
 
-| Slice | Scope                                                                                          | Status                                                                                                 |
-| ----- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| 4A    | Architecture and consolidation                                                                 | complete, docs only                                                                                    |
-| 4B    | Shot Lighting Rigs: `prism.shot-lighting.v1`, overlay, render provenance, optional package key | complete (PR #46); migration 0048 applied to hosted DEV                                                |
-| 4C    | Shot-centric Spatial Workspace and Production Frame handoff                                    | complete (PRs #49, #50, #51; 4C-B hosted acceptance); migration 0049 applied to hosted DEV             |
-| 4D    | Reusable setups: explicit copies, never live links                                             | complete (PR #53; PR #55 awaiting merge; 4D-B hosted acceptance); migration 0050 applied to hosted DEV |
-| 4E    | Splat control-pass refusal and environment limits                                              | not started                                                                                            |
-| 4F    | Production acceptance and roadmap close                                                        | not started                                                                                            |
+| Slice | Scope                                                                                          | Status                                                                                     |
+| ----- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 4A    | Architecture and consolidation                                                                 | complete, docs only                                                                        |
+| 4B    | Shot Lighting Rigs: `prism.shot-lighting.v1`, overlay, render provenance, optional package key | complete (PR #46); migration 0048 applied to hosted DEV                                    |
+| 4C    | Shot-centric Spatial Workspace and Production Frame handoff                                    | complete (PRs #49, #50, #51; 4C-B hosted acceptance); migration 0049 applied to hosted DEV |
+| 4D    | Reusable setups: explicit copies, never live links                                             | complete (PRs #53, #55; 4D-B hosted acceptance); migration 0050 applied to hosted DEV      |
+| 4E    | Splat control-pass refusal and environment limits                                              | in review (draft PR, no migration)                                                         |
+| 4F    | Production acceptance and roadmap close                                                        | not started                                                                                |
 
 **4B — complete.** Shot Lighting Rigs (`prism.shot-lighting.v1`) shipped in PR #46. Migration 0048 is applied to hosted
 DEV (the hosted head was 0048 when 4B closed; 0049 since 4C-B). Shot Lighting is optional and Shot-owned. It has base modes
@@ -274,14 +274,23 @@ called and nothing was deployed. Caveats and evidence: [phase-4-spatial-producti
 
 **4D — complete.** 4D-I1 (PR #53, no migration) added "Copy setup from…": another Shot's camera, lighting and/or
 blocking on the same Location's set is copied by value into a Shot's own rows, after a review, in one transaction.
-4D-I2 (PR #55, awaiting the owner's merge) added named setup templates (snapshots of those values, per set) that are copied the same way, and an
+4D-I2 (PR #55, merged as `40e8996`) added named setup templates (snapshots of those values, per set) that are copied the same way, and an
 append-only copy history. Templates are sources for copies, never runtime dependencies: editing or deleting a template
 never changes a Shot that copied it. 4D-B, the hosted acceptance, passed on 2026-11-06: migration **0050** is applied to
 hosted DEV once, the hosted head is 0050 and no migration is pending. The hosted DB suites, the owner template story and
 a real authenticated non-owner (a temporary Auth user, since deleted) passed; the non-owner could not see, read, change
 or apply the owner's templates or copy history through the browser, the server actions or the Data API. No provider was
 called and nothing was deployed. Caveats and evidence:
-[phase-4-spatial-production](phase-4-spatial-production.md#4d-b--hosted-acceptance). Next: **4E** (not started).
+[phase-4-spatial-production](phase-4-spatial-production.md#4d-b--hosted-acceptance).
+
+**4E — in review.** A Gaussian-splat environment is viewable without being safe for every production control. 4E
+derives what the Location's splat supports from the Set itself (no migration, nothing stored): it renders and can be
+framed and blocked against; its real-world scale is only what a human or provider calibration says; it is never relit;
+and exact control passes stay refused while it is visible (D6, unchanged message). The Set is now refused at save when
+the splat's transform is non-finite, collapsed to zero, or no longer honours its metric calibration. The editor shows an
+Environment panel with each operation's state and reason. Sets without a splat, and the image-first path, are
+unchanged. Details: [phase-4-spatial-production](phase-4-spatial-production.md#4e-implementation-notes-in-review). 4F
+has not started.
 
 Real reconstruction (M2D.3D2) stays optional and does not block any slice.
 

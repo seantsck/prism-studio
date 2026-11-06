@@ -694,6 +694,10 @@ test.describe("gaussian splat Location environment", () => {
     ] as const)
       await setInput(page, `inspector-${field}`, value);
     await expect.poll(async () => (await info(page)).splatObjects[0]!.scale[0]).toBeCloseTo(1, 4);
+    // scale 1 no longer honours the earlier "1 source unit = 0.5 m" calibration: say so, as at import (Phase 4E
+    // refuses to save a metric claim the transform contradicts)
+    await page.getByTestId("splat-reset-scale").click();
+    await expect(page.getByTestId("splat-scale-status")).toContainText("unknown units");
 
     // frame the reconstruction from a Production Camera and link it to the Shot
     await setInput(page, "camera-pos-x", "0");
@@ -880,7 +884,8 @@ test.describe("gaussian splat Location environment", () => {
     expect(env).toMatchObject({
       kind: "gaussian_splat",
       visible: true,
-      calibration: { units: "metres", metresPerSourceUnit: 0.5, scaleMethod: "manual" },
+      // the fixture reset the environment to scale 1 with unknown units (the truthful calibration for that transform)
+      calibration: { units: "unknown", metresPerSourceUnit: null, scaleMethod: "unknown" },
       sourceReferenceAssetIds: [],
     });
     expect(env.reconstructionFingerprint).toMatch(/^[0-9a-f]{64}$/);
