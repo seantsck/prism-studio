@@ -42,7 +42,28 @@ import { poseFingerprint } from "@/domain/previs/pose";
 import { bookmarkFromCamera } from "@/domain/previs/camera";
 import { cameraPathFingerprint, cameraPathSchema, validateCameraPath } from "@/domain/previs/camera-path";
 import { sceneFingerprint } from "@/domain/previs/document";
-import { planSetupCopy, SETUP_CHANGED, SetupCopyRefusal } from "@/domain/previs/setup-copy";
+import {
+  planSetupCopy,
+  SETUP_CHANGED,
+  SetupCopyRefusal,
+  type SetupComponent,
+  type SetupCopyPlan,
+  type SetupRows,
+} from "@/domain/previs/setup-copy";
+import {
+  parseSetupTemplateContent,
+  SETUP_TEMPLATE_SCHEMA,
+  setupTemplateContentFingerprint,
+  snapshotSetupTemplate,
+  templateAsSetupRows,
+  TEMPLATE_CHANGED,
+  TEMPLATE_CHARACTER_GONE,
+  TEMPLATE_GONE,
+  TEMPLATE_NAME_TAKEN,
+  TEMPLATE_OTHER_SET,
+  TEMPLATE_UNREADABLE,
+  TEMPLATES_NOT_MIGRATED,
+} from "@/domain/previs/setup-template";
 import {
   buildSpatialReference,
   CAMERA_MOTION_SCHEMA_VERSION,
@@ -69,6 +90,11 @@ import {
   type CameraPathRecord,
   type CopyShotSetupInput,
   type CopyShotSetupResult,
+  type CopyTemplateSetupInput,
+  type CreateSetupTemplateInput,
+  type SetupCopyRecord,
+  type SetupTemplateRecord,
+  type UpdateSetupTemplateInput,
   type MasterFrameRecord,
   type NewMasterFrame,
   type NewPrevisClip,
@@ -113,6 +139,71 @@ const mapLightingRig = (r: Row): ShotLightingRigRecord => ({
   createdBy: str(r.created_by),
   createdAt: iso(r.created_at),
   updatedAt: iso(r.updated_at),
+});
+
+const jsonOrNull = (v: unknown) => (v == null ? null : JSON.stringify(v));
+
+/** Phase 4D-I2 (0050): a template row; its stored values are re-validated on every read. */
+const mapTemplate = (r: Row): SetupTemplateRecord => ({
+  id: String(r.id),
+  projectId: String(r.project_id),
+  locationId: String(r.location_id),
+  sceneDocumentId: String(r.scene_document_id),
+  schemaVersion: String(r.schema_version),
+  name: String(r.name),
+  description: String(r.description),
+  revision: Number(r.revision),
+  content: parseSetupTemplateContent({
+    camera: r.camera_json ?? null,
+    lighting: r.lighting_json ?? null,
+    blocking: r.blocking_json ?? null,
+  }),
+  contentFingerprint: String(r.content_fingerprint),
+  sourceShotId: str(r.source_shot_id),
+  sourceShotCode: str(r.source_shot_code),
+  createdBy: str(r.created_by),
+  createdAt: iso(r.created_at),
+  updatedAt: iso(r.updated_at),
+});
+
+/**
+ * A template row whose stored values no longer validate must never take a Shot's workspace down: a listing skips it
+ * (logged), and addressing it directly is refused with TEMPLATE_UNREADABLE.
+ */
+const mapTemplateOrNull = (r: Row): SetupTemplateRecord | null => {
+  try {
+    return mapTemplate(r);
+  } catch (err) {
+    console.error(
+      `[setup-template ${String(r.id).slice(0, 8)}] unreadable:`,
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+};
+const mapTemplateOrRefuse = (r: Row): SetupTemplateRecord => {
+  const t = mapTemplateOrNull(r);
+  if (!t) throw new PrevisError("invalid", TEMPLATE_UNREADABLE);
+  return t;
+};
+
+const mapCopy = (r: Row): SetupCopyRecord => ({
+  id: String(r.id),
+  projectId: String(r.project_id),
+  shotId: String(r.shot_id),
+  locationId: String(r.location_id),
+  sceneDocumentId: String(r.scene_document_id),
+  sourceKind: r.source_kind === "template" ? "template" : "shot",
+  sourceShotId: str(r.source_shot_id),
+  sourceShotCode: str(r.source_shot_code),
+  templateId: str(r.template_id),
+  templateName: str(r.template_name),
+  templateRevision: r.template_revision == null ? null : Number(r.template_revision),
+  templateContentFingerprint: str(r.template_content_fingerprint),
+  components: (r.components as SetupComponent[]) ?? [],
+  planToken: String(r.plan_token),
+  copiedAt: iso(r.copied_at),
+  createdBy: str(r.created_by),
 });
 
 const NOT_MIGRATED_LIGHTING = "Shot lighting is not available until database migration 0048 is applied.";
@@ -1085,50 +1176,17 @@ export class PostgresPrevisData implements PrevisRepository {
   /**
    * Phase 4D: the explicit copy in ONE transaction. Both Shots' setup rows are locked (FOR UPDATE, in a fixed order),
    * the plan is recomputed from them and must carry the reviewed token, then every write runs on the destination's own
-   * rows. Any error rolls back all of them. RLS (the caller's JWT) scopes every statement to the owner's rows.
+   * rows. Any error rolls back all of them. RLS (the caller's JWT) scopes every statement to the owner's rows. From
+   * 0050 on, the copy also leaves an append-only provenance record (shot_setup_copies) in the same transaction.
    */
   async copyShotSetup(input: CopyShotSetupInput): Promise<CopyShotSetupResult> {
     const shotIds = [input.sourceShotId, input.destinationShotId];
     return this.tx(async (c) => {
-      const shots = await c.query(
-        "select id, location_id from shots where project_id = $1 and id = any($2::uuid[]) for share",
-        [input.projectId, shotIds],
-      );
-      if (shots.rowCount !== 2) throw new PrevisError("not_found", "That shot is not in this project.");
-      // both Shots must STILL be set in this Location (rechecked under lock, not only by the caller)
-      if (shots.rows.some((r) => String(r.location_id) !== input.locationId))
-        throw new PrevisError("conflict", SETUP_CHANGED);
-      const sc = await c.query(
-        `select id from location_scene_documents where id = $1 and project_id = $2 and location_id = $3
-           for share`,
-        [input.sceneDocumentId, input.projectId, input.locationId],
-      );
-      if (!sc.rows[0]) throw new PrevisError("not_found", "That 3D set was not found for this location.");
-
-      const lock = async (table: string) =>
-        (
-          await c.query(
-            `select * from ${table} where project_id = $1 and shot_id = any($2::uuid[])
-              order by shot_id, id for update`,
-            [input.projectId, shotIds],
-          )
-        ).rows;
-      const bookmarks = (await lock("shot_camera_bookmarks")).map(mapBookmark);
-      const lightingReady = (await c.query("select to_regclass('public.shot_light_rigs') is not null as ok"))
-        .rows[0]?.ok;
-      if (!lightingReady && input.components.includes("lighting"))
-        throw new PrevisError("invalid", NOT_MIGRATED_LIGHTING);
-      const rigs = lightingReady ? (await lock("shot_light_rigs")).map(mapLightingRig) : [];
-      const figures = (await lock("shot_character_blocking")).map(mapBlocking);
-      const rowsOf = (shotId: string) => ({
-        camera: bookmarks.find((b) => b.shotId === shotId) ?? null,
-        lighting: rigs.find((r) => r.shotId === shotId) ?? null,
-        blocking: figures
-          .filter((f) => f.shotId === shotId)
-          .sort((a, b) => (a.characterId < b.characterId ? -1 : 1)),
-      });
-      const source = rowsOf(input.sourceShotId);
-      const destination = rowsOf(input.destinationShotId);
+      const codes = await this.lockShotsOnLocation(c, input.projectId, shotIds, input.locationId);
+      await this.lockSceneForSetup(c, input);
+      const rows = await this.lockSetupRows(c, input.projectId, shotIds, input.components, "update");
+      const source = rows.of(input.sourceShotId);
+      const destination = rows.of(input.destinationShotId);
       let plan;
       try {
         plan = planSetupCopy({
@@ -1144,17 +1202,100 @@ export class PostgresPrevisData implements PrevisRepository {
         throw err;
       }
       if (plan.token !== input.expectedToken) throw new PrevisError("conflict", SETUP_CHANGED);
-      const dest = input.destinationShotId;
-      const changed = () => new PrevisError("conflict", SETUP_CHANGED);
+      const written = await this.writeSetupCopy(c, { input, plan, source, destination });
+      if (await this.templatesReady(c))
+        await this.recordSetupCopy(c, {
+          projectId: input.projectId,
+          shotId: input.destinationShotId,
+          locationId: input.locationId,
+          sceneDocumentId: input.sceneDocumentId,
+          sourceKind: "shot",
+          sourceShotId: input.sourceShotId,
+          sourceShotCode: codes.get(input.sourceShotId)!,
+          templateId: null,
+          templateName: null,
+          templateRevision: null,
+          templateContentFingerprint: null,
+          components: plan.components,
+          planToken: plan.token,
+          copiedAt: input.now,
+          createdBy: input.userId,
+        });
+      return { plan, ...written };
+    });
+  }
 
-      let camera: CameraBookmarkRecord | null = null;
-      if (plan.camera) {
-        const s = source.camera!;
-        const v = s.value;
-        if (plan.camera.unchanged) camera = destination.camera;
-        else {
-          const r = await c.query(
-            `insert into shot_camera_bookmarks
+  /** Locks the setup rows of the given Shots in a fixed order (table, then shot_id, then id). */
+  private async lockSetupRows(
+    c: PoolClient,
+    projectId: string,
+    shotIds: string[],
+    components: SetupComponent[],
+    mode: "update" | "share",
+  ) {
+    const lock = async (table: string) =>
+      (
+        await c.query(
+          `select * from ${table} where project_id = $1 and shot_id = any($2::uuid[])
+            order by shot_id, id for ${mode}`,
+          [projectId, shotIds],
+        )
+      ).rows;
+    const bookmarks = (await lock("shot_camera_bookmarks")).map(mapBookmark);
+    const lightingReady = (await c.query("select to_regclass('public.shot_light_rigs') is not null as ok"))
+      .rows[0]?.ok;
+    if (!lightingReady && components.includes("lighting"))
+      throw new PrevisError("invalid", NOT_MIGRATED_LIGHTING);
+    const rigs = lightingReady ? (await lock("shot_light_rigs")).map(mapLightingRig) : [];
+    const figures = (await lock("shot_character_blocking")).map(mapBlocking);
+    return {
+      of: (shotId: string) => ({
+        camera: bookmarks.find((b) => b.shotId === shotId) ?? null,
+        lighting: rigs.find((r) => r.shotId === shotId) ?? null,
+        blocking: figures
+          .filter((f) => f.shotId === shotId)
+          .sort((a, b) => (a.characterId < b.characterId ? -1 : 1)),
+      }),
+    };
+  }
+
+  /**
+   * Writes a planned copy into the DESTINATION's own rows from the SOURCE VALUES (another Shot's rows or a template's
+   * snapshot). Every write is a compare-and-set against the rows locked by the caller; any miss refuses the copy.
+   */
+  private async writeSetupCopy(
+    c: PoolClient,
+    args: {
+      input: {
+        projectId: string;
+        destinationShotId: string;
+        locationId: string;
+        sceneDocumentId: string;
+        destinationIntent: CopyShotSetupInput["destinationIntent"];
+        userId: string | null;
+        now: string;
+      };
+      plan: SetupCopyPlan;
+      source: SetupRows;
+      destination: {
+        camera: CameraBookmarkRecord | null;
+        lighting: ShotLightingRigRecord | null;
+        blocking: ShotBlockingRecord[];
+      };
+    },
+  ): Promise<Omit<CopyShotSetupResult, "plan">> {
+    const { input, plan, source, destination } = args;
+    const dest = input.destinationShotId;
+    const changed = () => new PrevisError("conflict", SETUP_CHANGED);
+
+    let camera: CameraBookmarkRecord | null = null;
+    if (plan.camera) {
+      const s = source.camera!;
+      const v = s.value;
+      if (plan.camera.unchanged) camera = destination.camera;
+      else {
+        const r = await c.query(
+          `insert into shot_camera_bookmarks
                (id, project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint,
                 camera_label, position, rotation, target, projection, fov_vertical_degrees, focal_length_mm,
                 focal_length_basis, production_aspect_ratio, production_aspect_value, created_by, created_at,
@@ -1170,6 +1311,72 @@ export class PostgresPrevisData implements PrevisRepository {
                production_aspect_value = excluded.production_aspect_value
              where shot_camera_bookmarks.project_id = excluded.project_id and $20::boolean
              returning *`,
+          [
+            randomUUID(),
+            input.projectId,
+            dest,
+            input.locationId,
+            input.sceneDocumentId,
+            s.sceneRevision,
+            s.sceneFingerprint,
+            s.cameraLabel,
+            JSON.stringify(v.position),
+            JSON.stringify(v.rotation),
+            JSON.stringify(v.target),
+            v.projection,
+            v.fovVerticalDegrees,
+            v.focalLengthMm,
+            v.focalLengthBasis,
+            v.productionAspectRatio,
+            v.productionAspectValue,
+            input.userId,
+            input.now,
+            // a row that did not exist under lock was created concurrently: never overwrite it
+            destination.camera !== null,
+          ],
+        );
+        if (!r.rows[0]) throw changed();
+        camera = mapBookmark(r.rows[0]);
+      }
+    }
+
+    let lighting: ShotLightingRigRecord | null = null;
+    if (plan.lighting) {
+      const s = source.lighting!;
+      const d = destination.lighting;
+      if (plan.lighting.unchanged) lighting = d;
+      else {
+        let rig;
+        try {
+          rig = parseShotLightingRig({ ...s.rig, authoredIntent: input.destinationIntent });
+        } catch (err) {
+          throw new PrevisError("invalid", `Invalid Shot lighting: ${(err as Error).message}`);
+        }
+        const fp = lightingFingerprint(rig);
+        let r;
+        if (d && plan.lighting.replaces?.onCurrentSet) {
+          r = await c.query(
+            `update shot_light_rigs
+                  set revision = revision + 1, scene_revision = $3, scene_fingerprint = $4, rig_json = $5::jsonb,
+                      lighting_fingerprint = $6
+                where shot_id = $1 and project_id = $2 and revision = $7 returning *`,
+            [dest, input.projectId, s.sceneRevision, s.sceneFingerprint, JSON.stringify(rig), fp, d.revision],
+          );
+        } else {
+          // a rig never moves sets (guard_shot_light_rig): a destination rig on another set is replaced by a new row
+          if (d) {
+            const del = await c.query(
+              "delete from shot_light_rigs where shot_id = $1 and project_id = $2 and revision = $3 returning id",
+              [dest, input.projectId, d.revision],
+            );
+            if (!del.rows[0]) throw changed();
+          }
+          r = await c.query(
+            `insert into shot_light_rigs
+                 (id, project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint,
+                  schema_version, revision, rig_json, lighting_fingerprint, created_by, created_at, updated_at)
+               values ($1,$2,$3,$4,$5,$6,$7,$8,1,$9::jsonb,$10,$11,$12,$12)
+               on conflict (shot_id) do nothing returning *`,
             [
               randomUUID(),
               input.projectId,
@@ -1178,177 +1385,414 @@ export class PostgresPrevisData implements PrevisRepository {
               input.sceneDocumentId,
               s.sceneRevision,
               s.sceneFingerprint,
-              s.cameraLabel,
-              JSON.stringify(v.position),
-              JSON.stringify(v.rotation),
-              JSON.stringify(v.target),
-              v.projection,
-              v.fovVerticalDegrees,
-              v.focalLengthMm,
-              v.focalLengthBasis,
-              v.productionAspectRatio,
-              v.productionAspectValue,
+              rig.schema,
+              JSON.stringify(rig),
+              fp,
               input.userId,
               input.now,
-              // a row that did not exist under lock was created concurrently: never overwrite it
-              destination.camera !== null,
             ],
           );
-          if (!r.rows[0]) throw changed();
-          camera = mapBookmark(r.rows[0]);
         }
+        if (!r.rows[0]) throw changed();
+        lighting = mapLightingRig(r.rows[0]);
       }
+    }
 
-      let lighting: ShotLightingRigRecord | null = null;
-      if (plan.lighting) {
-        const s = source.lighting!;
-        const d = destination.lighting;
-        if (plan.lighting.unchanged) lighting = d;
-        else {
-          let rig;
-          try {
-            rig = parseShotLightingRig({ ...s.rig, authoredIntent: input.destinationIntent });
-          } catch (err) {
-            throw new PrevisError("invalid", `Invalid Shot lighting: ${(err as Error).message}`);
-          }
-          const fp = lightingFingerprint(rig);
-          let r;
-          if (d && plan.lighting.replaces?.onCurrentSet) {
-            r = await c.query(
-              `update shot_light_rigs
-                  set revision = revision + 1, scene_revision = $3, scene_fingerprint = $4, rig_json = $5::jsonb,
-                      lighting_fingerprint = $6
-                where shot_id = $1 and project_id = $2 and revision = $7 returning *`,
-              [
-                dest,
-                input.projectId,
-                s.sceneRevision,
-                s.sceneFingerprint,
-                JSON.stringify(rig),
-                fp,
-                d.revision,
-              ],
-            );
-          } else {
-            // a rig never moves sets (guard_shot_light_rig): a destination rig on another set is replaced by a new row
-            if (d) {
-              const del = await c.query(
-                "delete from shot_light_rigs where shot_id = $1 and project_id = $2 and revision = $3 returning id",
-                [dest, input.projectId, d.revision],
-              );
-              if (!del.rows[0]) throw changed();
-            }
-            r = await c.query(
-              `insert into shot_light_rigs
-                 (id, project_id, shot_id, location_id, scene_document_id, scene_revision, scene_fingerprint,
-                  schema_version, revision, rig_json, lighting_fingerprint, created_by, created_at, updated_at)
-               values ($1,$2,$3,$4,$5,$6,$7,$8,1,$9::jsonb,$10,$11,$12,$12)
-               on conflict (shot_id) do nothing returning *`,
-              [
-                randomUUID(),
-                input.projectId,
-                dest,
-                input.locationId,
-                input.sceneDocumentId,
-                s.sceneRevision,
-                s.sceneFingerprint,
-                rig.schema,
-                JSON.stringify(rig),
-                fp,
-                input.userId,
-                input.now,
-              ],
-            );
-          }
-          if (!r.rows[0]) throw changed();
-          lighting = mapLightingRig(r.rows[0]);
+    let blocking: ShotBlockingRecord[] | null = null;
+    if (plan.blocking) {
+      blocking = [];
+      for (const f of plan.blocking.figures) {
+        const s = source.blocking.find(
+          (b) => b.characterId === f.characterId && b.sceneDocumentId === input.sceneDocumentId,
+        )!;
+        const d = destination.blocking.find((b) => b.characterId === f.characterId);
+        if (f.unchanged) {
+          blocking.push(d!);
+          continue;
         }
-      }
-
-      let blocking: ShotBlockingRecord[] | null = null;
-      if (plan.blocking) {
-        blocking = [];
-        for (const f of plan.blocking.figures) {
-          const s = source.blocking.find(
-            (b) => b.characterId === f.characterId && b.sceneDocumentId === input.sceneDocumentId,
-          )!;
-          const d = destination.blocking.find((b) => b.characterId === f.characterId);
-          if (f.unchanged) {
-            blocking.push(d!);
-            continue;
-          }
-          const e = s.entry;
-          const fp = blockingFingerprint(e, { locationId: input.locationId });
-          const r = d
-            ? await c.query(
-                `update shot_character_blocking
+        const e = s.entry;
+        const fp = blockingFingerprint(e, { locationId: input.locationId });
+        const r = d
+          ? await c.query(
+              `update shot_character_blocking
                     set revision = revision + 1, location_id = $4, scene_document_id = $5, scene_revision = $6,
                         scene_fingerprint = $7, root_position = $8::jsonb, root_orientation = $9::jsonb,
                         root_scale = $10, pose_json = $11::jsonb, visible = $12, pose_fingerprint = $13,
                         blocking_fingerprint = $14
                   where shot_id = $1 and character_id = $2 and project_id = $3 and revision = $15
                   returning *`,
-                [
-                  dest,
-                  f.characterId,
-                  input.projectId,
-                  input.locationId,
-                  input.sceneDocumentId,
-                  s.sceneRevision,
-                  s.sceneFingerprint,
-                  JSON.stringify(e.root.position),
-                  JSON.stringify(e.root.orientation),
-                  e.root.scale,
-                  JSON.stringify(e.pose),
-                  e.visibility,
-                  poseFingerprint(e.pose),
-                  fp,
-                  d.revision,
-                ],
-              )
-            : await c.query(
-                `insert into shot_character_blocking
+              [
+                dest,
+                f.characterId,
+                input.projectId,
+                input.locationId,
+                input.sceneDocumentId,
+                s.sceneRevision,
+                s.sceneFingerprint,
+                JSON.stringify(e.root.position),
+                JSON.stringify(e.root.orientation),
+                e.root.scale,
+                JSON.stringify(e.pose),
+                e.visibility,
+                poseFingerprint(e.pose),
+                fp,
+                d.revision,
+              ],
+            )
+          : await c.query(
+              `insert into shot_character_blocking
                    (id, project_id, shot_id, character_id, location_id, scene_document_id, scene_revision,
                     scene_fingerprint, schema_version, rig_version, revision, root_position, root_orientation,
                     root_scale, pose_json, visible, pose_fingerprint, blocking_fingerprint, created_by, created_at,
                     updated_at)
                  values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11::jsonb,$12::jsonb,$13,$14::jsonb,$15,$16,$17,$18,$19,$19)
                  on conflict (shot_id, character_id) do nothing returning *`,
-                [
-                  randomUUID(),
-                  input.projectId,
-                  dest,
-                  f.characterId,
-                  input.locationId,
-                  input.sceneDocumentId,
-                  s.sceneRevision,
-                  s.sceneFingerprint,
-                  e.schema,
-                  e.pose.rig,
-                  JSON.stringify(e.root.position),
-                  JSON.stringify(e.root.orientation),
-                  e.root.scale,
-                  JSON.stringify(e.pose),
-                  e.visibility,
-                  poseFingerprint(e.pose),
-                  fp,
-                  input.userId,
-                  input.now,
-                ],
-              );
-          if (!r.rows[0]) throw changed();
-          blocking.push(mapBlocking(r.rows[0]));
-        }
-        for (const rm of plan.blocking.removes) {
-          const r = await c.query(
-            `delete from shot_character_blocking
-              where shot_id = $1 and character_id = $2 and project_id = $3 and revision = $4 returning id`,
-            [dest, rm.characterId, input.projectId, rm.revision],
-          );
-          if (!r.rows[0]) throw changed();
-        }
+              [
+                randomUUID(),
+                input.projectId,
+                dest,
+                f.characterId,
+                input.locationId,
+                input.sceneDocumentId,
+                s.sceneRevision,
+                s.sceneFingerprint,
+                e.schema,
+                e.pose.rig,
+                JSON.stringify(e.root.position),
+                JSON.stringify(e.root.orientation),
+                e.root.scale,
+                JSON.stringify(e.pose),
+                e.visibility,
+                poseFingerprint(e.pose),
+                fp,
+                input.userId,
+                input.now,
+              ],
+            );
+        if (!r.rows[0]) throw changed();
+        blocking.push(mapBlocking(r.rows[0]));
       }
-      return { plan, camera, lighting, blocking };
+      for (const rm of plan.blocking.removes) {
+        const r = await c.query(
+          `delete from shot_character_blocking
+              where shot_id = $1 and character_id = $2 and project_id = $3 and revision = $4 returning id`,
+          [dest, rm.characterId, input.projectId, rm.revision],
+        );
+        if (!r.rows[0]) throw changed();
+      }
+    }
+    return { camera, lighting, blocking };
+  }
+
+  // ── Phase 4D-I2: named setup templates and copy provenance (migration 0050) ──
+
+  private async templatesReady(c: PoolClient): Promise<boolean> {
+    const r = await c.query(
+      `select to_regclass('public.shot_setup_templates') is not null
+          and to_regclass('public.shot_setup_copies') is not null as ok`,
+    );
+    return r.rows[0]?.ok === true;
+  }
+
+  /** Locks Shots of this Project (FOR SHARE) and requires each to be set in the Location. */
+  private async lockShotsOnLocation(c: PoolClient, projectId: string, shotIds: string[], locationId: string) {
+    const shots = await c.query(
+      "select id, location_id, shot_code from shots where project_id = $1 and id = any($2::uuid[]) for share",
+      [projectId, shotIds],
+    );
+    if (shots.rowCount !== new Set(shotIds).size)
+      throw new PrevisError("not_found", "That shot is not in this project.");
+    // every Shot must STILL be set in this Location (rechecked under lock, not only by the caller)
+    if (shots.rows.some((r) => String(r.location_id) !== locationId))
+      throw new PrevisError("conflict", SETUP_CHANGED);
+    return new Map(shots.rows.map((r) => [String(r.id), String(r.shot_code)]));
+  }
+
+  private async lockSceneForSetup(
+    c: PoolClient,
+    input: { projectId: string; locationId: string; sceneDocumentId: string },
+  ) {
+    const sc = await c.query(
+      `select id from location_scene_documents where id = $1 and project_id = $2 and location_id = $3
+         for share`,
+      [input.sceneDocumentId, input.projectId, input.locationId],
+    );
+    if (!sc.rows[0]) throw new PrevisError("not_found", "That 3D set was not found for this location.");
+  }
+
+  private async recordSetupCopy(c: PoolClient, rec: Omit<SetupCopyRecord, "id">) {
+    await c.query(
+      `insert into shot_setup_copies
+         (id, project_id, shot_id, location_id, scene_document_id, source_kind, source_shot_id, source_shot_code,
+          template_id, template_name, template_revision, template_content_fingerprint, components, plan_token,
+          copied_at, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::text[],$14,$15,$16)`,
+      [
+        randomUUID(),
+        rec.projectId,
+        rec.shotId,
+        rec.locationId,
+        rec.sceneDocumentId,
+        rec.sourceKind,
+        rec.sourceShotId,
+        rec.sourceShotCode,
+        rec.templateId,
+        rec.templateName,
+        rec.templateRevision,
+        rec.templateContentFingerprint,
+        rec.components,
+        rec.planToken,
+        rec.copiedAt,
+        rec.createdBy,
+      ],
+    );
+  }
+
+  async setupTemplatesReady() {
+    return this.tx((c) => this.templatesReady(c));
+  }
+
+  async listSetupTemplates(projectId: string, locationId: string) {
+    return this.tx(async (c) => {
+      if (!(await this.templatesReady(c))) return [];
+      const r = await c.query(
+        "select * from shot_setup_templates where project_id = $1 and location_id = $2 order by name, id",
+        [projectId, locationId],
+      );
+      return r.rows.map(mapTemplateOrNull).filter((t): t is SetupTemplateRecord => t !== null);
+    });
+  }
+
+  async getSetupTemplate(id: string) {
+    return this.tx(async (c) => {
+      if (!(await this.templatesReady(c))) return null;
+      const r = await c.query("select * from shot_setup_templates where id = $1", [id]);
+      return r.rows[0] ? mapTemplateOrRefuse(r.rows[0]) : null;
+    });
+  }
+
+  /** The Shot's current-set values, snapshotted under lock (FOR SHARE: a concurrent edit waits or wins first). */
+  private async snapshotShot(
+    c: PoolClient,
+    projectId: string,
+    shotId: string,
+    set: { locationId: string; sceneDocumentId: string },
+    components: SetupComponent[],
+  ) {
+    const codes = await this.lockShotsOnLocation(c, projectId, [shotId], set.locationId);
+    const rows = await this.lockSetupRows(c, projectId, [shotId], components, "share");
+    try {
+      return {
+        content: snapshotSetupTemplate({ rows: rows.of(shotId), set, components }),
+        code: codes.get(shotId)!,
+      };
+    } catch (err) {
+      if (err instanceof SetupCopyRefusal) throw new PrevisError("invalid", err.message);
+      throw err;
+    }
+  }
+
+  async createSetupTemplate(input: CreateSetupTemplateInput) {
+    return this.tx(async (c) => {
+      if (!(await this.templatesReady(c))) throw new PrevisError("invalid", TEMPLATES_NOT_MIGRATED);
+      await this.lockSceneForSetup(c, input);
+      const set = { locationId: input.locationId, sceneDocumentId: input.sceneDocumentId };
+      const snap = await this.snapshotShot(c, input.projectId, input.shotId, set, input.components);
+      try {
+        const r = await c.query(
+          `insert into shot_setup_templates
+             (id, project_id, location_id, scene_document_id, schema_version, name, description, revision, camera_json,
+              lighting_json, blocking_json, content_fingerprint, source_shot_id, source_shot_code, created_by,
+              created_at, updated_at)
+           values ($1,$2,$3,$4,$5,$6,$7,1,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15,$15) returning *`,
+          [
+            randomUUID(),
+            input.projectId,
+            input.locationId,
+            input.sceneDocumentId,
+            SETUP_TEMPLATE_SCHEMA,
+            input.name,
+            input.description,
+            jsonOrNull(snap.content.camera),
+            jsonOrNull(snap.content.lighting),
+            jsonOrNull(snap.content.blocking),
+            setupTemplateContentFingerprint(snap.content, set),
+            input.shotId,
+            snap.code,
+            input.userId,
+            input.now,
+          ],
+        );
+        return mapTemplate(r.rows[0]);
+      } catch (e) {
+        if ((e as { code?: string }).code === "23505") throw new PrevisError("conflict", TEMPLATE_NAME_TAKEN);
+        throw e;
+      }
+    });
+  }
+
+  private async lockTemplate(c: PoolClient, projectId: string, templateId: string, mode: "update" | "share") {
+    const r = await c.query(
+      `select * from shot_setup_templates where id = $1 and project_id = $2 for ${mode}`,
+      [templateId, projectId],
+    );
+    if (!r.rows[0]) throw new PrevisError("not_found", TEMPLATE_GONE);
+    return mapTemplateOrRefuse(r.rows[0]);
+  }
+
+  async updateSetupTemplate(input: UpdateSetupTemplateInput) {
+    return this.tx(async (c) => {
+      if (!(await this.templatesReady(c))) throw new PrevisError("invalid", TEMPLATES_NOT_MIGRATED);
+      const t = await this.lockTemplate(c, input.projectId, input.templateId, "update");
+      if (t.revision !== input.expectedRevision) throw new PrevisError("conflict", TEMPLATE_CHANGED);
+      let content = t.content;
+      let sourceShotId = t.sourceShotId;
+      let sourceShotCode = t.sourceShotCode;
+      if (input.contentFrom) {
+        const set = { locationId: t.locationId, sceneDocumentId: t.sceneDocumentId };
+        const cur = await c.query(
+          "select id from location_scene_documents where location_id = $1 and project_id = $2",
+          [t.locationId, input.projectId],
+        );
+        if (String(cur.rows[0]?.id ?? "") !== t.sceneDocumentId)
+          throw new PrevisError("invalid", TEMPLATE_OTHER_SET);
+        const snap = await this.snapshotShot(
+          c,
+          input.projectId,
+          input.contentFrom.shotId,
+          set,
+          input.contentFrom.components,
+        );
+        content = snap.content;
+        sourceShotId = input.contentFrom.shotId;
+        sourceShotCode = snap.code;
+      }
+      try {
+        const r = await c.query(
+          `update shot_setup_templates
+              set name = $3, description = $4, revision = revision + 1, camera_json = $5::jsonb,
+                  lighting_json = $6::jsonb, blocking_json = $7::jsonb, content_fingerprint = $8,
+                  source_shot_id = $9, source_shot_code = $10
+            where id = $1 and project_id = $2 and revision = $11 returning *`,
+          [
+            t.id,
+            input.projectId,
+            input.name ?? t.name,
+            input.description ?? t.description,
+            jsonOrNull(content.camera),
+            jsonOrNull(content.lighting),
+            jsonOrNull(content.blocking),
+            setupTemplateContentFingerprint(content, { locationId: t.locationId }),
+            sourceShotId,
+            sourceShotCode,
+            t.revision,
+          ],
+        );
+        if (!r.rows[0]) throw new PrevisError("conflict", TEMPLATE_CHANGED);
+        return mapTemplate(r.rows[0]);
+      } catch (e) {
+        if ((e as { code?: string }).code === "23505") throw new PrevisError("conflict", TEMPLATE_NAME_TAKEN);
+        throw e;
+      }
+    });
+  }
+
+  async deleteSetupTemplate(input: { projectId: string; templateId: string; expectedRevision: number }) {
+    return this.tx(async (c) => {
+      if (!(await this.templatesReady(c))) throw new PrevisError("not_found", TEMPLATE_GONE);
+      const r = await c.query(
+        "delete from shot_setup_templates where id = $1 and project_id = $2 and revision = $3 returning id",
+        [input.templateId, input.projectId, input.expectedRevision],
+      );
+      if (r.rows[0]) return;
+      const exists = await c.query("select 1 from shot_setup_templates where id = $1 and project_id = $2", [
+        input.templateId,
+        input.projectId,
+      ]);
+      throw exists.rows[0]
+        ? new PrevisError("conflict", TEMPLATE_CHANGED)
+        : new PrevisError("not_found", TEMPLATE_GONE);
+    });
+  }
+
+  /**
+   * The explicit copy FROM a template in ONE transaction: the destination Shot (FOR SHARE) and its rows (FOR UPDATE)
+   * and the template (FOR SHARE) are locked, the plan is recomputed from the template's stored values and must carry
+   * the reviewed token (which names the template revision), and the provenance record is written with the copy.
+   */
+  async copyTemplateSetup(input: CopyTemplateSetupInput): Promise<CopyShotSetupResult> {
+    return this.tx(async (c) => {
+      if (!(await this.templatesReady(c))) throw new PrevisError("not_found", TEMPLATE_GONE);
+      await this.lockShotsOnLocation(c, input.projectId, [input.destinationShotId], input.locationId);
+      await this.lockSceneForSetup(c, input);
+      const t = await this.lockTemplate(c, input.projectId, input.templateId, "share");
+      if (t.locationId !== input.locationId || t.sceneDocumentId !== input.sceneDocumentId)
+        throw new PrevisError("invalid", TEMPLATE_OTHER_SET);
+      const set = { locationId: input.locationId, sceneDocumentId: input.sceneDocumentId };
+      const source = templateAsSetupRows(t.content, set);
+      const rows = await this.lockSetupRows(
+        c,
+        input.projectId,
+        [input.destinationShotId],
+        input.components,
+        "update",
+      );
+      const destination = rows.of(input.destinationShotId);
+      let plan;
+      try {
+        plan = planSetupCopy({
+          sourceShotId: null,
+          template: { id: t.id, revision: t.revision, contentFingerprint: t.contentFingerprint },
+          destinationShotId: input.destinationShotId,
+          set,
+          source,
+          destination,
+          components: input.components,
+        });
+      } catch (err) {
+        if (err instanceof SetupCopyRefusal) throw new PrevisError("invalid", err.message);
+        throw err;
+      }
+      if (plan.token !== input.expectedToken) throw new PrevisError("conflict", SETUP_CHANGED);
+      if (plan.blocking) {
+        const ids = plan.blocking.figures.map((f) => f.characterId);
+        const known = await c.query(
+          "select count(*)::int n from characters where project_id = $1 and id = any($2::uuid[])",
+          [input.projectId, ids],
+        );
+        if (known.rows[0].n !== ids.length) throw new PrevisError("invalid", TEMPLATE_CHARACTER_GONE);
+      }
+      const written = await this.writeSetupCopy(c, { input, plan, source, destination });
+      await this.recordSetupCopy(c, {
+        projectId: input.projectId,
+        shotId: input.destinationShotId,
+        locationId: input.locationId,
+        sceneDocumentId: input.sceneDocumentId,
+        sourceKind: "template",
+        sourceShotId: null,
+        sourceShotCode: null,
+        templateId: t.id,
+        templateName: t.name,
+        templateRevision: t.revision,
+        templateContentFingerprint: t.contentFingerprint,
+        components: plan.components,
+        planToken: plan.token,
+        copiedAt: input.now,
+        createdBy: input.userId,
+      });
+      return { plan, ...written };
+    });
+  }
+
+  async listSetupCopies(projectId: string, shotId: string) {
+    return this.tx(async (c) => {
+      if (!(await this.templatesReady(c))) return [];
+      const r = await c.query(
+        `select * from shot_setup_copies where project_id = $1 and shot_id = $2
+          order by copied_at desc, id limit 50`,
+        [projectId, shotId],
+      );
+      return r.rows.map(mapCopy);
     });
   }
 

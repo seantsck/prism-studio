@@ -135,6 +135,27 @@ worker role, 0 policies with `direct_video_allowed = true`; `db:validate` STRUCT
 67/67, `db:worker-role` 60/60 (REAL LOGIN), `db:continuity-analysis` 80/80, `db:media-qa` 39/39, narrow repository
 acceptance on a disposable Project 15/15, hosted browser E2E 40/40; counts and Storage back to baseline afterwards.
 
+**0050** (Phase 4D-I2, **in the repository, NOT applied to hosted DEV**; hosted head 0049, 0050 pending; tested on
+disposable local databases only). Additive: two new tables, nothing else changes, nothing is backfilled.
+
+- **`shot_setup_templates`:** a named, Project- and Location/set-scoped snapshot of reusable setup values (camera,
+  lighting without authored text, blocking), with a content fingerprint, a revision and display-only source
+  provenance. CHECK constraints bound the name and shape. A security-invoker guard keeps a template on its Project,
+  Location and set and advances the revision by exactly one; it permits the FK's own `SET NULL` of `source_shot_id`.
+- **`shot_setup_copies`:** append-only provenance of every explicit copy into a Shot (template or Shot source, the
+  parts, the reviewed token). Deleting a template or source Shot only nulls that pointer (`ON DELETE SET NULL
+(column)`), so provenance can never become a dependency. The record leaves only with its Shot or Project.
+- **Security:** owner-only RLS (`is_project_owner`) on both tables, no SECURITY DEFINER. `authenticated` gets
+  select/insert/update/delete on templates and select/insert only on copies; the migration revokes from
+  `authenticated` first because default privileges would grant more, and takes update/delete/truncate on copies from
+  `service_role` too. `anon` and both worker roles hold nothing.
+- **Compatibility:** post-#53 `main` passes its behaviour suites on 0050. Only its schema-at-head assertions differ
+  (`db:validate` lists the new tables as unexpected; `db:setup-copy` asserts head 0049). The 4D-I2 code runs on 0049:
+  templates read as unavailable and 4D-I1 copies skip provenance. `db:validate` expects the 0050 objects only once
+  the ledger records 0050.
+- **Disposable gate:** a rolled-back `--dry-run`, then `db:migrate` applied exactly 0050 (`MIGRATION CHECKSUMS OK`);
+  `db:validate` STRUCTURE OK; `db:setup-templates` 65/65; `db:setup-copy` 26/26. Hosted acceptance is 4D-B.
+
 **0049** (Phase 4C-I1, **applied to hosted DEV on 2026-11-05T23:28:01.818Z** in 4C-B, checksum
 `9b4589caa4ed19bf92e6dc9f77217587bf3b08f99977578871c69113f9da19fb`; hosted head 0049, nothing pending). Revised in the 4C-I1 technical-review remediation
 before it was ever applied anywhere but a disposable database (the first review draft was

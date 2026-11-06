@@ -12,6 +12,7 @@ import type { CameraPath } from "@/domain/previs/camera-path";
 import type { RenderCamera } from "@/domain/previs/camera-provenance";
 import type { AuthoredLightingIntent, RenderLighting, ShotLightingRig } from "@/domain/previs/lighting";
 import type { SetupComponent, SetupCopyPlan } from "@/domain/previs/setup-copy";
+import type { SetupTemplateContent } from "@/domain/previs/setup-template";
 import type { SpatialReference } from "@/domain/previs/spatial";
 import type {
   CharacterMasksJson,
@@ -389,6 +390,88 @@ export interface CopyShotSetupResult {
   blocking: ShotBlockingRecord[] | null;
 }
 
+/**
+ * Phase 4D-I2 (migration 0050): a named, Project- and Location-scoped SNAPSHOT of reusable setup values. Nothing that
+ * renders, captures, promotes or packages a Shot ever reads it: applying it copies its values into the Shot's own rows.
+ */
+export interface SetupTemplateRecord {
+  id: string;
+  projectId: string;
+  locationId: string;
+  /** the one set the template's positions belong to */
+  sceneDocumentId: string;
+  schemaVersion: string;
+  name: string;
+  description: string;
+  revision: number;
+  content: SetupTemplateContent;
+  contentFingerprint: string;
+  /** display-only provenance of the last snapshot (null once that Shot is deleted; the code survives) */
+  sourceShotId: string | null;
+  sourceShotCode: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Phase 4D-I2: append-only provenance of one explicit copy INTO a Shot. History, never state. */
+export interface SetupCopyRecord {
+  id: string;
+  projectId: string;
+  shotId: string;
+  locationId: string;
+  sceneDocumentId: string;
+  sourceKind: "shot" | "template";
+  /** null once the source Shot / template is deleted; the code / name snapshot survives */
+  sourceShotId: string | null;
+  sourceShotCode: string | null;
+  templateId: string | null;
+  templateName: string | null;
+  templateRevision: number | null;
+  templateContentFingerprint: string | null;
+  components: SetupComponent[];
+  planToken: string;
+  copiedAt: string;
+  createdBy: string | null;
+}
+
+export interface CreateSetupTemplateInput {
+  projectId: string;
+  /** the Shot whose CURRENT-set values are snapshotted, inside the repository's transaction */
+  shotId: string;
+  locationId: string;
+  sceneDocumentId: string;
+  name: string;
+  description: string;
+  components: SetupComponent[];
+  userId: string | null;
+  now: string;
+}
+
+export interface UpdateSetupTemplateInput {
+  projectId: string;
+  templateId: string;
+  expectedRevision: number;
+  name?: string;
+  description?: string;
+  /** replace the values with a fresh snapshot of this Shot (same Location and set as the template) */
+  contentFrom?: { shotId: string; components: SetupComponent[] };
+  now: string;
+}
+
+export interface CopyTemplateSetupInput {
+  projectId: string;
+  templateId: string;
+  destinationShotId: string;
+  locationId: string;
+  sceneDocumentId: string;
+  components: SetupComponent[];
+  expectedToken: string;
+  destinationIntent: AuthoredLightingIntent;
+  userId: string | null;
+  now: string;
+}
+
 export interface PrevisRepository {
   /** Newest first. Immutable origin records of the Location's spatial reconstructions (M2D.1). */
   listReconstructions(locationId: string): Promise<SpatialReconstructionRecord[]>;
@@ -496,6 +579,27 @@ export interface PrevisRepository {
    * differs from the reviewed one, PrevisError("invalid") for a refused copy; on any failure nothing is written.
    */
   copyShotSetup(input: CopyShotSetupInput): Promise<CopyShotSetupResult>;
+
+  // ── Phase 4D-I2: named setup templates and copy provenance (migration 0050) ──
+  /** Memory: always. Postgres: only once 0050 is applied (probed, never assumed). */
+  setupTemplatesReady(): Promise<boolean>;
+  /** The templates saved on one Location's set, by name. */
+  listSetupTemplates(projectId: string, locationId: string): Promise<SetupTemplateRecord[]>;
+  getSetupTemplate(id: string): Promise<SetupTemplateRecord | null>;
+  /** Snapshots the Shot's current-set values in one transaction. PrevisError("conflict") on a duplicate name. */
+  createSetupTemplate(input: CreateSetupTemplateInput): Promise<SetupTemplateRecord>;
+  /** Rename, re-describe and/or replace the values (compare-and-set on revision). Never touches any Shot. */
+  updateSetupTemplate(input: UpdateSetupTemplateInput): Promise<SetupTemplateRecord>;
+  /** Deletes the template (CAS on revision). Shots that copied it keep their values; provenance keeps the name. */
+  deleteSetupTemplate(input: {
+    projectId: string;
+    templateId: string;
+    expectedRevision: number;
+  }): Promise<void>;
+  /** The atomic explicit copy FROM a template (same contract as copyShotSetup), plus its provenance record. */
+  copyTemplateSetup(input: CopyTemplateSetupInput): Promise<CopyShotSetupResult>;
+  /** Newest first: the copies made INTO this Shot. Empty before 0050. */
+  listSetupCopies(projectId: string, shotId: string): Promise<SetupCopyRecord[]>;
 
   listPrevisClips(shotId: string): Promise<PrevisClipRecord[]>;
   getPrevisClip(id: string): Promise<PrevisClipRecord | null>;

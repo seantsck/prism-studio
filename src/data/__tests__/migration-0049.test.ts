@@ -13,12 +13,12 @@ const sql = readFileSync(`${DIR}/${FILE}`, "utf8");
 const code = sql.replace(/--.*$/gm, ""); // statements only, no comments
 
 describe("migration 0049: spatial camera and Production Frame source provenance", () => {
-  it("is the latest migration, follows 0048, and leaves 0048 byte-for-byte unchanged", () => {
+  it("follows 0048, and leaves 0048 byte-for-byte unchanged", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe(FILE);
-    expect(files.at(-2)).toBe("0048_shot_lighting_rigs.sql");
+    expect(files).toContain(FILE);
+    expect(files[files.indexOf(FILE) - 1]).toBe("0048_shot_lighting_rigs.sql");
     expect(checksumOf(readFileSync(`${DIR}/0048_shot_lighting_rigs.sql`, "utf8"))).toBe(
       "d59c8ef800ce83f78492b4e030a07d6349d06fb1c2e04daeec195384860034b1",
     );

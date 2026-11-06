@@ -102,18 +102,23 @@ try {
       "Shots 2A / 2B already hold spatial setup rows; this suite only runs on Shots without any.",
     );
 
-  // ── 0. no schema change ──
+  // ── 0. schema: the copy writes only the Shot's own rows (0050 adds templates + provenance, never a link column) ──
   const ledger = await pool.query("select max(name) m from prism_migrations");
+  const head = String(ledger.rows[0].m);
   check(
-    "no migration added: the head is 0049",
-    ledger.rows[0].m === "0049_spatial_camera_and_frame_source.sql",
+    "the head is 0049 or 0050 (4D-I1 needs no migration; 0050 only adds templates and provenance)",
+    head === "0049_spatial_camera_and_frame_source.sql" || head === "0050_shot_setup_templates.sql",
+    head,
   );
   const tables = await pool.query(
-    "select count(*)::int n from pg_tables where schemaname = 'public' and tablename ~ '(template|preset|setup)'",
+    "select array_agg(tablename::text order by tablename) t from pg_tables where schemaname = 'public' and tablename ~ '(template|preset|setup)'",
   );
+  const setupTables = (tables.rows[0].t ?? []) as string[];
   check(
-    "no setup / template / preset table exists (copies live in the Shot's own rows)",
-    tables.rows[0].n === 0,
+    "no setup table beyond 0050's templates and provenance (copies live in the Shot's own rows)",
+    JSON.stringify(setupTables) ===
+      JSON.stringify(head.startsWith("0050") ? ["shot_setup_copies", "shot_setup_templates"] : []),
+    JSON.stringify(setupTables),
   );
 
   // ── fixtures: a private set, both Shots on it, and a temporary third Shot (deleted by the deletion check) ──
@@ -390,6 +395,14 @@ try {
 } finally {
   for (const id of created.shotIds)
     await pool.query("delete from shots where id = $1", [id]).catch(() => undefined);
+  // 0050: the suite's copies left provenance on its private Location only (history rows have no Location FK)
+  for (const id of created.locationIds)
+    await pool
+      .query(
+        "delete from shot_setup_copies where location_id = $1 and to_regclass('public.shot_setup_copies') is not null",
+        [id],
+      )
+      .catch(() => undefined);
   // every setup row the suite made is on its private Location: deleting it cascades to them (nothing else is touched)
   for (const s of restoreShotLocations)
     await pool
@@ -407,7 +420,19 @@ const leftover = await pool.query(
           (select count(*)::int from shots where shot_code = 'ZZ-setup-copy') as shots`,
 );
 const l = leftover.rows[0];
-check("cleanup left no test rows", l.locations === 0 && l.projects === 0 && l.shots === 0, JSON.stringify(l));
+// 0050 only: provenance rows the suite left behind (a separate query: the table does not exist before 0050)
+l.copies = (await pool.query("select to_regclass('public.shot_setup_copies') is not null as ok")).rows[0].ok
+  ? (
+      await pool.query(
+        "select count(*)::int n from shot_setup_copies c where not exists (select 1 from locations l where l.id = c.location_id)",
+      )
+    ).rows[0].n
+  : 0;
+check(
+  "cleanup left no test rows",
+  l.locations === 0 && l.projects === 0 && l.shots === 0 && l.copies === 0,
+  JSON.stringify(l),
+);
 
 let failed = 0;
 for (const [name, ok, detail] of results) {
