@@ -1,4 +1,5 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { deploymentTarget, publicUrlTargetsRef, resolveTarget } from "@/lib/supabase/target";
 import path from "node:path";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
@@ -113,12 +114,21 @@ export async function createOutputSink(
   if (mode === "memory") return new LocalDiskSink();
   const url = env.NEXT_PUBLIC_SUPABASE_URL;
   const publishable = env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  if (!url || !url.includes("lyqdxiyjperhniwhzsvg")) {
+  let ref: string;
+  try {
+    ref = resolveTarget({
+      environment: env.NEXT_PUBLIC_PRISM_STUDIO_ENVIRONMENT,
+      ref: env.NEXT_PUBLIC_PRISM_STUDIO_SUPABASE_REF,
+    }).ref;
+  } catch (err) {
+    throw new SinkConfigError(err instanceof Error ? err.message : "invalid Supabase target");
+  }
+  if (!url || !publicUrlTargetsRef(url, ref)) {
     throw new SinkConfigError("NEXT_PUBLIC_SUPABASE_URL must target the Prism Studio project.");
   }
   const secret =
     env.PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY?.trim() || env.PRISM_STUDIO_WORKER_SERVICE_KEY?.trim();
-  if (secret) return secretKeySink({ url, publishable, secret, bucket, what: "worker" });
+  if (secret) return secretKeySink({ url, publishable, secret, bucket, what: "worker", ref });
   const email = env.PRISM_STUDIO_DEV_USER_EMAIL;
   const password = env.PRISM_STUDIO_DEV_USER_PASSWORD;
   if (
@@ -151,8 +161,16 @@ export function secretKeySink(o: {
   secret: string;
   bucket?: string;
   what: string;
+  /** the target project ref; defaults to this deployment's (NEXT_PUBLIC_PRISM_STUDIO_*) */
+  ref?: string;
 }): OutputSink {
-  if (!o.url || !o.url.includes("lyqdxiyjperhniwhzsvg"))
+  let ref: string;
+  try {
+    ref = o.ref ?? deploymentTarget().ref;
+  } catch (err) {
+    throw new SinkConfigError(err instanceof Error ? err.message : "invalid Supabase target");
+  }
+  if (!o.url || !publicUrlTargetsRef(o.url, ref))
     throw new SinkConfigError("NEXT_PUBLIC_SUPABASE_URL must target the Prism Studio project.");
   if (!isServerSecretKey(o.secret) || (o.publishable && o.secret === o.publishable))
     throw new SinkConfigError(

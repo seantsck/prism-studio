@@ -11,7 +11,10 @@ import path from "node:path";
 import pg from "pg";
 import { startScript } from "./lib/safety.mjs";
 
-const url = startScript({ mode: "migrate --dry-run check (rolled back; nothing persists)" });
+const url = startScript({
+  productionSafe: true,
+  mode: "migrate --dry-run check (rolled back; nothing persists)",
+});
 const PROBE = "9998_dry_run_probe.sql";
 const client = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
 await client.connect();

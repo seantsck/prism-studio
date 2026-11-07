@@ -14,6 +14,7 @@ const checkOnly = process.argv.includes("--check");
 const dryRun = process.argv.includes("--dry-run");
 if (checkOnly && dryRun) throw new Error("Use either --check or --dry-run.");
 const url = startScript({
+  productionSafe: true,
   mode: checkOnly ? "migrate --check (read-only)" : dryRun ? "migrate --dry-run (rolled back)" : "migrate",
 });
 
