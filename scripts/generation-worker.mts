@@ -21,7 +21,7 @@ import { createOutputSink, SinkConfigError } from "../src/generation/sink";
 import { GenerationWorker } from "../src/generation/worker";
 import { healthPortFrom, startLivenessServer, WorkerLiveness } from "../src/lib/worker-health";
 import { WORKER_ROLE } from "./lib/worker-role-spec.mjs";
-import { PRISM_STUDIO_REF, assertProjectRef, installRedactingHandlers, printBanner } from "./lib/safety.mjs";
+import { resolveTarget, assertProjectRef, installRedactingHandlers, printBanner } from "./lib/safety.mjs";
 
 installRedactingHandlers();
 
@@ -98,7 +98,7 @@ const pool = new pg.Pool({
 }
 const available = registry.availability();
 console.log(`DB role:           ${WORKER_ROLE} — ${dbMode}`);
-console.log(`Supabase project:  ${PRISM_STUDIO_REF}`);
+console.log(`Supabase project:  ${resolveTarget().ref}`);
 const disclosure = providerDisclosure(
   registry.adapters().map((a) => a.info()),
   config.enabledProviders,

@@ -1,15 +1,21 @@
 // Shared safety checks for scripts that act as the dev Auth user. The UUID is the canonical owner id;
 // the email, when present, is only a cross-check.
-import { disposableLocalTarget } from "./safety.mjs";
+import { connectionTargetsRef, DEV_PROJECT_REF, disposableLocalTarget, resolveTarget } from "./safety.mjs";
 
-export const PRISM_STUDIO_REF = "lyqdxiyjperhniwhzsvg";
+/** @deprecated the DEV project ref */
+export const PRISM_STUDIO_REF = DEV_PROJECT_REF;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /** Pure checks on env values; throws before any database access. */
 export function readDevUserEnv(env = process.env) {
   const url = env.SUPABASE_DB_URL;
-  if (!url?.includes(PRISM_STUDIO_REF) && !disposableLocalTarget(url, env))
-    throw new Error(`SUPABASE_DB_URL does not target Prism Studio project ${PRISM_STUDIO_REF}; refusing.`);
+  if (!disposableLocalTarget(url, env)) {
+    const { environment, ref } = resolveTarget(env);
+    // the dev Auth user is a test identity: it never acts on production
+    if (environment === "production") throw new Error("Dev-user tooling refuses the production environment.");
+    if (!url || !connectionTargetsRef(url, ref))
+      throw new Error(`SUPABASE_DB_URL does not target Prism Studio project ${ref}; refusing.`);
+  }
   const id = env.PRISM_STUDIO_DEV_USER_ID?.trim();
   if (!id) throw new Error("PRISM_STUDIO_DEV_USER_ID is not set (the Supabase Auth user UUID).");
   if (!UUID.test(id))
@@ -25,9 +31,7 @@ export function readDevUserEnv(env = process.env) {
 export async function assertDevUserExists(queryable, { id, email }) {
   const { rows } = await queryable.query("select id::text, email from auth.users where id = $1::uuid", [id]);
   if (rows.length !== 1)
-    throw new Error(
-      `PRISM_STUDIO_DEV_USER_ID ${id} does not exist in auth.users of project ${PRISM_STUDIO_REF}.`,
-    );
+    throw new Error(`PRISM_STUDIO_DEV_USER_ID ${id} does not exist in auth.users of the target project.`);
   const actual = rows[0].email;
   if (email && actual?.toLowerCase() !== email.toLowerCase())
     throw new Error(

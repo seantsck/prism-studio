@@ -2,7 +2,53 @@
 //   - ref guard (the connection string must name the dedicated project)
 //   - visible target banner BEFORE any mutation
 //   - secret redaction for anything that gets printed (including exception messages)
-export const PRISM_STUDIO_REF = "lyqdxiyjperhniwhzsvg";
+//   - environment-scoped targeting (Phase 5A.2): which Supabase project a run may touch, and refusal of
+//     non-production-safe tooling on production
+/** The DEV / staging project (owner review, previews, tests). Never customer production. */
+export const DEV_PROJECT_REF = "lyqdxiyjperhniwhzsvg";
+/** @deprecated the DEV project ref; use resolveTarget(env).ref for the project a run is allowed to touch */
+export const PRISM_STUDIO_REF = DEV_PROJECT_REF;
+
+export const ENVIRONMENTS = ["development", "staging", "rehearsal", "production"];
+const REF_RE = /^[a-z]{20}$/;
+
+/**
+ * Which Supabase project this run targets, from NEXT_PUBLIC_PRISM_STUDIO_ENVIRONMENT and
+ * NEXT_PUBLIC_PRISM_STUDIO_SUPABASE_REF (public names: the browser checks the same target). Unset means the
+ * historical default: development on the DEV project, so existing machines and staging are unchanged.
+ *   - development / staging may only target the DEV project;
+ *   - rehearsal / production must name their project explicitly, and it can never be the DEV project.
+ */
+export function resolveTarget(env = process.env) {
+  const environment = (env.NEXT_PUBLIC_PRISM_STUDIO_ENVIRONMENT ?? "").trim() || "development";
+  if (!ENVIRONMENTS.includes(environment))
+    throw new Error(`NEXT_PUBLIC_PRISM_STUDIO_ENVIRONMENT must be one of ${ENVIRONMENTS.join(", ")}`);
+  const explicit = (env.NEXT_PUBLIC_PRISM_STUDIO_SUPABASE_REF ?? "").trim();
+  if (explicit && !REF_RE.test(explicit))
+    throw new Error("NEXT_PUBLIC_PRISM_STUDIO_SUPABASE_REF is not a Supabase project ref");
+  const isolated = environment === "rehearsal" || environment === "production";
+  if (isolated && !explicit)
+    throw new Error(`The ${environment} environment must name its Supabase project explicitly; refusing.`);
+  const ref = explicit || DEV_PROJECT_REF;
+  if (isolated && ref === DEV_PROJECT_REF)
+    throw new Error(`The ${environment} environment can never target the DEV project; refusing.`);
+  if (!isolated && ref !== DEV_PROJECT_REF)
+    throw new Error(
+      `The ${environment} environment may only target the DEV project; a different project needs rehearsal or production. Refusing.`,
+    );
+  return { environment, ref };
+}
+
+/** True when a Postgres connection string addresses `ref`: a pooler user `<role>.<ref>` or the direct host. */
+export function connectionTargetsRef(url, ref) {
+  try {
+    const u = new URL(url);
+    const user = decodeURIComponent(u.username);
+    return user.endsWith(`.${ref}`) || u.hostname === `db.${ref}.supabase.co`;
+  } catch {
+    return false;
+  }
+}
 
 /** Removes passwords/keys from any text. Safe to call on arbitrary strings and error messages. */
 export function redact(input, env = process.env) {
@@ -93,17 +139,29 @@ export function disposableLocalTarget(url, env = process.env) {
 export function assertProjectRef(url, what = "SUPABASE_DB_URL", env = process.env) {
   if (!url) throw new Error(`${what} is not set`);
   if (disposableLocalTarget(url, env)) return;
-  if (!url.includes(PRISM_STUDIO_REF))
-    throw new Error(`${what} does not target Prism Studio project ${PRISM_STUDIO_REF}; refusing.`);
+  const { ref } = resolveTarget(env);
+  if (!connectionTargetsRef(url, ref))
+    throw new Error(`${what} does not target Prism Studio project ${ref}; refusing.`);
+}
+
+/**
+ * Production refuses every script that is not explicitly production-safe (migrations, validation, role provisioning,
+ * workers). Seeds, resets, cleanups and behaviour suites write fixtures and must never share a database with customers.
+ */
+export function assertToolAllowed(mode, { productionSafe = false } = {}, env = process.env) {
+  const { environment } = resolveTarget(env);
+  if (environment === "production" && !productionSafe)
+    throw new Error(`"${mode}" is not production-safe and refuses the production environment.`);
 }
 
 /** Prints the target banner. Call before the first statement that can mutate anything. */
 export function printBanner({ mode, url, devOwner = null, log = console.log, env = process.env }) {
   log("──────────────────────────────────────────────");
+  const target = disposableLocalTarget(url, env) ? null : resolveTarget(env);
   log(
-    disposableLocalTarget(url, env)
-      ? "Target:                  DISPOSABLE LOCAL DATABASE (not Supabase)"
-      : `Target Supabase project: ${PRISM_STUDIO_REF}`,
+    target
+      ? `Target Supabase project: ${target.ref} (${target.environment})`
+      : "Target:                  DISPOSABLE LOCAL DATABASE (not Supabase)",
   );
   log(`Database host:           ${safeTarget(url)}`);
   log(`Mode:                    ${mode}`);
@@ -123,9 +181,10 @@ export function installRedactingHandlers() {
 }
 
 /** One call for scripts: guard + banner + redacting handlers. Returns the validated connection string. */
-export function startScript({ mode, devOwner = null, env = process.env }) {
+export function startScript({ mode, devOwner = null, productionSafe = false, env = process.env }) {
   installRedactingHandlers();
   assertProjectRef(env.SUPABASE_DB_URL, "SUPABASE_DB_URL", env);
+  if (!disposableLocalTarget(env.SUPABASE_DB_URL, env)) assertToolAllowed(mode, { productionSafe }, env);
   printBanner({ mode, url: env.SUPABASE_DB_URL, devOwner, env });
   return env.SUPABASE_DB_URL;
 }

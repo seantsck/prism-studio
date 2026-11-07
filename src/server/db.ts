@@ -1,6 +1,7 @@
 import "server-only";
 import pg from "pg";
 import { PRISM_STUDIO_SUPABASE_REF } from "@/lib/supabase/config";
+import { connectionTargetsRef, deploymentTarget } from "@/lib/supabase/target";
 
 /**
  * Guarded Postgres access for the dedicated Prism Studio Supabase project.
@@ -20,7 +21,7 @@ declare global {
 export function getPool(): pg.Pool {
   const url = process.env.SUPABASE_DB_URL;
   if (!url) throw new Error("SUPABASE_DB_URL is not set");
-  if (!url.includes(PRISM_STUDIO_SUPABASE_REF)) {
+  if (!connectionTargetsRef(url, deploymentTarget().ref)) {
     throw new Error("SUPABASE_DB_URL does not target the Prism Studio project; refusing to connect.");
   }
   globalThis.__prismPool ??= new pg.Pool({
