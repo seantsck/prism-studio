@@ -8,7 +8,7 @@
     "generation": {
       "root": "./",
       "entrypoint": "Dockerfile.generation-worker",
-      "instances": { "iad1": 0 },
+      "instances": { "iad1": 1 },
       "resources": { "requests": { "memory": "1Gi" } },
       "terminationGracePeriodSeconds": 120,
       "livenessProbe": {
