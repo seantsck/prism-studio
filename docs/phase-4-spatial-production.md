@@ -4,7 +4,7 @@
 4B (Shot Lighting Rigs) complete (PR #46); migration 0048 applied to and accepted on hosted DEV (hosted head 0048, nothing
 pending at the time). 4C complete: architecture accepted ([4C-A](#4c-a-architecture--accepted)); 4C-I1 complete (PR
 #50); 4C-I2 (Shot-centric Spatial Workspace) complete (PR #51); [4C-B](#4c-b--hosted-acceptance) hosted acceptance
-passed, with migration 0049 applied to hosted DEV (hosted head 0049, nothing pending). 4D-I1 (explicit Shot-to-Shot setup copy, no migration) is complete (PR #53). 4D-I2 (named setup templates and copy provenance, PR #55, merged as `40e8996`) is implemented ([notes](#4d-i2-implementation-notes)); [4D-B](#4d-b--hosted-acceptance) hosted acceptance passed, with migration 0050 applied to hosted DEV (hosted head 0050, nothing pending). 4D is complete. 4E (splat control-pass refusal and environment limits, no migration) is implemented and in review ([notes](#4e-implementation-notes-in-review)). 4F has not started. What 4B actually shipped is
+passed, with migration 0049 applied to hosted DEV (hosted head 0049, nothing pending). 4D-I1 (explicit Shot-to-Shot setup copy, no migration) is complete (PR #53). 4D-I2 (named setup templates and copy provenance, PR #55, merged as `40e8996`) is implemented ([notes](#4d-i2-implementation-notes)); [4D-B](#4d-b--hosted-acceptance) hosted acceptance passed, with migration 0050 applied to hosted DEV (hosted head 0050, nothing pending). 4D is complete. 4E (splat control-pass refusal and environment limits, no migration) is complete (PR #56). [4F](#4f--phase-4-production-acceptance) production acceptance passed on hosted DEV. **Phase 4 is complete.** What 4B actually shipped is
 recorded in [4B implementation notes](#4b-implementation-notes); elsewhere, design text describes intent.**
 
 Phase 4 finishes the optional spatial path into a Production Frame. It does not build a 3D system: Phase 2F already built
@@ -374,7 +374,7 @@ These are real gaps in merged code, recorded here and fixed only by the slice na
 | 4   | **Promotion has no Master Frame staleness check** (`promoteMasterFrame_impl`). A stale frame promotes without warning.                                                                             | 4C warns and requires confirmation. It does not refuse: an older look can be the choice |
 | 5   | **Production Frame intent `spatial` freezes live `ctx.spatial`**, not the source Master Frame's fingerprints, so the two can differ.                                                               | 4C records source fingerprints additively                                               |
 | 6   | **"Never rewritten" is not enforced on `scene_master_frames` or `shot_previs_clips`.** No guard trigger; owner policy is `for all`. Only the bundle table is guarded, and DELETE stays open there. | 4B, in 0048 ([D3](#d3--provenance-guards-in-0048))                                      |
-| 7   | Doc drift: VS "M2 reuse" lists built features as unbuilt; VS's adapter sentence; `domain-model.md` "unused".                                                                                       | 4F, docs only                                                                           |
+| 7   | Doc drift: VS "M2 reuse" lists built features as unbuilt; VS's adapter sentence; `domain-model.md` "unused".                                                                                       | 4F, docs only: corrected                                                                |
 
 ## 10. Slices
 
@@ -1353,10 +1353,10 @@ Caveats:
 - **Non-goals:** a real-GPU spike, unless a concrete production requirement appears before 4E; approximate passes; real COLMAP
   or Brush acceptance (M2D.3D2); new reconstruction providers.
 
-#### 4E implementation notes (in review)
+#### 4E implementation notes
 
-Status: **implemented on branch `phase-4e-splat-control-environment-limits` (draft PR, in review). No migration.** The
-repository and hosted heads stay 0050. 4F has not started.
+Status: **complete: merged in PR #56 (`d8b44bf`). No migration.** The
+repository and hosted heads stay 0050.
 
 **Rule: an environment can be viewable without being safe for every production control.** The Location's Gaussian
 splat renders with its baked colour and can be framed and blocked against. It never produces exact control passes, it
@@ -1446,8 +1446,8 @@ limits that keep the Set truthful, and does not make 3D mandatory.
     hosted counts, Storage, jobs and Auth identical before and after. Hosted holds 0 saved Sets and 0 reconstructions,
     so the new limits affect no stored row.
   - Typecheck, lint (0 errors), Prettier and `git diff --check`: clean.
-- **Status.** 4E is implemented and passes its gates; it is complete when its PR is reviewed and merged. No hosted
-  acceptance is required (no migration, D6). 4F has not started.
+- **Status.** Complete (PR #56). No hosted acceptance was required (no migration, D6); the hosted 4F story exercises
+  it on hosted DEV.
 
 ### 4F — Production acceptance and roadmap close
 
@@ -1456,6 +1456,86 @@ limits that keep the Set truthful, and does not make 3D mandatory.
 - **Provider calls:** one bounded paid image-to-video smoke is accepted in principle ([D5](#d5--paid-video-proof-accepted-in-principle)),
   but **only after its own explicit owner gate**. Nothing is authorized yet.
 - **Non-goals:** Phase 5 or 6 scope.
+
+#### 4F — Phase 4 production acceptance
+
+Status: **passed on 2026-11-06 against hosted DEV. Phase 4 is complete.** Run locally against hosted from `main`
+`d8b44bf` plus this slice's acceptance spec (production Webpack build, local server, `playwright.supabase.config.ts`
+settings). Nothing was deployed; the mock provider was the only provider configured and none was called (job counts
+unchanged). No migration and no application code change: 4F adds one acceptance spec and documentation.
+
+**The story** (`e2e/supabase-phase4-acceptance.spec.ts`, one serial owner run, 11/11), in production order:
+
+1. **Anonymous** visitors to the Shot Spatial Workspace are redirected to login.
+2. **A — one Shot-owned setup.** Shot 1A creates Tokyo Night Streets' set, links its camera, blocks Yumeko and saves a
+   Shot Lighting Rig. A set without a splat shows no Environment panel.
+3. **B — Master Frame to Production Frame.** 1A captures a Master Frame (all four axes fresh, lit by 1A's rig) and
+   promotes it; the Production Frame freezes the exact five source fingerprints and the package names the Master Frame.
+4. **C — Shot-to-Shot copy.** 1B reviews and copies 1A's setup: three rows of its own, one `shot` history row (1A).
+5. **D — template, and frozen lineage.** 1A saves "4F Night key" (revision 1). 1A then changes its light: the template is
+   unchanged (a snapshot), 1A's Production Frame row is unchanged (frozen lineage), and its Master Frame shows lighting
+   STALE instead of being rewritten.
+6. **E — template applied.** 1B, after its own lighting change, applies the template: it holds the template's values
+   (not 1A's current ones) and its history shows the Shot copy and the template copy. 1B's next edit reaches neither the
+   template nor 1A. (A Shot already identical to a template is offered no copy: "Already identical".)
+7. **F — template deleted.** 1B's rows are untouched; the history keeps the name with a null pointer, shown as
+   "template since deleted".
+8. **G — 1B's own frame.** 1B captures and promotes a Master Frame lit by its own rig; 1A's frame is unaffected.
+9. **H — environment limits on hosted.** 1C's set (Black Luxury Sedan) gets an imported Gaussian splat (private
+   Storage): view and framing only, control passes refused and the capture button disabled, framing limited until a
+   scale is applied, then available. A one-axis rescale after calibrating is refused at save with the scene revision
+   and fingerprint unchanged on hosted; re-applying the scale clears it.
+10. **I — image-first.** 1C takes an uploaded Production Frame (956×400, private `/api/assets` route) with no 3D step; a
+    Shot with no Location gets the optional-spatial empty state and the same upload.
+11. **J — final state.** 1A and 1B have selected `previs_master` Production Frames and 1C an `upload` one; each package
+    names its selected frame; 1A's lineage is still the frame it froze.
+
+**Real non-owner: not re-run, by decision.** 4E changed no authorization, RLS, grant or action surface, and 4F adds none.
+4D-B (2026-11-06) ran a fresh real temporary user against hosted 0050 across every Phase 4 surface (pages, all setup
+actions, the Data API, and the 4C regression spec covering the spatial pages, the seven spatial actions and ten owner
+tables), then deleted it. A new temporary user would add Auth churn without new evidence. `db:rls` and
+`db:worker-role` re-ran green below.
+
+**Evidence.**
+
+- **Hosted migration state:** head 0050, 50 ledger rows, `MIGRATION CHECKSUMS OK`, nothing pending. The 0050 policies
+  (3), grants and SECURITY DEFINER inventory (the two pre-existing functions only) are exactly as accepted in 4D-B.
+- **Hosted DB matrix (all exit 0):** `db:validate` STRUCTURE OK, `db:behavior` 61/61, `db:previs` 60/60,
+  `db:blocking` 57/57, `db:lighting` 119/119, `db:spatial-source` 63/63, `db:spatial-passes` 80/80,
+  `db:production-frames` 71/71, `db:setup-copy` 26/26, `db:setup-templates` 69/69, `db:rls` 67/67,
+  `db:worker-role` 63/63 (real worker logins).
+- **Browser matrix (memory mode, production Webpack build): 57/57.** 4B Shot Lighting 9, 4C spatial provenance 10, 4C
+  Shot Spatial Workspace 12, 4D setup copy and templates 8, 4E environment limits 5, Gaussian splats (Spark) 13. Each
+  ran alone on its own server through a temporary, uncommitted config that filters `playwright.config.ts` to that
+  server (the full config starts 14 servers, more than this machine's memory holds).
+- **Hosted browser:** the 4F story 11/11.
+- **Unit:** 190/190 files, 2763/2763 tests.
+- **Production build:** `npm run build` (`next build --webpack`) passed in both the hosted and the memory configuration.
+- **Static:** typecheck, lint (0 errors), Prettier and `git diff --check` clean.
+- **Cleanup:** against the pre-run hosted baseline, every public row count, Storage (15 objects) and every job count is
+  identical. The run's scenes, bookmarks, rigs, blocking, templates, copy history, Master Frames, Production Frames and
+  selections, the reconstruction, and the splat, render and uploaded assets with their Storage objects were removed. No
+  temporary Auth user exists (1 user).
+
+**Caveats.**
+
+- The owner's `auth.sessions` rose 35 → 50, one per sign-in across the two hosted runs (the first stopped at E on a test
+  assumption, corrected above; its fixtures were cleaned and the hosted baseline matched before the rerun). No data
+  changed.
+- D5's bounded paid image-to-video smoke was **not** run: it needs its own explicit owner gate, and none was given.
+  Phase 4 acceptance proves the spatial and image-first paths to a usable Production Frame with mock providers only; it
+  makes no claim about real provider output.
+- #42 (worker secret breadth) and #47 (legacy anon grants on `scene_master_frames` and `shot_previs_clips`) remain open
+  and separately tracked.
+- Turbopack production builds fail on this Windows machine (`0xc0000142`); Webpack is the production build path (#54).
+  Deferred, post-MVP.
+- Real local reconstruction (M2D.3D2) stays "PRODUCTION READY: NO"; it never blocked Phase 4.
+
+**What Phase 4 completion means.** A filmmaker can take a Shot from its Location's 3D set to a selected Production Frame:
+a Shot-owned camera, blocking and lighting rig; a Master Frame whose provenance is frozen exactly when it is promoted;
+setups reused by explicit copy or named snapshot, never by live link; and a Gaussian-splat environment that says plainly
+what it can and cannot be used for. All of it is optional: a Shot with no 3D at all reaches the same usable Production
+Frame by upload or storyboard.
 
 ## 11. Non-goals
 

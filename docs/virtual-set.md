@@ -17,8 +17,10 @@ Nothing in M1 generates video, calls a provider or touches an ArtCraft service.
 | Project, Episode, Script Scene, Shot, Location, Character, Look, Performance, Production Frame, GenerationPackage | Three.js scene graph, viewport, selection, gizmos, transforms, camera controls, rendering |
 | `prism.previs.v1` document, scene fingerprint, camera bookmark, master-frame provenance                           | the engine's own scene JSON (opaque round-trip payload inside the document)               |
 
-Code boundary: only `src/lib/previs/scene-adapter.ts` imports engine internals (plus two vendored hooks the editor
-component uses). Everything else depends on the `SpatialSceneAdapter` interface.
+Code boundary: `src/lib/previs/scene-adapter.ts` is the adapter and the main importer of engine internals. A few other
+modules touch the vendored engine directly, each narrowly: `blocking-overlay.ts` (transform sessions, FK hooks, undo),
+`lighting-overlay.ts` (the `Editor` type only), `shapes.ts` (the shape-factory shim) and the editor component (two
+vendored hooks and the `Editor` type). Everything else depends on the `SpatialSceneAdapter` interface.
 
 ## Document (`prism.previs.v1`)
 
@@ -125,23 +127,21 @@ Playwright runs Chromium with the software rasteriser (`--use-angle=swiftshader`
   Assets upload with any purpose.
 - Master-frame capture needs the set to be saved and the shot's camera linked first (the server enforces both).
 
-## M2 reuse (investigated, not built)
+## M2 reuse (investigated before M2; all of it is now built)
 
-| Capability                      | Upstream basis                                                                                                                                            | What Prism must add                                                                                                           |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Camera timeline / path          | **Built in M2A** as a Prism-owned `prism.camera-path.v1` evaluator (see "Camera motion and local previs"); the engine timeline is not used for the camera | M2B may use the engine timeline for object animation                                                                          |
-| **Focal-length keyframing**     | **Done in M2A** in the Prism evaluator (not by patching the engine timeline)                                                                              | —                                                                                                                             |
-| Quaternion/slerp rotation       | **Done in M2A** (`slerpQuaternion`, shortest arc)                                                                                                         | —                                                                                                                             |
-| Character posing                | `KinHelpers/{FKHelper,BoneJSONHelper}`, `SkeletonHelperController`                                                                                        | a Prism mannequin with `mixamorig:*`-compatible bones (rig is name-matched); pose presets as JSON                             |
-| Pose presets                    | `BoneJSONHelper.toJSON/poseFromBoneJSON`                                                                                                                  | Prism-authored preset library                                                                                                 |
-| Local previs video              | **Done in M2A**, with the selected performance audio muxed in **M2A.1** (MediaBunny + WebCodecs)                                                          | —                                                                                                                             |
-| Depth pass                      | none vendored (`CustomOutlinePass`/`FindSurfaces` were removed: provenance not established)                                                               | write a Prism depth override material (three.js `MeshDepthMaterial`); PNG sequence                                            |
-| Object-id / character masks     | surface-id material exists; per-object id pass does not                                                                                                   | new override material mapping `uuid → colour`; ties to mannequin `characterId`                                                |
-| Gaussian splats                 | removed in the pre-PR hardening (the engine's loader and the `@sparkjsdev/spark` dependency)                                                              | re-add `@sparkjsdev/spark` and the upstream loader behind a feature flag; asset pipeline for `.spz`; licence of splat sources |
-| Image-to-location / image-to-3D | none locally (ArtCraft calls its own backend)                                                                                                             | a Prism provider adapter behind the existing generation spend gates                                                           |
+This table was the pre-M2 investigation. Every row has since shipped, in Prism-owned code (Phase 4F corrected it):
 
-M2 recommendation order: ~~focal-length keyframes + slerp → camera path UI → local previs video~~ (M2A, done) → mannequin
-rig/poses (M2B) → depth/object-id passes (M2C) → splats and image-to-location (M2D).
+| Capability                      | Status                                                                                                                                                                |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Camera timeline / path          | **Built in M2A** as a Prism-owned `prism.camera-path.v1` evaluator (see "Camera motion and local previs"); the engine timeline is not used for the camera             |
+| Focal-length keyframing         | **Built in M2A** in the Prism evaluator (not by patching the engine timeline)                                                                                         |
+| Quaternion/slerp rotation       | **Built in M2A** (`slerpQuaternion`, shortest arc)                                                                                                                    |
+| Character posing, pose presets  | **Built in M2B**: `prism.humanoid-rig.v1` / `prism.pose.v1`, FK only (see "Character blocking")                                                                       |
+| Local previs video              | **Built in M2A**, with the selected performance audio muxed in **M2A.1** (MediaBunny + WebCodecs)                                                                     |
+| Depth pass                      | **Built in M2C** with a Prism-written depth material (see "Spatial control passes")                                                                                   |
+| Object-id / character masks     | **Built in M2C** (object-id manifest and exact Character masks)                                                                                                       |
+| Gaussian splats                 | **Built in M2D.1** with `@sparkjsdev/spark` and a Prism-written runtime (`splat-runtime.ts`); control passes stay refused for splats (Phase 4E, D6)                   |
+| Image-to-location / image-to-3D | **Built in M2D.2** as reconstruction jobs behind the existing spend gates (see "Generated spatial environments"); real local reconstruction (M2D.3D2) is not accepted |
 
 ## Camera motion and local previs (Phase 2F M2A)
 

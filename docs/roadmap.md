@@ -236,7 +236,7 @@ vision; face embeddings; cross-Shot / cut-level continuity (3A.4); cross-Episode
 accepted on the verified calibration v2 (six temporal families). Lip sync stays unchecked and separately gated, and QA
 stays advisory.
 
-## Phase 4 — Spatial Production _(architecture accepted; 4A–4D complete; 4E in review)_
+## Phase 4 — Spatial Production _(complete: 4A–4F; hosted DEV head 0050)_
 
 Design: [phase-4-spatial-production](phase-4-spatial-production.md). **3D is an optional construction tool for a Production
 Frame, never a prerequisite for one.**
@@ -247,7 +247,7 @@ previs, depth/object-id/mask control passes, splat environments and the Producti
 ArtCraft-derived Three.js engine behind `SpatialSceneAdapter`. React Three Fiber is not required. `locations.set3d` was never
 the attachment, holds no data, and stays legacy and non-authoritative. `spatial.marks` stays authored text.
 
-**Phase 4 work remaining:**
+**Phase 4 slices:**
 
 | Slice | Scope                                                                                          | Status                                                                                     |
 | ----- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
@@ -255,8 +255,8 @@ the attachment, holds no data, and stays legacy and non-authoritative. `spatial.
 | 4B    | Shot Lighting Rigs: `prism.shot-lighting.v1`, overlay, render provenance, optional package key | complete (PR #46); migration 0048 applied to hosted DEV                                    |
 | 4C    | Shot-centric Spatial Workspace and Production Frame handoff                                    | complete (PRs #49, #50, #51; 4C-B hosted acceptance); migration 0049 applied to hosted DEV |
 | 4D    | Reusable setups: explicit copies, never live links                                             | complete (PRs #53, #55; 4D-B hosted acceptance); migration 0050 applied to hosted DEV      |
-| 4E    | Splat control-pass refusal and environment limits                                              | in review (draft PR, no migration)                                                         |
-| 4F    | Production acceptance and roadmap close                                                        | not started                                                                                |
+| 4E    | Splat control-pass refusal and environment limits                                              | complete (PR #56, no migration)                                                            |
+| 4F    | Production acceptance and roadmap close                                                        | complete (4F hosted acceptance; tests and docs only)                                       |
 
 **4B — complete.** Shot Lighting Rigs (`prism.shot-lighting.v1`) shipped in PR #46. Migration 0048 is applied to hosted
 DEV (the hosted head was 0048 when 4B closed; 0049 since 4C-B). Shot Lighting is optional and Shot-owned. It has base modes
@@ -270,7 +270,6 @@ DEV once, the hosted head is 0049 and no migration is pending. The DB gates, the
 4C hosted workspace story passed, and a real authenticated non-owner (a temporary Auth user, since deleted) could not
 discover, read or change the owner's project through the browser, the server actions or the Data API. No provider was
 called and nothing was deployed. Caveats and evidence: [phase-4-spatial-production](phase-4-spatial-production.md#4c-b--hosted-acceptance).
-4E–4F are not started.
 
 **4D — complete.** 4D-I1 (PR #53, no migration) added "Copy setup from…": another Shot's camera, lighting and/or
 blocking on the same Location's set is copied by value into a Shot's own rows, after a review, in one transaction.
@@ -283,14 +282,27 @@ or apply the owner's templates or copy history through the browser, the server a
 called and nothing was deployed. Caveats and evidence:
 [phase-4-spatial-production](phase-4-spatial-production.md#4d-b--hosted-acceptance).
 
-**4E — in review.** A Gaussian-splat environment is viewable without being safe for every production control. 4E
-derives what the Location's splat supports from the Set itself (no migration, nothing stored): it renders and can be
-framed and blocked against; its real-world scale is only what a human or provider calibration says; it is never relit;
-and exact control passes stay refused while it is visible (D6, unchanged message). The Set is now refused at save when
+**4E — complete.** A Gaussian-splat environment is viewable without being safe for every production control. 4E
+(PR #56, no migration) derives what the Location's splat supports from the Set itself (nothing stored): it renders and can
+be framed and blocked against; its real-world scale is only what a human or provider calibration says; it is never
+relit; and exact control passes stay refused while it is visible (D6, unchanged message). The Set is refused at save when
 the splat's transform is non-finite, collapsed to zero, or no longer honours its metric calibration. The editor shows an
-Environment panel with each operation's state and reason. Sets without a splat, and the image-first path, are
-unchanged. Details: [phase-4-spatial-production](phase-4-spatial-production.md#4e-implementation-notes-in-review). 4F
-has not started.
+Environment panel with each operation's state and reason. Sets without a splat, and the image-first path, are unchanged.
+Details: [phase-4-spatial-production](phase-4-spatial-production.md#4e-implementation-notes).
+
+**4F — complete; Phase 4 is complete.** One hosted owner story (11/11, mock providers only, no deploy) took Shots from a
+Location's 3D set through a Shot Lighting Rig, blocking and camera, a Master Frame frozen into a Production Frame,
+Shot-to-Shot and named-template reuse with attributed history, template deletion, a Gaussian splat's environment limits,
+and the image-first upload path, to a usable selected Production Frame on every Shot. The hosted DB matrix (12 suites),
+the Phase 4 browser matrix (57/57), the unit suite (2763/2763) and the Webpack production build all passed; hosted DEV
+returned to its baseline. The real non-owner pass was not repeated: 4E and 4F changed no authorization surface and 4D-B's
+real-user run on 0050 stands. Not claimed: real provider output (D5's paid video smoke needs its own owner gate). Still
+open and separately tracked: #42, #47. Turbopack on Windows stays deferred; Webpack is the production build path. Details:
+[phase-4-spatial-production](phase-4-spatial-production.md#4f--phase-4-production-acceptance).
+
+**What Phase 4 means for the product.** A Shot can go from its Location's 3D set to a selected Production Frame with
+Shot-owned camera, blocking and lighting, exact frozen provenance, and setups reused by copy or snapshot, never by live
+link. 3D stays optional: a Shot with no 3D reaches the same usable Production Frame by upload or storyboard.
 
 Real reconstruction (M2D.3D2) stays optional and does not block any slice.
 
