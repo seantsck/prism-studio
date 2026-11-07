@@ -57,7 +57,9 @@ User (auth.users)
 - **Non-principal speakers.** A dialogue line may have `characterId = null` with a `speakerLabel`.
 - **Timing is derived.** Duration comes from selected takes ([performance-workflow](performance-workflow.md)).
 - **Freshness is hashed state.** Per-part fingerprints, not event history ([production-workflow](production-workflow.md)).
-- **Locations are 3D-ready.** `set3d` is nullable and unused; `spatial.marks` use normalised 0–1 coordinates.
+- **Locations have optional 3D sets.** A Location's 3D set lives in `location_scene_documents` (one per Location);
+  `locations.set3d` is legacy, holds no data and is not authoritative (removal is D7, after Phase 4). `spatial.marks`
+  use normalised 0–1 coordinates.
 
 ## Persistence mapping
 
