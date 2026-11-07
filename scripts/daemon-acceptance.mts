@@ -90,7 +90,7 @@ try {
     if (job?.lease_owner) claimedBy.add(String(job.lease_owner));
     if (job && ["succeeded", "failed", "cancelled"].includes(String(job.status))) break;
     if (Date.now() - enqueuedAt > timeoutMs) break;
-    await new Promise((r) => setTimeout(r, 3000));
+    await new Promise((r) => setTimeout(r, 500));
   }
   const outputs = (
     await pool.query(
@@ -101,7 +101,15 @@ try {
       [attemptId],
     )
   ).rows;
+  const timeline = (
+    await pool.query(
+      `select to_status, round(extract(epoch from (at - (select created_at from generation_jobs where attempt_id = $1)))::numeric, 1)::float as t
+         from generation_job_events where attempt_id = $1 order by at`,
+      [attemptId],
+    )
+  ).rows.map((e) => `${e.t}s ${e.to_status}`);
   Object.assign(out, {
+    timeline,
     status: job?.status ?? "missing",
     claimedBy: [...claimedBy],
     attempts: job?.attempt_count ?? null,

@@ -1,0 +1,30 @@
+# Prism Studio media worker image (Phase 5A.2; planned Vercel Daemon): Node + ffmpeg/ffprobe.
+#
+# Runs the existing continuity-analysis worker today (it needs ffmpeg for QA frames); the persisted media-job worker
+# (conform, contact sheets, episode render) joins it in 5A.3. Same guarantees as the generation image: repository-root
+# build context, no ARG (platform build args never reach the image), .dockerignore keeps every .env* file out,
+# non-root user, NODE_ENV=production, one Node process so SIGTERM reaches the worker.
+FROM node:24-bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PRISM_STUDIO_PERSISTENCE=supabase
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --include=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force
+
+COPY tsconfig.json ./
+COPY src ./src
+COPY scripts ./scripts
+
+USER node
+
+EXPOSE 8080
+
+CMD ["node", "--import", "tsx", "scripts/continuity-worker.mts"]

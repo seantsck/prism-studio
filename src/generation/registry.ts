@@ -108,8 +108,11 @@ export function createRegistry(
   env: Record<string, string | undefined> = process.env,
   config: GenerationConfig = readGenerationConfig(env),
 ): ModelRegistry {
+  // Phase 5A.2: customer-facing environments never offer the failure-simulation fixtures.
+  const environment = (env.NEXT_PUBLIC_PRISM_STUDIO_ENVIRONMENT ?? "").trim();
+  const customerFacing = environment === "production" || environment === "rehearsal";
   const adapters: GenerationProviderAdapter[] = [
-    new MockProvider({ stageDelayMs: config.mock.stageDelayMs }),
+    new MockProvider({ stageDelayMs: config.mock.stageDelayMs, failureSimulations: !customerFacing }),
   ];
   // Real adapters: registered always (so their availability and blockers are visible), enabled per deployment
   // through PRISM_STUDIO_GENERATION_PROVIDERS and configured through their own credentials.
