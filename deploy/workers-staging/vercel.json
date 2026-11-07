@@ -1,0 +1,23 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "echo workers-only project: no web install",
+  "buildCommand": "echo workers-only project: no web build",
+  "outputDirectory": "deploy/workers-staging/static",
+  "daemons": {
+    "generation": {
+      "root": "./",
+      "entrypoint": "Dockerfile.generation-worker",
+      "instances": { "iad1": 1 },
+      "resources": { "requests": { "memory": "1Gi" } },
+      "terminationGracePeriodSeconds": 120,
+      "livenessProbe": {
+        "httpGet": { "port": 8080, "path": "/healthz" },
+        "initialDelaySeconds": 60,
+        "periodSeconds": 30,
+        "timeoutSeconds": 5,
+        "failureThreshold": 4
+      }
+    }
+  }
+}

@@ -3,7 +3,7 @@ import pg from "pg";
 
 import { startScript } from "./lib/safety.mjs";
 
-const url = startScript({ mode: "validate (read-only)" });
+const url = startScript({ productionSafe: true, mode: "validate (read-only)" });
 const client = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
 await client.connect();
 const rows = async (sql, p = []) => (await client.query(sql, p)).rows;

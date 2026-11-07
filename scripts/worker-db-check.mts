@@ -10,7 +10,7 @@ import pg from "pg";
 import { EXPECTED, FORBIDDEN_TABLES, WORKER_ROLE } from "./lib/worker-role-spec.mjs";
 import { assertProjectRef, redact, safeTarget, startScript } from "./lib/safety.mjs";
 
-const url = startScript({ mode: "worker role audit (read-only)" });
+const url = startScript({ productionSafe: true, mode: "worker role audit (read-only)" });
 const failures: string[] = [];
 const ok = (name: string, pass: boolean, detail = "") => {
   console.log(`${pass ? "PASS" : "FAIL"}  ${name}${pass || !detail ? "" : `  → ${detail}`}`);

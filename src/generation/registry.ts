@@ -74,7 +74,11 @@ export class ModelRegistry {
     const adapter = this.adapters_.get(model.provider);
     const info = adapter?.info();
     const enabled = this.config.enabledProviders.includes(model.provider);
-    const missing = info ? missingConfig(info.requiredConfig, this.env) : [];
+    // The customer-facing web/control plane never needs provider credentials merely to compile, price and queue
+    // a request. When a provider is explicitly worker-backed, its separate execution deployment owns the secret.
+    // Workers do not set this flag, so their registry still fails closed unless the real credential is present.
+    const workerBacked = this.config.workerBackedProviders.includes(model.provider);
+    const missing = info && !workerBacked ? missingConfig(info.requiredConfig, this.env) : [];
     const paidGenerationEnabled = !this.billsMoney(model) || this.config.paid.enabled;
     return {
       provider: model.provider,
@@ -108,8 +112,11 @@ export function createRegistry(
   env: Record<string, string | undefined> = process.env,
   config: GenerationConfig = readGenerationConfig(env),
 ): ModelRegistry {
+  // Phase 5A.2: customer-facing environments never offer the failure-simulation fixtures.
+  const environment = (env.NEXT_PUBLIC_PRISM_STUDIO_ENVIRONMENT ?? "").trim();
+  const customerFacing = environment === "production" || environment === "rehearsal";
   const adapters: GenerationProviderAdapter[] = [
-    new MockProvider({ stageDelayMs: config.mock.stageDelayMs }),
+    new MockProvider({ stageDelayMs: config.mock.stageDelayMs, failureSimulations: !customerFacing }),
   ];
   // Real adapters: registered always (so their availability and blockers are visible), enabled per deployment
   // through PRISM_STUDIO_GENERATION_PROVIDERS and configured through their own credentials.

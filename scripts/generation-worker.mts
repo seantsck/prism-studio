@@ -3,6 +3,11 @@
 //   npm run worker:generation -- --until-idle      process everything due, then exit (CI / one-shot)
 //   npm run worker:generation -- --once            a single tick (claim + one step per job), then exit
 //   npm run worker:generation -- --dry-run         show what is due without claiming or calling providers
+//   npm run worker:generation:container            same, for a container (env from the platform, no .env.local)
+//
+// Container liveness (Phase 5A.1, Vercel Daemons): set PRISM_STUDIO_WORKER_HEALTH_PORT to serve GET /healthz (200 while
+// the worker loop keeps completing iterations, 503 when it has been stuck for PRISM_STUDIO_WORKER_HEALTH_STALE_MS,
+// default 10 minutes). The body holds counts and ages only.
 //
 // It claims jobs through Postgres (FOR UPDATE SKIP LOCKED + leases), drives provider adapters, ingests
 // outputs into Prism's private Storage, and records every transition. Credentials come from the
@@ -14,8 +19,9 @@ import { consoleLogger } from "../src/generation/log";
 import { createRegistry, providerDisclosure } from "../src/generation/registry";
 import { createOutputSink, SinkConfigError } from "../src/generation/sink";
 import { GenerationWorker } from "../src/generation/worker";
+import { healthPortFrom, startLivenessServer, WorkerLiveness } from "../src/lib/worker-health";
 import { WORKER_ROLE } from "./lib/worker-role-spec.mjs";
-import { PRISM_STUDIO_REF, assertProjectRef, installRedactingHandlers, printBanner } from "./lib/safety.mjs";
+import { resolveTarget, assertProjectRef, installRedactingHandlers, printBanner } from "./lib/safety.mjs";
 
 installRedactingHandlers();
 
@@ -92,7 +98,7 @@ const pool = new pg.Pool({
 }
 const available = registry.availability();
 console.log(`DB role:           ${WORKER_ROLE} — ${dbMode}`);
-console.log(`Supabase project:  ${PRISM_STUDIO_REF}`);
+console.log(`Supabase project:  ${resolveTarget().ref}`);
 const disclosure = providerDisclosure(
   registry.adapters().map((a) => a.info()),
   config.enabledProviders,
@@ -172,8 +178,15 @@ if (once) {
     if (n === 0) await new Promise((r) => setTimeout(r, config.worker.idlePollMs));
   }
 } else {
+  const healthPort = healthPortFrom(process.env.PRISM_STUDIO_WORKER_HEALTH_PORT);
+  const liveness = new WorkerLiveness({
+    staleAfterMs: Number(process.env.PRISM_STUDIO_WORKER_HEALTH_STALE_MS) || 10 * 60_000,
+  });
+  const health = healthPort === null ? null : await startLivenessServer(liveness, healthPort);
+  if (health) console.log(`liveness:          GET /healthz on port ${healthPort}`);
   console.log(`worker ${worker.workerId} running; Ctrl+C to stop`);
-  await worker.run(controller.signal);
+  await worker.run(controller.signal, (e) => liveness.beat(e));
+  await new Promise<void>((resolve) => (health ? health.close(() => resolve()) : resolve()));
 }
 
 await pool.end();

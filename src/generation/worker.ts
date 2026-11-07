@@ -143,14 +143,28 @@ export class GenerationWorker {
     return claimed.length;
   }
 
-  /** Runs until the signal aborts. Safe to stop mid-job: leases expire and another worker resumes. */
-  async run(signal: AbortSignal): Promise<void> {
+  /**
+   * Runs until the signal aborts. Safe to stop mid-job: leases expire and another worker resumes.
+   * `onLoop` (optional) observes every completed loop iteration, e.g. a container liveness probe (5A.1); it never
+   * changes what the worker does, and an observer that throws is ignored.
+   */
+  async run(
+    signal: AbortSignal,
+    onLoop?: (e: { ok: boolean; processed: number; at: Date }) => void,
+  ): Promise<void> {
     while (!signal.aborted) {
       let n = 0;
+      let ok = true;
       try {
         n = await this.tick();
       } catch (err) {
+        ok = false;
         this.log.error({ event: "worker.tick_failed", workerId: this.workerId }, err);
+      }
+      try {
+        onLoop?.({ ok, processed: n, at: this.now() });
+      } catch {
+        /* an observer must never stop the worker */
       }
       if (n === 0) await sleep(this.config.worker.idlePollMs, signal);
     }
