@@ -1,6 +1,6 @@
 "use server";
 
-import { hasVisibleSplat, SPLAT_PASSES_BLOCKED_MESSAGE } from "@/domain/previs/splat";
+import { controlPassRefusal } from "@/domain/previs/environment-capability";
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { ZodError } from "zod";
@@ -159,8 +159,9 @@ export async function captureSpatialPassBundle(
       );
 
     // A visible Gaussian splat is spatial geometry these passes cannot represent exactly. Refuse rather than ship
-    // depth, ids or masks that silently omit the environment.
-    if (hasVisibleSplat(scene.document.objects)) throw new UserFacingError(SPLAT_PASSES_BLOCKED_MESSAGE);
+    // depth, ids or masks that silently omit the environment (4E: the one shared rule, `controlPassRefusal`).
+    const refusal = controlPassRefusal(scene.document.objects);
+    if (refusal) throw new UserFacingError(refusal.message);
 
     // the camera source, re-derived from SAVED state (never the navigation camera, never a client camera)
     let camera: ControlCameraSource;

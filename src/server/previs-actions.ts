@@ -29,6 +29,7 @@ import {
   type RenderCamera,
 } from "@/domain/previs/camera-provenance";
 import { buildPrevisDocument } from "@/domain/previs/document";
+import { environmentSaveIssues } from "@/domain/previs/environment-capability";
 import {
   authoredLightingIntent,
   baseEnvironmentFingerprint,
@@ -181,6 +182,10 @@ export async function saveLocationScene(
       if ((recon.resultChecksum ?? null) !== (asset.checksum ?? null))
         throw new UserFacingError("The splat's content no longer matches its reconstruction record.");
     }
+    // Phase 4E environment limits: a non-finite or collapsed transform, or a metric calibration the transform no
+    // longer honours, is refused before anything is written (never coerced, never saved as a false metric claim).
+    const [limit] = environmentSaveIssues(engineScene, document.objects);
+    if (limit) throw new UserFacingError(limit.message);
     const saved = await repo.saveScene({
       id: randomUUID(),
       projectId: data.project.id,
