@@ -19,7 +19,7 @@ import { ContinuityAnalysisWorker } from "../src/continuity/analysis/worker";
 import { consoleLogger } from "../src/generation/log";
 import { createOutputSink, SinkConfigError } from "../src/generation/sink";
 import { FfmpegMediaProcessor } from "../src/media/ffmpeg";
-import { PRISM_STUDIO_REF, assertProjectRef, installRedactingHandlers, printBanner } from "./lib/safety.mjs";
+import { resolveTarget, assertProjectRef, installRedactingHandlers, printBanner } from "./lib/safety.mjs";
 
 installRedactingHandlers();
 
@@ -72,7 +72,7 @@ const pool = new pg.Pool({ connectionString: url, ssl: { rejectUnauthorized: fal
 }
 
 console.log(`DB role:           ${ROLE} (PRISM_STUDIO_CONTINUITY_DB_URL)`);
-console.log(`Supabase project:  ${PRISM_STUDIO_REF}`);
+console.log(`Supabase project:  ${resolveTarget().ref}`);
 for (const a of analyzerStatuses(process.env)) {
   console.log(
     `  analyzer ${a.id}/${a.model}: ${a.state}${a.kind === "model" ? `, paid analysis ${a.spend === "enabled" ? "ENABLED" : "OFF"}` : ", free"}${a.usable ? " → usable" : ""}`,
