@@ -1,0 +1,20 @@
+# Container build context (Phase 5A.1 worker images). Secrets and local state never enter an image.
+.env
+.env.*
+**/.env
+**/.env.*
+.vercel
+.git
+.github
+node_modules
+.next
+out
+coverage
+test-results
+playwright-report
+blob-report
+*.log
+.DS_Store
+# local media, previews and scratch
+public/uploads
+tmp
