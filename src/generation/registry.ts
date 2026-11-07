@@ -74,7 +74,11 @@ export class ModelRegistry {
     const adapter = this.adapters_.get(model.provider);
     const info = adapter?.info();
     const enabled = this.config.enabledProviders.includes(model.provider);
-    const missing = info ? missingConfig(info.requiredConfig, this.env) : [];
+    // The customer-facing web/control plane never needs provider credentials merely to compile, price and queue
+    // a request. When a provider is explicitly worker-backed, its separate execution deployment owns the secret.
+    // Workers do not set this flag, so their registry still fails closed unless the real credential is present.
+    const workerBacked = this.config.workerBackedProviders.includes(model.provider);
+    const missing = info && !workerBacked ? missingConfig(info.requiredConfig, this.env) : [];
     const paidGenerationEnabled = !this.billsMoney(model) || this.config.paid.enabled;
     return {
       provider: model.provider,
