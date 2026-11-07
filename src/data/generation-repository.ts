@@ -1,4 +1,4 @@
-import type { Asset, GenerationAttempt } from "@/domain/schemas";
+import type { Asset, GenerationAttempt, SubjectImageAttempt, WorkerAttempt } from "@/domain/schemas";
 import type {
   CancelOutcome,
   CostEstimate,
@@ -70,6 +70,26 @@ export interface AttemptView {
   job: GenerationJob | null;
   outputs: AttemptOutputView[];
   costs: GenerationCost[];
+}
+
+/** Phase 5B-I1: what a Character / Location image attempt is generated FOR. */
+export type ImageSubjectRef =
+  { kind: "character"; characterId: string } | { kind: "location"; locationId: string };
+
+/** A Character / Location image attempt with its job, outputs and costs (the same shape as a Shot AttemptView). */
+export interface SubjectAttemptView {
+  attempt: SubjectImageAttempt;
+  job: GenerationJob | null;
+  outputs: AttemptOutputView[];
+  costs: GenerationCost[];
+}
+
+export interface CreateSubjectImageAttemptInput {
+  attempt: Omit<SubjectImageAttempt, "attemptNumber">;
+  job: CreateAttemptInput["job"];
+  estimate: CostEstimate;
+  limits: CreateAttemptInput["limits"];
+  now: string;
 }
 
 export interface ProjectGenerationRow {
@@ -165,6 +185,17 @@ export interface GenerationRepository {
   getJob(jobId: string): Promise<GenerationJob | null>;
   getAttemptView(attemptId: string): Promise<AttemptView | null>;
   listShotAttempts(shotId: string): Promise<AttemptView[]>;
+  /**
+   * Phase 5B-I1: an image generation whose subject is a Character or a Location (migration 0051). Same job, worker,
+   * ingest, outputs and costs as a Shot attempt; numbered per subject; idempotent by the job's key; the project's active
+   * and per-user submit limits apply. Never approved (approval stays a Shot concept).
+   */
+  createSubjectImageAttempt(
+    input: CreateSubjectImageAttemptInput,
+  ): Promise<{ attempt: SubjectImageAttempt; job: GenerationJob; duplicate: boolean }>;
+  /** Newest first. Only the subject's own attempts (never a Shot's). */
+  listSubjectImageAttempts(subject: ImageSubjectRef): Promise<SubjectAttemptView[]>;
+  getSubjectImageAttempt(attemptId: string): Promise<SubjectAttemptView | null>;
   /** Cheap polling query: jobs that are not terminal. */
   listActiveProjectJobs(projectId: string): Promise<GenerationJob[]>;
   listProjectGenerations(projectId: string, filters?: GenerationFilters): Promise<ProjectGenerationRow[]>;
@@ -182,7 +213,8 @@ export interface GenerationRepository {
 
 export interface ClaimedJob {
   job: GenerationJob;
-  attempt: GenerationAttempt;
+  /** Any subject (Shot, Character or Location): the worker reads only the frozen request and plan. */
+  attempt: WorkerAttempt;
   /** Owner of the project, for storage ownership + audit. */
   ownerUserId: string;
 }

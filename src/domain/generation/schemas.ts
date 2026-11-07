@@ -45,8 +45,25 @@ export const VIDEO_MODALITIES: readonly GenerationModality[] = [
  *                             Frame (Phase 2H): image-to-video only, never a Storyboard, override or text-to-video
  * Frozen on the attempt's request; it never changes `shot.generation.modality`.
  */
-export const GENERATION_PURPOSES = ["shot_output", "production_frame", "animate_production_frame"] as const;
+export const GENERATION_PURPOSES = [
+  "shot_output",
+  "production_frame",
+  "animate_production_frame",
+  /** Phase 5B-I1: an image whose SUBJECT is a Character (portrait, identity / Look reference); never a Shot output. */
+  "character_image",
+  /** Phase 5B-I1: an image whose SUBJECT is a Location (concept, establishing view, angle, plate); never a Shot output. */
+  "location_image",
+] as const;
 export type GenerationPurpose = (typeof GENERATION_PURPOSES)[number];
+
+/** The purposes whose subject is a Shot (candidate sets, the Shot's history and approval are Shot-only). */
+export type ShotGenerationPurpose = Extract<
+  GenerationPurpose,
+  "shot_output" | "production_frame" | "animate_production_frame"
+>;
+/** Narrows to a Shot purpose; a subject purpose (Character / Location image) is never a Shot purpose. */
+export const shotPurposeOf = (p: GenerationPurpose): ShotGenerationPurpose =>
+  p === "character_image" || p === "location_image" ? "shot_output" : p;
 
 /** The purpose of a frozen request; requests frozen before Phase 2G.2 carry none and are `shot_output`. */
 export const purposeOfRequest = (r: { purpose?: GenerationPurpose | null }): GenerationPurpose =>

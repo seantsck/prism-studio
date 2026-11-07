@@ -1,7 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { ZodType } from "zod";
-import { assetSchema, generationAttemptSchema, type GenerationAttempt } from "@/domain/schemas";
+import {
+  assetSchema,
+  generationAttemptSchema,
+  subjectImageAttemptSchema,
+  workerAttemptSchema,
+  type GenerationAttempt,
+  type SubjectImageAttempt,
+} from "@/domain/schemas";
 import {
   ACTIVE_STATUSES,
   WORKABLE_STATUSES,
@@ -35,6 +42,9 @@ import {
   type JobPatch,
   type ProjectGenerationRow,
   type ReviewInput,
+  type CreateSubjectImageAttemptInput,
+  type ImageSubjectRef,
+  type AttemptOutputView,
 } from "./generation-repository";
 import { COLLECTIONS, flatFromRow, flatToRow, type CollectionSpec, type Row } from "./postgres-mapping";
 import { upsertRow } from "./postgres-repository";
@@ -63,6 +73,8 @@ const parseCost = (r: Row): GenerationCost => generationCostSchema.parse(flatFro
 const parseEvent = (r: Row): GenerationEvent => generationEventSchema.parse(flatFromRow(r, EVENT));
 const parseAttempt = (r: Row): GenerationAttempt =>
   generationAttemptSchema.parse(flatFromRow(r, COLLECTIONS.attempts));
+const parseSubjectAttempt = (r: Row): SubjectImageAttempt =>
+  subjectImageAttemptSchema.parse(flatFromRow(r, COLLECTIONS.attempts));
 
 /** camelCase JobPatch key → column. Only these are ever written by the worker. */
 const PATCH_COLUMNS: Record<string, string> = {
@@ -341,6 +353,17 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
   }
 
   private async views(c: PoolClient, attemptRows: Row[]): Promise<AttemptView[]> {
+    return this.viewsOf(c, attemptRows, parseAttempt);
+  }
+
+  /** Attempt rows + their jobs, outputs and costs, with the attempt parsed by `parse` (Shot or subject attempts). */
+  private async viewsOf<A>(
+    c: PoolClient,
+    attemptRows: Row[],
+    parse: (r: Row) => A,
+  ): Promise<
+    Array<{ attempt: A; job: GenerationJob | null; outputs: AttemptOutputView[]; costs: GenerationCost[] }>
+  > {
     if (attemptRows.length === 0) return [];
     const ids = attemptRows.map((r) => String(r.id));
     // One client, one query at a time (pg does not support overlapping queries on a connection).
@@ -360,7 +383,7 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
     return attemptRows.map((r) => {
       const id = String(r.id);
       return {
-        attempt: parseAttempt(r),
+        attempt: parse(r),
         job: jobs.rows.filter((j) => j.attempt_id === id).map(parseJob)[0] ?? null,
         outputs: outputs.rows
           .filter((o) => o.attempt_id === id)
@@ -380,6 +403,152 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
     return this.tx(async (c) => {
       const rows = (await c.query("select * from generation_attempts where id = $1", [attemptId])).rows;
       return (await this.views(c, rows))[0] ?? null;
+    });
+  }
+
+  // ───────────────────────── Phase 5B-I1: Character / Location image attempts ─────────────────────────
+
+  async createSubjectImageAttempt(input: CreateSubjectImageAttemptInput) {
+    const a = input.attempt;
+    return this.tx(async (c) => {
+      // same serialisation as a Shot submit: the project row lock makes the limit checks race-free
+      const project = await c.query("select id from projects where id = $1 for update", [a.projectId]);
+      if (project.rowCount === 0)
+        throw new GenerationSubmitError("not_found", "That project no longer exists.");
+
+      const replay = await c.query(
+        "select * from generation_jobs where project_id = $1 and idempotency_key = $2",
+        [a.projectId, input.job.idempotencyKey],
+      );
+      if (replay.rows[0]) {
+        const job = parseJob(replay.rows[0]);
+        const att = await c.query("select * from generation_attempts where id = $1", [job.attemptId]);
+        return { attempt: parseSubjectAttempt(att.rows[0]), job, duplicate: true };
+      }
+
+      // the subject must exist IN THIS PROJECT (the composite foreign key enforces it too)
+      const subject = a.characterId
+        ? await c.query("select 1 from characters where id = $1 and project_id = $2", [
+            a.characterId,
+            a.projectId,
+          ])
+        : await c.query("select 1 from locations where id = $1 and project_id = $2", [
+            a.locationId,
+            a.projectId,
+          ]);
+      if (subject.rowCount === 0)
+        throw new GenerationSubmitError(
+          "not_found",
+          a.characterId ? "That character no longer exists." : "That location no longer exists.",
+        );
+
+      const open = await c.query(
+        `select count(*)::int as n from generation_jobs
+          where project_id = $1 and status in ('queued','submitting','submitted','processing','ingesting','cancel_requested')`,
+        [a.projectId],
+      );
+      if (open.rows[0].n >= input.limits.maxActivePerProject) {
+        throw new GenerationSubmitError(
+          "project_busy",
+          `This project already has ${open.rows[0].n} active generations (limit ${input.limits.maxActivePerProject}).`,
+        );
+      }
+      const recent = await c.query(
+        `select count(*)::int as n from generation_attempts
+         where project_id = $1 and created_by is not distinct from $2::uuid
+           and created_at > $3::timestamptz - interval '60 seconds'`,
+        [a.projectId, a.createdBy, input.now],
+      );
+      if (recent.rows[0].n >= input.limits.maxSubmitsPerMinutePerUser) {
+        throw new GenerationSubmitError(
+          "throttled",
+          "You are submitting generations too quickly. Wait a moment and try again.",
+        );
+      }
+
+      const num = await c.query(
+        a.characterId
+          ? "select coalesce(max(attempt_number), 0) + 1 as n from generation_attempts where character_id = $1"
+          : "select coalesce(max(attempt_number), 0) + 1 as n from generation_attempts where location_id = $1",
+        [a.characterId ?? a.locationId],
+      );
+      const attempt: SubjectImageAttempt = subjectImageAttemptSchema.parse({
+        ...a,
+        attemptNumber: Number(num.rows[0].n),
+        status: "queued",
+        approved: false,
+      });
+      await upsertRow(c, "generation_attempts", {
+        ...flatToRow(attempt, COLLECTIONS.attempts),
+        project_id: a.projectId,
+      });
+
+      const jobRow: Row = {
+        id: input.job.id,
+        project_id: a.projectId,
+        attempt_id: attempt.id,
+        provider: attempt.provider,
+        model: attempt.model,
+        status: "queued",
+        idempotency_key: input.job.idempotencyKey,
+        queue_priority: input.job.queuePriority,
+        max_attempts: input.job.maxAttempts,
+        next_run_at: input.now,
+        estimated_cost: input.estimate.amount,
+        currency: input.job.currency,
+        created_by: attempt.createdBy,
+      };
+      const cols = Object.keys(jobRow);
+      const inserted = await c.query(
+        `insert into generation_jobs (${cols.map(q).join(", ")}) values (${cols.map((_, i) => `$${i + 1}`).join(", ")}) returning *`,
+        cols.map((k) => jobRow[k]),
+      );
+      const job = parseJob(inserted.rows[0]);
+      await c.query(
+        `insert into generation_costs (project_id, attempt_id, job_id, provider, model, kind, amount, currency, basis, units, recorded_at)
+         values ($1, $2, $3, $4, $5, 'estimated', $6, $7, $8, $9, $10)`,
+        [
+          a.projectId,
+          attempt.id,
+          job.id,
+          attempt.provider,
+          attempt.model,
+          input.estimate.amount,
+          input.estimate.currency,
+          input.estimate.basis,
+          input.estimate.units,
+          input.now,
+        ],
+      );
+      await c.query(
+        `insert into generation_job_events (project_id, job_id, attempt_id, at, from_status, to_status, note)
+         values ($1, $2, $3, $4, null, 'queued', 'Submitted by user')`,
+        [a.projectId, job.id, attempt.id, input.now],
+      );
+      return { attempt, job, duplicate: false };
+    });
+  }
+
+  async listSubjectImageAttempts(subject: ImageSubjectRef) {
+    return this.tx(async (c) => {
+      const rows = (
+        await c.query(
+          subject.kind === "character"
+            ? "select * from generation_attempts where character_id = $1 order by attempt_number desc"
+            : "select * from generation_attempts where location_id = $1 order by attempt_number desc",
+          [subject.kind === "character" ? subject.characterId : subject.locationId],
+        )
+      ).rows;
+      return this.viewsOf(c, rows, parseSubjectAttempt);
+    });
+  }
+
+  async getSubjectImageAttempt(attemptId: string) {
+    return this.tx(async (c) => {
+      const rows = (
+        await c.query("select * from generation_attempts where id = $1 and shot_id is null", [attemptId])
+      ).rows;
+      return (await this.viewsOf(c, rows, parseSubjectAttempt))[0] ?? null;
     });
   }
 
@@ -410,7 +579,7 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
     f: GenerationFilters = {},
   ): Promise<ProjectGenerationRow[]> {
     return this.tx(async (c) => {
-      const where = ["a.project_id = $1"];
+      const where = ["a.project_id = $1", "a.shot_id is not null"]; // Shot generations (0051 subjects excluded)
       const params: unknown[] = [projectId];
       const add = (sql: string, value: unknown) => {
         params.push(value);
@@ -581,7 +750,13 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
         const a = attempts.find((x) => String(x.id) === String(r.attempt_id));
         if (!a) return [];
         const { owner_user_id, ...attemptRow } = a as Row & { owner_user_id: string };
-        return [{ job: parseJob(r), attempt: parseAttempt(attemptRow), ownerUserId: String(owner_user_id) }];
+        return [
+          {
+            job: parseJob(r),
+            attempt: workerAttemptSchema.parse(flatFromRow(attemptRow, COLLECTIONS.attempts)),
+            ownerUserId: String(owner_user_id),
+          },
+        ];
       });
     });
   }
