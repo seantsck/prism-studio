@@ -70,3 +70,27 @@ begin
   return new;
 end;
 $$;
+
+-- 0051 shared-database compatibility gate: a generated Character / Location image is deletable when nothing in the
+-- project references it (the app's asset-usage guard decides that). Its OWN attempt is provenance, not a use: the
+-- attempt row is kept (output_asset_id is set null by its existing key) and only the subject attempt's output link is
+-- dropped, atomically with the Asset delete. Shot attempt outputs are NEVER released here, so their key still refuses
+-- the delete exactly as before. SECURITY DEFINER because the project owner has no delete grant on generation_outputs.
+create or replace function release_subject_image_outputs() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  delete from generation_outputs o
+   using generation_attempts a
+   where o.asset_id = old.id
+     and o.project_id = old.project_id
+     and a.id = o.attempt_id
+     and a.project_id = o.project_id
+     and a.shot_id is null;
+  return old;
+end;
+$$;
+revoke all on function release_subject_image_outputs() from public;
+
+create trigger assets_release_subject_image_outputs
+  before delete on assets
+  for each row execute function release_subject_image_outputs();
