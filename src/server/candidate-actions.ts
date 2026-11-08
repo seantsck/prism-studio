@@ -48,6 +48,11 @@ const selectionsSchema = z
         .object({ sourceAssetId: z.string().min(1).max(64), instruction: z.string().min(1).max(2000) })
         .nullable()
         .optional(),
+      /** Phase 5B-I6: the creator's direction (Production Frame candidates); bounded, never a protected line. */
+      direction: z
+        .object({ kind: z.enum(["additional", "alternate_composition"]), text: z.string().max(500) })
+        .nullable()
+        .optional(),
     }),
   )
   .min(1)
@@ -125,6 +130,7 @@ async function createCandidateSet_impl(form: FormData) {
         quality: s.quality ?? null,
         background: s.background ?? null,
         edit: s.edit ?? null,
+        direction: s.direction ?? null,
       })),
       acknowledgeAll: str(form, "ackAll") === "1",
       confirmedTotalUsd:

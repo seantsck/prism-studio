@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ImageEditSpec } from "@/domain/generation/image-edit";
+import type { CreatorDirection } from "@/domain/generation/prompt-plan";
 import type { CandidateRepository, CandidateSetView } from "@/data/candidates-repository";
 import { animationSource, type AnimationSourceFrame } from "@/domain/generation/animation";
 import { GenerationSubmitError, type GenerationRepository } from "@/data/generation-repository";
@@ -49,6 +50,8 @@ export interface CandidateSelection {
   background?: "transparent" | "opaque" | null;
   /** Phase 5B-I2: edit this source still (Production Frame candidates); the result is a new Asset. */
   edit?: ImageEditSpec | null;
+  /** Phase 5B-I6: the creator's direction for a Production Frame candidate (Additional / Alternate Composition). */
+  direction?: CreatorDirection | null;
 }
 
 export interface CandidatePlanItem {
@@ -151,6 +154,7 @@ export function planCandidateSet(args: {
       now: args.now,
       shared,
       edit: s.edit ?? undefined,
+      direction: s.direction ?? null,
     });
     const blockers = evaluation.gate.blockers.map((b) => b.message);
     return {
@@ -386,6 +390,7 @@ export async function submitCandidateSet(args: {
         projectRevision: args.projectRevision,
         now,
         edit: it.selection.edit ?? undefined,
+        direction: it.selection.direction ?? null,
       });
       if (!prepared.input) {
         const why = prepared.evaluation.gate.blockers.map((b) => b.message).join(" · ") || "blocked";

@@ -23,6 +23,8 @@ import { getRepo, requireProjectFresh } from "./repo";
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 
 const SHOT_IMAGE_KINDS = ["production_frame", "alternate_composition", "storyboard", "edit"] as const;
+/** Phase 5B-I6: how many candidates one Generate Production Frame may ask for (the candidate-set limit also applies). */
+const MAX_SHOT_CANDIDATES = 4;
 type ShotImageKind = (typeof SHOT_IMAGE_KINDS)[number];
 const TITLE: Record<ShotImageKind, string> = {
   production_frame: "Production Frame candidate",
@@ -53,21 +55,32 @@ async function startShotImage_impl(form: FormData): Promise<ActionResult> {
   if (edit && !edit.instruction) throw new UserFacingError("Describe the edit.");
   const background = str(form, "transparent") === "1" ? "transparent" : null;
   const quality = str(form, "quality") || null;
+  // Phase 5B-I6: the creator's direction. Alternate Composition varies only framing, lens, camera position and
+  // composition; Additional direction is a small override. Neither replaces identity, wardrobe, Location or continuity.
+  const text = str(form, "direction").slice(0, 500);
+  const direction =
+    kind === "alternate_composition"
+      ? { kind: "alternate_composition" as const, text }
+      : kind === "production_frame" && text
+        ? { kind: "additional" as const, text }
+        : null;
+  // Phase 5B-I6: candidates of ONE model, the human's choice (the planner enforces the configured maximum, the spend
+  // gate prices every one of them, and the confirmed total must cover them all)
+  const count = kind === "edit" || kind === "storyboard" ? 1 : Number(str(form, "count") || "1");
+  if (!Number.isInteger(count) || count < 1 || count > MAX_SHOT_CANDIDATES)
+    throw new UserFacingError(`Choose between 1 and ${MAX_SHOT_CANDIDATES} candidates.`);
+  const selection = {
+    provider,
+    modelId,
+    ...(quality ? { quality } : {}),
+    ...(background ? { background } : {}),
+    ...(edit ? { edit } : {}),
+    ...(direction ? { direction } : {}),
+  };
   const fd = new FormData();
   fd.set("projectSlug", str(form, "projectSlug"));
   fd.set("shotId", str(form, "shotId"));
-  fd.set(
-    "selections",
-    JSON.stringify([
-      {
-        provider,
-        modelId,
-        ...(quality ? { quality } : {}),
-        ...(background ? { background } : {}),
-        ...(edit ? { edit } : {}),
-      },
-    ]),
-  );
+  fd.set("selections", JSON.stringify(Array.from({ length: count }, () => selection)));
   fd.set("generationPurpose", "production_frame");
   fd.set("title", TITLE[kind]);
   fd.set("purpose", PURPOSE[kind]);

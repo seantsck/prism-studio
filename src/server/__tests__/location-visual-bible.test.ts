@@ -638,7 +638,8 @@ describe("5B-I5 Ojou-sama acceptance: Shots receive Character + Location referen
         references: { ...base.capabilities.references, maxReferences: max },
       },
     });
-    // 5: the two lowest-priority Visual Bible images (night variant, establishing) are left out and named
+    // 5 (5B-I6 tiers): the two lowest-priority OPTIONAL images (the generic Lobby reference, then the night variant)
+    // are left out and named; Yumeko's identity + Look and the selected view are essential
     const five = evaluateCompatibility(pkg, limited(5), { purpose: "production_frame" });
     expect(five.errors.map((e) => e.id)).not.toContain("references.too_many");
     expect(five.used.references.map((r) => r.assetId)).toEqual([
@@ -646,15 +647,17 @@ describe("5B-I5 Ojou-sama acceptance: Shots receive Character + Location referen
       f.yumeko.look.id,
       f.lobby.toElevators.asset.id,
       f.lobby.canonical.id,
-      f.lobby.toEntrance.asset.id,
+      f.lobby.establishing.id,
     ]);
-    const disclosed = five.ignoredFeatures.find((x) => x.id === "references.location_visual_bible_limit")!;
-    expect(disclosed.label).toBe("2 Location Visual Bible references");
-    expect(disclosed.impact).toContain("lobby wide");
+    const disclosed = five.ignoredFeatures.find((x) => x.id === "references.optional_trimmed")!;
+    expect(disclosed.label).toBe("2 optional references not sent");
     expect(disclosed.impact).toContain("night");
-    // 2: even without every Visual Bible image the Shot needs 4; the existing hard limit refuses (nothing is sent)
+    expect(disclosed.impact).toContain("Grand Celeste Lobby reference");
+    // 2: the Shot's 3 essential images do not fit: refused, with the essential count (nothing is sent)
     const two = evaluateCompatibility(pkg, limited(2), { purpose: "production_frame" });
-    expect(two.errors.map((e) => e.id)).toContain("references.too_many");
+    expect(two.errors.find((e) => e.id === "references.too_many")?.message).toBe(
+      "This model supports 2 references, but this Shot requires 3 essential references.",
+    );
     const lite = prepareSubmission({
       data: await data(),
       shotId: shot.id,

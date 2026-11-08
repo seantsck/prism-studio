@@ -18,7 +18,7 @@ import {
   type SpendGateInput,
 } from "@/domain/generation/gate";
 import { animationRequestViolations } from "@/domain/generation/animation";
-import { buildPromptPlan } from "@/domain/generation/prompt-plan";
+import { buildPromptPlan, normalizeDirection, type CreatorDirection } from "@/domain/generation/prompt-plan";
 import {
   applyImageEdit,
   imageEditBlockers,
@@ -86,6 +86,8 @@ export function evaluateShotForModel(args: {
   shared?: SharedShotEvaluation;
   /** Phase 5B-I2: edit this source still (Production Frame candidates only); the source is sent first. */
   edit?: ImageEditSpec;
+  /** Phase 5B-I6: the creator's direction (Production Frame candidates only); never replaces a protected line. */
+  direction?: CreatorDirection | null;
 }): Evaluation {
   const shared = args.shared ?? buildSharedEvaluation(args.data, args.shotId, args.now);
   const { ctx, pkg } = shared;
@@ -106,7 +108,10 @@ export function evaluateShotForModel(args: {
   const adapterBlockers: GateBlocker[] = [];
   if (model && adapter && compatibility?.compatible && compatibility.modality) {
     try {
-      const built = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation, { purpose });
+      const built = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation, {
+        purpose,
+        direction: args.direction,
+      });
       const base = buildGenerationRequest({
         pkg,
         model,
@@ -208,6 +213,8 @@ export function prepareSubmission(args: {
   projectRevision?: string | null;
   /** Phase 5B-I2: edit this source still; the result is a NEW Asset, the source is never modified. */
   edit?: ImageEditSpec;
+  /** Phase 5B-I6: the creator's direction (Production Frame candidates only); recorded on the attempt. */
+  direction?: CreatorDirection | null;
 }): PreparedSubmission {
   const now = args.now ?? new Date();
   const evaluation = evaluateShotForModel({ ...args, now });
@@ -218,7 +225,9 @@ export function prepareSubmission(args: {
   const adapter = args.registry.adapter(model.provider)!;
   const builtPlan = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation, {
     purpose: args.purpose,
+    direction: args.direction,
   });
+  const direction = args.purpose === "production_frame" ? normalizeDirection(args.direction) : null;
   const baseRequest = buildGenerationRequest({
     pkg,
     model,
@@ -298,6 +307,8 @@ export function prepareSubmission(args: {
       providerOptions: request.providerOptions,
       // lineage (Phase 5B-I2): the edited source; the new image is always a new Asset
       ...(args.edit ? { editSourceAssetId: args.edit.sourceAssetId } : {}),
+      // Phase 5B-I6: the creator's direction for this still (Additional direction / Alternate Composition)
+      ...(direction ? { creatorDirection: direction } : {}),
     },
     inputAssetIds: [...used].sort(),
     outputAssetId: null,

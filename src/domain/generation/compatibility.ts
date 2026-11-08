@@ -56,7 +56,24 @@ export interface CompatibilityInput {
   assetId: string | null;
   role: ReferenceRole | null;
   used: boolean;
+  /** Phase 5B-I6: a Production Frame reference's tier (see `ReferenceTier`). Absent for every other purpose. */
+  tier?: ReferenceTier;
 }
+
+/**
+ * Phase 5B-I6: how a Production Frame reference is treated at the model's reference limit.
+ *   essential  never dropped to fit: each Character's identity (its designated canonical identity, else its first
+ *              identity image; with a Continuity Lock, the Lock's first frozen identity image), each Character's
+ *              selected Look (its first image) and the Shot's selected Location View. If the essentials alone do not
+ *              fit, generation is REFUSED.
+ *   optional   everything Prism adds automatically (the Shot's current Production Frame / approved Storyboard, other
+ *              identity and Look images, the Location Visual Bible, generic Location references): left out lowest
+ *              priority first, and every omission is named.
+ *   frozen     a Character Continuity Lock's other frozen images (2G.4): never dropped and never reordered.
+ *   explicit   what the creator attached by hand (Shot references, the lighting reference): never dropped; over the
+ *              limit they keep the existing "Reduce references in Shot Prep" refusal.
+ */
+export type ReferenceTier = "essential" | "frozen" | "optional" | "explicit";
 
 export interface CompatibilityReport {
   provider: string;
@@ -222,6 +239,53 @@ const hasStoredFile = (pkg: GenerationPackage, assetId: string): boolean => {
 
 /** How a request labels the canonical Location View image (adapters show it to the model verbatim). */
 export const locationViewLabel = (name: string) => `Canonical Location View "${name}"`;
+
+/**
+ * Phase 5B-I6: the essential Production Frame images, by asset (only those with a stored file count). Per Character in
+ * assignment order: its identity (designated canonical identity; else its first identity image; with a Continuity Lock
+ * the Lock's first frozen identity image) and its selected Look's first image. Then the selected Location View.
+ */
+export function productionFrameEssentialAssetIds(pkg: GenerationPackage): Set<string> {
+  const out = new Set<string>();
+  const add = (id: string | null | undefined) => {
+    if (id && hasStoredFile(pkg, id)) out.add(id);
+  };
+  for (const c of pkg.characters) {
+    const images = characterImages(pkg, c);
+    const canonical = c.continuityLock ? undefined : c.canonicalIdentityAssetId;
+    add(
+      canonical && hasStoredFile(pkg, canonical)
+        ? canonical
+        : images.identity.find((i) => hasStoredFile(pkg, i.assetId))?.assetId,
+    );
+    add(images.look.find((i) => hasStoredFile(pkg, i.assetId))?.assetId);
+  }
+  add(pkg.references.locationView?.assetId);
+  return out;
+}
+
+/** Phase 5B-I6: each Production Frame reference's tier, by asset (see ReferenceTier). */
+export function productionFrameReferenceTiers(pkg: GenerationPackage): Map<string, ReferenceTier> {
+  const essential = productionFrameEssentialAssetIds(pkg);
+  const frozen = new Set(
+    (pkg.references.characterContinuity ?? []).flatMap((l) => l.references.map((r) => r.assetId)),
+  );
+  const explicit = new Set(
+    [pkg.lighting.referenceAssetId, ...pkg.references.referenceAssetIds].filter((x): x is string => !!x),
+  );
+  return new Map(
+    deriveProductionFrameReferenceCandidates(pkg).map((c) => [
+      c.assetId,
+      essential.has(c.assetId)
+        ? "essential"
+        : frozen.has(c.assetId)
+          ? "frozen"
+          : explicit.has(c.assetId)
+            ? "explicit"
+            : "optional",
+    ]),
+  );
+}
 
 /**
  * Deterministic reference priority for `production_frame` image generation (Phase 2G.2, extended in 2G.3 and 2G.4),
@@ -638,6 +702,7 @@ export function evaluateCompatibility(
   };
   const droppedByRole = new Map<string, Candidate[]>();
   const supplements = new Set(candidates.filter((c) => c.supplement).map((c) => c.assetId));
+  const pfTiers = pfPurpose ? productionFrameReferenceTiers(pkg) : null;
   for (const c of candidates) {
     if (roleSupported(c.role))
       accepted.push({ assetId: c.assetId, role: c.role, order: accepted.length, label: c.label });
@@ -648,6 +713,7 @@ export function evaluateCompatibility(
       assetId: c.assetId,
       role: c.role,
       used: roleSupported(c.role),
+      ...(pfTiers?.has(c.assetId) ? { tier: pfTiers.get(c.assetId)! } : {}),
     });
   }
   if (exclusive && !referenceMode && (startUsed || endUsed) && accepted.length > 0) {
@@ -700,8 +766,39 @@ export function evaluateCompatibility(
   // Phase 5B-I5: automatic Location Visual Bible images never push a Shot over the model's limit. The lowest-priority
   // ones are left out first and disclosed (an ignored feature the creator acknowledges); nothing is dropped silently,
   // and every other reference keeps the hard limit below.
-  const over = accepted.length - caps.references.maxReferences;
-  if (over > 0 && supplements.size > 0) {
+  const refLimit = caps.references.maxReferences;
+  const tierOf = pfTiers ?? new Map<string, ReferenceTier>();
+  const over = accepted.length - refLimit;
+  if (pfPurpose && over > 0) {
+    // Phase 5B-I6: Production Frames. Optional automatic references are left out lowest priority first (the reverse of
+    // the send order) and named; essential and explicit references are never dropped to fit.
+    const drop = new Set(
+      accepted
+        .filter((r) => tierOf.get(r.assetId) === "optional")
+        .slice(-over)
+        .map((r) => r.assetId),
+    );
+    if (drop.size > 0) {
+      const kept = accepted.filter((r) => !drop.has(r.assetId)).map((r, order) => ({ ...r, order }));
+      accepted.length = 0;
+      accepted.push(...kept);
+      for (const i of inputs) if (i.kind === "reference" && i.assetId && drop.has(i.assetId)) i.used = false;
+      const labels = candidates.filter((c) => drop.has(c.assetId)).map((c) => c.label);
+      ignored.push({
+        id: "references.optional_trimmed",
+        feature: "references",
+        label: `${drop.size} optional reference${drop.size === 1 ? "" : "s"} not sent`,
+        impact: `${model.displayName} accepts at most ${refLimit} references, so these lower-priority images are NOT sent: ${labels.join("; ")}.`,
+      });
+    }
+    const essentials = accepted.filter((r) => tierOf.get(r.assetId) === "essential").length;
+    if (essentials > refLimit)
+      errors.push({
+        id: "references.too_many",
+        feature: "references",
+        message: essentialOverflowMessage(refLimit, essentials),
+      });
+  } else if (over > 0 && supplements.size > 0) {
     const drop = accepted
       .filter((r) => supplements.has(r.assetId))
       .slice(-over)
@@ -722,7 +819,10 @@ export function evaluateCompatibility(
       });
     }
   }
-  if (accepted.length > caps.references.maxReferences) {
+  if (
+    accepted.length > caps.references.maxReferences &&
+    !errors.some((e) => e.id === "references.too_many")
+  ) {
     errors.push({
       id: "references.too_many",
       feature: "references",
@@ -823,3 +923,7 @@ export function evaluateCompatibility(
 
 /** Ids of every modality, exposed for UI selects. */
 export const ALL_MODALITIES = GENERATION_MODALITIES;
+
+/** Phase 5B-I6: the refusal when a Shot's essential references alone exceed the model's limit. */
+export const essentialOverflowMessage = (max: number, essentials: number) =>
+  `This model supports ${max} reference${max === 1 ? "" : "s"}, but this Shot requires ${essentials} essential reference${essentials === 1 ? "" : "s"}.`;
