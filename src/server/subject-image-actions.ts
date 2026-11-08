@@ -11,7 +11,7 @@ import {
   type LocationImageIntent,
 } from "@/domain/generation/subject-image";
 import { IDENTITY_SLOTS, type ProjectData } from "@/domain/schemas";
-import { prepareBackgroundRemoval } from "@/generation/background-removal";
+import { HOSTED_MATTING_ENGINE, prepareBackgroundRemoval } from "@/generation/background-removal";
 import { prepareSubjectImage } from "@/generation/subject-submission";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { createLocationViewFromReference } from "./location-view-actions";
@@ -274,6 +274,9 @@ async function removeBackground_impl(form: FormData) {
   if (!sourceAssetId) throw new UserFacingError("Choose the image to cut out.");
   const own = await subjectImageAssetIds(data, { kind: "character", characterId });
   if (!own.has(sourceAssetId)) throw new UserFacingError("That image does not belong to this character.");
+  // Phase 5B-I3b: the local engine is the default. The hosted engine runs ONLY on the creator's explicit High Quality
+  // Removal, with the price they saw confirmed (the server recomputes it and refuses a mismatch).
+  const hosted = str(form, "quality") === "high";
   const clientKey = str(form, "idempotencyKey");
   const prepared = prepareBackgroundRemoval({
     data,
@@ -283,8 +286,17 @@ async function removeBackground_impl(form: FormData) {
     userId: user.kind === "supabase" ? user.id : null,
     idempotencyKey: clientKey.length >= 8 ? clientKey : `cutout-${randomUUID()}`,
     config: getGenerationConfig(),
+    engine: hosted ? HOSTED_MATTING_ENGINE : undefined,
   });
   if (!prepared.ok) throw new UserFacingError(prepared.reasons.slice(0, 3).join(" · "));
+  if (hosted) {
+    const confirmed = Number(str(form, "confirmedTotalUsd"));
+    const expected = prepared.estimate.amount;
+    if (expected == null || !Number.isFinite(confirmed) || Math.abs(confirmed - expected) > 1e-9)
+      throw new UserFacingError(
+        `Confirm the price of High Quality Removal ($${expected ?? "?"}) to continue.`,
+      );
+  }
   try {
     await (await getGenerationRepo()).createSubjectImageAttempt(prepared.input);
   } catch (err) {

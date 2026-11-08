@@ -8,7 +8,7 @@ import {
 } from "@/domain/generation/subject-image";
 import { IDENTITY_SLOTS } from "@/domain/schemas";
 import { assetUrl } from "@/lib/utils";
-import type { EditSource, ImageModelOption } from "@/server/subject-images";
+import type { EditSource, HostedMattingOffer, ImageModelOption } from "@/server/subject-images";
 import {
   startSubjectImage,
   saveAsCharacterReference,
@@ -34,6 +34,8 @@ export function SubjectImagePanel(props: {
   models: ImageModelOption[];
   /** Phase 5B-I2: images of this subject that Edit Image may start from (its references and generated images). */
   sources?: EditSource[];
+  /** Phase 5B-I3b: the explicit, paid High Quality Removal offer (hosted). */
+  hostedMatting?: HostedMattingOffer;
 }) {
   const { subject } = props;
   const intents = subject.kind === "character" ? CHARACTER_IMAGE_INTENTS : LOCATION_IMAGE_INTENTS;
@@ -315,6 +317,14 @@ export function SubjectImagePanel(props: {
                     data-testid="subject-image-preview"
                   />
                 ) : null}
+                {cutFrom &&
+                v.attempt.status === "failed" &&
+                v.job?.lastErrorCode === "matting_background_not_plain" ? (
+                  <HighQualityOffer offer={props.hostedMatting} hidden={hidden} sourceAssetId={cutFrom} />
+                ) : null}
+                {cutFrom && v.attempt.provider === "photoroom" && out ? (
+                  <Badge tone="neutral">Processed by Photoroom</Badge>
+                ) : null}
                 {out && v.attempt.status === "succeeded" && subject.kind === "character" && !cutFrom ? (
                   <ActionForm
                     action={removeBackground}
@@ -439,5 +449,56 @@ function QualityField({ qualities }: { qualities: string[] }) {
         ))}
       </select>
     </Field>
+  );
+}
+
+/**
+ * Phase 5B-I3b: shown only after the LOCAL engine refused a complex background. Nothing is sent anywhere until the
+ * creator presses the button; the price is the provider's configured price, confirmed back to the server.
+ */
+function HighQualityOffer({
+  offer,
+  hidden,
+  sourceAssetId,
+}: {
+  offer: HostedMattingOffer | undefined;
+  hidden: React.ReactNode;
+  sourceAssetId: string;
+}) {
+  const price = offer?.usdPerImage != null ? `$${offer.usdPerImage.toFixed(2)}` : null;
+  return (
+    <div className="mt-1 space-y-1 rounded border border-line p-2" data-testid="high-quality-offer">
+      <p className="text-[12px]">This image has a complex background.</p>
+      {offer?.available && price ? (
+        <ActionForm
+          action={removeBackground}
+          successMessage="High Quality Removal queued"
+          className="space-y-1"
+        >
+          {hidden}
+          <input type="hidden" name="sourceAssetId" value={sourceAssetId} />
+          <input type="hidden" name="quality" value="high" />
+          <input type="hidden" name="confirmedTotalUsd" value={String(offer.usdPerImage)} />
+          <Button type="submit" size="sm" variant="primary" data-testid="high-quality-removal">
+            High Quality Removal — {price}
+          </Button>
+          <p className="text-[11px] text-muted" data-testid="high-quality-privacy">
+            {offer.privacyShort}
+          </p>
+          <details className="text-[11px] text-muted">
+            <summary className="cursor-pointer">Details</summary>
+            <ul className="mt-1 list-disc pl-4">
+              {offer.privacyDetails.map((d) => (
+                <li key={d}>{d}</li>
+              ))}
+            </ul>
+          </details>
+        </ActionForm>
+      ) : (
+        <p className="text-[11px] text-muted" data-testid="high-quality-unavailable">
+          High Quality Removal is not set up on this server.
+        </p>
+      )}
+    </div>
   );
 }

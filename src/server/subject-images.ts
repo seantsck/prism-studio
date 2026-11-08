@@ -4,6 +4,12 @@ import { catalogModel } from "@/domain/generation/models/catalog";
 import { hasStoredImage } from "@/domain/generation/subject-image";
 import type { ProjectData } from "@/domain/schemas";
 import { assetUrl } from "@/lib/utils";
+import { HOSTED_MATTING_ENGINE } from "@/generation/background-removal";
+import {
+  PHOTOROOM_PRIVACY_DETAILS,
+  PHOTOROOM_PRIVACY_SHORT,
+  PHOTOROOM_PROVIDER_ID,
+} from "@/generation/providers/photoroom/config";
 import { PRISM_MATTING_PROVIDER_ID } from "@/generation/providers/prism-matting/adapter";
 import { getGenerationRepo, getRegistry } from "./generation";
 
@@ -23,6 +29,32 @@ export interface ImageModelOption {
   qualities: string[];
 }
 
+/**
+ * Phase 5B-I3b: the explicit High Quality Removal offer (hosted, paid). The price comes from the provider's own
+ * configured pricing (never written in UI code); `available` is false when the server is not set up for it.
+ */
+export interface HostedMattingOffer {
+  available: boolean;
+  label: string;
+  usdPerImage: number | null;
+  privacyShort: string;
+  privacyDetails: string[];
+}
+
+export function hostedMattingOffer(): HostedMattingOffer {
+  const registry = getRegistry();
+  const model = registry.model(HOSTED_MATTING_ENGINE.provider, HOSTED_MATTING_ENGINE.modelId);
+  const adapter = registry.adapter(HOSTED_MATTING_ENGINE.provider);
+  const estimate = model && adapter ? adapter.estimateCost({} as never, model) : null;
+  return {
+    available: !!model && registry.availabilityOf(model).available,
+    label: model?.displayName ?? "High Quality Removal",
+    usdPerImage: estimate?.amount ?? null,
+    privacyShort: PHOTOROOM_PRIVACY_SHORT,
+    privacyDetails: PHOTOROOM_PRIVACY_DETAILS,
+  };
+}
+
 /** Phase 5B-I2: an image of this subject that "Edit Image" may start from. */
 export interface EditSource {
   assetId: string;
@@ -37,7 +69,12 @@ export interface EditSource {
 export async function subjectImageState(
   subject: ImageSubjectRef,
   data?: ProjectData,
-): Promise<{ attempts: SubjectAttemptView[]; models: ImageModelOption[]; sources: EditSource[] }> {
+): Promise<{
+  attempts: SubjectAttemptView[];
+  models: ImageModelOption[];
+  sources: EditSource[];
+  hostedMatting: HostedMattingOffer;
+}> {
   const repo = await getGenerationRepo({ startInlineWorker: false });
   const registry = getRegistry();
   const models = registry
@@ -47,6 +84,7 @@ export async function subjectImageState(
         m.capabilities.image &&
         // Phase 5B-I3: background removal is its own action, never a generation or edit model
         m.provider !== PRISM_MATTING_PROVIDER_ID &&
+        m.provider !== PHOTOROOM_PROVIDER_ID &&
         (m.capabilities.modalities.includes("text_to_image") ||
           m.capabilities.modalities.includes("image_to_image")),
     )
@@ -62,7 +100,12 @@ export async function subjectImageState(
       qualities: catalogModel(m.provider, m.modelId)?.image?.qualities.map((q) => q.id) ?? [],
     }));
   const attempts = await repo.listSubjectImageAttempts(subject);
-  return { attempts, models, sources: data ? editSources(data, subject, attempts) : [] };
+  return {
+    attempts,
+    models,
+    sources: data ? editSources(data, subject, attempts) : [],
+    hostedMatting: hostedMattingOffer(),
+  };
 }
 
 function editSources(

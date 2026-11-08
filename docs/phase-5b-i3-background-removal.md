@@ -189,3 +189,58 @@ A later generation sends the cutout as a reference, and the matting engine is ne
 `src/generation/__tests__/matting.test.ts` (9 tests): the codec (round trip, RGB / RGBA / palette + tRNS, refusals,
 `pngHasAlpha`) and the keyer (soft edges, RGB untouched, enclosed area kept, deterministic, busy and empty refusals,
 existing transparency respected). Browser story G runs the flow end to end.
+
+## 7. I3b: High Quality Removal (Photoroom), only on request
+
+**Local first.** **Remove Background** always runs the local `plain-background-keyer-1` (free, private).
+
+- If it succeeds, the cutout is returned immediately, and nothing is sent anywhere.
+- If it refuses (`matting_background_not_plain`), the card says **"This image has a complex background."** and offers
+  **High Quality Removal — $0.02**. The price comes from the provider's configuration, never from UI code.
+- **Nothing is sent to Photoroom automatically.** Only that button queues the hosted job.
+
+**Privacy.** The normal UI shows one line: "Processed by Photoroom. The provider states API images are discarded after
+processing." The details (eastern-US servers, the provider's exact statement, errors not billed) sit under **Details**.
+
+**Provider:** `photoroom` / `photoroom-remove-background` (`src/generation/providers/photoroom/`).
+
+- **A separate provider, not a second local engine**, because its credential, worker-backed queuing and spend gate are
+  per provider. It produces the same `background_removal` attempt, so lineage, promotion and deletion are identical.
+- **Contract** (Photoroom docs, 2026-11-08): `POST https://sdk.photoroom.com/v1/segment`, `x-api-key`, multipart
+  `image_file` (PNG / JPEG / WebP, ≤ 50 MB, ≤ 6,000 px), with `format=png&channels=rgba&size=full&crop=false`. There
+  is no idempotency key; "Calls that result in an error will not consume an image"; the default limit is 60 images a
+  minute.
+- **Secret.** `PRISM_STUDIO_PROVIDER_PHOTOROOM_API_KEY` is **worker only**.
+  - It is set as a header in `http-transport.ts`, which is loaded lazily, and never logged, returned or stored.
+  - The web queues the job through `PRISM_STUDIO_WORKER_BACKED_PROVIDERS=photoroom`.
+  - A worker without the key fails closed.
+- **Cost.**
+  - The price is defined once, in `config.ts` (`PHOTOROOM_DEFAULT_USD_PER_IMAGE`); a different contract price is the
+    `PRISM_STUDIO_PHOTOROOM_USD_PER_IMAGE` setting.
+  - The server recomputes the estimate and refuses a confirmation that doesn't match.
+  - The spend gate (paid generation on, under the cap) applies at submit and again in the worker.
+- **Retry safety.** The call is synchronous and ingested under the same lease. An ambiguous call (timeout, dropped
+  connection, 5xx) is never re-sent: the job stops with `submission_outcome_unknown` for the operator. A result held by
+  a worker that died is reported as `photoroom_result_not_retained` instead of being bought again.
+- **Output and pixel identity.**
+  - It is classified as **matting**.
+  - Prism accepts the result only if it is a PNG with an alpha channel; anything else is refused and never stored as a
+    cutout.
+  - The provenance records `foregroundPreservation: "provider-process"`, and `rgbUnchangedVerified` (true, false, or
+    null when it could not be checked from the bytes) — never Prism's local `rgbUnchanged` guarantee.
+  - It also records the API surface, the source checksum, the uncertainty score if Photoroom sends one, and the cost.
+
+**Tests:** `src/server/__tests__/background-removal-hosted.test.ts`, 10 tests on the fake transport, zero external
+calls:
+
+1. a plain-background image stays local, with no request;
+2. a busy image is refused locally, with no automatic Photoroom call;
+3. the explicit High Quality Removal queues Photoroom;
+4. the result is a PNG with alpha, the source is untouched, lineage and cost are recorded;
+5. the provenance claims match what was verified;
+6. a cross-character or out-of-project source is refused;
+7. the web queues without the key, and the worker fails closed without it;
+8. the key is never in browser code, `NEXT_PUBLIC` names or persisted data;
+9. the price confirmation, the paid switch, the cap and the configured price are enforced;
+10. a provider error leaves the source intact; a replay and extra ticks make one call; an ambiguous call is never
+    re-sent.

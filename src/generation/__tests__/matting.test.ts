@@ -91,8 +91,11 @@ describe("plain-background keyer", () => {
     expect(matte.kind).toBe("soft");
     const cut = composeCutout(src, matte);
     expect(cut.data.length).toBe(src.data.length);
+    // every RGB value is kept (counted, then asserted once: a per-pixel expect is slow under load)
+    let rgbChanged = 0;
     for (let i = 0; i < src.width * src.height; i++)
-      for (let c = 0; c < 3; c++) expect(cut.data[i * 4 + c]).toBe(src.data[i * 4 + c]);
+      for (let c = 0; c < 3; c++) if (cut.data[i * 4 + c] !== src.data[i * 4 + c]) rgbChanged++;
+    expect(rgbChanged).toBe(0);
     expect(cut.data[3]).toBe(0); // a background corner
     const face = (Math.round(src.height * 0.32) * src.width + src.width / 2) * 4 + 3;
     expect(cut.data[face]).toBe(255);
