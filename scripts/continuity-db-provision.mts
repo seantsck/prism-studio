@@ -7,12 +7,15 @@
 // secret is attached to it, and the secret comes from the environment: never in a migration, never printed.
 // Existing credentials are NOT replaced unless --rotate is passed. Independent of the generation worker role.
 import pg from "pg";
-import { PRISM_STUDIO_REF, redact, safeTarget, startScript } from "./lib/safety.mjs";
+import { resolveTarget, redact, safeTarget, startScript } from "./lib/safety.mjs";
 
 const ROLE = "prism_continuity_worker";
 const rotate = process.argv.includes("--rotate");
 
-const url = startScript({ mode: `provision ${ROLE} login${rotate ? " (rotate)" : ""}` });
+const url = startScript({
+  productionSafe: true,
+  mode: `provision ${ROLE} login${rotate ? " (rotate)" : ""}`,
+});
 const password = process.env.PRISM_STUDIO_CONTINUITY_DB_PASSWORD ?? "";
 
 if (password.length < 24) {
@@ -48,7 +51,7 @@ try {
     await client.query(stmt.rows[0].sql);
     console.log(`${ROLE}: LOGIN ${r.rolcanlogin ? "password rotated" : "enabled"} (connection limit 10).`);
   }
-  console.log(`Pooler login name: ${ROLE}.${PRISM_STUDIO_REF}  (admin URL targets ${safeTarget(url)})`);
+  console.log(`Pooler login name: ${ROLE}.${resolveTarget().ref}  (admin URL targets ${safeTarget(url)})`);
   console.log(
     "Set on the continuity worker host ONLY: PRISM_STUDIO_CONTINUITY_DB_URL=postgresql://<login>:<password>@<session-pooler-host>:5432/postgres",
   );

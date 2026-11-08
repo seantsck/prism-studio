@@ -108,7 +108,7 @@ in 5D.
 **Bootstrap.** Rehearse first, then run the same procedure for real:
 
 1. **5A.2 code:** replace the hard-coded DEV ref with an **environment-scoped target**:
-   - a required `PRISM_STUDIO_SUPABASE_REF` and `PRISM_STUDIO_ENVIRONMENT` (`development` | `staging` | `production`);
+   - a required `NEXT_PUBLIC_PRISM_STUDIO_SUPABASE_REF` and `NEXT_PUBLIC_PRISM_STUDIO_ENVIRONMENT` (`development` | `staging` | `rehearsal` | `production`);
    - every guard still refuses a database whose ref does not match;
    - destructive tooling (`db:seed --reset`, cleanup scripts, e2e fixtures, `previs-cleanup`) refuses
      `production` outright.
@@ -184,7 +184,7 @@ there it would start on the staging project's next production deploy:
 - `PRISM_STUDIO_GENERATION_PROVIDERS`, `PRISM_STUDIO_ALLOW_PAID_GENERATION`, `PRISM_STUDIO_MAX_GENERATION_USD`,
   `PRISM_STUDIO_WORKER_CONCURRENCY`, `PRISM_STUDIO_WORKER_HEALTH_PORT=8080`.
 - `RUNWAYML_API_SECRET`, Production only, after the paid gate is authorized.
-- In 5A.2: `PRISM_STUDIO_SUPABASE_REF` and `PRISM_STUDIO_ENVIRONMENT`.
+- In 5A.2: `NEXT_PUBLIC_PRISM_STUDIO_SUPABASE_REF` and `NEXT_PUBLIC_PRISM_STUDIO_ENVIRONMENT`.
 
 ## 6. Media daemon and the persisted media queue (5A.3)
 
@@ -294,3 +294,111 @@ health page and alerts, #42 and #47.
 - hide the failure-simulation mocks from production.
 
 No real provider calls, no Production project, and no public site.
+
+## 12. 5A.2 results (staging daemon, targeting, sizing)
+
+**Environment-scoped targeting (implemented).**
+
+- `NEXT_PUBLIC_PRISM_STUDIO_ENVIRONMENT` and `NEXT_PUBLIC_PRISM_STUDIO_SUPABASE_REF` decide which Supabase project a run
+  may touch. The browser checks the same target, which is why the names are public; they are not secret.
+- Unset keeps today's behaviour: development on DEV.
+- `development` and `staging` may only target DEV. `rehearsal` and `production` must name their own project and can
+  never target DEV.
+- Matching is exact, never a substring:
+  - a pooler user `<role>.<ref>`;
+  - a direct host `db.<ref>.supabase.co`;
+  - a public URL `https://<ref>.supabase.co`.
+- Production refuses every script not marked production-safe (only migrate, the migrate dry-run check, validate, and
+  role provisioning and checks are) and all dev-user tooling.
+- The application guard (`src/lib/supabase/target.ts`) and the script guard (`scripts/lib/safety.mjs`) are proven
+  identical by a parity test over every environment and ref combination.
+- Failure-simulation mock models (flaky, rejects, hang) are neither listed nor addressable in `production` or
+  `rehearsal`.
+
+**Generation image and SIGTERM.**
+
+- `docker build` passes: 1.29 GB, which includes dev dependencies; slimming is a follow-up.
+- The image runs as `node` with `NODE_ENV=production` and contains no `.env*` file.
+- With no credential it refuses to start (exit 2).
+- On staging DEV with mock providers only:
+  - `/healthz` returned 200;
+  - `docker stop` (SIGTERM) logged "finishing in-flight work, then exiting", then "worker stopped", and the container
+    exited 0 in about 2 s;
+  - no secret appeared in the container logs.
+- The containerized worker processed a real mock job end to end in 11 s (2 outputs, with checksums, in private
+  Storage). The run cleaned up exactly: hosted DEV showed 0 public-table differences and identical Storage.
+
+**`prism-studio-workers-staging` (created after those gates).**
+
+- Project `prj_y3tAqBjQgw8t1wKmk9enklS07BE6`, with All Deployments protection and no Git link.
+- No web output: a no-op build and one static placeholder page, so no request handler exists where the worker
+  credentials live.
+- Production environment variables (names only):
+  - `PRISM_STUDIO_WORKER_DB_URL` (sensitive), `PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY` (sensitive);
+  - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_PRISM_STUDIO_ENVIRONMENT=staging`;
+  - mock-only provider flags, paid generation `false`, health port 8080;
+  - no provider keys.
+- Deployed from a clean clone of `cbfe9a5` with `deploy/workers-staging/vercel.json` placed at its root
+  (`dpl_CD3w6eqqDkiD9oXEU7JTeqZDUpqW`). Vercel built the daemon image itself (`daemon.generation@sha256:73e76d6e…`).
+- Declared instances: **0**.
+- Acceptance window (06:56–07:01 UTC, the only time an instance ran):
+  1. Scaled to 1 through the REST override (`PUT /v1/projects/{id}/daemons/generation/instances`); it was ready in
+     12 s.
+  2. `daemon:acceptance` enqueued one mock job through the app's own submission path while **no local worker ran**.
+     The daemon, as `worker-9f4aa4f2`, completed it in 8 s, with 2 outputs and checksums in private Storage, cleaned
+     up.
+  3. A forced instance restart was issued while a job was `submitted`. The job completed exactly once (1 attempt) by
+     the graceful path. A restart that lands during a provider step is covered by leases, as designed.
+  4. The override was removed. Configured, desired, ready and total instances are all 0. Hosted DEV is identical to
+     before the window.
+- **Not yet verified on Vercel:** reading the daemon's own stdout in Vercel Logs. Per-instance logs need CLI ≥ 64.3
+  (`vercel daemons instances inspect`), which is not signed in on this machine, and the REST runtime-logs endpoint
+  returns nothing for daemons. The same image's output was verified secret-free locally.
+
+**Benchmarks** (local Docker, cgroup peak covering Node and ffmpeg; synthetic 1080p H.264/AAC inputs; no network):
+
+| Workload                                                                  | Limit          | Time                         | Peak memory                    |
+| ------------------------------------------------------------------------- | -------------- | ---------------------------- | ------------------------------ |
+| Generation worker: idle, then mock video jobs                             | 1 GiB / 1 vCPU | 9–11 s per job               | 106 MiB idle, **127 MiB** peak |
+| Conform: crop to 2.39:1 (6 × 8 s)                                         | 4 GiB / 2 vCPU | 85 s                         | 540 MiB                        |
+| Conform: pillarbox into 2.39:1 (6 × 8 s)                                  | 4 GiB / 2 vCPU | 113 s                        | 771 MiB                        |
+| QA frames (144 frames from 12 clips)                                      | 4 GiB / 2 vCPU | 241 s                        | 506 MiB                        |
+| Contact sheet (24 frames)                                                 | 4 GiB / 2 vCPU | 41 s                         | 509 MiB                        |
+| Episode render, single graph: 12 inputs, 96 s, dialogue + faded music bed | 4 GiB / 2 vCPU | 322 s (≈3.4× realtime)       | 1,601 MiB                      |
+| Episode render, single graph: 24 inputs, 48 s                             | 4 GiB / 2 vCPU | 168 s                        | 2,036 MiB                      |
+| Episode render, single graph: 48 inputs, 96 s                             | 4 GiB / 2 vCPU | 357 s                        | **3,652 MiB**                  |
+| Render + QA frames + 3 contact sheets, **concurrently**                   | 4 GiB / 2 vCPU | 876 s (vs ≈685 s sequential) | 1,785 MiB                      |
+
+There were no OOM kills in any run. The episode render is a representative workload; the real one is 5B.
+
+**Sizing decisions.**
+
+1. **Generation: `1Gi`, the smallest size.** The measured peak is 127 MiB. Real provider videos are larger than the
+   mock output: at concurrency 2 with roughly 100 MB ingests the peak stays well below 1 GiB.
+2. **Episode render must be segmented (a 5B design requirement).** A single filter graph grows by about 68 MiB per
+   input (1.6 GiB at 12 inputs, 3.65 GiB at 48). A 10-minute episode of 75–150 shots would be killed at 4 GiB, and
+   even at 8 GiB. 5B therefore renders in bounded memory, independent of shot count:
+   1. normalize each item alone into an intermediate with an identical encoding (bounded by conform at ≤ 0.8 GiB);
+   2. join the intermediates with the concat demuxer (stream copy);
+   3. mix audio in its own pass, chunked if the number of placements is large;
+   4. mux once.
+3. **Media and continuity share one `4Gi` (2 vCPU) instance.** That holds under two conditions: the render is
+   segmented as in point 2, and per-kind concurrency limits apply (one render at a time, one QA batch at a time).
+   - Measured concurrently, even with the unbounded single-graph render at 12 inputs, the peak was 1.79 GiB.
+   - With a segmented render, the expected peak is about 0.8 GiB (render) + 0.5 GiB (QA) + Node, well under 4 GiB.
+   - The cost is latency, not safety: concurrent work took about 28% longer than sequential.
+   - Continuity moves to its own `1Gi` instance only if continuity latency during renders becomes a problem; that
+     needs no image change.
+4. **Render speed.** About 3.4× realtime at 2 vCPU (preset `medium`, 804p): a 10-minute episode renders in about
+   34 min. An `8Gi` (4 vCPU) media instance roughly halves that. That is a cost and latency choice for Production, not
+   a correctness one.
+
+**Production starting footprint:** generation `1Gi`, plus media and continuity `4Gi` (shared), about 5 GiB running
+around the clock. Staging daemons stay at 0 except during acceptance.
+
+**Still open for 5A.2:**
+
+- **Production bootstrap rehearsal** ([runbook](phase-5a-production-bootstrap.md)). It needs the owner to create the
+  throwaway Supabase project and fill `.env.rehearsal`. There is no Supabase account access from this machine.
+- **Vercel daemon log check.** It needs one `vercel login` with CLI ≥ 64.3, or a look at the dashboard's Logs filtered
+  to `source:daemon`.

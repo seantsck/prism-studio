@@ -440,6 +440,65 @@ describe("registry and configuration", () => {
     expect(missingConfig(["PRISM_STUDIO_PROVIDER_ACME_API_KEY"], {})).toHaveLength(1);
   });
 
+  it("worker-backed providers can be queued by the web without copying execution secrets", () => {
+    const fake: GenerationProviderAdapter = {
+      ...new MockProvider(),
+      info: () => ({
+        provider: "acme",
+        displayName: "Acme",
+        kind: "real",
+        description: "",
+        requiredConfig: [providerEnvName("acme", "api_key")],
+        webhooks: false,
+      }),
+      listModels: () => [
+        { ...new MockProvider().listModels()[0]!, provider: "acme", modelId: "acme-1", kind: "real" },
+      ],
+    } as unknown as GenerationProviderAdapter;
+
+    const web = new ModelRegistry(
+      [fake],
+      readGenerationConfig({
+        PRISM_STUDIO_GENERATION_PROVIDERS: "acme",
+        PRISM_STUDIO_WORKER_BACKED_PROVIDERS: "acme",
+        PRISM_STUDIO_ALLOW_PAID_GENERATION: "true",
+        PRISM_STUDIO_MAX_GENERATION_USD: "1",
+      }),
+      {},
+    );
+    const webAvailability = web.availability()[0]!;
+    expect(webAvailability.configured).toBe(true);
+    expect(webAvailability.available).toBe(true);
+    expect(webAvailability.missingConfig).toEqual([]);
+
+    const worker = new ModelRegistry(
+      [fake],
+      readGenerationConfig({
+        PRISM_STUDIO_GENERATION_PROVIDERS: "acme",
+        PRISM_STUDIO_ALLOW_PAID_GENERATION: "true",
+        PRISM_STUDIO_MAX_GENERATION_USD: "1",
+      }),
+      {},
+    );
+    const workerAvailability = worker.availability()[0]!;
+    expect(workerAvailability.configured).toBe(false);
+    expect(workerAvailability.available).toBe(false);
+    expect(workerAvailability.missingConfig).toEqual(["PRISM_STUDIO_PROVIDER_ACME_API_KEY"]);
+
+    // fail closed: a config with NO worker-backed list (hand-built, or from before the field existed) treats nothing as
+    // worker-backed, so the strict credential check still applies (and nothing crashes)
+    const legacy: Partial<ReturnType<typeof readGenerationConfig>> = readGenerationConfig({
+      PRISM_STUDIO_GENERATION_PROVIDERS: "acme",
+      PRISM_STUDIO_ALLOW_PAID_GENERATION: "true",
+      PRISM_STUDIO_MAX_GENERATION_USD: "1",
+    });
+    delete legacy.workerBackedProviders;
+    const handBuilt = new ModelRegistry([fake], legacy as ReturnType<typeof readGenerationConfig>, {});
+    const handBuiltAvailability = handBuilt.availability()[0]!;
+    expect(handBuiltAvailability.available).toBe(false);
+    expect(handBuiltAvailability.missingConfig).toEqual(["PRISM_STUDIO_PROVIDER_ACME_API_KEY"]);
+  });
+
   it("default registry lists real models but only the free mock models are usable", () => {
     const r = createRegistry({ NODE_ENV: "development" });
     expect(r.models().map((m) => m.provider)).toContain("runway");

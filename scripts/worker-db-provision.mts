@@ -10,12 +10,15 @@
 // Afterwards build the worker connection string from the project's SESSION POOLER host (Supabase dashboard →
 // Connect). The login name through the shared pooler is `prism_generation_worker.<project ref>`.
 import pg from "pg";
-import { PRISM_STUDIO_REF, redact, safeTarget, startScript } from "./lib/safety.mjs";
+import { resolveTarget, redact, safeTarget, startScript } from "./lib/safety.mjs";
 
 const ROLE = "prism_generation_worker";
 const rotate = process.argv.includes("--rotate");
 
-const url = startScript({ mode: `provision ${ROLE} login${rotate ? " (rotate)" : ""}` });
+const url = startScript({
+  productionSafe: true,
+  mode: `provision ${ROLE} login${rotate ? " (rotate)" : ""}`,
+});
 const password = process.env.PRISM_STUDIO_WORKER_DB_PASSWORD ?? "";
 
 if (password.length < 24) {
@@ -55,10 +58,10 @@ try {
     console.log(`${ROLE}: LOGIN ${r.rolcanlogin ? "password rotated" : "enabled"} (connection limit 10).`);
   }
   console.log(`
-Pooler login name:  ${ROLE}.${PRISM_STUDIO_REF}
+Pooler login name:  ${ROLE}.${resolveTarget().ref}
 Pooler host:        use your project's Session Pooler host (currently the admin URL targets ${safeTarget(url)})
 Set on the worker host ONLY:
-  PRISM_STUDIO_WORKER_DB_URL=postgresql://${ROLE}.${PRISM_STUDIO_REF}:<password>@<session-pooler-host>:5432/postgres
+  PRISM_STUDIO_WORKER_DB_URL=postgresql://${ROLE}.${resolveTarget().ref}:<password>@<session-pooler-host>:5432/postgres
 Then verify:  npm run worker:db:check`);
 } catch (err) {
   console.error(redact(err instanceof Error ? err.message : String(err)));

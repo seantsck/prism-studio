@@ -409,13 +409,30 @@ function decodeToken(id: string): MockJobToken {
 export interface MockProviderOptions {
   /** Simulated latency per stage (queued, then processing). 0 completes on the first poll. */
   stageDelayMs?: number;
+  /**
+   * Offer the engineering-only failure-simulation models (flaky, rejecting, hanging). Default true (development, tests,
+   * staging). Production and rehearsal turn them off (Phase 5A.2): they are then neither listed nor addressable.
+   */
+  failureSimulations?: boolean;
 }
+
+/** Engineering fixtures that simulate provider failures; never offered to customers. */
+export const MOCK_FAILURE_SIMULATION_MODELS: readonly string[] = [
+  "mock-video-flaky",
+  "mock-video-rejects",
+  "mock-video-hang",
+];
 
 export class MockProvider implements GenerationProviderAdapter {
   private readonly delay: number;
+  private readonly defs: MockModelDef[];
 
   constructor(options: MockProviderOptions = {}) {
     this.delay = options.stageDelayMs ?? 1_500;
+    this.defs =
+      options.failureSimulations === false
+        ? defs.filter((d) => !MOCK_FAILURE_SIMULATION_MODELS.includes(d.model.modelId))
+        : defs;
   }
 
   info() {
@@ -430,11 +447,11 @@ export class MockProvider implements GenerationProviderAdapter {
   }
 
   listModels(): GenerationModel[] {
-    return defs.map((d) => structuredClone(d.model));
+    return this.defs.map((d) => structuredClone(d.model));
   }
 
   private def(modelId: string): MockModelDef {
-    const d = defs.find((x) => x.model.modelId === modelId);
+    const d = this.defs.find((x) => x.model.modelId === modelId);
     if (!d)
       throw new GenerationProviderError("invalid_request", "unknown_model", `Unknown mock model ${modelId}`);
     return d;
