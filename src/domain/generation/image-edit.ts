@@ -43,8 +43,10 @@ export function applyImageEdit(
       : [{ key: "action", title: "Edit", lines: [line] }, ...plan.sections],
   };
   const max = Math.max(1, model.capabilities.references.maxReferences);
+  // The source is NOT a Production Frame reference ("production_frame" means "conditioned on the canonical Production
+  // Frame", which the Production Frame promotion guard checks): it is the image being edited, so its role is neutral.
   const references = [
-    { assetId: edit.sourceAssetId, role: "production_frame" as const, order: 0, label: "the image to edit" },
+    { assetId: edit.sourceAssetId, role: "other" as const, order: 0, label: "the image to edit" },
     ...request.references.filter((r) => r.assetId !== edit.sourceAssetId),
   ]
     .slice(0, max)

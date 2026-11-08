@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRepository } from "@/data/memory-repository";
+import { buildShotContext } from "@/domain/context";
+import { candidateInputStaleness } from "@/domain/generated-production-frame";
 import { shotEditableAssetIds } from "@/domain/generation/image-edit";
 import { submitCandidateSet } from "@/generation/candidate-set";
 import { readGenerationConfig } from "@/generation/config";
@@ -378,6 +380,12 @@ describe("5B-I2 Edit Image — Shot (the existing Production Frame candidate wor
     expect(d2.assets.find((a) => a.id === sourceId)).toEqual(sourceBefore);
     // still a Production Frame candidate (the existing promotion flows apply to it unchanged)
     expect(shotEditableAssetIds(d2, shot.id).has(edited.outputAssetId!)).toBe(true);
+    // regression: the edit source is NOT a Production Frame reference, so the existing promotion guard does not read the
+    // edit as "generated from a Production Frame that is no longer canonical"
+    expect(
+      (edited.request as { references: Array<{ assetId: string; role: string }> }).references[0]!.role,
+    ).toBe("other");
+    expect(candidateInputStaleness(buildShotContext(d2, shot.id), edited)).toBeNull();
   });
 
   it("transparency on a Shot still is refused for a model without it (the planner blocks the set)", async () => {

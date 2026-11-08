@@ -9,7 +9,7 @@ import { expect, test, type Page } from "@playwright/test";
  *   C  Shot 3A:   Generate Image (the existing Production Frame candidate workflow) → Use as Storyboard Frame
  *   D  Character: Edit Image → new image with lineage → Use as Character Reference (5B-I2)
  *   E  Location:  generated image → Use as Location View (5B-I2)
- *   F  Shot 3A:   Edit Image → new Production Frame candidate with lineage → Use as Production Frame (5B-I2)
+ *   F  Shot 3A:   Edit Image → new Production Frame candidate with lineage → existing PF guard → Use as Storyboard (5B-I2)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -128,7 +128,7 @@ test("D — Character: Edit Image makes a NEW image with visible lineage, then U
   const panel = page.getByTestId("subject-images");
   const before = await panel.getByTestId("subject-image").count();
   const edit = panel.getByTestId("subject-image-edit");
-  await edit.locator("summary").click();
+  await edit.locator("summary").first().click();
   await edit.getByTestId("subject-image-edit-instruction").fill("change the coat to dark green");
   await edit.getByTestId("subject-image-edit-submit").click();
   await expect(page.getByText("Edit queued")).toBeVisible({ timeout: 30_000 });
@@ -175,7 +175,7 @@ test("F — Shot 3A: Edit Image is a new Production Frame candidate with lineage
   const shotUrl = page.url().split("?")[0]!;
   await page.goto(`${shotUrl}?section=production_frame`);
   const edit = page.getByTestId("shot-image-edit");
-  await edit.locator("summary").click();
+  await edit.locator("summary").first().click();
   await edit.getByTestId("shot-image-edit-instruction").fill("add falling snow");
   await edit.getByTestId("shot-image-edit-submit").click();
   await page.waitForURL(/\/candidates\/[0-9a-f-]{36}/, { timeout: 60_000 });
@@ -192,6 +192,11 @@ test("F — Shot 3A: Edit Image is a new Production Frame candidate with lineage
     .getByTestId("shot-generated-still")
     .filter({ has: page.getByTestId("shot-image-lineage") })
     .first();
+  // the EXISTING Production Frame promotion stays authoritative: the edit is accepted as a candidate (not "stale"), and
+  // 3A's 2.39:1 frame needs its production conform first (never a silent crop)
   await edited.getByTestId("shot-use-as-production-frame").click();
-  await expect(page.getByText("Production Frame set")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Create the production conform first.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/no longer the canonical one/)).toHaveCount(0);
+  await edited.getByTestId("shot-use-as-storyboard").click();
+  await expect(page.getByText("Added as a Storyboard frame")).toBeVisible({ timeout: 30_000 });
 });
