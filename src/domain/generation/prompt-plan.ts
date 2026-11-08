@@ -54,6 +54,42 @@ const ANIMATION_ORDER: readonly PromptSectionKey[] = [
 ];
 
 /**
+ * Phase 5B-I6: the reading order for a Production Frame STILL. Semantic content first (who, wearing what, where, doing
+ * what, feeling what), then cinematography (composition, camera, lighting), then continuity and constraints. A still
+ * has no duration, so the timing section is never included.
+ */
+const PRODUCTION_FRAME_ORDER: readonly PromptSectionKey[] = [
+  "subject",
+  "identity",
+  "wardrobe",
+  "environment",
+  "action",
+  "performance",
+  "composition",
+  "camera",
+  "lighting",
+  "continuity",
+  "hard_constraints",
+  "negative_constraints",
+  "provider_adaptation",
+];
+
+/**
+ * Phase 5B-I6: a small creative override from the creator, recorded on the attempt. `alternate_composition` varies
+ * ONLY framing, lens, camera position and composition. Neither kind may change identity, wardrobe, the Location or
+ * continuity: a protecting line always leads the hard constraints.
+ */
+export interface CreatorDirection {
+  kind: "additional" | "alternate_composition";
+  text: string;
+}
+export const MAX_CREATOR_DIRECTION = 500;
+export const CREATOR_DIRECTION_GUARD =
+  "Keep every Character's identity and wardrobe, the Location and continuity exactly as referenced; the creator direction never changes them.";
+export const ALTERNATE_COMPOSITION_LINE =
+  "Alternate composition: vary the framing, lens, camera position and composition; keep the same Characters, Looks and Location.";
+
+/**
  * Normalises the package into sectioned production intent. This is NOT a prompt string: each adapter
  * decides how to render sections for its model (one paragraph, tagged fields, multiple inputs...).
  * Pure and deterministic: the same package always yields the same plan.
@@ -65,10 +101,14 @@ export function buildPromptPlan(
    * composition lines are never rewritten and the Prompt Inspector can show the two separately.
    */
   adaptation?: { provider: string[] } | null,
-  /** Default `shot_output`. `animate_production_frame` (2H): motion-first wording and order. */
-  opts: { purpose?: GenerationPurpose } = {},
+  /**
+   * Default `shot_output`. `animate_production_frame` (2H): motion-first wording and order. `production_frame` (5B-I6):
+   * still-image order, no timing, and the optional creator direction.
+   */
+  opts: { purpose?: GenerationPurpose; direction?: CreatorDirection | null } = {},
 ): PromptPlan {
   const animate = opts.purpose === "animate_production_frame";
+  const still = opts.purpose === "production_frame";
   const names = pkg.characters.map((c) => c.name);
   const cam = pkg.camera;
   // v5: a locked assignment is described from its Continuity Lock's frozen facts (never the live library)
@@ -91,6 +131,8 @@ export function buildPromptPlan(
             c.physicalDescription
               ? `${c.name}: ${c.physicalDescription}`
               : `${c.name}: see identity references`,
+            // 5B-I6: a still is matched to the designated canonical identity image, which is sent first
+            still && c.canonicalIdentityAssetId && `${c.name}: match the canonical identity reference image`,
           ];
         const slots = lock.references
           .filter((r) => r.role === "identity")
@@ -136,6 +178,9 @@ export function buildPromptPlan(
       pkg.set?.geography && `geography: ${pkg.set.geography}`,
       // v4: the Shot's chosen canonical viewpoint, in words (its image, when the model takes one, is the evidence)
       ...(pkg.references.locationView ? describeLocationView(pkg.references.locationView) : []),
+      still &&
+        pkg.set?.visualReferences?.some((r) => r.kind === "canonical") &&
+        `${pkg.set.name}: match the canonical Location reference image`,
       pkg.continuity.weather && `weather: ${pkg.continuity.weather}`,
       pkg.continuity.timeOfDay && `time of day: ${pkg.continuity.timeOfDay}`,
       pkg.props.length ? `props: ${pkg.props.map((p) => p.name).join(", ")}` : "",
@@ -176,15 +221,23 @@ export function buildPromptPlan(
       ...pkg.timing.segments.map((s) => `${seconds(s.startMs)}–${seconds(s.endMs)}: ${s.label}`),
     ]),
     performance: clean(
-      pkg.performance.flatMap((p) => [
-        `${p.speaker}: "${p.text}"`,
-        p.emotion && `emotion: ${p.emotion}${p.intensity != null ? ` (${p.intensity}/10)` : ""}`,
-        p.objective && `objective: ${p.objective}`,
-        p.pace && `pace: ${p.pace}`,
-        p.selectedTake
-          ? `performed take ${p.selectedTake.takeNumber} (${seconds(p.selectedTake.durationMs)})`
-          : "no performed take",
-      ]),
+      pkg.performance.flatMap((p) =>
+        still
+          ? // a still shows the moment: the line being spoken and its emotion, never pace or a take's duration
+            [
+              `${p.speaker}: "${p.text}"`,
+              p.emotion && `emotion: ${p.emotion}${p.intensity != null ? ` (${p.intensity}/10)` : ""}`,
+            ]
+          : [
+              `${p.speaker}: "${p.text}"`,
+              p.emotion && `emotion: ${p.emotion}${p.intensity != null ? ` (${p.intensity}/10)` : ""}`,
+              p.objective && `objective: ${p.objective}`,
+              p.pace && `pace: ${p.pace}`,
+              p.selectedTake
+                ? `performed take ${p.selectedTake.takeNumber} (${seconds(p.selectedTake.durationMs)})`
+                : "no performed take",
+            ],
+      ),
     ),
     lighting: clean([
       pkg.lighting.mood && `mood: ${pkg.lighting.mood}`,
@@ -227,13 +280,37 @@ export function buildPromptPlan(
     bySection.composition = [ANIMATION_COMPOSITION_LINE, ...bySection.composition];
     bySection.hard_constraints = [ANIMATION_PRESERVE_LINE, ...bySection.hard_constraints];
   }
-  const order = animate ? ANIMATION_ORDER : PROMPT_SECTIONS;
+  // Phase 5B-I6: the creator's direction (Production Frame stills only); it never replaces a protected line
+  const direction = still ? normalizeDirection(opts.direction) : null;
+  if (direction) {
+    if (direction.kind === "alternate_composition") {
+      bySection.composition = [
+        direction.text
+          ? `${ALTERNATE_COMPOSITION_LINE} Direction: ${direction.text}`
+          : ALTERNATE_COMPOSITION_LINE,
+        ...bySection.composition.map((l) => `planned: ${l}`),
+      ];
+      bySection.camera = bySection.camera.map((l) => `planned ${l}`);
+    } else if (direction.text) {
+      bySection.composition = [...bySection.composition, `Creator direction: ${direction.text}`];
+    }
+    bySection.hard_constraints = [CREATOR_DIRECTION_GUARD, ...bySection.hard_constraints];
+  }
+  const order = animate ? ANIMATION_ORDER : still ? PRODUCTION_FRAME_ORDER : PROMPT_SECTIONS;
   return {
     version: 1,
     sections: order
       .map((key) => ({ key, title: TITLES[key], lines: bySection[key] }))
       .filter((s) => s.lines.length > 0),
   };
+}
+
+/** Phase 5B-I6: a trimmed, bounded direction; an empty "additional" direction is no direction at all. */
+export function normalizeDirection(d: CreatorDirection | null | undefined): CreatorDirection | null {
+  if (!d) return null;
+  const text = d.text.replace(/\s+/g, " ").trim().slice(0, MAX_CREATOR_DIRECTION);
+  if (d.kind === "additional" && !text) return null;
+  return { kind: d.kind, text };
 }
 
 /** Plain-text rendering used by simple adapters (and the Prompt Inspector's "compiled" fallback). */

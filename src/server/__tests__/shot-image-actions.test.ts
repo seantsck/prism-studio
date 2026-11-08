@@ -86,6 +86,52 @@ async function generatedStill(shotCode: string) {
   return { shot, attempt, data: after };
 }
 
+describe("5B-I6 Generate Production Frame: candidates and direction", () => {
+  it("asks for N candidates of the ONE chosen model and forwards Additional direction; bounds are enforced", async () => {
+    expect(
+      await startShotImage(
+        form({
+          shotId: "s1",
+          kind: "production_frame",
+          model: "mock/mock-image-1",
+          count: "3",
+          direction: "  a touch tighter ",
+        }),
+      ),
+    ).toEqual({ ok: true });
+    const sel = JSON.parse(String(world.created[0]!.get("selections")));
+    expect(sel).toHaveLength(3);
+    for (const s of sel)
+      expect(s).toEqual({
+        provider: "mock",
+        modelId: "mock-image-1",
+        direction: { kind: "additional", text: "a touch tighter" },
+      });
+    for (const count of ["0", "5", "x"])
+      expect(
+        await startShotImage(
+          form({ shotId: "s1", kind: "production_frame", model: "mock/mock-image-1", count }),
+        ),
+      ).toMatchObject({ ok: false, error: "Choose between 1 and 4 candidates." });
+    // Generate Alternatives with a direction; an edit and a storyboard are always one image
+    await startShotImage(
+      form({
+        shotId: "s1",
+        kind: "alternate_composition",
+        model: "mock/mock-image-1",
+        direction: "low angle",
+      }),
+    );
+    expect(JSON.parse(String(world.created.at(-1)!.get("selections")))[0].direction).toEqual({
+      kind: "alternate_composition",
+      text: "low angle",
+    });
+    await startShotImage(form({ shotId: "s1", kind: "storyboard", model: "mock/mock-image-1", count: "4" }));
+    expect(JSON.parse(String(world.created.at(-1)!.get("selections")))).toHaveLength(1);
+    expect(world.created).toHaveLength(3);
+  });
+});
+
 describe("5B-I1b Shot image actions", () => {
   it("Generate Image / Alternate Composition / Generate Storyboard delegate ONE chosen model to the Production Frame workflow", async () => {
     for (const kind of ["production_frame", "alternate_composition", "storyboard"]) {
@@ -96,11 +142,20 @@ describe("5B-I1b Shot image actions", () => {
     expect(world.created).toHaveLength(3);
     for (const fd of world.created) {
       expect(fd.get("generationPurpose")).toBe("production_frame");
-      expect(JSON.parse(String(fd.get("selections")))).toEqual([
-        { provider: "mock", modelId: "mock-image-1" },
-      ]);
       expect(fd.get("shotId")).toBe("s1");
     }
+    // 5B-I6: Alternate Composition carries its (protected) direction; the others are the plain chosen model
+    expect(world.created.map((fd) => JSON.parse(String(fd.get("selections"))))).toEqual([
+      [{ provider: "mock", modelId: "mock-image-1" }],
+      [
+        {
+          provider: "mock",
+          modelId: "mock-image-1",
+          direction: { kind: "alternate_composition", text: "" },
+        },
+      ],
+      [{ provider: "mock", modelId: "mock-image-1" }],
+    ]);
     expect(world.created.map((f) => f.get("title"))).toEqual([
       "Production Frame candidate",
       "Alternate composition",

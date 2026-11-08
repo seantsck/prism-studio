@@ -13,6 +13,9 @@ import { expect, test, type Page } from "@playwright/test";
  *   G  Character: upload a plain-background portrait → Remove Background → review → Use as Character Reference (5B-I3)
  *   H  Character: Visual Bible readiness → Use as Canonical → the large canonical image (5B-I4)
  *   I  Location:  Visual Bible readiness → Use as Canonical → views from E → replacement needs confirmation (5B-I5)
+ *   J  Shot 3A:   Production Frame Inputs from the Visual Bibles (Yumeko canonical + Look, the selected Lobby view,
+ *                 the Lobby canonical) → Generate Production Frame → Use as Production Frame → refresh → Generate
+ *                 Alternatives → the canonical frame is unchanged (5B-I6)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -196,9 +199,10 @@ test("F — Shot 3A: Edit Image is a new Production Frame candidate with lineage
     .filter({ has: page.getByTestId("shot-image-lineage") })
     .first();
   // the EXISTING Production Frame promotion stays authoritative: the edit is accepted as a candidate (not "stale"), and
-  // 3A's 2.39:1 frame needs its production conform first (never a silent crop)
-  await edited.getByTestId("shot-use-as-production-frame").click();
-  await expect(page.getByText("Create the production conform first.")).toBeVisible({ timeout: 30_000 });
+  // 3A's 2.39:1 frame needs its production conform first (never a silent crop): 5B-I6 offers the conform here, and
+  // never offers a Use as Production Frame that would be refused
+  await expect(edited.getByTestId("shot-create-conform")).toBeVisible();
+  await expect(edited.getByTestId("shot-use-as-production-frame")).toHaveCount(0);
   await expect(page.getByText(/no longer the canonical one/)).toHaveCount(0);
   await edited.getByTestId("shot-use-as-storyboard").click();
   await expect(page.getByText("Added as a Storyboard frame")).toBeVisible({ timeout: 30_000 });
@@ -324,4 +328,126 @@ test("I — Location: the Visual Bible shows readiness and views; Use as Canonic
       timeout: 30_000,
     });
   }
+});
+
+test("J — Shot 3A: Production Frame Inputs come from the Visual Bibles; promote one; alternatives never replace it", async ({
+  page,
+}) => {
+  test.setTimeout(420_000);
+  // ── the Lobby's Visual Bible, through the UI: a canonical appearance and a named Location View ──
+  await page.goto(`${P}/locations`);
+  const lobby = page
+    .locator("details")
+    .filter({ has: page.locator("summary", { hasText: "Grand Celeste Lobby" }) });
+  const openLobby = () =>
+    lobby.evaluate((el) => {
+      (el as HTMLDetailsElement).open = true;
+    });
+  await openLobby();
+  await lobby.getByRole("button", { name: "Unlock location" }).click();
+  await expect(lobby.getByRole("button", { name: "Lock location" })).toBeVisible({ timeout: 30_000 });
+  await openLobby();
+  const images = lobby.locator('[data-testid^="location-images-"]').getByTestId("subject-images");
+  await images.getByTestId("subject-image-intent").selectOption("establishing_view");
+  await images.getByTestId("subject-image-generate").click();
+  await expect(page.getByText("Image queued")).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(
+      async () => {
+        await page.reload();
+        await openLobby();
+        return images.getByTestId("subject-image").first().getAttribute("data-status");
+      },
+      { timeout: 90_000, intervals: [1500] },
+    )
+    .toBe("succeeded");
+  const still = images.getByTestId("subject-image").first();
+  await still.getByTestId("use-as-canonical-location").click();
+  await expect(page.getByText("Canonical appearance set")).toBeVisible({ timeout: 30_000 });
+  await openLobby();
+  await still.locator('input[name="lv_name"]').fill("Entrance toward elevators");
+  await still.getByTestId("use-as-location-view").click();
+  await expect(page.getByText("Location View saved")).toBeVisible({ timeout: 30_000 });
+  await openLobby();
+  await lobby.getByRole("button", { name: "Lock location" }).click();
+  await expect(lobby.getByRole("button", { name: "Unlock location" })).toBeVisible({ timeout: 30_000 });
+
+  // ── Shot 3A: select the view, then read the inputs ──
+  await page.goto(`${EP}/shots`);
+  await page.getByRole("link", { name: "3A", exact: true }).click();
+  await page.waitForURL(/\/shots\/[0-9a-f-]{36}/);
+  const shotUrl = page.url().split("?")[0]!;
+  await page.goto(`${shotUrl}?section=production_frame`);
+  await page.getByTestId("location-view-section").getByTestId("lv-choose").first().click();
+  await expect(page.getByTestId("lv-selected")).toBeVisible({ timeout: 30_000 });
+  await page.goto(`${shotUrl}?section=production_frame`);
+  const inputs = page.getByTestId("pf-inputs");
+  await expect(inputs).toBeVisible();
+  await expect(inputs.getByTestId("pf-inputs-characters")).toContainText("Yumeko — Canonical Identity");
+  await expect(inputs.getByTestId("pf-inputs-characters")).toContainText("Formal Black");
+  await expect(inputs.getByTestId("pf-inputs-location")).toContainText(
+    "Grand Celeste Lobby — Entrance toward elevators",
+  );
+  await expect(inputs.getByTestId("pf-inputs-location")).toContainText("Grand Celeste Lobby — Canonical");
+  await expect(page.getByTestId("pf-ready-characters")).toHaveAttribute("data-done", "true");
+  await expect(page.getByTestId("pf-ready-location")).toHaveAttribute("data-done", "true");
+
+  // ── Generate Production Frame (free mock model) → a candidate → Use as Production Frame ──
+  const stills = page.getByTestId("shot-generated-still");
+  const newest = async () =>
+    (await stills.count()) ? await stills.first().getAttribute("data-attempt") : null;
+  const before = await newest();
+  await page.getByTestId("shot-generate-image").click();
+  await page.waitForURL(/\/candidates\/[0-9a-f-]{36}/, { timeout: 60_000 });
+  await expect
+    .poll(
+      async () => {
+        await page.goto(`${shotUrl}?section=production_frame`);
+        return newest();
+      },
+      { timeout: 120_000, intervals: [2000] },
+    )
+    .not.toBe(before);
+  const freshAttempt = await stills.first().getAttribute("data-attempt");
+  const fresh = page.locator(`[data-testid="shot-generated-still"][data-attempt="${freshAttempt}"]`);
+  // 3A is 2.39:1: the existing production conform comes first (never a silent crop), then the promotion
+  await fresh.getByTestId("shot-create-conform").click();
+  await expect
+    .poll(
+      async () => {
+        await page.goto(`${shotUrl}?section=production_frame`);
+        return fresh.getByTestId("shot-use-as-production-frame").count();
+      },
+      { timeout: 60_000, intervals: [1500] },
+    )
+    .toBe(1);
+  await fresh.getByTestId("shot-use-as-production-frame").click();
+  // after a refresh, exactly that candidate is the canonical Production Frame
+  const current = page.locator('[data-testid="shot-generated-still"][data-current="true"]');
+  await expect
+    .poll(
+      async () => {
+        await page.goto(`${shotUrl}?section=production_frame`);
+        return current.count();
+      },
+      { timeout: 60_000, intervals: [1500] },
+    )
+    .toBe(1);
+  await expect(current).toHaveAttribute("data-attempt", freshAttempt!);
+  const pfBefore = await page.getByTestId("pf-selected").getAttribute("data-version");
+
+  // ── Generate Alternatives: a new candidate; the canonical Production Frame is unchanged ──
+  await page.getByTestId("shot-alternate-composition").click();
+  await page.waitForURL(/\/candidates\/[0-9a-f-]{36}/, { timeout: 60_000 });
+  await expect
+    .poll(
+      async () => {
+        await page.goto(`${shotUrl}?section=production_frame`);
+        return newest();
+      },
+      { timeout: 120_000, intervals: [2000] },
+    )
+    .not.toBe(freshAttempt);
+  await expect(current).toHaveAttribute("data-attempt", freshAttempt!);
+  await expect(page.getByTestId("pf-selected")).toHaveAttribute("data-version", pfBefore ?? "");
 });

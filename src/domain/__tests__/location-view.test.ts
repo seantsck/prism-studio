@@ -396,14 +396,27 @@ describe("references: role, order, dedupe, limits and truthful disclosure", () =
     ]);
   });
 
-  it("more references than the model accepts BLOCKS the candidate: nothing is truncated", () => {
-    const { data } = richShot();
+  it("over the model's limit (5B-I6): optional images are left out lowest priority first and NAMED; the view is essential", () => {
+    const { data, pf, view } = richShot();
     const lite = model("mock-image-lite"); // accepts 2
     const report = evaluateCompatibility(pkgOf(data, "2B"), lite, { purpose: "production_frame" });
-    expect(report.compatible).toBe(false);
-    expect(report.errors.map((e) => e.id)).toContain("references.too_many");
-    expect(report.errors.find((e) => e.id === "references.too_many")!.message).toMatch(
-      /4 references selected/,
+    // 4 selected: Production Frame, Storyboard (optional), Location View (essential), Location ref (optional)
+    expect(report.errors.map((e) => e.id)).not.toContain("references.too_many");
+    expect(report.used.references.map((r) => r.assetId)).toEqual([pf.assetId, view.assetId]);
+    const trimmed = report.ignoredFeatures.find((f) => f.id === "references.optional_trimmed")!;
+    expect(trimmed.label).toBe("2 optional references not sent");
+    expect(trimmed.impact).toMatch(/Approved storyboard frame/);
+    expect(trimmed.impact).toMatch(/reference/);
+    expect(report.inputs.find((i) => i.role === "location_view")).toMatchObject({
+      used: true,
+      tier: "essential",
+    });
+    // a model that cannot take even the essential view refuses, with the essential count
+    const one = structuredClone(lite);
+    one.capabilities.references.maxReferences = 0;
+    const refused = evaluateCompatibility(pkgOf(data, "2B"), one, { purpose: "production_frame" });
+    expect(refused.errors.find((e) => e.id === "references.too_many")?.message).toBe(
+      "This model supports 0 references, but this Shot requires 1 essential reference.",
     );
   });
 
