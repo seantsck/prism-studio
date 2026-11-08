@@ -129,15 +129,18 @@ describe("provider disclosure (worker banner) and the per-process mock opt-out",
     expect(
       readGenerationConfig({ NODE_ENV: "test", PRISM_STUDIO_GENERATION_PROVIDERS: "runway" })
         .enabledProviders,
-    ).toEqual(["runway", "mock"]);
+      // Phase 5B-I3: the free local matting engine is on by default outside production too
+    ).toEqual(["runway", "mock", "prism-matting"]);
     expect(
       readGenerationConfig({
         NODE_ENV: "test",
         PRISM_STUDIO_GENERATION_PROVIDERS: "runway",
         PRISM_STUDIO_DISABLE_MOCK_PROVIDER: "1",
       }).enabledProviders,
-    ).toEqual(["runway"]);
+    ).toEqual(["runway", "prism-matting"]);
     // production defaults are unchanged: the mock stays off unless explicitly enabled
     expect(readGenerationConfig({ NODE_ENV: "production" }).enabledProviders).not.toContain("mock");
+    // ...and so does the local matting engine: production lists it explicitly like every provider
+    expect(readGenerationConfig({ NODE_ENV: "production" }).enabledProviders).not.toContain("prism-matting");
   });
 });
