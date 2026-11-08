@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { locationVisualBibleSchema } from "./location-visual-bible";
 import {
   GENERATION_MODALITIES,
   REJECTION_CATEGORIES,
@@ -274,6 +275,11 @@ export const locationSchema = z.object({
   recurringProps: z.array(text),
   referenceAssetIds: z.array(id),
   locked: z.boolean(),
+  /**
+   * Phase 5B-I5: the Location Visual Bible (canonical identity + designated establishing views, plates and variants).
+   * Optional: absent (or `{}`) is an empty Visual Bible, and every package / fingerprint is then unchanged.
+   */
+  visualBible: locationVisualBibleSchema.optional(),
   /** Extension points kept from before the 3D Set existed; the 3D Set itself lives in `location_scene_documents`. */
   set3d: z
     .object({

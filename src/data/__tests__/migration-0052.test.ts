@@ -11,12 +11,11 @@ const FILE = "0052_character_visual_roles.sql";
 const code = readFileSync(`${DIR}/${FILE}`, "utf8").replace(/--.*$/gm, "");
 
 describe("migration 0052: Character Visual Bible roles", () => {
-  it("is the latest migration, follows 0051, and leaves 0051 byte-for-byte unchanged", () => {
+  it("follows 0051 and leaves 0051 byte-for-byte unchanged", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe(FILE);
-    expect(files.at(-2)).toBe("0051_generation_subjects.sql");
+    expect(files[files.indexOf(FILE) - 1]).toBe("0051_generation_subjects.sql");
     expect(checksumOf(readFileSync(`${DIR}/0051_generation_subjects.sql`, "utf8"))).toBe(
       "1f9ca2000ea666955bd518c848eb41ee58d3cc5bbd4296130ff5e5c8803bb620",
     );

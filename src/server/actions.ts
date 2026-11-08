@@ -377,6 +377,7 @@ async function saveLocation_impl(form: FormData) {
     referenceAssetIds: existing?.referenceAssetIds ?? [],
     locked: false,
     set3d: existing?.set3d ?? null,
+    ...(existing?.visualBible ? { visualBible: existing.visualBible } : {}),
   });
   await repo.upsert(data.project.id, "locations", location);
   refresh(slug);

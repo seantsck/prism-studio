@@ -18,6 +18,8 @@ import {
   removeBackground,
 } from "@/server/subject-image-actions";
 import { setCanonicalIdentity, setCharacterCutout } from "@/server/visual-bible-actions";
+import { setCanonicalLocation } from "@/server/location-visual-bible-actions";
+import { LOCATION_VIEW_KINDS, LOCATION_VIEW_KIND_LABEL } from "@/domain/location-view";
 import { RefreshWhileActive } from "./refresh-while-active";
 
 const ACTIVE = new Set(["queued", "running"]);
@@ -413,6 +415,16 @@ export function SubjectImagePanel(props: {
                       </ActionForm>
                     )}
                     {subject.kind === "location" ? (
+                      <ActionForm action={setCanonicalLocation} successMessage="Canonical appearance set">
+                        <input type="hidden" name="projectSlug" value={props.projectSlug} />
+                        <input type="hidden" name="locationId" value={subject.id} />
+                        <input type="hidden" name="attemptId" value={v.attempt.id} />
+                        <Button type="submit" size="sm" data-testid="use-as-canonical-location">
+                          Use as Canonical
+                        </Button>
+                      </ActionForm>
+                    ) : null}
+                    {subject.kind === "location" ? (
                       <ActionForm
                         action={saveAsLocationView}
                         successMessage="Location View saved"
@@ -424,10 +436,21 @@ export function SubjectImagePanel(props: {
                         <input
                           name="lv_name"
                           aria-label="View name"
-                          placeholder="View name"
-                          defaultValue={`Generated view #${v.attempt.attemptNumber}`}
+                          placeholder="Entrance → elevators"
+                          required
                           className="w-36"
                         />
+                        <select
+                          name="lv_kind"
+                          aria-label="View kind"
+                          defaultValue={intent === "establishing_view" ? "establishing" : "custom"}
+                        >
+                          {LOCATION_VIEW_KINDS.map((k) => (
+                            <option key={k} value={k}>
+                              {LOCATION_VIEW_KIND_LABEL[k]}
+                            </option>
+                          ))}
+                        </select>
                         <Button type="submit" size="sm" data-testid="use-as-location-view">
                           Use as Location View
                         </Button>

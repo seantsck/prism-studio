@@ -3,6 +3,11 @@ import { visualRoleOf } from "./visual-bible";
 import type { ShotCharacterContext, ShotContext } from "./context";
 import { fingerprint } from "./hash";
 import { locationViewPartIdentity } from "./location-view";
+import {
+  effectiveLocationReferenceIds,
+  locationBibleReferences,
+  shotTimeText,
+} from "./location-visual-bible";
 import { timelineFromContext } from "./timeline";
 
 /**
@@ -78,6 +83,13 @@ function withOrphans(ctx: ShotContext, entries: unknown[]): unknown[] {
   ];
 }
 
+/** Phase 5B-I5: the Visual Bible references this Shot receives (kind + Asset), present only when there are any. */
+function locationBiblePart(ctx: ShotContext): { visualBible?: Array<[string, string]> } {
+  if (!ctx.location) return {};
+  const refs = locationBibleReferences(ctx.location, shotTimeText(ctx));
+  return refs.length ? { visualBible: refs.map((r) => [r.kind, r.assetId]) } : {};
+}
+
 function locationPart(ctx: ShotContext): Record<string, unknown> | null {
   const view = locationViewPartIdentity(ctx);
   if (!ctx.location) return view ? { view } : null;
@@ -88,9 +100,12 @@ function locationPart(ctx: ShotContext): Record<string, unknown> | null {
     zones: ctx.location.zones,
     entrances: ctx.location.entrances,
     lighting: ctx.location.lighting,
-    referenceAssetIds: ctx.location.referenceAssetIds,
+    // 5B-I5: the references this Shot actually receives (a designated variant it does not use is left out);
+    // exactly the stored list when nothing is designated
+    referenceAssetIds: effectiveLocationReferenceIds(ctx.location, shotTimeText(ctx)),
     locked: ctx.location.locked,
     ...(view ? { view } : {}),
+    ...locationBiblePart(ctx),
   };
 }
 

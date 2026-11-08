@@ -12,6 +12,7 @@ import { expect, test, type Page } from "@playwright/test";
  *   F  Shot 3A:   Edit Image → new Production Frame candidate with lineage → existing PF guard → Use as Storyboard (5B-I2)
  *   G  Character: upload a plain-background portrait → Remove Background → review → Use as Character Reference (5B-I3)
  *   H  Character: Visual Bible readiness → Use as Canonical → the large canonical image (5B-I4)
+ *   I  Location:  Visual Bible readiness → Use as Canonical → views from E → replacement needs confirmation (5B-I5)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -285,4 +286,42 @@ test("H — Character: the Visual Bible shows readiness; Use as Canonical sets t
   await page.reload();
   await expect(page.getByTestId("vb-canonical-image")).toBeVisible();
   await expect(page.getByTestId("vb-item-canonical")).toHaveAttribute("data-done", "true");
+});
+
+test("I — Location: the Visual Bible shows readiness and views; Use as Canonical; replacing it needs confirmation", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.goto(`${P}/locations`);
+  const vb = page.locator('[data-testid^="location-visual-bible-"]').first();
+  const open = () =>
+    vb.evaluate((el) => {
+      const details = el.closest("details");
+      if (details) details.open = true;
+    });
+  await open();
+  await expect(vb.getByTestId("lvb-readiness")).toBeVisible();
+  await expect(vb.getByTestId("lvb-presets")).toBeVisible();
+  // story E made a Location View of this Location: it appears among the Views
+  await expect(vb.getByTestId("lvb-view").first()).toBeVisible();
+  await expect(vb.getByTestId("lvb-item-view")).toHaveAttribute("data-done", "true");
+  // stories B/E unlocked this Location; choose a generated image as the canonical appearance (an explicit act)
+  const source = vb.getByTestId("lvb-canonical-source");
+  const value = await source.locator("option", { hasText: "Generated" }).first().getAttribute("value");
+  await source.selectOption(value!);
+  await vb.getByTestId("lvb-use-as-canonical").click();
+  await expect(page.getByText("Canonical appearance set")).toBeVisible({ timeout: 30_000 });
+  await page.reload();
+  await open();
+  await expect(vb.getByTestId("lvb-canonical-image")).toBeVisible();
+  await expect(vb.getByTestId("lvb-item-canonical")).toHaveAttribute("data-done", "true");
+  // another image's "Use as Canonical" does not silently replace it
+  const details = vb.locator("xpath=ancestor::details[1]");
+  const images = details.getByTestId("subject-images").getByTestId("subject-image");
+  if ((await images.count()) > 1) {
+    await images.nth(1).getByTestId("use-as-canonical-location").click();
+    await expect(page.getByText(/already has a canonical appearance\. Confirm to replace it/)).toBeVisible({
+      timeout: 30_000,
+    });
+  }
 });
