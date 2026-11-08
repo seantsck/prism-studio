@@ -52,7 +52,7 @@ export default async function CharacterPage({
   const identityLocked = refs.length > 0 && refs.every((r) => r.locked);
   const hidden = <input type="hidden" name="projectSlug" value={slug} />;
   // Phase 5B-I1: this Character's generated images (its own subject attempts; never Shot history)
-  const images = await subjectImageState({ kind: "character", characterId: c.id });
+  const images = await subjectImageState({ kind: "character", characterId: c.id }, data);
 
   return (
     <div>
@@ -72,6 +72,7 @@ export default async function CharacterPage({
             subject={{ kind: "character", id: c.id, looks: looks.map((l) => ({ id: l.id, name: l.name })) }}
             attempts={images.attempts}
             models={images.models}
+            sources={images.sources}
           />
         </div>
         <Panel title="Character">

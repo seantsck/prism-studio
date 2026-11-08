@@ -23,7 +23,9 @@ import type {
  *   gpt-image-2.5-flare     fastest high-quality everyday generation
  *   gpt-image-2.5-sunburst  editing precision (the edit endpoint's default model)
  * Not registered:
- *   - gpt-image-2.6-sunburst / -flare: documented and priced, but NOT typed by openai@7.32.0 and not ZDR-listed.
+ *   - gpt-image-2.6-sunburst / -flare: AVAILABLE UPSTREAM, NOT YET DEFAULT (see OPENAI_IMAGE_UPSTREAM_NOT_DEFAULT).
+ * The direct Images API is used (not the Responses image-generation tool, which also serves 2.5) because a Prism job is a
+ * discrete generation or edit, not a conversational image session.
  *   - gpt-image-2: transparency is preview only; gpt-image-1.5 / -1-mini / chatgpt-image-latest shut down 2026-12-01;
  *     gpt-image-1 / dall-e-* are shut down.
  *
@@ -221,3 +223,30 @@ export const OPENAI_IMAGE_MODELS: readonly CatalogModel[] = [
     concurrencyNote: "Usage-tier limits (Build tier: 250K TPM / 20 images per minute).",
   },
 ];
+
+/**
+ * Models OpenAI offers that Prism knows about but does NOT offer yet. Never registered as models (nothing can select
+ * them); kept so the architecture, the docs and the tests name the exact conditions for adopting them.
+ */
+export const OPENAI_IMAGE_UPSTREAM_NOT_DEFAULT = [
+  {
+    modelId: "gpt-image-2.6-sunburst",
+    status: "available upstream, not yet default",
+    upstreamReleased: "2026-11-04",
+    until: [
+      "the installed SDK types the model (no untyped workaround)",
+      "Prism's privacy requirements are satisfied",
+      "its Zero Data Retention status is acceptable for unreleased customer material (not listed as of 2026-11-07)",
+    ],
+  },
+  {
+    modelId: "gpt-image-2.6-flare",
+    status: "available upstream, not yet default",
+    upstreamReleased: "2026-11-04",
+    until: [
+      "the installed SDK types the model (no untyped workaround)",
+      "Prism's privacy requirements are satisfied",
+      "its Zero Data Retention status is acceptable for unreleased customer material (not listed as of 2026-11-07)",
+    ],
+  },
+] as const;

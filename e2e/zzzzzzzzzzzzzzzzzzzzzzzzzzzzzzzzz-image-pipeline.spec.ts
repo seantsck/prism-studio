@@ -7,6 +7,9 @@ import { expect, test, type Page } from "@playwright/test";
  *   A  Character: Generate Image → finished → Use as Character Reference
  *   B  Location:  Generate Image → finished → Use as Location Reference
  *   C  Shot 3A:   Generate Image (the existing Production Frame candidate workflow) → Use as Storyboard Frame
+ *   D  Character: Edit Image → new image with lineage → Use as Character Reference (5B-I2)
+ *   E  Location:  generated image → Use as Location View (5B-I2)
+ *   F  Shot 3A:   Edit Image → new Production Frame candidate with lineage → Use as Production Frame (5B-I2)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -112,4 +115,83 @@ test("C — Shot 3A: Generate Image through the Production Frame workflow, then 
     .toBeGreaterThan(0);
   await page.getByTestId("shot-generated-still").first().getByTestId("shot-use-as-storyboard").click();
   await expect(page.getByText("Added as a Storyboard frame")).toBeVisible({ timeout: 30_000 });
+});
+
+// ── Phase 5B-I2: Edit Image (free mock models), lineage and promotion ──
+
+test("D — Character: Edit Image makes a NEW image with visible lineage, then Use as Character Reference", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await page.goto(`${P}/characters`);
+  await page.getByRole("link", { name: "Yumeko" }).first().click();
+  const panel = page.getByTestId("subject-images");
+  const before = await panel.getByTestId("subject-image").count();
+  const edit = panel.getByTestId("subject-image-edit");
+  await edit.locator("summary").click();
+  await edit.getByTestId("subject-image-edit-instruction").fill("change the coat to dark green");
+  await edit.getByTestId("subject-image-edit-submit").click();
+  await expect(page.getByText("Edit queued")).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(
+      async () => {
+        await page.reload();
+        const first = panel.getByTestId("subject-image").first();
+        return (await panel.getByTestId("subject-image").count()) > before
+          ? first.getAttribute("data-status")
+          : "waiting";
+      },
+      { timeout: 90_000, intervals: [1500] },
+    )
+    .toBe("succeeded");
+  const first = panel.getByTestId("subject-image").first();
+  await expect(first.getByTestId("subject-image-lineage")).toContainText("→ edit attempt #");
+  await first.locator('select[name="slot"]').selectOption("additional");
+  await first.getByTestId("use-as-character-reference").click();
+  await expect(page.getByText("Character reference set")).toBeVisible({ timeout: 30_000 });
+});
+
+test("E — Location: a generated image becomes a Location View", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto(`${P}/locations`);
+  const card = page.locator('[data-testid^="location-images-"]').first();
+  await card.evaluate((el) => {
+    const details = el.closest("details");
+    if (details) details.open = true;
+  });
+  const first = card.getByTestId("subject-images").getByTestId("subject-image").first();
+  await first.locator('input[name="lv_name"]').fill("Generated establishing view");
+  await first.getByTestId("use-as-location-view").click();
+  await expect(page.getByText("Location View saved")).toBeVisible({ timeout: 30_000 });
+});
+
+test("F — Shot 3A: Edit Image is a new Production Frame candidate with lineage, then Use as Production Frame", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  await page.goto(`${EP}/shots`);
+  await page.getByRole("link", { name: "3A", exact: true }).click();
+  await page.waitForURL(/\/shots\/[0-9a-f-]{36}/);
+  const shotUrl = page.url().split("?")[0]!;
+  await page.goto(`${shotUrl}?section=production_frame`);
+  const edit = page.getByTestId("shot-image-edit");
+  await edit.locator("summary").click();
+  await edit.getByTestId("shot-image-edit-instruction").fill("add falling snow");
+  await edit.getByTestId("shot-image-edit-submit").click();
+  await page.waitForURL(/\/candidates\/[0-9a-f-]{36}/, { timeout: 60_000 });
+  await expect
+    .poll(
+      async () => {
+        await page.goto(`${shotUrl}?section=production_frame`);
+        return page.getByTestId("shot-image-lineage").count();
+      },
+      { timeout: 120_000, intervals: [2000] },
+    )
+    .toBeGreaterThan(0);
+  const edited = page
+    .getByTestId("shot-generated-still")
+    .filter({ has: page.getByTestId("shot-image-lineage") })
+    .first();
+  await edited.getByTestId("shot-use-as-production-frame").click();
+  await expect(page.getByText("Production Frame set")).toBeVisible({ timeout: 30_000 });
 });

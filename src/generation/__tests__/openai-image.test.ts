@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { GenerationProviderError } from "@/domain/generation/errors";
 import type { GenerationRequest } from "@/domain/generation/schemas";
+import { OPENAI_IMAGE_UPSTREAM_NOT_DEFAULT } from "@/domain/generation/models/openai-image-catalog";
 import { readGenerationConfig } from "../config";
 import { MockProvider } from "../providers/mock";
 import { OPENAI_IMAGE_SECRET_ENV, OpenAIImageProvider } from "../providers/openai-image/adapter";
@@ -98,6 +99,11 @@ describe("openai-image: registry, credentials and the worker-only secret", () =>
     }
     // not enabled by default: nothing is usable without an explicit deployment decision
     expect(r.usable().some((m) => m.provider === "openai-image")).toBe(false);
+    // GPT Image 2.6 is known upstream but NOT offered (not SDK-typed, not ZDR-listed)
+    for (const u of OPENAI_IMAGE_UPSTREAM_NOT_DEFAULT) {
+      expect(u.status).toBe("available upstream, not yet default");
+      expect(r.model("openai-image", u.modelId)).toBeNull();
+    }
   });
 
   it("the web queues it as worker-backed WITHOUT the key; the worker without the key fails closed", () => {
