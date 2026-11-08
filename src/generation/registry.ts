@@ -20,6 +20,7 @@ export function providerDisclosure(
 }
 import { RunwayProvider } from "./providers/runway/adapter";
 import { OpenAIImageProvider } from "./providers/openai-image/adapter";
+import { PrismMattingProvider } from "./providers/prism-matting/adapter";
 
 /**
  * Server-side model registry: which providers/models exist, what they can do, whether they are enabled and
@@ -66,9 +67,13 @@ export class ModelRegistry {
     return this.config.paid;
   }
 
-  /** Mock models are free; everything else bills and is subject to the spend gate. */
+  /**
+   * Mock models are free, and so is a provider that explicitly declares it runs locally at no cost (Phase 5B-I3, the
+   * local matting engine). Everything else bills and is subject to the spend gate.
+   */
   billsMoney(model: GenerationModel): boolean {
-    return model.kind !== "mock";
+    if (model.kind === "mock") return false;
+    return this.adapters_.get(model.provider)?.info().localNoCost !== true;
   }
 
   availabilityOf(model: GenerationModel): ModelAvailability {
@@ -125,5 +130,7 @@ export function createRegistry(
   adapters.push(new RunwayProvider({ env }));
   // Phase 5B-I2: GPT Image directly through OpenAI (the worker owns its key; the SDK loads lazily on first call)
   adapters.push(new OpenAIImageProvider({ env }));
+  // Phase 5B-I3: background removal inside the worker (local, free, deterministic; never a generative redraw)
+  adapters.push(new PrismMattingProvider());
   return new ModelRegistry(adapters, config, env);
 }

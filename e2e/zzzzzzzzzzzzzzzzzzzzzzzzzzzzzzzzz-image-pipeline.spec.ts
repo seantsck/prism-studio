@@ -10,6 +10,7 @@ import { expect, test, type Page } from "@playwright/test";
  *   D  Character: Edit Image → new image with lineage → Use as Character Reference (5B-I2)
  *   E  Location:  generated image → Use as Location View (5B-I2)
  *   F  Shot 3A:   Edit Image → new Production Frame candidate with lineage → existing PF guard → Use as Storyboard (5B-I2)
+ *   G  Character: upload a plain-background portrait → Remove Background → review → Use as Character Reference (5B-I3)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -199,4 +200,66 @@ test("F — Shot 3A: Edit Image is a new Production Frame candidate with lineage
   await expect(page.getByText(/no longer the canonical one/)).toHaveCount(0);
   await edited.getByTestId("shot-use-as-storyboard").click();
   await expect(page.getByText("Added as a Storyboard frame")).toBeVisible({ timeout: 30_000 });
+});
+
+// ── Phase 5B-I3: Remove Background (local, free; nothing generated) ──
+
+test("G — Character: upload a portrait, Remove Background, review original vs cutout, Use as Character Reference", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const { portraitFixturePng } = await import("../src/generation/matting/fixture");
+  await page.goto(`${P}/characters`);
+  await page.getByRole("link", { name: "Yumeko" }).first().click();
+  await expect(page.getByTestId("subject-images")).toBeVisible();
+  // the seeded identity references are locked: the creator explicitly unlocks them before uploading (as in story B)
+  const unlock = page.getByRole("button", { name: "Unlock", exact: true });
+  if ((await unlock.count()) > 0) {
+    await unlock.first().click();
+    await expect(page.getByRole("button", { name: "Lock all", exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+  }
+  // an unlocked identity slot takes the fixture (the real upload path: magic bytes, checksum, private storage)
+  const slot = page.locator('[data-testid^="identity-slot-"]').last();
+  await expect(slot).toBeVisible();
+  await slot.getByTestId("identity-file").setInputFiles({
+    name: "yumeko-portrait.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(portraitFixturePng()),
+  });
+  await slot.getByTestId("identity-upload").click();
+  await page.waitForTimeout(1500);
+  await page.reload();
+  const panel = page.getByTestId("subject-images");
+  const box = panel.getByTestId("subject-image-remove-background");
+  await box.locator("summary").first().click();
+  const option = box
+    .getByTestId("remove-background-source")
+    .locator("option", { hasText: "Reference:" })
+    .first();
+  await box.getByTestId("remove-background-source").selectOption((await option.getAttribute("value"))!);
+  await box.getByTestId("remove-background-submit").click();
+  await expect(page.getByText("Background removal queued")).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(
+      async () => {
+        await page.reload();
+        const cut = panel
+          .getByTestId("subject-image")
+          .filter({ has: page.getByTestId("subject-image-cutout-lineage") });
+        return (await cut.count()) > 0 ? cut.first().getAttribute("data-status") : "waiting";
+      },
+      { timeout: 90_000, intervals: [1500] },
+    )
+    .toBe("succeeded");
+  const cut = panel
+    .getByTestId("subject-image")
+    .filter({ has: page.getByTestId("subject-image-cutout-lineage") })
+    .first();
+  await expect(cut.getByTestId("subject-image-cutout-review")).toBeVisible();
+  await expect(cut.getByTestId("subject-image-cutout-lineage")).toContainText("→ background removal #");
+  await cut.locator('select[name="slot"]').selectOption("additional");
+  await cut.getByTestId("use-as-character-reference").click();
+  await expect(page.getByText("Character reference set")).toBeVisible({ timeout: 30_000 });
 });

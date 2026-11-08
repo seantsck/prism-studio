@@ -15,6 +15,7 @@ import {
   saveAsLocationReference,
   saveAsLocationView,
   saveAsLookReference,
+  removeBackground,
 } from "@/server/subject-image-actions";
 import { RefreshWhileActive } from "./refresh-while-active";
 
@@ -124,6 +125,35 @@ export function SubjectImagePanel(props: {
           </p>
         )}
 
+        {subject.kind === "character" && sources.length > 0 ? (
+          <details className="rounded border border-line p-2" data-testid="subject-image-remove-background">
+            <summary className="cursor-pointer text-sm">Remove Background</summary>
+            <ActionForm
+              action={removeBackground}
+              successMessage="Background removal queued"
+              className="mt-2 flex flex-wrap items-end gap-2"
+            >
+              {hidden}
+              <Field label="Source image" hint="The original is never changed; the cutout is a new image.">
+                <select name="sourceAssetId" data-testid="remove-background-source">
+                  {sources.map((s) => (
+                    <option key={s.assetId} value={s.assetId}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Button type="submit" variant="primary" data-testid="remove-background-submit">
+                Remove Background
+              </Button>
+              <p className="w-full text-[11px] text-muted">
+                Cuts the subject out of a plain / studio background, keeping its original pixels (no
+                generation, no upload, free). Busy backgrounds are refused for now.
+              </p>
+            </ActionForm>
+          </details>
+        ) : null}
+
         {preferredEditor && sources.length > 0 ? (
           <details className="rounded border border-line p-2" data-testid="subject-image-edit">
             <summary className="cursor-pointer text-sm">Edit Image</summary>
@@ -194,10 +224,18 @@ export function SubjectImagePanel(props: {
             const settings = v.attempt.modelSettings as {
               intent?: string;
               editSourceAssetId?: string;
+              backgroundRemovalSourceAssetId?: string;
+              purpose?: string;
               providerOptions?: { background?: string };
             };
             const intent = String(settings.intent ?? "");
             const editedFrom = settings.editSourceAssetId ?? null;
+            // Phase 5B-I3: a cutout (background removal of an existing image; nothing generated)
+            const cutFrom =
+              settings.purpose === "background_removal"
+                ? (settings.backgroundRemovalSourceAssetId ?? null)
+                : null;
+            const cutSource = cutFrom ? sources.find((s) => s.assetId === cutFrom) : undefined;
             return (
               <li
                 key={v.attempt.id}
@@ -208,7 +246,10 @@ export function SubjectImagePanel(props: {
                 <div className="mb-1 flex items-center justify-between text-xs">
                   <span>
                     #{v.attempt.attemptNumber} ·{" "}
-                    {SUBJECT_IMAGE_INTENT_LABEL[intent as keyof typeof SUBJECT_IMAGE_INTENT_LABEL] ?? "Image"}{" "}
+                    {cutFrom
+                      ? "Cutout"
+                      : (SUBJECT_IMAGE_INTENT_LABEL[intent as keyof typeof SUBJECT_IMAGE_INTENT_LABEL] ??
+                        "Image")}{" "}
                     · {v.attempt.model}
                   </span>
                   <Badge
@@ -229,10 +270,43 @@ export function SubjectImagePanel(props: {
                     {v.attempt.attemptNumber} → {out ? "this new image" : "new image (pending)"}
                   </p>
                 ) : null}
+                {cutFrom ? (
+                  <p className="mb-1 text-[11px] text-muted" data-testid="subject-image-cutout-lineage">
+                    Source: {sourceLabel.get(cutFrom) ?? "an earlier image"} → background removal #
+                    {v.attempt.attemptNumber} → {out ? "this transparent cutout" : "cutout (pending)"}
+                  </p>
+                ) : null}
                 {settings.providerOptions?.background === "transparent" ? (
                   <Badge tone="neutral">Transparent background</Badge>
                 ) : null}
-                {out ? (
+                {out && cutFrom ? (
+                  <div className="grid grid-cols-2 gap-1" data-testid="subject-image-cutout-review">
+                    <figure>
+                      {cutSource?.url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={cutSource.url} alt="" className="w-full rounded" />
+                      ) : (
+                        <div className="text-[11px] text-muted">Original</div>
+                      )}
+                      <figcaption className="text-[10px] text-muted">Original (unchanged)</figcaption>
+                    </figure>
+                    <figure>
+                      {/* checkerboard so transparency is visible */}
+                      <div className="rounded bg-[length:16px_16px] bg-[conic-gradient(#ddd_25%,#fff_0_50%,#ddd_0_75%,#fff_0)]">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={assetUrl(out.asset) ?? undefined}
+                          alt=""
+                          className="w-full rounded"
+                          data-testid="subject-image-preview"
+                        />
+                      </div>
+                      <figcaption className="text-[10px] text-muted">
+                        Cutout (PNG with alpha) · kept as an asset
+                      </figcaption>
+                    </figure>
+                  </div>
+                ) : out ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={assetUrl(out.asset) ?? undefined}
@@ -240,6 +314,19 @@ export function SubjectImagePanel(props: {
                     className="w-full rounded"
                     data-testid="subject-image-preview"
                   />
+                ) : null}
+                {out && v.attempt.status === "succeeded" && subject.kind === "character" && !cutFrom ? (
+                  <ActionForm
+                    action={removeBackground}
+                    successMessage="Background removal queued"
+                    className="mt-1"
+                  >
+                    {hidden}
+                    <input type="hidden" name="sourceAssetId" value={out.asset.id} />
+                    <Button type="submit" size="sm" data-testid="remove-background">
+                      Remove Background
+                    </Button>
+                  </ActionForm>
                 ) : null}
                 {out && v.attempt.status === "succeeded" ? (
                   <div className="mt-2 flex flex-wrap gap-1">

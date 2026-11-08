@@ -489,7 +489,9 @@ describe("registry and configuration", () => {
   it("default registry lists real models but only the free mock models are usable", () => {
     const r = createRegistry({ NODE_ENV: "development" });
     expect(r.models().map((m) => m.provider)).toContain("runway");
-    expect(r.usable().every((m) => m.kind === "mock")).toBe(true);
+    // nothing billable is usable by default: only the free mock models and the free local matting engine (5B-I3)
+    expect(r.usable().every((m) => !r.billsMoney(m))).toBe(true);
+    expect(r.usable().every((m) => m.kind === "mock" || m.provider === "prism-matting")).toBe(true);
     expect(r.usable().map((m) => m.modelId)).toContain("mock-video-1");
     // credentials alone are not enough: provider enabled + configured + paid generation switched on
     const configured = createRegistry({
