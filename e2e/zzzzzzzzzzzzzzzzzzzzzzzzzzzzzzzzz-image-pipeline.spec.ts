@@ -211,24 +211,24 @@ test("G — Character: upload a portrait, Remove Background, review original vs 
   const { portraitFixturePng } = await import("../src/generation/matting/fixture");
   await page.goto(`${P}/characters`);
   await page.getByRole("link", { name: "Yumeko" }).first().click();
-  // an unlocked identity slot takes the fixture (the real upload path: magic bytes, checksum, private storage)
-  const slots = page.locator('[data-testid^="identity-slot-"]');
-  const count = await slots.count();
-  let slot = null;
-  for (let i = 0; i < count; i++) {
-    const s = slots.nth(i);
-    if ((await s.getByText("locked").count()) === 0) {
-      slot = s;
-      break;
-    }
+  await expect(page.getByTestId("subject-images")).toBeVisible();
+  // the seeded identity references are locked: the creator explicitly unlocks them before uploading (as in story B)
+  const unlock = page.getByRole("button", { name: "Unlock", exact: true });
+  if ((await unlock.count()) > 0) {
+    await unlock.first().click();
+    await expect(page.getByRole("button", { name: "Lock all", exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
   }
-  expect(slot).not.toBeNull();
-  await slot!.getByTestId("identity-file").setInputFiles({
+  // an unlocked identity slot takes the fixture (the real upload path: magic bytes, checksum, private storage)
+  const slot = page.locator('[data-testid^="identity-slot-"]').last();
+  await expect(slot).toBeVisible();
+  await slot.getByTestId("identity-file").setInputFiles({
     name: "yumeko-portrait.png",
     mimeType: "image/png",
     buffer: Buffer.from(portraitFixturePng()),
   });
-  await slot!.getByTestId("identity-upload").click();
+  await slot.getByTestId("identity-upload").click();
   await page.waitForTimeout(1500);
   await page.reload();
   const panel = page.getByTestId("subject-images");

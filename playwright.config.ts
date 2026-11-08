@@ -321,7 +321,8 @@ export default defineConfig({
       url: "http://localhost:3116",
       reuseExistingServer: false,
       timeout: 120_000,
-      env: memoryEnv(3116),
+      // Phase 5B-I3: `next start` runs in production mode, where the local matting engine is listed explicitly
+      env: { ...memoryEnv(3116), PRISM_STUDIO_GENERATION_PROVIDERS: "prism-matting" },
     },
   ],
 });
