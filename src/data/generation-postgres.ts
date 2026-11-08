@@ -205,6 +205,9 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
       if (replay.rows[0]) {
         const job = parseJob(replay.rows[0]);
         const att = await c.query("select * from generation_attempts where id = $1", [job.attemptId]);
+        // 0051 compatibility: a key of a Character / Location attempt is not this Shot submission's
+        if (att.rows[0]?.shot_id == null)
+          throw new GenerationSubmitError("not_found", "That submission belongs to another generation.");
         return { attempt: parseAttempt(att.rows[0]), job, duplicate: true };
       }
 
@@ -401,7 +404,9 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
 
   async getAttemptView(attemptId: string) {
     return this.tx(async (c) => {
-      const rows = (await c.query("select * from generation_attempts where id = $1", [attemptId])).rows;
+      const rows = (
+        await c.query("select * from generation_attempts where id = $1 and shot_id is not null", [attemptId])
+      ).rows;
       return (await this.views(c, rows))[0] ?? null;
     });
   }
@@ -423,6 +428,8 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
       if (replay.rows[0]) {
         const job = parseJob(replay.rows[0]);
         const att = await c.query("select * from generation_attempts where id = $1", [job.attemptId]);
+        if (att.rows[0]?.shot_id != null)
+          throw new GenerationSubmitError("not_found", "That submission belongs to another generation.");
         return { attempt: parseSubjectAttempt(att.rows[0]), job, duplicate: true };
       }
 
@@ -685,8 +692,11 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
 
   async reviewAttempt(attemptId: string, review: ReviewInput) {
     return this.tx(async (c) => {
-      const cur = (await c.query("select * from generation_attempts where id = $1 for update", [attemptId]))
-        .rows[0];
+      const cur = (
+        await c.query("select * from generation_attempts where id = $1 and shot_id is not null for update", [
+          attemptId,
+        ])
+      ).rows[0];
       if (!cur) return null;
       const attempt = parseAttempt(cur);
       if (review.status === "approved") {

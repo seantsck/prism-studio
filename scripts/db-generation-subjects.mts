@@ -116,6 +116,48 @@ try {
   const rows = await owner.listProjectGenerations(pid, {});
   check("the project generations listing stays Shot-only", !rows.some((r) => created.includes(r.attempt.id)));
 
+  // ── 0051 migration-compatibility gate: Shot readers given a subject id ──
+  check(
+    "the Shot attempt view says 'not found' for a subject id",
+    (await owner.getAttemptView(a.attempt.id)) === null,
+  );
+  check(
+    "review (a Shot act) says 'not found' for a subject id",
+    (await owner.reviewAttempt(a.attempt.id, {
+      status: "approved",
+      categories: [],
+      reason: "",
+      notes: "",
+      now: new Date().toISOString(),
+    })) === null,
+  );
+  let crossKind = "";
+  try {
+    const shot = data.shots[0]!;
+    await owner.createAttemptWithJob({
+      attempt: { ...(reloaded.attempts[0] ?? ({} as never)), id: randomUUID(), shotId: shot.id },
+      job: {
+        id: randomUUID(),
+        idempotencyKey: inputA.job.idempotencyKey,
+        maxAttempts: 1,
+        queuePriority: 0,
+        currency: "USD",
+      },
+      estimate: inputA.estimate,
+      expectedShotUpdatedAt: shot.updatedAt,
+      expectedProjectRevision: null,
+      limits: inputA.limits,
+      now: new Date().toISOString(),
+    } as never);
+  } catch (e) {
+    crossKind = (e as Error).message;
+  }
+  check(
+    "a Shot submission reusing a subject's key is refused cleanly",
+    /belongs to another generation/.test(crossKind),
+    crossKind.slice(0, 80),
+  );
+
   // ── RLS: strangers and anon see nothing; strangers cannot create in someone else's project ──
   check(
     "a stranger lists nothing",

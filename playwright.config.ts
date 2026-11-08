@@ -92,6 +92,9 @@ const ISOLATED_4D = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-setup-copy.spec.ts";
 /** The Phase 4E environment-limits spec: its own memory server (it imports a splat, calibrates and saves a set). */
 const ISOLATED_4E = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-environment-limits.spec.ts";
 
+/** The Phase 5B image-pipeline spec: its own memory server (it generates Character, Location and Shot images). */
+const ISOLATED_5B = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-image-pipeline.spec.ts";
+
 /**
  * TEST SERVERS ONLY. Playwright's request client reuses keep-alive sockets; at Node's default idle-close boundary
  * (5 s + 1 s buffer) the server could close a socket while `page.request` was reusing it, giving ECONNRESET before
@@ -122,6 +125,7 @@ export default defineConfig({
         ISOLATED_4C2,
         ISOLATED_4D,
         ISOLATED_4E,
+        ISOLATED_5B,
       ],
       use: { baseURL: "http://localhost:3102" },
     },
@@ -189,6 +193,11 @@ export default defineConfig({
       name: "memory-4e-isolated",
       testMatch: ISOLATED_4E,
       use: { baseURL: "http://localhost:3115" },
+    },
+    {
+      name: "memory-5b-isolated",
+      testMatch: ISOLATED_5B,
+      use: { baseURL: "http://localhost:3116" },
     },
   ],
   // Started in order: the first builds; the others serve the same build from separate processes (separate stores).
@@ -306,6 +315,13 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 120_000,
       env: memoryEnv(3115),
+    },
+    {
+      command: `npx next start -p 3116 ${KEEP_ALIVE}`,
+      url: "http://localhost:3116",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: memoryEnv(3116),
     },
   ],
 });
