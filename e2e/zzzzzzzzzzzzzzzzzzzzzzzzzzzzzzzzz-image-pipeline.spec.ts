@@ -11,6 +11,7 @@ import { expect, test, type Page } from "@playwright/test";
  *   E  Location:  generated image → Use as Location View (5B-I2)
  *   F  Shot 3A:   Edit Image → new Production Frame candidate with lineage → existing PF guard → Use as Storyboard (5B-I2)
  *   G  Character: upload a plain-background portrait → Remove Background → review → Use as Character Reference (5B-I3)
+ *   H  Character: Visual Bible readiness → Use as Canonical → the large canonical image (5B-I4)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -262,4 +263,26 @@ test("G — Character: upload a portrait, Remove Background, review original vs 
   await cut.locator('select[name="slot"]').selectOption("additional");
   await cut.getByTestId("use-as-character-reference").click();
   await expect(page.getByText("Character reference set")).toBeVisible({ timeout: 30_000 });
+});
+
+// ── Phase 5B-I4: Character Visual Bible ──
+
+test("H — Character: the Visual Bible shows readiness; Use as Canonical sets the large canonical image", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.goto(`${P}/characters`);
+  await page.getByRole("link", { name: "Yumeko" }).first().click();
+  const vb = page.getByTestId("visual-bible");
+  await expect(vb).toBeVisible();
+  await expect(vb.getByTestId("vb-readiness")).toBeVisible();
+  // the earlier stories made generated images: choose one as the canonical identity (an explicit act)
+  const source = vb.getByTestId("vb-canonical-source");
+  const value = await source.locator("option", { hasText: "Generated" }).first().getAttribute("value");
+  await source.selectOption(value!);
+  await vb.getByTestId("vb-use-as-canonical").click();
+  await expect(page.getByText("Canonical identity set")).toBeVisible({ timeout: 30_000 });
+  await page.reload();
+  await expect(page.getByTestId("vb-canonical-image")).toBeVisible();
+  await expect(page.getByTestId("vb-item-canonical")).toHaveAttribute("data-done", "true");
 });

@@ -1,4 +1,5 @@
 import { fingerprint } from "../hash";
+import { expressionOf, orderedIdentityRefs, visualRoleOf } from "../visual-bible";
 import type { Asset, Character, CharacterLook, IdentityRef, Location, ProjectData } from "../schemas";
 import type { GenerationReference, PromptPlan } from "./schemas";
 
@@ -12,6 +13,10 @@ import type { GenerationReference, PromptPlan } from "./schemas";
 export const CHARACTER_IMAGE_INTENTS = [
   "portrait",
   "character_reference",
+  // Phase 5B-I4: Visual Bible presets (angles), fed into the same pipeline
+  "three_quarter",
+  "profile",
+  "full_body",
   "look_sheet",
   "outfit_variant",
   "expression_variant",
@@ -29,6 +34,9 @@ export type SubjectImageIntent = CharacterImageIntent | LocationImageIntent;
 export const SUBJECT_IMAGE_INTENT_LABEL: Record<SubjectImageIntent, string> = {
   portrait: "Portrait",
   character_reference: "Character reference",
+  three_quarter: "3/4 view",
+  profile: "Profile",
+  full_body: "Full body",
   look_sheet: "Look sheet",
   outfit_variant: "Outfit variant",
   expression_variant: "Expression variant",
@@ -46,6 +54,13 @@ const COMPOSITION: Record<SubjectImageIntent, string[]> = {
   character_reference: [
     "Full-body character reference, front view, neutral pose, plain neutral background, even light.",
     "The whole figure is visible from head to shoes; nothing cropped.",
+  ],
+  three_quarter: [
+    "Three-quarter view of the character (face turned about 45 degrees), head to waist, plain neutral background, even light.",
+  ],
+  profile: ["Side profile of the character, head and shoulders, plain neutral background, even light."],
+  full_body: [
+    "Full-body view, front, neutral standing pose, plain neutral background, even light; head to shoes, nothing cropped.",
   ],
   look_sheet: [
     "Character look sheet: the same person shown full-body from the front, three-quarter and side on one sheet.",
@@ -137,19 +152,34 @@ export function buildSubjectImagePlan(data: ProjectData, input: SubjectImageInpu
           ...line("Accessories", look.accessories),
         ],
       });
-    const identity = data.identityRefs
-      .filter((r: IdentityRef) => r.characterId === character.id && hasStoredImage(assetOf(r.assetId)))
-      .map((r) => ({
-        assetId: r.assetId!,
-        label: `${character.name} identity — ${r.slot.replace("_", " ")}`,
-      }));
+    // Phase 5B-I4 priority: canonical identity → selected Look → the other identity references (deterministic; the
+    // request trims to the model's limit from the END, so the highest-priority images always survive)
+    const identityAll = orderedIdentityRefs(
+      data.identityRefs.filter(
+        (r: IdentityRef) => r.characterId === character.id && hasStoredImage(assetOf(r.assetId)),
+      ),
+    ).map((r) => ({
+      assetId: r.assetId!,
+      canonical: visualRoleOf(r) === "canonical",
+      label:
+        visualRoleOf(r) === "canonical"
+          ? `${character.name} canonical identity`
+          : visualRoleOf(r) === "cutout"
+            ? `${character.name} cutout`
+            : visualRoleOf(r) === "expression"
+              ? `${character.name} expression — ${expressionOf(r) ?? "expression"}`
+              : `${character.name} identity — ${r.slot.replace("_", " ")}`,
+    }));
+    const canonicalFirst = identityAll.filter((r) => r.canonical);
+    const identity = identityAll.filter((r) => !r.canonical);
     const lookRefs = (look?.referenceAssetIds ?? [])
       .filter((id) => hasStoredImage(assetOf(id)))
       .map((id) => ({ assetId: id, label: `${character.name} Look "${look!.name}"` }));
     const seen = new Set<string>();
     for (const [role, list] of [
-      ["identity", identity],
+      ["identity", canonicalFirst],
       ["character_look", lookRefs],
+      ["identity", identity],
     ] as const)
       for (const r of list)
         if (!seen.has(r.assetId)) {

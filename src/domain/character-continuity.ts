@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { orderedIdentityRefs, visualRoleOf } from "./visual-bible";
 import { fingerprint } from "./hash";
 import {
   IDENTITY_SLOTS,
@@ -500,6 +501,8 @@ export interface ResolvedCharacterAppearance {
   identityReferenceAssetIds: string[];
   /** per identity image: its slot (null when live and unknown) */
   identityReferences: Array<{ assetId: string; slot: IdentitySlot | null; label: string }>;
+  /** Phase 5B-I4: the Character's canonical identity image (live only; null when none is designated). */
+  canonicalIdentityAssetId?: string | null;
 }
 
 export function liveAppearance(c: {
@@ -507,9 +510,12 @@ export function liveAppearance(c: {
   look: CharacterLook | null;
   identityRefs: IdentityRef[];
 }): ResolvedCharacterAppearance {
-  const refs = c.identityRefs.flatMap((r) =>
+  // Phase 5B-I4: canonical identity first (unchanged order when no Visual Bible role exists)
+  const ordered = orderedIdentityRefs(c.identityRefs);
+  const refs = ordered.flatMap((r) =>
     r.assetId ? [{ assetId: r.assetId, slot: r.slot, label: r.label }] : [],
   );
+  const canonical = ordered.find((r) => visualRoleOf(r) === "canonical" && r.assetId)?.assetId ?? null;
   return {
     source: "live",
     lock: null,
@@ -534,6 +540,7 @@ export function liveAppearance(c: {
       : null,
     identityReferenceAssetIds: refs.map((r) => r.assetId),
     identityReferences: refs,
+    ...(canonical ? { canonicalIdentityAssetId: canonical } : {}),
   };
 }
 
