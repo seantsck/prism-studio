@@ -484,6 +484,19 @@ describe("registry and configuration", () => {
     expect(workerAvailability.configured).toBe(false);
     expect(workerAvailability.available).toBe(false);
     expect(workerAvailability.missingConfig).toEqual(["PRISM_STUDIO_PROVIDER_ACME_API_KEY"]);
+
+    // fail closed: a config with NO worker-backed list (hand-built, or from before the field existed) treats nothing as
+    // worker-backed, so the strict credential check still applies (and nothing crashes)
+    const legacy: Partial<ReturnType<typeof readGenerationConfig>> = readGenerationConfig({
+      PRISM_STUDIO_GENERATION_PROVIDERS: "acme",
+      PRISM_STUDIO_ALLOW_PAID_GENERATION: "true",
+      PRISM_STUDIO_MAX_GENERATION_USD: "1",
+    });
+    delete legacy.workerBackedProviders;
+    const handBuilt = new ModelRegistry([fake], legacy as ReturnType<typeof readGenerationConfig>, {});
+    const handBuiltAvailability = handBuilt.availability()[0]!;
+    expect(handBuiltAvailability.available).toBe(false);
+    expect(handBuiltAvailability.missingConfig).toEqual(["PRISM_STUDIO_PROVIDER_ACME_API_KEY"]);
   });
 
   it("default registry lists real models but only the free mock models are usable", () => {
