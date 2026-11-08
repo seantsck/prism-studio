@@ -5,6 +5,7 @@ import { generationRequestSchema, type CostEstimate, type PromptPlan } from "@/d
 import { hasStoredImage } from "@/domain/generation/subject-image";
 import type { ProjectData } from "@/domain/schemas";
 import type { GenerationConfig } from "./config";
+import { PHOTOROOM_MODEL_ID, PHOTOROOM_PROVIDER_ID } from "./providers/photoroom/config";
 import { PRISM_MATTING_PROVIDER_ID } from "./providers/prism-matting/adapter";
 import type { ModelRegistry } from "./registry";
 
@@ -17,6 +18,11 @@ import type { ModelRegistry } from "./registry";
  * Asset the worker ingests. The source is never modified.
  */
 export const DEFAULT_MATTING_ENGINE = "plain-background-keyer-1";
+/** Phase 5B-I3b: the hosted engine, used only on an explicit "High Quality Removal". */
+export const HOSTED_MATTING_ENGINE = {
+  provider: PHOTOROOM_PROVIDER_ID,
+  modelId: PHOTOROOM_MODEL_ID,
+} as const;
 
 export type PreparedBackgroundRemoval =
   | { ok: true; input: CreateSubjectImageAttemptInput; estimate: CostEstimate }
@@ -30,8 +36,8 @@ export function prepareBackgroundRemoval(args: {
   userId: string | null;
   idempotencyKey: string;
   config: GenerationConfig;
-  /** Default: the local plain-background engine. */
-  engine?: string;
+  /** Default: the local plain-background engine (`prism-matting`). */
+  engine?: { provider: string; modelId: string };
   now?: Date;
 }): PreparedBackgroundRemoval {
   const character = args.data.characters.find((c) => c.id === args.characterId);
@@ -39,13 +45,23 @@ export function prepareBackgroundRemoval(args: {
   const source = args.data.assets.find((a) => a.id === args.sourceAssetId);
   if (!hasStoredImage(source) || source.projectId !== args.data.project.id)
     return { ok: false, reasons: ["That image no longer exists in this project."] };
-  const engine = args.engine ?? DEFAULT_MATTING_ENGINE;
-  const model = args.registry.model(PRISM_MATTING_PROVIDER_ID, engine);
-  const adapter = args.registry.adapter(PRISM_MATTING_PROVIDER_ID);
+  const engine = args.engine ?? { provider: PRISM_MATTING_PROVIDER_ID, modelId: DEFAULT_MATTING_ENGINE };
+  const model = args.registry.model(engine.provider, engine.modelId);
+  const adapter = args.registry.adapter(engine.provider);
   if (!model || !adapter)
     return { ok: false, reasons: ["Background removal is not available on this server."] };
-  if (!args.registry.availabilityOf(model).available)
-    return { ok: false, reasons: ["Background removal is not enabled on this server."] };
+  const availability = args.registry.availabilityOf(model);
+  if (!availability.available)
+    return {
+      ok: false,
+      reasons: [
+        !availability.enabled || availability.missingConfig.length
+          ? `${model.displayName} is not set up on this server.`
+          : !availability.paidGenerationEnabled
+            ? "Paid generation is switched off on this server."
+            : "Background removal is not enabled on this server.",
+      ],
+    };
 
   const plan: PromptPlan = {
     version: 1,

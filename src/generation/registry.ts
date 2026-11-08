@@ -20,6 +20,7 @@ export function providerDisclosure(
 }
 import { RunwayProvider } from "./providers/runway/adapter";
 import { OpenAIImageProvider } from "./providers/openai-image/adapter";
+import { PhotoroomProvider } from "./providers/photoroom/adapter";
 import { PrismMattingProvider } from "./providers/prism-matting/adapter";
 
 /**
@@ -132,5 +133,7 @@ export function createRegistry(
   adapters.push(new OpenAIImageProvider({ env }));
   // Phase 5B-I3: background removal inside the worker (local, free, deterministic; never a generative redraw)
   adapters.push(new PrismMattingProvider());
+  // Phase 5B-I3b: hosted, paid matting; only on an explicit High Quality Removal (the worker owns its key)
+  adapters.push(new PhotoroomProvider({ env }));
   return new ModelRegistry(adapters, config, env);
 }

@@ -73,6 +73,7 @@ export default async function CharacterPage({
             attempts={images.attempts}
             models={images.models}
             sources={images.sources}
+            hostedMatting={images.hostedMatting}
           />
         </div>
         <Panel title="Character">
