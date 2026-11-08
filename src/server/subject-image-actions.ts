@@ -75,7 +75,7 @@ async function startSubjectImage_impl(form: FormData) {
   const clientKey = str(form, "idempotencyKey");
   const prepared = prepareSubjectImage({
     data,
-    input: { subject, direction: str(form, "direction") },
+    input: { subject, direction: subjectDirection(form, intent) },
     registry: getRegistry(),
     provider,
     modelId,
@@ -213,6 +213,9 @@ async function saveAsLocationView_impl(form: FormData): Promise<ActionResult> {
   if (!location) throw new UserFacingError("That location no longer exists.");
   if (location.locked)
     throw new UserFacingError("That location is locked. Unlock it before changing its references.");
+  // Phase 5B-I5: a Location View is a named, recurring camera view: the creator names it explicitly
+  if (!str(form, "lv_name"))
+    throw new UserFacingError("Name the Location View (for example: Entrance → elevators).");
   const { assetId } = await generatedImage(data, str(form, "attemptId"), { locationId: location.id });
   if (!location.referenceAssetIds.includes(assetId)) {
     await (
@@ -226,7 +229,7 @@ async function saveAsLocationView_impl(form: FormData): Promise<ActionResult> {
   fd.set("projectSlug", slug);
   fd.set("locationId", location.id);
   fd.set("assetId", assetId);
-  fd.set("lv_name", str(form, "lv_name") || "Generated view");
+  fd.set("lv_name", str(form, "lv_name"));
   fd.set("lv_kind", str(form, "lv_kind") || "establishing");
   const result = await createLocationViewFromReference(fd);
   refresh(slug);
@@ -236,6 +239,14 @@ async function saveAsLocationView_impl(form: FormData): Promise<ActionResult> {
 
 export async function saveAsLocationView(form: FormData): Promise<ActionResult> {
   return runAction(() => saveAsLocationView_impl(form), { name: "saveAsLocationView" });
+}
+
+/** Phase 5B-I5: a Time-of-Day Variant names its time / state ("night"); it leads the creator's own direction. */
+function subjectDirection(form: FormData, intent: string): string {
+  const direction = str(form, "direction");
+  const variant = str(form, "variant").slice(0, 60);
+  if (intent !== "time_variant" || !variant) return direction;
+  return [`Time of day / state: ${variant}.`, direction].filter(Boolean).join(" ");
 }
 
 /**

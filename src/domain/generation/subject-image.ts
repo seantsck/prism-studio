@@ -1,4 +1,5 @@
 import { fingerprint } from "../hash";
+import { locationBibleOf } from "../location-visual-bible";
 import { expressionOf, orderedIdentityRefs, visualRoleOf } from "../visual-bible";
 import type { Asset, Character, CharacterLook, IdentityRef, Location, ProjectData } from "../schemas";
 import type { GenerationReference, PromptPlan } from "./schemas";
@@ -26,6 +27,10 @@ export const LOCATION_IMAGE_INTENTS = [
   "background",
   "establishing_view",
   "alternate_angle",
+  // Phase 5B-I5: Location Visual Bible presets over the same pipeline
+  "interior_view",
+  "exterior_view",
+  "time_variant",
 ] as const;
 export type CharacterImageIntent = (typeof CHARACTER_IMAGE_INTENTS)[number];
 export type LocationImageIntent = (typeof LOCATION_IMAGE_INTENTS)[number];
@@ -44,6 +49,9 @@ export const SUBJECT_IMAGE_INTENT_LABEL: Record<SubjectImageIntent, string> = {
   background: "Background",
   establishing_view: "Establishing view",
   alternate_angle: "Alternate angle",
+  interior_view: "Interior view",
+  exterior_view: "Exterior view",
+  time_variant: "Time-of-day variant",
 };
 
 /** What the image is asked to show, per intent (composition only; the subject's facts come from the Bible). */
@@ -76,6 +84,13 @@ const COMPOSITION: Record<SubjectImageIntent, string[]> = {
     "Establishing wide shot of the location as an audience first sees it; no people in focus.",
   ],
   alternate_angle: ["The same location from a different camera angle than its existing views; no people."],
+  interior_view: [
+    "Interior view of the location, wide, eye level, readable layout and materials; no people in focus.",
+  ],
+  exterior_view: ["Exterior view of the location, wide, as approached from outside; no people in focus."],
+  time_variant: [
+    "The same place, same layout and materials, shown in the time of day or state named in the direction; no people in focus.",
+  ],
 };
 
 export type ImageSubject =
@@ -213,9 +228,28 @@ export function buildSubjectImagePlan(data: ProjectData, input: SubjectImageInpu
           : []),
       ],
     });
-    for (const id of location.referenceAssetIds ?? [])
-      if (hasStoredImage(assetOf(id)))
-        refs.push({ assetId: id, role: "location", order: refs.length, label: `${location.name} reference` });
+    // Phase 5B-I5: the canonical location leads, then establishing views and plates, then the other references
+    const bible = locationBibleOf(location);
+    const ordered: Array<[string, string]> = [
+      ...(bible.canonicalAssetId
+        ? [[bible.canonicalAssetId, `${location.name} canonical location`] as [string, string]]
+        : []),
+      ...bible.entries
+        .filter((e) => e.role === "establishing")
+        .map((e) => [e.assetId, `${location.name} establishing view`] as [string, string]),
+      ...bible.entries
+        .filter((e) => e.role === "plate")
+        .map((e) => [e.assetId, `${location.name} background plate`] as [string, string]),
+      ...(location.referenceAssetIds ?? []).map(
+        (id) => [id, `${location.name} reference`] as [string, string],
+      ),
+    ];
+    const seenRefs = new Set<string>();
+    for (const [id, label] of ordered)
+      if (!seenRefs.has(id) && hasStoredImage(assetOf(id))) {
+        seenRefs.add(id);
+        refs.push({ assetId: id, role: "location", order: refs.length, label });
+      }
     subjectSnapshot = {
       kind: "location",
       locationId: location.id,

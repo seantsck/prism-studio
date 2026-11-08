@@ -28,7 +28,14 @@ vi.mock("@/server/visual-bible-actions", () => ({
   clearVisualBibleDesignation: vi.fn(),
 }));
 
+vi.mock("@/server/location-visual-bible-actions", () => ({
+  setCanonicalLocation: vi.fn(),
+  addLocationDesignation: vi.fn(),
+  clearLocationDesignation: vi.fn(),
+}));
+
 const { SubjectImagePanel } = await import("../subject-image-panel");
+const { LocationVisualBiblePanel } = await import("../location-visual-bible-panel");
 const { VisualBiblePanel } = await import("../visual-bible-panel");
 
 const SRC = "11111111-1111-4111-8111-111111111111";
@@ -210,5 +217,77 @@ describe("5B-I3b + I4 merged Character image UI", () => {
     expect(count(html, "vb-generate-portrait")).toBeGreaterThanOrEqual(1);
     // the hosted offer belongs to the Images panel only, never duplicated into the Visual Bible
     expect(html).not.toContain("High Quality Removal");
+  });
+
+  it("5B-I5: a Location image offers Use as Canonical and a NAMED Location View (no default name)", () => {
+    const html = renderToStaticMarkup(
+      createElement(SubjectImagePanel, {
+        projectSlug: "ojousama",
+        subject: { kind: "location", id: "loc-1" },
+        attempts: [
+          view(1, {
+            provider: "mock",
+            status: "succeeded",
+            settings: { intent: "alternate_angle" },
+            out: true,
+          }),
+        ] as never,
+        models,
+        sources: [],
+      }),
+    );
+    expect(count(html, "use-as-canonical-location")).toBe(1);
+    expect(count(html, "use-as-location-view")).toBe(1);
+    expect(count(html, "use-as-location-reference")).toBe(1);
+    expect(count(html, "use-as-canonical")).toBe(0);
+    expect(html).toMatch(/<input(?=[^>]*name="lv_name")(?=[^>]*required)[^>]*>/);
+    expect(html).not.toContain("Generated view #");
+    expect(html).toContain('name="lv_kind"');
+  });
+
+  it("5B-I5: the Location Visual Bible renders readiness, presets, views and designations once", () => {
+    const data = buildSeedProject();
+    const lobby = data.locations.find((l) => l.name === "Grand Celeste Lobby")!;
+    const unlocked = {
+      ...data,
+      locations: data.locations.map((l) => (l.id === lobby.id ? { ...l, locked: false } : l)),
+    };
+    const html = renderToStaticMarkup(
+      createElement(LocationVisualBiblePanel, {
+        data: { ...unlocked, locationViews: [] },
+        locationId: lobby.id,
+        slug: "ojousama",
+        sources: [{ assetId: SRC, label: "Lobby photo", url: null }],
+        models,
+      }),
+    );
+    expect(count(html, `location-visual-bible-${lobby.id}`)).toBe(1);
+    for (const key of ["canonical", "establishing", "view", "reverse", "variant", "plate"])
+      expect(count(html, `lvb-item-${key}`)).toBe(1);
+    for (const intent of [
+      "location_concept",
+      "establishing_view",
+      "alternate_angle",
+      "interior_view",
+      "exterior_view",
+      "background",
+      "time_variant",
+    ])
+      expect(count(html, `lvb-generate-${intent}`)).toBe(1);
+    expect(count(html, "lvb-use-as-canonical")).toBe(1);
+    expect(count(html, "lvb-add-designation")).toBe(1);
+    expect(html).toContain("Grand Celeste Lobby");
+    // locked: shown, but no designation controls
+    const locked = renderToStaticMarkup(
+      createElement(LocationVisualBiblePanel, {
+        data: { ...data, locationViews: [] },
+        locationId: lobby.id,
+        slug: "ojousama",
+        sources: [{ assetId: SRC, label: "Lobby photo", url: null }],
+        models,
+      }),
+    );
+    expect(count(locked, "lvb-locked")).toBe(1);
+    expect(count(locked, "lvb-use-as-canonical")).toBe(0);
   });
 });
