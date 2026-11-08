@@ -72,6 +72,15 @@ export class MemoryGenerationService implements GenerationRepository, Generation
   constructor(private readonly access: MemoryProjectsAccess) {}
 
   // ── lookup helpers ──
+  /** Shot attempts only (Shot views, review, the Shot submission replay): a subject id is "not found". */
+  private findShotAttempt(attemptId: string): { project: ProjectData; attempt: GenerationAttempt } | null {
+    for (const project of this.access.all()) {
+      const attempt = project.attempts.find((a) => a.id === attemptId);
+      if (attempt) return { project, attempt };
+    }
+    return null;
+  }
+
   private findAttempt(attemptId: string): { project: ProjectData; attempt: GenerationAttempt } | null {
     for (const project of this.access.all()) {
       const attempt = project.attempts.find((a) => a.id === attemptId);
@@ -128,7 +137,10 @@ export class MemoryGenerationService implements GenerationRepository, Generation
       (j) => j.projectId === found.project.id && j.idempotencyKey === input.job.idempotencyKey,
     );
     if (replay) {
-      const attempt = this.findAttempt(replay.attemptId)!.attempt;
+      const prior = this.findShotAttempt(replay.attemptId);
+      if (!prior)
+        throw new GenerationSubmitError("not_found", "That submission belongs to another generation.");
+      const attempt = prior.attempt;
       return { attempt: clone(attempt), job: clone(replay), duplicate: true };
     }
 
@@ -363,7 +375,7 @@ export class MemoryGenerationService implements GenerationRepository, Generation
   }
 
   async getAttemptView(attemptId: string) {
-    const f = this.findAttempt(attemptId);
+    const f = this.findShotAttempt(attemptId);
     return f ? this.view(f.project, f.attempt) : null;
   }
 
@@ -446,7 +458,7 @@ export class MemoryGenerationService implements GenerationRepository, Generation
   }
 
   async reviewAttempt(attemptId: string, review: ReviewInput) {
-    const f = this.findAttempt(attemptId);
+    const f = this.findShotAttempt(attemptId);
     if (!f) return null;
     if (review.status === "approved") {
       if (f.attempt.status !== "succeeded") {
