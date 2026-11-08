@@ -53,6 +53,11 @@ export const GENERATION_PURPOSES = [
   "character_image",
   /** Phase 5B-I1: an image whose SUBJECT is a Location (concept, establishing view, angle, plate); never a Shot output. */
   "location_image",
+  /**
+   * Phase 5B-I3: a transparent cutout of an EXISTING image of a Character (segmentation / matting, never a generative
+   * redraw). Executed by a local matting engine; the source pixels are kept, only an alpha channel is added.
+   */
+  "background_removal",
 ] as const;
 export type GenerationPurpose = (typeof GENERATION_PURPOSES)[number];
 
@@ -63,7 +68,7 @@ export type ShotGenerationPurpose = Extract<
 >;
 /** Narrows to a Shot purpose; a subject purpose (Character / Location image) is never a Shot purpose. */
 export const shotPurposeOf = (p: GenerationPurpose): ShotGenerationPurpose =>
-  p === "character_image" || p === "location_image" ? "shot_output" : p;
+  p === "character_image" || p === "location_image" || p === "background_removal" ? "shot_output" : p;
 
 /** The purpose of a frozen request; requests frozen before Phase 2G.2 carry none and are `shot_output`. */
 export const purposeOfRequest = (r: { purpose?: GenerationPurpose | null }): GenerationPurpose =>
@@ -231,6 +236,11 @@ export const generationProviderInfoSchema = z.object({
   /** Environment variable NAMES the adapter needs (never values). */
   requiredConfig: z.array(z.string()),
   webhooks: z.boolean(),
+  /**
+   * Phase 5B-I3: the adapter runs entirely inside Prism's own worker (no external call, no upload) and costs nothing.
+   * Absent = billable like any real provider (fail-safe): only an explicit `true` exempts it from the spend gate.
+   */
+  localNoCost: z.boolean().optional(),
 });
 export type GenerationProviderInfo = z.infer<typeof generationProviderInfoSchema>;
 

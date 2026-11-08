@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isPng, pngHasAlpha } from "./matting/png";
 import { parseBuffer } from "music-metadata";
 import { assetSchema, type Asset } from "@/domain/schemas";
 import type { GenerationResult, ProviderOutput } from "@/domain/generation/schemas";
@@ -124,8 +125,10 @@ async function inspect(
   };
   if (kind === "image") {
     const size = readImageSize(bytes);
-    if (size) return { ...base, width: size.width, height: size.height };
-    return base;
+    // Phase 5B-I3: transparency is read from the stored bytes (alpha channel or tRNS), never from a claim
+    const extra = isPng(bytes) ? { hasAlpha: pngHasAlpha(bytes) } : {};
+    if (size) return { ...base, width: size.width, height: size.height, extra };
+    return { ...base, extra };
   }
   if (kind === "audio") {
     try {

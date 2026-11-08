@@ -113,17 +113,14 @@ Two operations, both provider-neutral:
 
 1. **Generate with a transparent background.** This is a provider capability (GPT Image direct
    `background: transparent`). It is an ordinary generation, priced and gated.
-2. **Remove Background from an existing image.** This runs in the **media worker** (5A's ffmpeg image plus an open
-   segmentation model, CPU, no spend):
-   - **deterministic**: the same input gives the same cutout, with a derivation key;
-   - **private**: bytes never leave Prism;
-   - **free**.
-
-   It records `asset_derivations.operation = 'background_removal'` (an enum extension, in I3's migration) and writes a
-   PNG with an alpha channel. The asset metadata records `hasAlpha: true`, so later references and compositions treat
-   it correctly.
-
-   A provider route remains possible per model where quality demands it, but it is opt-in and priced.
+2. **Remove Background from an existing image.** Built in I3: see
+   [phase-5b-i3-background-removal](phase-5b-i3-background-removal.md).
+   - It runs as the local `prism-matting` provider on the existing generation queue and worker, behind a
+     provider-neutral `MattingEngine` boundary (matte only; the source RGB is never changed).
+   - The shipped engine is Prism's own deterministic plain-background keyer: free, private, no model weights.
+   - A segmentation model (BiRefNet) waits on an owner / legal decision and a CPU benchmark.
+   - The earlier plan (an `asset_derivations` operation in the media worker) was superseded: the media-job worker does
+     not exist yet, and attempt lineage is already exact.
 
 ## 5. Lineage
 

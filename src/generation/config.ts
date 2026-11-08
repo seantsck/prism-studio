@@ -76,7 +76,8 @@ export function readGenerationConfig(env: Env = process.env): GenerationConfig {
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
   // The mock provider is on by default outside production and must be enabled explicitly there.
-  let enabledProviders = [...new Set([...listed, ...(production ? [] : ["mock"])])];
+  // Phase 5B-I3: the local matting engine (free, no upload) follows the same rule: on outside production, listed there.
+  let enabledProviders = [...new Set([...listed, ...(production ? [] : ["mock", "prism-matting"])])];
   if (production && env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER === "1") enabledProviders.push("mock");
   // Opt-out for ONE process (e.g. a live paid run that should not even list the free mock). The default is unchanged,
   // and a registered mock is never a fallback anyway: every job names its own provider.

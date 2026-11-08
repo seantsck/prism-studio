@@ -11,6 +11,7 @@ import {
   type LocationImageIntent,
 } from "@/domain/generation/subject-image";
 import { IDENTITY_SLOTS, type ProjectData } from "@/domain/schemas";
+import { prepareBackgroundRemoval } from "@/generation/background-removal";
 import { prepareSubjectImage } from "@/generation/subject-submission";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { createLocationViewFromReference } from "./location-view-actions";
@@ -254,4 +255,45 @@ async function saveAsLocationView_impl(form: FormData): Promise<ActionResult> {
 
 export async function saveAsLocationView(form: FormData): Promise<ActionResult> {
   return runAction(() => saveAsLocationView_impl(form), { name: "saveAsLocationView" });
+}
+
+/**
+ * Phase 5B-I3: "Remove Background" for one of THIS Character's own images (a reference, a Look image or a generated
+ * image). Queues a local, free background-removal job; the cutout is a NEW Asset and the source is never modified.
+ * The result is promoted with the existing "Use as Character Reference" / "Use as Look" actions; nothing is replaced
+ * automatically.
+ */
+async function removeBackground_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const user = await requireUser();
+  const data = await requireProjectFresh(slug);
+  const characterId = str(form, "subjectId");
+  const sourceAssetId = str(form, "sourceAssetId");
+  if (!data.characters.some((c) => c.id === characterId))
+    throw new UserFacingError("That character no longer exists.");
+  if (!sourceAssetId) throw new UserFacingError("Choose the image to cut out.");
+  const own = await subjectImageAssetIds(data, { kind: "character", characterId });
+  if (!own.has(sourceAssetId)) throw new UserFacingError("That image does not belong to this character.");
+  const clientKey = str(form, "idempotencyKey");
+  const prepared = prepareBackgroundRemoval({
+    data,
+    characterId,
+    sourceAssetId,
+    registry: getRegistry(),
+    userId: user.kind === "supabase" ? user.id : null,
+    idempotencyKey: clientKey.length >= 8 ? clientKey : `cutout-${randomUUID()}`,
+    config: getGenerationConfig(),
+  });
+  if (!prepared.ok) throw new UserFacingError(prepared.reasons.slice(0, 3).join(" · "));
+  try {
+    await (await getGenerationRepo()).createSubjectImageAttempt(prepared.input);
+  } catch (err) {
+    if (err instanceof GenerationSubmitError) throw new UserFacingError(err.message);
+    throw err;
+  }
+  refresh(slug);
+}
+
+export async function removeBackground(form: FormData): Promise<ActionResult> {
+  return runAction(() => removeBackground_impl(form), { name: "removeBackground" });
 }

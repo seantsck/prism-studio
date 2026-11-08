@@ -4,6 +4,7 @@ import { catalogModel } from "@/domain/generation/models/catalog";
 import { hasStoredImage } from "@/domain/generation/subject-image";
 import type { ProjectData } from "@/domain/schemas";
 import { assetUrl } from "@/lib/utils";
+import { PRISM_MATTING_PROVIDER_ID } from "@/generation/providers/prism-matting/adapter";
 import { getGenerationRepo, getRegistry } from "./generation";
 
 export interface ImageModelOption {
@@ -44,6 +45,8 @@ export async function subjectImageState(
     .filter(
       (m) =>
         m.capabilities.image &&
+        // Phase 5B-I3: background removal is its own action, never a generation or edit model
+        m.provider !== PRISM_MATTING_PROVIDER_ID &&
         (m.capabilities.modalities.includes("text_to_image") ||
           m.capabilities.modalities.includes("image_to_image")),
     )
