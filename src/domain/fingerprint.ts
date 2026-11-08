@@ -1,4 +1,5 @@
 import { lockIdentityBasis, lockLookBasis } from "./character-continuity";
+import { visualRoleOf } from "./visual-bible";
 import type { ShotCharacterContext, ShotContext } from "./context";
 import { fingerprint } from "./hash";
 import { locationViewPartIdentity } from "./location-view";
@@ -104,7 +105,13 @@ function characterEntry(c: ShotCharacterContext): Record<string, unknown> {
   const live = {
     assignment: c.assignment,
     physicalDescription: c.character?.physicalDescription ?? null,
-    identityRefs: c.identityRefs.map((r) => [r.slot, r.assetId, r.locked]).sort(),
+    // Phase 5B-I4: a Visual Bible role (canonical / cutout / expression) is part of the identity; absent = unchanged tuple
+    identityRefs: c.identityRefs
+      .map((r) => {
+        const role = visualRoleOf(r);
+        return role ? [r.slot, r.assetId, r.locked, role] : [r.slot, r.assetId, r.locked];
+      })
+      .sort(),
   };
   return c.continuityLockIssue
     ? { ...live, invalidContinuityLock: c.continuityLockIssue.continuityLockId }

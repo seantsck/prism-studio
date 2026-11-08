@@ -18,6 +18,7 @@ import { createLocationViewFromReference } from "./location-view-actions";
 import { requireUser } from "./auth";
 import { getGenerationConfig, getGenerationRepo, getRegistry } from "./generation";
 import { getRepo, requireProjectFresh } from "./repo";
+import { subjectImageAssetIds } from "./subject-image-sources";
 
 /**
  * Phase 5B-I1: Character / Location image generation on the EXISTING queue and worker, and the explicit acts that turn a
@@ -93,26 +94,6 @@ async function startSubjectImage_impl(form: FormData) {
     throw err;
   }
   refresh(slug);
-}
-
-/** The images a Character / Location may edit: its reference images and its own generated images. */
-async function subjectImageAssetIds(
-  data: ProjectData,
-  subject: { kind: "character"; characterId: string } | { kind: "location"; locationId: string },
-): Promise<Set<string>> {
-  const ids: Array<string | null> = [];
-  if (subject.kind === "character") {
-    ids.push(...data.identityRefs.filter((r) => r.characterId === subject.characterId).map((r) => r.assetId));
-    for (const l of data.looks.filter((x) => x.characterId === subject.characterId))
-      ids.push(...l.referenceAssetIds);
-  } else {
-    ids.push(...(data.locations.find((l) => l.id === subject.locationId)?.referenceAssetIds ?? []));
-  }
-  const views = await (await getGenerationRepo()).listSubjectImageAttempts(subject);
-  for (const v of views) for (const o of v.outputs) ids.push(o.asset.id);
-  return new Set(
-    ids.filter((id): id is string => !!id && hasStoredImage(data.assets.find((a) => a.id === id))),
-  );
 }
 
 export async function startSubjectImage(form: FormData): Promise<ActionResult> {

@@ -180,6 +180,13 @@ export function deriveReferenceCandidates(pkg: GenerationPackage): Candidate[] {
   const view = pkg.references.locationView;
   for (const c of pkg.characters) {
     const images = characterImages(pkg, c);
+    // Phase 5B-I4: a designated canonical identity leads, then the selected Look, then the other identity images.
+    // Without one the order is unchanged (identity, then Look).
+    const canonical = c.continuityLock ? undefined : c.canonicalIdentityAssetId;
+    if (canonical && canonical !== view?.assetId) push(canonical, "identity", `${c.name} canonical identity`);
+    if (canonical)
+      for (const i of images.look)
+        if (i.assetId !== view?.assetId) push(i.assetId, "character_look", i.label);
     for (const i of images.identity) if (i.assetId !== view?.assetId) push(i.assetId, "identity", i.label);
     for (const i of images.look) if (i.assetId !== view?.assetId) push(i.assetId, "character_look", i.label);
   }

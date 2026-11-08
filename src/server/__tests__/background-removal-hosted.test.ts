@@ -77,6 +77,7 @@ vi.mock("@/server/generation", async () => {
 });
 
 import { removeBackground } from "../subject-image-actions";
+import { setCharacterCutout } from "../visual-bible-actions";
 
 const sinkRoot = mkdtempSync(path.join(tmpdir(), "prism-i3b-"));
 afterAll(() => rmSync(sinkRoot, { recursive: true, force: true }));
@@ -434,5 +435,54 @@ describe("5B-I3b local first, hosted only on request", () => {
     const amb = (await cutouts(y.id)).find((v) => v.job?.idempotencyKey === "hq-ambiguous-key-1")!;
     expect(amb.attempt.status).toBe("failed");
     expect(amb.job?.lastErrorCode).toBe("submission_outcome_unknown");
+  });
+
+  it("I4 integration: a local or a Photoroom cutout may be designated as the Character cutout (replacement confirmed)", async () => {
+    const { y, busy } = await busyRefusedLocally();
+    // local cutout of an easy image
+    const plain = await stored(y.id, portraitFixturePng(), "portrait");
+    await removeBackground(form({ subjectId: y.id, sourceAssetId: plain.id }));
+    // explicit High Quality Removal of the busy one
+    await removeBackground(
+      form({ subjectId: y.id, sourceAssetId: busy.id, quality: "high", confirmedTotalUsd: "0.02" }),
+    );
+    await work();
+    expect(fake.calls).toHaveLength(1);
+    const done = (await cutouts(y.id)).filter((v) => v.attempt.status === "succeeded");
+    const local = done.find((v) => v.attempt.provider === "prism-matting")!;
+    const hosted = done.find((v) => v.attempt.provider === "photoroom")!;
+    const designation = async () =>
+      (await data()).identityRefs.filter(
+        (r) => r.characterId === y.id && (r.metadata as { visualRole?: string }).visualRole === "cutout",
+      );
+    const vb = (attemptId: string, extra: Record<string, string> = {}) => {
+      const f = new FormData();
+      for (const [k, v] of Object.entries({
+        projectSlug: "ojousama",
+        characterId: y.id,
+        attemptId,
+        ...extra,
+      }))
+        f.set(k, v);
+      return f;
+    };
+    expect(await setCharacterCutout(vb(local.attempt.id))).toMatchObject({ ok: true });
+    expect((await designation()).map((r) => r.assetId)).toEqual([local.outputs[0]!.asset.id]);
+    // the hosted cutout replaces it only with confirmation; designation never calls a provider
+    expect(await setCharacterCutout(vb(hosted.attempt.id))).toMatchObject({ ok: false });
+    expect(await setCharacterCutout(vb(hosted.attempt.id, { confirmReplace: "1" }))).toMatchObject({
+      ok: true,
+    });
+    expect((await designation()).map((r) => r.assetId)).toEqual([hosted.outputs[0]!.asset.id]);
+    expect(fake.calls).toHaveLength(1);
+    // the opaque source is still refused as a cutout (transparency is read from the bytes, not the form)
+    const f = new FormData();
+    for (const [k, v] of Object.entries({ projectSlug: "ojousama", characterId: y.id, assetId: busy.id }))
+      f.set(k, v);
+    f.set("confirmReplace", "1");
+    expect(await setCharacterCutout(f)).toMatchObject({
+      ok: false,
+      error: "A cutout must be a transparent PNG. Remove the background first.",
+    });
   });
 });

@@ -21,6 +21,7 @@ import { createCharacterContinuityLock } from "@/server/character-continuity-act
 import { requireProject } from "@/server/repo";
 import { ActionForm } from "@/components/action-form";
 import { SubjectImagePanel } from "@/components/images/subject-image-panel";
+import { VisualBiblePanel } from "@/components/images/visual-bible-panel";
 import { subjectImageState } from "@/server/subject-images";
 
 const join = (xs: string[]) => xs.join("\n");
@@ -66,6 +67,15 @@ export default async function CharacterPage({
         }
       />
       <div className="grid gap-4 p-6 xl:grid-cols-2">
+        <div className="xl:col-span-2">
+          <VisualBiblePanel
+            data={data}
+            characterId={c.id}
+            slug={slug}
+            sources={images.sources}
+            models={images.models}
+          />
+        </div>
         <div className="xl:col-span-2">
           <SubjectImagePanel
             projectSlug={slug}

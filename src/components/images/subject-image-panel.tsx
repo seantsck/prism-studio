@@ -17,6 +17,7 @@ import {
   saveAsLookReference,
   removeBackground,
 } from "@/server/subject-image-actions";
+import { setCanonicalIdentity, setCharacterCutout } from "@/server/visual-bible-actions";
 import { RefreshWhileActive } from "./refresh-while-active";
 
 const ACTIVE = new Set(["queued", "running"]);
@@ -342,6 +343,22 @@ export function SubjectImagePanel(props: {
                   <div className="mt-2 flex flex-wrap gap-1">
                     {subject.kind === "character" ? (
                       <>
+                        <ActionForm
+                          action={cutFrom ? setCharacterCutout : setCanonicalIdentity}
+                          successMessage={cutFrom ? "Cutout set" : "Canonical identity set"}
+                          className="flex gap-1"
+                        >
+                          <input type="hidden" name="projectSlug" value={props.projectSlug} />
+                          <input type="hidden" name="characterId" value={subject.id} />
+                          <input type="hidden" name="attemptId" value={v.attempt.id} />
+                          <Button
+                            type="submit"
+                            size="sm"
+                            data-testid={cutFrom ? "use-as-cutout" : "use-as-canonical"}
+                          >
+                            {cutFrom ? "Use as Cutout" : "Use as Canonical"}
+                          </Button>
+                        </ActionForm>
                         <ActionForm
                           action={saveAsCharacterReference}
                           successMessage="Character reference set"

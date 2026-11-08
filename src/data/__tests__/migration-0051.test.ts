@@ -18,12 +18,11 @@ const release = RELEASE.exec(code)?.[0] ?? "";
 const rest = code.replace(RELEASE, "");
 
 describe("migration 0051: generation subjects (Character / Location images)", () => {
-  it("is the latest migration, follows 0050, and leaves 0050 byte-for-byte unchanged", () => {
+  it("follows 0050 (0052 follows it; see migration-0052.test.ts) and leaves 0050 byte-for-byte unchanged", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe(FILE);
-    expect(files.at(-2)).toBe("0050_shot_setup_templates.sql");
+    expect(files[files.indexOf(FILE) - 1]).toBe("0050_shot_setup_templates.sql");
     expect(checksumOf(readFileSync(`${DIR}/0050_shot_setup_templates.sql`, "utf8"))).toBe(
       "19cdbc22592756dd6749ab6aba900b9f94380f64a249f4a48fa07b91353debe0",
     );

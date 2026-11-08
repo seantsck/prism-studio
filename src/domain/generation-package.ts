@@ -121,6 +121,8 @@ export interface GenerationPackage {
       referenceAssetIds: string[];
     } | null;
     identityReferenceAssetIds: string[];
+    /** Phase 5B-I4: the Character's canonical identity image (present only when one is designated, live only). */
+    canonicalIdentityAssetId?: string;
     expression: string;
     posture: string;
     gestures: string;
@@ -300,6 +302,7 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
           }
         : null,
       identityReferenceAssetIds: a.identityReferenceAssetIds,
+      ...(a.canonicalIdentityAssetId ? { canonicalIdentityAssetId: a.canonicalIdentityAssetId } : {}),
       // shot-specific performance stays live on the assignment, locked or not
       expression: c.assignment.expression,
       posture: c.assignment.posture,
