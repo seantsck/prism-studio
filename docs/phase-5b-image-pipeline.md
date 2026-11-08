@@ -203,3 +203,80 @@ Two operations, both provider-neutral:
 - **I4 and I5:** the Character and Location visual bibles (canonical selection UI, angle and expression sets,
   time-of-day sets, background plates as a Location reference role).
 - **I6:** Production Frame composition from the bibles (Shot 3A acceptance on 「お嬢様、僕と結婚してください。」).
+
+## 9. I1b: Shot image entry points
+
+**Branch:** `phase-5b-i1b-shot-image-entrypoints`. It is stacked on I1 (it needs 0051 for the compatibility gate) and
+retargets to `phase-5b-image-pipeline` when #64 merges. The integration branch now contains 5A by history: merge
+`b667cdd` of `e99c7a1`, plus `352a663` (below).
+
+- **Shot Prep → Production Frame: Generate Image, Alternate Composition, Generate Storyboard.** Each submits a
+  **one-model `production_frame` candidate set through the existing `createCandidateSet`**. That brings the same gate,
+  spend confirmation (a paid model needs the creator's confirmed total), candidate page and disclosure of ignored
+  inputs. There is no new selection system.
+  - The Production Frame purpose already exempts the Storyboard rules and needs no 3D.
+  - Shot context comes from the existing GenerationPackage, unchanged: Character, Look, identity references (or Lock
+    images), Location and Location View, camera, composition, blocking, lighting, continuity, props, the story beat
+    and the prompt plan.
+  - Nothing replaces the current Storyboard or Production Frame.
+- **The Shot's recent generated stills:**
+  - **Use as Production Frame** is the existing `chooseGeneratedFrameAsProductionFrame`.
+  - **Use as Storyboard Frame** is new. It adds a **new, unapproved** Storyboard frame version (`source = 'generated'`,
+    which 0002 already allows) pointing at the generated Asset. Existing frames and the Asset are untouched. It refuses
+    another Shot's still, a Character or Location image, and an unfinished image.
+- **Model** is under Advanced. A free model is suggested and paid ones are labelled; the human chooses.
+
+**Integration fix:** `352a663`. `ModelRegistry.availabilityOf` crashed (`undefined.includes`) for a config without
+`workerBackedProviders` (`runway.test.ts` failed on the 5A head itself). A missing list now means none, so it fails
+closed. The same fix belongs on #63.
+
+## 10. 0051 migration-compatibility gate
+
+**The rule.** Before 0051 is applied to any database that a deployed build reads (shared DEV, later Production), every
+reader that build uses must handle Shot, Character and Location attempts without crashing.
+
+**Inventory of Shot-only assumptions:**
+
+| Reader                                                                                                                                                                                                                                                                    | Assumption                                                                           | Status                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `loadProject` attempts (Postgres `postgres-repository.ts`; memory `ProjectData.attempts`)                                                                                                                                                                                 | every attempt has a Shot                                                             | **Shot-only by query** (`shot_id is not null`; memory keeps subjects separately)                                                                                        |
+| `listProjectGenerations` (Generations page)                                                                                                                                                                                                                               | `attempt.shotId` maps to a Shot; `generations-view.tsx:197` uses `shotById.get(..)!` | **Shot-only by query**; the `!` is preceded by a `shotById.has` filter                                                                                                  |
+| Model history (`candidates-postgres.ts`)                                                                                                                                                                                                                                  | per-Shot attempt rows                                                                | **Shot-only by query**                                                                                                                                                  |
+| `getAttemptView(id)` (`/generations/[attemptId]`, the continuity page, media actions)                                                                                                                                                                                     | parses a Shot attempt                                                                | **fixed**: a subject id is "not found" (the page 404s)                                                                                                                  |
+| `reviewAttempt(id)` (approve / reject)                                                                                                                                                                                                                                    | parses a Shot attempt                                                                | **fixed**: a subject id is "not found"                                                                                                                                  |
+| Shot submission replay (idempotency key)                                                                                                                                                                                                                                  | the key's attempt is a Shot attempt                                                  | **fixed**: a cross-kind key is refused ("belongs to another generation")                                                                                                |
+| Subject submission replay                                                                                                                                                                                                                                                 | the key's attempt is a subject attempt                                               | **fixed**, the same way                                                                                                                                                 |
+| Episode-edit readers (`episode-edit-postgres.ts` by id, and approved-by-shot)                                                                                                                                                                                             | edit references are Shot attempts                                                    | **Shot-only by query**                                                                                                                                                  |
+| Worker claim, update, finalize, cancel                                                                                                                                                                                                                                    | none (frozen request and plan only)                                                  | **subject-neutral** (`WorkerAttempt`)                                                                                                                                   |
+| `attempt.shotId` consumers in domain, pages and continuity: `asset-usage`, `edit/eligibility`, `edit/proposal`, `generated-production-frame`, `animation`, `shot-sequence`, `pipeline`, `media-actions`, `episode-edit-media`, `continuity/service`, the generation pages | Shot attempts                                                                        | **safe by construction**: their inputs are the Shot-only readers above                                                                                                  |
+| `asset-usage` for a subject output Asset                                                                                                                                                                                                                                  | its attempt is in Shot history                                                       | **fixed (0051 shared-database compatibility gate, #64)**: deletion follows actual references; an unreferenced subject image is deletable with its attempt kept (see §5) |
+
+**Evidence:**
+
+- Memory: `src/data/__tests__/attempt-subject-compat.test.ts`, 5/5, with subject attempts present (queued and
+  succeeded).
+  - Old Shot data reads exactly as before.
+  - The generations listing stays Shot-only.
+  - The Shot attempt view and review say "not found" for a subject id.
+  - A cross-kind key is refused.
+  - Asset usage does not crash.
+- Postgres (disposable, at 0051): `scripts/db-generation-subjects.mts`, **28/28**, now including the three Shot-reader and three asset-delete
+  gate checks. The existing `db:generation` passes 71/71 on the same database.
+
+**Remaining before 0051 reaches shared DEV:** the asset-usage gap is closed (§5); what remains is re-running this gate against whatever
+build is then deployed.
+
+## 11. Preview strategy (prepared, not created)
+
+When owner acceptance needs a hosted run:
+
+1. Create a **Supabase preview branch** of the Prism Studio project, which gets its own database and ref. Apply
+   0001 → head (including 0051) there only.
+2. Add **Preview-scoped** environment variables to the existing `prism-studio` Vercel project. Production variables are
+   never touched. Deploy the integration branch as a **preview** deployment, never with `--prod`, so the live alias
+   `prism-studio-tawny.vercel.app` is unaffected. All Deployments protection already covers previews.
+3. **Environment guard:** a preview branch has its own ref, and 5A's guard allows a non-DEV ref only for `rehearsal` or
+   `production`. The preview therefore runs as `rehearsal` (test tooling allowed, never DEV), or a `preview`
+   environment is added to both guards with the parity test.
+4. Workers for that preview: the staging workers project at 0 instances is not pointed at the branch. A preview run
+   uses the in-process mock path or a temporary worker container against the branch.

@@ -207,7 +207,10 @@ export class PostgresEpisodeEditData implements EpisodeEditRepository {
   private async loadFacts(c: PoolClient, refs: EditRefs): Promise<EditSourceFacts> {
     const rows = async (sql: string, ids: string[]) => (ids.length ? (await c.query(sql, [ids])).rows : []);
     const attemptRows = [
-      ...(await rows("select * from generation_attempts where id = any($1::uuid[])", refs.attemptIds)),
+      ...(await rows(
+        "select * from generation_attempts where id = any($1::uuid[]) and shot_id is not null",
+        refs.attemptIds,
+      )),
       ...(await rows(
         "select * from generation_attempts where shot_id = any($1::uuid[]) and approved for share",
         refs.replacementShotIds,
