@@ -9,6 +9,7 @@ import { MemoryLocationViewService } from "./location-view-memory";
 import { MemoryMediaQaService } from "./media-qa-memory";
 import { MemoryPrevisService } from "./previs-memory";
 import { MemoryProductionFrameService } from "./production-frame-memory";
+import { MemoryStoryService } from "./story-memory";
 import type { Repository } from "./repository";
 import type {
   Asset,
@@ -96,6 +97,13 @@ export class MemoryRepository implements Repository {
       masterFrame: (id) => this.previs.masterFrameRecord(id),
     });
     return this.productionFrameService;
+  }
+
+  /** Production Proposals (Phase 5B-S1; same semantics as Postgres). */
+  private storyService?: MemoryStoryService;
+  get story(): MemoryStoryService {
+    this.storyService ??= new MemoryStoryService((projectId) => this.projects.has(projectId));
+    return this.storyService;
   }
 
   /** Location Views and the Shots' view selections (Phase 2G.3; same semantics as Postgres). Independent of 3D. */

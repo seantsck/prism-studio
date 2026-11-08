@@ -45,6 +45,7 @@ import { getGenerationRepo } from "./generation";
 import { getMediaQaRepo } from "./media-qa";
 import { getPrevisRepo } from "./previs";
 import { getRepo, requireProjectFresh } from "./repo";
+import { getStoryRepo } from "./story";
 import { discardUpload, hasFile, ingestUpload } from "./ingest-upload";
 
 // ───────────────────────── helpers ─────────────────────────
@@ -1155,6 +1156,10 @@ async function deleteAsset_impl(form: FormData) {
   ];
   if (pins.length > 0) {
     throw new UserFacingError(`This asset can't be deleted: ${pins.join("; ")}.`);
+  }
+  // Phase 5B-S1: an uploaded screenplay that a Production Proposal was made from is its immutable source
+  if (await (await getStoryRepo({ startInlineWorker: false })).usesAsset(asset.id)) {
+    throw new UserFacingError("This asset can't be deleted: it is the source of a Story proposal.");
   }
   await repo.remove(data.project.id, "assets", asset.id);
   await discardUpload(asset);

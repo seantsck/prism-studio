@@ -9,6 +9,7 @@ export const dynamic = "force-dynamic";
 
 const NAV = [
   ["", "Overview"],
+  ["/story", "Import Story"],
   ["/bible", "Bible"],
   ["/script", "Script"],
   ["/perform", "Perform"],
