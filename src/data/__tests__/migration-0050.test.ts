@@ -14,12 +14,12 @@ const sql = readFileSync(`${DIR}/${FILE}`, "utf8");
 const code = sql.replace(/--.*$/gm, ""); // statements only, no comments
 
 describe("migration 0050: named Shot setup templates and setup-copy history", () => {
-  it("is the latest migration, follows 0049, and leaves 0048 and 0049 byte-for-byte unchanged", () => {
+  it("follows 0049, and leaves 0048 and 0049 byte-for-byte unchanged", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe(FILE);
-    expect(files.at(-2)).toBe("0049_spatial_camera_and_frame_source.sql");
+    expect(files).toContain(FILE);
+    expect(files[files.indexOf(FILE) - 1]).toBe("0049_spatial_camera_and_frame_source.sql");
     const sumOf = (f: string) => checksumOf(readFileSync(`${DIR}/${f}`, "utf8"));
     expect(sumOf("0048_shot_lighting_rigs.sql")).toBe(
       "d59c8ef800ce83f78492b4e030a07d6349d06fb1c2e04daeec195384860034b1",

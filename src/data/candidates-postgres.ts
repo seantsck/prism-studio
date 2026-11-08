@@ -389,7 +389,7 @@ export class PostgresCandidateData implements CandidateRepository {
                from generation_jobs
               where attempt_id = a.id order by created_at desc limit 1
            ) j on true
-          where a.project_id = $1`,
+          where a.project_id = $1 and a.shot_id is not null`,
         [projectId],
       );
       const reviews = await c.query("select * from generation_reviews where project_id = $1", [projectId]);

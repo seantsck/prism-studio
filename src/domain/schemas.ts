@@ -639,6 +639,22 @@ export const generationAttemptSchema = z.object({
 });
 export type GenerationAttempt = z.infer<typeof generationAttemptSchema>;
 
+/**
+ * Phase 5B-I1: an attempt whose subject is a Character or a Location instead of a Shot (migration 0051). Same row,
+ * same job / worker / outputs / costs; `shotId` is null and exactly one of `characterId` / `locationId` is set. These
+ * never appear in `ProjectData.attempts` (Shot history), so every Shot view is unchanged.
+ */
+export const subjectImageAttemptSchema = generationAttemptSchema
+  .extend({ shotId: z.null(), characterId: nullableId.default(null), locationId: nullableId.default(null) })
+  .refine((a) => (a.characterId === null) !== (a.locationId === null), {
+    message: "a subject attempt names exactly one Character or Location",
+  });
+export type SubjectImageAttempt = z.infer<typeof subjectImageAttemptSchema>;
+
+/** What the generation worker reads: any attempt, whatever its subject (the worker never uses the subject). */
+export const workerAttemptSchema = generationAttemptSchema.extend({ shotId: nullableId });
+export type WorkerAttempt = z.infer<typeof workerAttemptSchema>;
+
 export const CONTINUITY_DIMENSIONS = [
   "characterIdentity",
   "wardrobe",

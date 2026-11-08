@@ -41,6 +41,7 @@ import { SHOT_SECTION_SPECS, applySection } from "@/domain/shot-fields";
 import { validateLookLink } from "@/domain/looks";
 import { nextTakeNumber, selectTake as selectTakeDomain } from "@/domain/takes";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
+import { getGenerationRepo } from "./generation";
 import { getMediaQaRepo } from "./media-qa";
 import { getPrevisRepo } from "./previs";
 import { getRepo, requireProjectFresh } from "./repo";
@@ -1146,7 +1147,11 @@ async function deleteAsset_impl(form: FormData) {
     );
   }
   // Derived-media lineage and QA history also pin an asset: nothing is orphaned silently.
-  const pins = await (await getMediaQaRepo()).assetPins(asset.id);
+  const pins = [
+    ...(await (await getMediaQaRepo()).assetPins(asset.id)),
+    // a Character / Location image attempt that sent this Asset as a reference (0051 compatibility gate)
+    ...(await (await getGenerationRepo()).subjectImageAssetPins(data.project.id, asset.id)),
+  ];
   if (pins.length > 0) {
     throw new UserFacingError(`This asset can't be deleted: ${pins.join("; ")}.`);
   }

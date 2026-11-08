@@ -1,7 +1,12 @@
 import type { CompatibilityReport } from "./compatibility";
 import type { ModelFit } from "./models/matrix";
 import type { GenerationPackage } from "../generation-package";
-import { parseGenerationPurpose, type GenerationPurpose } from "./schemas";
+import {
+  parseGenerationPurpose,
+  type GenerationPurpose,
+  type ShotGenerationPurpose,
+  shotPurposeOf,
+} from "./schemas";
 
 /**
  * Candidate sets (Phase 2E): an intentional comparison experiment. One shared production package, several
@@ -18,8 +23,9 @@ export type CandidateSetStatus = (typeof CANDIDATE_SET_STATUSES)[number];
  */
 export function candidateSetPurpose(set: {
   recommendation: Record<string, unknown> | null;
-}): GenerationPurpose {
-  return parseGenerationPurpose(set.recommendation?.generationPurpose);
+}): ShotGenerationPurpose {
+  // a candidate set always belongs to a Shot: a subject purpose can never be one (Phase 5B-I1)
+  return shotPurposeOf(parseGenerationPurpose(set.recommendation?.generationPurpose));
 }
 
 export const MAX_CANDIDATES_DEFAULT = 6;
