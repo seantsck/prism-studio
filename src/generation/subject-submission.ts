@@ -8,6 +8,7 @@ import {
 } from "@/domain/generation/schemas";
 import {
   buildSubjectImagePlan,
+  hasStoredImage,
   SubjectImageError,
   type SubjectImageInputs,
 } from "@/domain/generation/subject-image";
@@ -32,6 +33,16 @@ export interface PrepareSubjectImageArgs {
   idempotencyKey: string;
   config: GenerationConfig;
   now?: Date;
+  /**
+   * Phase 5B-I2: explicit options the creator chose. Each is checked against the model (never silently emulated):
+   * a transparent background needs native transparency; a quality must be one the model offers.
+   */
+  options?: { background?: "transparent" | "opaque"; quality?: string };
+  /**
+   * Phase 5B-I2: edit an existing image of this project. It is sent FIRST (the image being edited); the edited result
+   * is a NEW Asset. The source Asset is never modified, and the attempt records it (lineage: source → attempt → new).
+   */
+  edit?: { sourceAssetId: string; instruction: string };
 }
 
 export type PreparedSubjectImage =
@@ -47,7 +58,13 @@ export type PreparedSubjectImage =
 export function prepareSubjectImage(args: PrepareSubjectImageArgs): PreparedSubjectImage {
   let built;
   try {
-    built = buildSubjectImagePlan(args.data, args.input);
+    // an edit's instruction is the creator's direction for this image (the plan is what the provider receives)
+    const direction = args.edit
+      ? [args.input.direction.trim(), `Edit the first image: ${args.edit.instruction.trim()}`]
+          .filter(Boolean)
+          .join(" ")
+      : args.input.direction;
+    built = buildSubjectImagePlan(args.data, { ...args.input, direction });
   } catch (e) {
     if (e instanceof SubjectImageError) return { ok: false, reasons: [e.message] };
     throw e;
@@ -70,14 +87,40 @@ export function prepareSubjectImage(args: PrepareSubjectImageArgs): PreparedSubj
   if (!caps.image) return { ok: false, reasons: [`${model.displayName} does not make still images.`] };
   const canEdit = caps.modalities.includes("image_to_image") && caps.references.referenceImages;
   const canText = caps.modalities.includes("text_to_image");
-  const useReferences = built.references.length > 0 && canEdit;
+  const editing = args.edit ?? null;
+  if (editing) {
+    if (!canEdit) return { ok: false, reasons: [`${model.displayName} cannot edit images.`] };
+    const source = args.data.assets.find((a) => a.id === editing.sourceAssetId);
+    if (!hasStoredImage(source))
+      return { ok: false, reasons: ["That image no longer exists in this project."] };
+    if (!editing.instruction.trim()) return { ok: false, reasons: ["Describe the edit."] };
+  }
+  const background = args.options?.background;
+  if (background === "transparent" && !caps.image.transparency)
+    return { ok: false, reasons: [`${model.displayName} cannot make transparent backgrounds.`] };
+  const useReferences = (built.references.length > 0 || editing !== null) && canEdit;
   if (!useReferences && !canText)
     return {
       ok: false,
       reasons: [`${model.displayName} needs reference images, and this subject has none yet.`],
     };
   const max = useReferences ? caps.references.maxReferences : 0;
-  const references = useReferences ? built.references.slice(0, max).map((r, i) => ({ ...r, order: i })) : [];
+  const sourceRef = editing
+    ? [
+        {
+          assetId: editing.sourceAssetId,
+          role: (args.input.subject.kind === "character" ? "identity" : "location") as
+            "identity" | "location",
+          order: 0,
+          label: "the image to edit",
+        },
+      ]
+    : [];
+  const candidates = [...sourceRef, ...built.references.filter((r) => r.assetId !== editing?.sourceAssetId)];
+  const references = useReferences ? candidates.slice(0, max).map((r, i) => ({ ...r, order: i })) : [];
+  const providerOptions: Record<string, string> = {};
+  if (background) providerOptions.background = background;
+  if (args.options?.quality) providerOptions.quality = args.options.quality;
   const aspectRatio = args.aspectRatio ?? caps.image.aspectRatios[0] ?? null;
   if (!aspectRatio || !caps.image.aspectRatios.includes(aspectRatio))
     return {
@@ -101,7 +144,7 @@ export function prepareSubjectImage(args: PrepareSubjectImageArgs): PreparedSubj
     startFrameAssetId: null,
     endFrameAssetId: null,
     audioAssetIds: [],
-    providerOptions: {},
+    providerOptions,
     idempotencyKey: args.idempotencyKey,
   });
   const valid = adapter.validateRequest(request, model);
@@ -133,7 +176,14 @@ export function prepareSubjectImage(args: PrepareSubjectImageArgs): PreparedSubj
         negativePrompt: request.prompt.negative,
         packageSnapshot: built.packageSnapshot,
         packageFingerprint: built.packageFingerprint,
-        modelSettings: { purpose, aspectRatio, intent: subject.intent, providerOptions: {} },
+        modelSettings: {
+          purpose,
+          aspectRatio,
+          intent: subject.intent,
+          providerOptions,
+          // lineage (Phase 5B-I2): the edited source; the new image is always a new Asset
+          ...(editing ? { editSourceAssetId: editing.sourceAssetId } : {}),
+        },
         inputAssetIds: [...new Set(references.map((r) => r.assetId))].sort(),
         outputAssetId: null,
         costUsd: null,

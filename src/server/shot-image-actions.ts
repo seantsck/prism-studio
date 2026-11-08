@@ -22,17 +22,19 @@ import { getRepo, requireProjectFresh } from "./repo";
  */
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 
-const SHOT_IMAGE_KINDS = ["production_frame", "alternate_composition", "storyboard"] as const;
+const SHOT_IMAGE_KINDS = ["production_frame", "alternate_composition", "storyboard", "edit"] as const;
 type ShotImageKind = (typeof SHOT_IMAGE_KINDS)[number];
 const TITLE: Record<ShotImageKind, string> = {
   production_frame: "Production Frame candidate",
   alternate_composition: "Alternate composition",
   storyboard: "Storyboard frame",
+  edit: "Edited still",
 };
 const PURPOSE: Record<ShotImageKind, string> = {
   production_frame: "A still candidate for this Shot's Production Frame.",
   alternate_composition: "Another composition of this Shot; the current frame is kept.",
   storyboard: "A generated still to use as a Storyboard frame.",
+  edit: "An edit of one of this Shot's stills; the source image is kept unchanged.",
 };
 
 async function startShotImage_impl(form: FormData): Promise<ActionResult> {
@@ -42,10 +44,30 @@ async function startShotImage_impl(form: FormData): Promise<ActionResult> {
   // the human's model, posted as "provider/modelId"; never substituted
   const [provider = "", modelId = ""] = str(form, "model").split("/");
   if (!provider || !modelId) throw new UserFacingError("Choose an image model.");
+  // Phase 5B-I2: Edit Image (a NEW still from one of this Shot's stills) and an explicit transparent background
+  const edit =
+    kind === "edit"
+      ? { sourceAssetId: str(form, "sourceAssetId"), instruction: str(form, "instruction") }
+      : null;
+  if (edit && !edit.sourceAssetId) throw new UserFacingError("Choose the image to edit.");
+  if (edit && !edit.instruction) throw new UserFacingError("Describe the edit.");
+  const background = str(form, "transparent") === "1" ? "transparent" : null;
+  const quality = str(form, "quality") || null;
   const fd = new FormData();
   fd.set("projectSlug", str(form, "projectSlug"));
   fd.set("shotId", str(form, "shotId"));
-  fd.set("selections", JSON.stringify([{ provider, modelId }]));
+  fd.set(
+    "selections",
+    JSON.stringify([
+      {
+        provider,
+        modelId,
+        ...(quality ? { quality } : {}),
+        ...(background ? { background } : {}),
+        ...(edit ? { edit } : {}),
+      },
+    ]),
+  );
   fd.set("generationPurpose", "production_frame");
   fd.set("title", TITLE[kind]);
   fd.set("purpose", PURPOSE[kind]);

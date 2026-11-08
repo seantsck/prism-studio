@@ -1,5 +1,6 @@
 import { ActionForm } from "@/components/action-form";
 import { Button, Field } from "@/components/ui";
+import { shotEditableAssetIds } from "@/domain/generation/image-edit";
 import { isProductionFrameAttempt } from "@/domain/generation/schemas";
 import type { ProjectData } from "@/domain/schemas";
 import { assetUrl } from "@/lib/utils";
@@ -30,9 +31,29 @@ export function ShotImageActions({
       label: m.displayName,
       available: registry.availabilityOf(m).available,
       paid: registry.billsMoney(m),
+      transparency: m.capabilities.image?.transparency === true,
+      editing: m.capabilities.modalities.includes("image_to_image") && m.capabilities.image?.editing === true,
     }));
+  const editors = models.filter((m) => m.available && m.editing);
+  const preferredEditor = editors.find((m) => !m.paid) ?? editors[0] ?? null;
+  const anyTransparency = models.some((m) => m.available && m.transparency);
   const preferred = models.find((m) => m.available && !m.paid) ?? models.find((m) => m.available) ?? null;
   const assets = new Map(data.assets.map((a) => [a.id, a]));
+  // Phase 5B-I2: Edit Image starts from one of THIS Shot's stills (the server checks the same set)
+  const editable = [...shotEditableAssetIds(data, shotId)].map((id) => {
+    const fromAttempt = data.attempts.find((a) => a.shotId === shotId && a.outputAssetId === id);
+    const frame = data.frames.find((f) => f.shotId === shotId && f.assetId === id);
+    const pf = (data.productionFrames ?? []).find((f) => f.shotId === shotId && f.assetId === id);
+    const label = pf
+      ? `Production Frame v${pf.version}`
+      : frame
+        ? `Storyboard v${frame.version}`
+        : fromAttempt
+          ? `Generated #${fromAttempt.attemptNumber} (${fromAttempt.model})`
+          : (assets.get(id)?.name ?? "image");
+    return { id, label };
+  });
+  const labelOf = new Map(editable.map((e) => [e.id, e.label]));
   const recent = data.attempts
     .filter(
       (a) =>
@@ -80,6 +101,7 @@ export function ShotImageActions({
             >
               Generate Storyboard
             </Button>
+            {anyTransparency ? <TransparentToggle testId="shot-image-transparent" /> : null}
           </div>
           <details>
             <summary className="cursor-pointer text-[11px] text-muted">Advanced</summary>
@@ -101,7 +123,58 @@ export function ShotImageActions({
             </div>
           </details>
         </ActionForm>
-      ) : (
+      ) : null}
+      {preferredEditor && editable.length > 0 ? (
+        <details className="border border-line p-2" data-testid="shot-image-edit">
+          <summary className="cursor-pointer text-[12px]">Edit Image</summary>
+          <ActionForm action={startShotImage} successMessage="Edit queued" className="mt-2 space-y-2">
+            {hidden}
+            <input type="hidden" name="kind" value="edit" />
+            <p className="text-[11px] text-muted">
+              The edit is a new Production Frame candidate. The source image is never changed.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Field label="Source image">
+                <select name="sourceAssetId" data-testid="shot-image-edit-source">
+                  {editable.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Model" hint="Only models that can edit an image.">
+                <select name="model" defaultValue={preferredEditor.value} data-testid="shot-image-edit-model">
+                  {editors.map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                      {m.paid ? " (paid)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <Field label="Edit instruction">
+              <textarea name="instruction" rows={2} required data-testid="shot-image-edit-instruction" />
+            </Field>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button type="submit" size="sm" variant="primary" data-testid="shot-image-edit-submit">
+                Edit Image
+              </Button>
+              {editors.some((m) => m.transparency) ? (
+                <TransparentToggle testId="shot-image-edit-transparent" />
+              ) : null}
+            </div>
+            <details>
+              <summary className="cursor-pointer text-[11px] text-muted">Advanced</summary>
+              <Field label="Confirm total (USD)" hint="Required only for a paid model.">
+                <input name="confirmedTotalUsd" inputMode="decimal" />
+              </Field>
+            </details>
+          </ActionForm>
+        </details>
+      ) : null}
+      {preferred ? null : (
         <p className="text-[12px] text-muted" data-testid="shot-image-unavailable">
           No image model is available on this server.
         </p>
@@ -119,6 +192,14 @@ export function ShotImageActions({
                 <div className="mt-1 text-[11px] text-muted">
                   #{a.attemptNumber} · {a.model}
                 </div>
+                {(a.modelSettings as { editSourceAssetId?: string }).editSourceAssetId ? (
+                  <div className="text-[11px] text-muted" data-testid="shot-image-lineage">
+                    Source:{" "}
+                    {labelOf.get((a.modelSettings as { editSourceAssetId: string }).editSourceAssetId) ??
+                      "an earlier image"}{" "}
+                    → edit attempt #{a.attemptNumber} → this new image
+                  </div>
+                ) : null}
                 <div className="mt-1 flex flex-wrap gap-1">
                   <ActionForm
                     action={chooseGeneratedFrameAsProductionFrame}
@@ -144,5 +225,14 @@ export function ShotImageActions({
         </ul>
       ) : null}
     </div>
+  );
+}
+
+function TransparentToggle({ testId }: { testId: string }) {
+  return (
+    <label className="flex items-center gap-1 text-[11px]">
+      <input type="checkbox" name="transparent" value="1" data-testid={testId} />
+      Transparent background
+    </label>
   );
 }

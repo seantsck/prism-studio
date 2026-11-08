@@ -24,7 +24,7 @@ export default async function LocationsPage({ params }: { params: Promise<{ proj
   const images = new Map(
     await Promise.all(
       data.locations.map(
-        async (l) => [l.id, await subjectImageState({ kind: "location", locationId: l.id })] as const,
+        async (l) => [l.id, await subjectImageState({ kind: "location", locationId: l.id }, data)] as const,
       ),
     ),
   );
@@ -212,6 +212,7 @@ export default async function LocationsPage({ params }: { params: Promise<{ proj
                     subject={{ kind: "location", id: l.id }}
                     attempts={images.get(l.id)?.attempts ?? []}
                     models={images.get(l.id)?.models ?? []}
+                    sources={images.get(l.id)?.sources ?? []}
                   />
                 </div>
               ) : null}

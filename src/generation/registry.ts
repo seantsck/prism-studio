@@ -19,6 +19,7 @@ export function providerDisclosure(
   };
 }
 import { RunwayProvider } from "./providers/runway/adapter";
+import { OpenAIImageProvider } from "./providers/openai-image/adapter";
 
 /**
  * Server-side model registry: which providers/models exist, what they can do, whether they are enabled and
@@ -122,5 +123,7 @@ export function createRegistry(
   // Real adapters: registered always (so their availability and blockers are visible), enabled per deployment
   // through PRISM_STUDIO_GENERATION_PROVIDERS and configured through their own credentials.
   adapters.push(new RunwayProvider({ env }));
+  // Phase 5B-I2: GPT Image directly through OpenAI (the worker owns its key; the SDK loads lazily on first call)
+  adapters.push(new OpenAIImageProvider({ env }));
   return new ModelRegistry(adapters, config, env);
 }

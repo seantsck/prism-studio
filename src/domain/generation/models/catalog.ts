@@ -1,5 +1,6 @@
 import type { GenerationModel, ModelCapabilities } from "../schemas";
 import { RUNWAY_IMAGE_MODELS } from "./image-catalog";
+import { OPENAI_IMAGE_MODELS } from "./openai-image-catalog";
 import type {
   CatalogModel,
   CatalogPricing,
@@ -448,8 +449,11 @@ export { RUNWAY_IMAGE_MODELS };
 /** Every Runway catalog model (video, then still image), in a stable order. */
 export const RUNWAY_MODELS: readonly CatalogModel[] = [...RUNWAY_VIDEO_MODELS, ...RUNWAY_IMAGE_MODELS];
 
+/** Every catalog model of every real provider (Runway, then OpenAI Images direct, Phase 5B-I2). */
+export const CATALOG_MODELS: readonly CatalogModel[] = [...RUNWAY_MODELS, ...OPENAI_IMAGE_MODELS];
+
 export function catalogModel(provider: string, modelId: string): CatalogModel | null {
-  return RUNWAY_MODELS.find((m) => m.provider === provider && m.modelId === modelId) ?? null;
+  return CATALOG_MODELS.find((m) => m.provider === provider && m.modelId === modelId) ?? null;
 }
 
 /** A still-image model (it has an image credit rule and no video modality). */

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { ImageEditSpec } from "@/domain/generation/image-edit";
 import type { CandidateRepository, CandidateSetView } from "@/data/candidates-repository";
 import { animationSource, type AnimationSourceFrame } from "@/domain/generation/animation";
 import { GenerationSubmitError, type GenerationRepository } from "@/data/generation-repository";
@@ -44,6 +45,10 @@ export interface CandidateSelection {
   nativeAudio?: boolean;
   /** Still-image quality (Production Frame candidates); null = the model's explicit Prism default. */
   quality?: string | null;
+  /** Phase 5B-I2: an explicit transparent background (refused for a model without native transparency). */
+  background?: "transparent" | "opaque" | null;
+  /** Phase 5B-I2: edit this source still (Production Frame candidates); the result is a new Asset. */
+  edit?: ImageEditSpec | null;
 }
 
 export interface CandidatePlanItem {
@@ -99,6 +104,7 @@ function providerOptionsOf(fit: ModelFit, s: CandidateSelection): Record<string,
   if (s.nativeAudio) o.nativeAudio = true;
   // image quality is always EXPLICIT when the model has one: never the provider's hidden default
   if (fit.quality) o.quality = fit.quality;
+  if (s.background) o.background = s.background;
   return o;
 }
 
@@ -144,6 +150,7 @@ export function planCandidateSet(args: {
       purpose,
       now: args.now,
       shared,
+      edit: s.edit ?? undefined,
     });
     const blockers = evaluation.gate.blockers.map((b) => b.message);
     return {
@@ -378,6 +385,7 @@ export async function submitCandidateSet(args: {
         config: args.config,
         projectRevision: args.projectRevision,
         now,
+        edit: it.selection.edit ?? undefined,
       });
       if (!prepared.input) {
         const why = prepared.evaluation.gate.blockers.map((b) => b.message).join(" · ") || "blocked";

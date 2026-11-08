@@ -19,6 +19,12 @@ import {
 } from "@/domain/generation/gate";
 import { animationRequestViolations } from "@/domain/generation/animation";
 import { buildPromptPlan } from "@/domain/generation/prompt-plan";
+import {
+  applyImageEdit,
+  imageEditBlockers,
+  transparencyBlockers,
+  type ImageEditSpec,
+} from "@/domain/generation/image-edit";
 import type {
   CostEstimate,
   GenerationModel,
@@ -78,6 +84,8 @@ export function evaluateShotForModel(args: {
   now?: Date;
   /** Reuse an already built context/package when evaluating several models for one shot. */
   shared?: SharedShotEvaluation;
+  /** Phase 5B-I2: edit this source still (Production Frame candidates only); the source is sent first. */
+  edit?: ImageEditSpec;
 }): Evaluation {
   const shared = args.shared ?? buildSharedEvaluation(args.data, args.shotId, args.now);
   const { ctx, pkg } = shared;
@@ -98,15 +106,23 @@ export function evaluateShotForModel(args: {
   const adapterBlockers: GateBlocker[] = [];
   if (model && adapter && compatibility?.compatible && compatibility.modality) {
     try {
-      const plan = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation, { purpose });
-      const req = buildGenerationRequest({
+      const built = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation, { purpose });
+      const base = buildGenerationRequest({
         pkg,
         model,
         compatibility,
-        plan,
+        plan: built,
         idempotencyKey: "estimate-only-key",
         providerOptions: args.providerOptions,
       });
+      const editBlocked = args.edit ? imageEditBlockers(model, base) : [];
+      const { request: req, plan } =
+        args.edit && editBlocked.length === 0
+          ? applyImageEdit(base, built, args.edit, model)
+          : { request: base, plan: built };
+      [...editBlocked, ...transparencyBlockers(model, req)].forEach((message, i) =>
+        adapterBlockers.push({ code: `image.option.${i}`, source: "model", message }),
+      );
       // Provider-specific limits the generic engine cannot know (e.g. prompt length) surface as explicit
       // ignored features: acknowledged by the user, recorded in the attempt, never silently dropped.
       const extra = adapter.additionalIgnoredFeatures?.(req, plan, model) ?? [];
@@ -190,6 +206,8 @@ export function prepareSubmission(args: {
   seed?: number | null;
   /** `GenerationRepository.projectRevision()` captured before `data` was loaded (null = unchecked). */
   projectRevision?: string | null;
+  /** Phase 5B-I2: edit this source still; the result is a NEW Asset, the source is never modified. */
+  edit?: ImageEditSpec;
 }): PreparedSubmission {
   const now = args.now ?? new Date();
   const evaluation = evaluateShotForModel({ ...args, now });
@@ -198,16 +216,22 @@ export function prepareSubmission(args: {
     return { evaluation, input: null };
 
   const adapter = args.registry.adapter(model.provider)!;
-  const plan = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation, { purpose: args.purpose });
-  const request = buildGenerationRequest({
+  const builtPlan = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation, {
+    purpose: args.purpose,
+  });
+  const baseRequest = buildGenerationRequest({
     pkg,
     model,
     compatibility,
-    plan,
+    plan: builtPlan,
     idempotencyKey: args.idempotencyKey,
     seed: args.seed ?? null,
     providerOptions: args.providerOptions,
   });
+  // the gate above already refused an impossible edit or transparency (evaluateShotForModel saw the same edit)
+  const { request, plan } = args.edit
+    ? applyImageEdit(baseRequest, builtPlan, args.edit, model)
+    : { request: baseRequest, plan: builtPlan };
   // Phase 2H: an animation is created only when its request starts from exactly the frozen Production Frame
   const violations = animationRequestViolations(request, pkg);
   if (violations.length > 0) {
@@ -272,6 +296,8 @@ export function prepareSubmission(args: {
       fps: request.fps,
       seed: request.seed,
       providerOptions: request.providerOptions,
+      // lineage (Phase 5B-I2): the edited source; the new image is always a new Asset
+      ...(args.edit ? { editSourceAssetId: args.edit.sourceAssetId } : {}),
     },
     inputAssetIds: [...used].sort(),
     outputAssetId: null,

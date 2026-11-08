@@ -18,6 +18,7 @@ const env = {
   PRISM_STUDIO_ENABLE_MOCK_PROVIDER: "1",
 };
 const world = vi.hoisted(() => ({ repo: null as unknown }));
+vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/server/auth", () => ({ requireUser: async () => ({ kind: "memory", id: "tester" }) }));
 vi.mock("@/server/repo", async () => {

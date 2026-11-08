@@ -13,6 +13,7 @@ import {
 import { IDENTITY_SLOTS, type ProjectData } from "@/domain/schemas";
 import { prepareSubjectImage } from "@/generation/subject-submission";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
+import { createLocationViewFromReference } from "./location-view-actions";
 import { requireUser } from "./auth";
 import { getGenerationConfig, getGenerationRepo, getRegistry } from "./generation";
 import { getRepo, requireProjectFresh } from "./repo";
@@ -54,6 +55,21 @@ async function startSubjectImage_impl(form: FormData) {
     subject = { kind: "location" as const, locationId: subjectId, intent: intent as LocationImageIntent };
   } else throw new UserFacingError("Nothing to generate an image for.");
 
+  // Phase 5B-I2: Edit Image starts only from one of THIS subject's own images (its references or generated images)
+  const sourceAssetId = str(form, "sourceAssetId");
+  const edit = sourceAssetId ? { sourceAssetId, instruction: str(form, "instruction") } : undefined;
+  if (edit) {
+    const own = await subjectImageAssetIds(
+      data,
+      subject.kind === "character"
+        ? { kind: "character", characterId: subject.characterId }
+        : { kind: "location", locationId: subject.locationId },
+    );
+    if (!own.has(edit.sourceAssetId))
+      throw new UserFacingError("That image does not belong to this subject.");
+  }
+  const background = str(form, "transparent") === "1" ? ("transparent" as const) : undefined;
+  const quality = str(form, "quality") || undefined;
   const clientKey = str(form, "idempotencyKey");
   const prepared = prepareSubjectImage({
     data,
@@ -65,6 +81,8 @@ async function startSubjectImage_impl(form: FormData) {
     userId: user.kind === "supabase" ? user.id : null,
     idempotencyKey: clientKey.length >= 8 ? clientKey : `subject-${randomUUID()}`,
     config: getGenerationConfig(),
+    edit,
+    options: background || quality ? { background, quality } : undefined,
   });
   if (!prepared.ok) throw new UserFacingError(prepared.reasons.slice(0, 3).join(" · "));
   try {
@@ -74,6 +92,26 @@ async function startSubjectImage_impl(form: FormData) {
     throw err;
   }
   refresh(slug);
+}
+
+/** The images a Character / Location may edit: its reference images and its own generated images. */
+async function subjectImageAssetIds(
+  data: ProjectData,
+  subject: { kind: "character"; characterId: string } | { kind: "location"; locationId: string },
+): Promise<Set<string>> {
+  const ids: Array<string | null> = [];
+  if (subject.kind === "character") {
+    ids.push(...data.identityRefs.filter((r) => r.characterId === subject.characterId).map((r) => r.assetId));
+    for (const l of data.looks.filter((x) => x.characterId === subject.characterId))
+      ids.push(...l.referenceAssetIds);
+  } else {
+    ids.push(...(data.locations.find((l) => l.id === subject.locationId)?.referenceAssetIds ?? []));
+  }
+  const views = await (await getGenerationRepo()).listSubjectImageAttempts(subject);
+  for (const v of views) for (const o of v.outputs) ids.push(o.asset.id);
+  return new Set(
+    ids.filter((id): id is string => !!id && hasStoredImage(data.assets.find((a) => a.id === id))),
+  );
 }
 
 export async function startSubjectImage(form: FormData): Promise<ActionResult> {
@@ -179,4 +217,41 @@ async function saveAsLocationReference_impl(form: FormData) {
 
 export async function saveAsLocationReference(form: FormData): Promise<ActionResult> {
   return runAction(() => saveAsLocationReference_impl(form), { name: "saveAsLocationReference" });
+}
+
+/**
+ * Phase 5B-I2: "Use as Location View". The generated image joins the Location's references (an explicit act, refused
+ * while the Location is locked) and becomes a named Location View through the EXISTING 2G.3 action, unchanged.
+ */
+async function saveAsLocationView_impl(form: FormData): Promise<ActionResult> {
+  const slug = str(form, "projectSlug");
+  await requireUser();
+  const data = await requireProjectFresh(slug);
+  const location = data.locations.find((l) => l.id === str(form, "locationId"));
+  if (!location) throw new UserFacingError("That location no longer exists.");
+  if (location.locked)
+    throw new UserFacingError("That location is locked. Unlock it before changing its references.");
+  const { assetId } = await generatedImage(data, str(form, "attemptId"), { locationId: location.id });
+  if (!location.referenceAssetIds.includes(assetId)) {
+    await (
+      await getRepo()
+    ).upsert(data.project.id, "locations", {
+      ...location,
+      referenceAssetIds: [...location.referenceAssetIds, assetId],
+    });
+  }
+  const fd = new FormData();
+  fd.set("projectSlug", slug);
+  fd.set("locationId", location.id);
+  fd.set("assetId", assetId);
+  fd.set("lv_name", str(form, "lv_name") || "Generated view");
+  fd.set("lv_kind", str(form, "lv_kind") || "establishing");
+  const result = await createLocationViewFromReference(fd);
+  refresh(slug);
+  if (!result.ok) throw new UserFacingError(result.error);
+  return result;
+}
+
+export async function saveAsLocationView(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveAsLocationView_impl(form), { name: "saveAsLocationView" });
 }
