@@ -11,6 +11,11 @@ const DIR = "supabase/migrations";
 const FILE = "0051_generation_subjects.sql";
 const sql = readFileSync(`${DIR}/${FILE}`, "utf8");
 const code = sql.replace(/--.*$/gm, "");
+// the one privileged piece: the 0051 shared-database compatibility gate's release trigger (checked on its own below)
+const RELEASE =
+  /create or replace function release_subject_image_outputs\(\)[\s\S]*?\$\$;\s*revoke all on function release_subject_image_outputs\(\) from public;\s*create trigger assets_release_subject_image_outputs\s+before delete on assets\s+for each row execute function release_subject_image_outputs\(\);/;
+const release = RELEASE.exec(code)?.[0] ?? "";
+const rest = code.replace(RELEASE, "");
 
 describe("migration 0051: generation subjects (Character / Location images)", () => {
   it("is the latest migration, follows 0050, and leaves 0050 byte-for-byte unchanged", () => {
@@ -24,14 +29,28 @@ describe("migration 0051: generation subjects (Character / Location images)", ()
     );
   });
 
-  it("is additive: no new table, no destruction, no row writes, no grant or policy change, no SECURITY DEFINER", () => {
-    expect(code).not.toMatch(/\bcreate table\b/i);
-    expect(code).not.toMatch(/\bsecurity definer\b/i);
-    expect(code).not.toMatch(/\bdrop\s+(table|column|index|policy|function|trigger|constraint)\b/i);
-    expect(code).not.toMatch(/\b(truncate\s+\w|delete\s+from|insert\s+into)\b/i);
-    expect(code).not.toMatch(/\bupdate\s+\w+\s+set\b/i);
-    expect(code).not.toMatch(/\b(grant|revoke)\b/i);
-    expect(code).not.toMatch(/\b(create|alter|drop)\s+policy\b/i);
+  it("is additive: no new table, no destruction, no row writes, no grant or policy change, no SECURITY DEFINER (outside the release trigger)", () => {
+    expect(release).not.toBe("");
+    expect(rest).not.toMatch(/\bcreate table\b/i);
+    expect(rest).not.toMatch(/\bsecurity definer\b/i);
+    expect(rest).not.toMatch(/\bdrop\s+(table|column|index|policy|function|trigger|constraint)\b/i);
+    expect(rest).not.toMatch(/\b(truncate\s+\w|delete\s+from|insert\s+into)\b/i);
+    expect(rest).not.toMatch(/\bupdate\s+\w+\s+set\b/i);
+    expect(rest).not.toMatch(/\b(grant|revoke)\b/i);
+    expect(rest).not.toMatch(/\b(create|alter|drop)\s+policy\b/i);
+  });
+
+  it("0051 shared-database compatibility gate: the release trigger drops ONLY a subject attempt's output link", () => {
+    expect(release).toMatch(/language plpgsql security definer set search_path = public/);
+    // exactly one data statement: a delete of generation_outputs rows for THIS asset whose attempt has no Shot
+    expect(release.match(/\b(delete from|insert into|update \w+ set|truncate)\b/gi)).toEqual(["delete from"]);
+    expect(release).toMatch(/delete from generation_outputs o\s+using generation_attempts a/);
+    expect(release).toMatch(/o\.asset_id = old\.id/);
+    expect(release).toMatch(/o\.project_id = old\.project_id/);
+    expect(release).toMatch(/a\.id = o\.attempt_id/);
+    expect(release).toMatch(/a\.shot_id is null;/);
+    expect(release).toMatch(/return old;/);
+    expect(release).toMatch(/revoke all on function release_subject_image_outputs\(\) from public;/);
   });
 
   it("allows exactly one subject, keeps subjects in their project, and keeps subject attempts image-only and unapproved", () => {

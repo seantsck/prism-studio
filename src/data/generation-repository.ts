@@ -196,6 +196,13 @@ export interface GenerationRepository {
   /** Newest first. Only the subject's own attempts (never a Shot's). */
   listSubjectImageAttempts(subject: ImageSubjectRef): Promise<SubjectAttemptView[]>;
   getSubjectImageAttempt(attemptId: string): Promise<SubjectAttemptView | null>;
+  /**
+   * 0051 shared-database compatibility gate: why a Character / Location image attempt still needs this Asset (it was
+   * sent as an INPUT reference). Its OWN output is provenance, not a use: deleting an unreferenced generated subject
+   * image keeps the attempt (its output becomes null) and drops only that output link. Shot attempts are unchanged
+   * (they are in ProjectData.attempts and pin both inputs and outputs through asset-usage).
+   */
+  subjectImageAssetPins(projectId: string, assetId: string): Promise<string[]>;
   /** Cheap polling query: jobs that are not terminal. */
   listActiveProjectJobs(projectId: string): Promise<GenerationJob[]>;
   listProjectGenerations(projectId: string, filters?: GenerationFilters): Promise<ProjectGenerationRow[]>;

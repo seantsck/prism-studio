@@ -559,6 +559,26 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
     });
   }
 
+  async subjectImageAssetPins(projectId: string, assetId: string) {
+    return this.tx(async (c) =>
+      (
+        await c.query(
+          `select a.attempt_number, coalesce(ch.name, l.name, 'Unknown') as subject,
+                  case when a.character_id is not null then 'Character' else 'Location' end as kind
+             from generation_attempts a
+             left join characters ch on ch.id = a.character_id
+             left join locations l on l.id = a.location_id
+            where a.project_id = $1 and a.shot_id is null and $2::uuid = any (a.input_asset_ids)
+            order by a.attempt_number`,
+          [projectId, assetId],
+        )
+      ).rows.map(
+        (r: { attempt_number: number; subject: string; kind: string }) =>
+          `${r.kind} "${r.subject}" · image attempt ${r.attempt_number} input`,
+      ),
+    );
+  }
+
   async listShotAttempts(shotId: string) {
     return this.tx(async (c) => {
       const rows = (

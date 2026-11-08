@@ -258,6 +258,76 @@ try {
     wc.release();
   }
 
+  // ── 0051 shared-database compatibility gate: deleting a generated image, inside a rolled-back transaction ──
+  // a subject image is released (attempt kept, output nulled, output link dropped); a Shot image is still refused
+  const gc = await pool.connect();
+  try {
+    await gc.query("begin");
+    const subjectAsset = randomUUID();
+    const shotAsset = randomUUID();
+    for (const id of [subjectAsset, shotAsset])
+      await gc.query(
+        "insert into assets (id, project_id, type, name, source) values ($1, $2, 'image', 'gate image', 'generated')",
+        [id, pid],
+      );
+    await gc.query("update generation_attempts set output_asset_id = $2 where id = $1", [
+      a.attempt.id,
+      subjectAsset,
+    ]);
+    await gc.query(
+      "insert into generation_outputs (project_id, attempt_id, asset_id, role, position) values ($1, $2, $3, 'primary', 0)",
+      [pid, a.attempt.id, subjectAsset],
+    );
+    const shotAttempt = (
+      await gc.query(
+        `select a.id from generation_attempts a where a.project_id = $1 and a.shot_id is not null
+           and not exists (select 1 from generation_outputs o where o.attempt_id = a.id and o.role = 'primary') limit 1`,
+        [pid],
+      )
+    ).rows[0]?.id as string | undefined;
+    if (shotAttempt)
+      await gc.query(
+        "insert into generation_outputs (project_id, attempt_id, asset_id, role, position) values ($1, $2, $3, 'primary', 99)",
+        [pid, shotAttempt, shotAsset],
+      );
+    // as the project owner (role authenticated, RLS on): the app's own delete statement
+    await gc.query("savepoint owner");
+    const pre = rlsPreamble({ sub: dev.id }).replace(/^begin; /, "");
+    await gc.query(pre);
+    await gc.query("delete from assets where id = $1 and project_id = $2", [subjectAsset, pid]);
+    const att = (
+      await gc.query("select output_asset_id from generation_attempts where id = $1", [a.attempt.id])
+    ).rows[0];
+    const links = (
+      await gc.query("select count(*)::int n from generation_outputs where asset_id = $1", [subjectAsset])
+    ).rows[0].n;
+    check(
+      "0051 gate: an unreferenced generated subject image is deletable; its attempt is kept with no output",
+      att !== undefined && att.output_asset_id === null && links === 0,
+      JSON.stringify({ att, links }),
+    );
+    let shotErr = "";
+    await gc.query("savepoint shot");
+    try {
+      await gc.query("delete from assets where id = $1 and project_id = $2", [shotAsset, pid]);
+    } catch (e) {
+      shotErr = (e as Error).message;
+    }
+    await gc.query("rollback to savepoint shot");
+    check(
+      "0051 gate: a Shot attempt's output image is still refused (unchanged)",
+      shotAttempt !== undefined && /foreign key/i.test(shotErr),
+      shotErr || "no seeded Shot attempt",
+    );
+    const shotLink = (
+      await gc.query("select count(*)::int n from generation_outputs where asset_id = $1", [shotAsset])
+    ).rows[0].n;
+    check("0051 gate: the Shot output link is never released", shotLink === 1);
+  } finally {
+    await gc.query("rollback").catch(() => undefined);
+    gc.release();
+  }
+
   // ── deleting the subject cascades its attempts, inside a rolled-back transaction ──
   const cc = await pool.connect();
   try {

@@ -266,6 +266,7 @@ export class MemoryRepository implements Repository {
         shot.propIds = shot.propIds.filter((x) => x !== id);
         this.touchShot(projectId, shot.id);
       }
+    if (name === "assets") this.generationService?.releaseSubjectOutputs(projectId, id);
     if (name === "assets")
       for (const ref of p.identityRefs.filter((r) => r.assetId === id)) {
         ref.assetId = null;

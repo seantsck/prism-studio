@@ -134,6 +134,21 @@ Two operations, both provider-neutral:
 - **Edits (I2).** An edit is a new image attempt whose input names the source Asset. The edited image is a **new**
   Asset, so the source is never overwritten, and it can be promoted like any generated image.
 - **Background removal (I3).** A new Asset plus an `asset_derivations` row, with the parent kept.
+- **Deleting a generated Character / Location image** (the 0051 shared-database compatibility gate). The asset-usage
+  guard reflects actual references, not "generated":
+  - **In use, so refused:** a Character reference slot, a Look reference, a Location reference, a Location View
+    (immutable, so permanently), a Production Frame, a Storyboard frame, a Continuity Lock, a Shot attempt's input or
+    output, and a Character / Location image attempt that sent it as an **input** reference
+    (`subjectImageAssetPins`).
+  - **Its own attempt is provenance, not a use.** An unreferenced generated subject image is deletable. The attempt is
+    kept (status, cost, prompt), its `output_asset_id` becomes null through its existing key, and only that subject
+    attempt's `generation_outputs` link is dropped, atomically with the Asset delete (0051's
+    `assets_release_subject_image_outputs` trigger; the memory twin is `releaseSubjectOutputs`).
+  - **Shot behaviour is unchanged.** A Shot attempt's output is still pinned by asset-usage, and its output link is
+    never released, so Postgres's key refuses the delete as before.
+  - Evidence: `src/server/__tests__/asset-usage-0051-gate.test.ts` (memory, through the real `deleteAsset`),
+    `src/data/__tests__/migration-0051.test.ts` (the trigger's exact shape), and three checks in
+    `scripts/db-generation-subjects.mts` (Postgres, as the RLS-bound owner).
 
 ## 6. Isolation rule (deployment)
 
@@ -150,7 +165,8 @@ Two operations, both provider-neutral:
 
 ## 7. Acceptance gates (I1)
 
-- **Disposable Postgres at 0051** (`scripts/db-generation-subjects.mts`, 22/22):
+- **Disposable Postgres at 0051** (`scripts/db-generation-subjects.mts`, 25/25, including the three asset-delete
+  checks of the 0051 shared-database compatibility gate):
   - constraints: one subject, image-only, never approved, project-scoped subjects, per-subject numbering;
   - idempotency and RLS (a stranger reads and creates nothing);
   - the project load, generations listing and model history stay Shot-only;

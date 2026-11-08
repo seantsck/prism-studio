@@ -288,6 +288,33 @@ export class MemoryGenerationService implements GenerationRepository, Generation
     return a ? this.subjectView(a) : null;
   }
 
+  async subjectImageAssetPins(projectId: string, assetId: string) {
+    const project = this.projectOf(projectId);
+    return this.subjectAttempts
+      .filter((a) => a.projectId === projectId && a.inputAssetIds.includes(assetId))
+      .sort((x, y) => x.attemptNumber - y.attemptNumber)
+      .map((a) => {
+        const subject = a.characterId
+          ? `Character "${project?.characters.find((c) => c.id === a.characterId)?.name ?? "Unknown"}"`
+          : `Location "${project?.locations.find((l) => l.id === a.locationId)?.name ?? "Unknown"}"`;
+        return `${subject} · image attempt ${a.attemptNumber} input`;
+      });
+  }
+
+  /**
+   * The memory twin of 0051's `release_subject_image_outputs` trigger plus `output_asset_id ... on delete set null`:
+   * an Asset delete drops a subject attempt's output link and nulls its output; the attempt itself is kept.
+   * Shot attempt outputs are never released (asset-usage refuses that delete first, as Postgres's key would).
+   */
+  releaseSubjectOutputs(projectId: string, assetId: string): void {
+    const subjectIds = new Set(
+      this.subjectAttempts.filter((a) => a.projectId === projectId).map((a) => a.id),
+    );
+    this.outputs = this.outputs.filter((o) => !(o.assetId === assetId && subjectIds.has(o.attemptId)));
+    for (const a of this.subjectAttempts)
+      if (a.projectId === projectId && a.outputAssetId === assetId) a.outputAssetId = null;
+  }
+
   /** The job, its estimated cost and the first event, shared by Shot and subject attempts. */
   private enqueue(
     project: ProjectData,
