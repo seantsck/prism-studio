@@ -258,6 +258,27 @@ describe("5B-I4 Character Visual Bible", () => {
     expect(sha((await sink.get(seanImg.objectPath!))!)).toBe(seanImg.checksum);
   });
 
+  it("refuses an asset of ANOTHER project, for every designation", async () => {
+    const d = await data();
+    const y = d.characters.find((c) => c.name === "Yumeko")!;
+    const otherId = randomUUID();
+    await repo.createProject(
+      { ...d.project, id: otherId, slug: "other-project", title: "Other" },
+      { ...d.bible, projectId: otherId },
+    );
+    const foreign = { ...(await uploaded(y.id, "probe")), id: randomUUID(), projectId: otherId };
+    await repo.upsert(otherId, "assets", { ...foreign, metadata: { hasAlpha: true } });
+    const f = (extra: Record<string, string>) =>
+      form({ characterId: y.id, assetId: foreign.id, confirmReplace: "1", ...extra });
+    for (const action of [setCanonicalIdentity, setCharacterCutout])
+      expect(await action(f({}))).toMatchObject({
+        ok: false,
+        error: "That image does not belong to this character.",
+      });
+    expect(await addExpressionReference(f({ expression: "happy" }))).toMatchObject({ ok: false });
+    expect((await data()).identityRefs.some((r) => r.assetId === foreign.id)).toBe(false);
+  });
+
   it("supporting references, Look references, expressions and the cutout fill the readiness checklist", async () => {
     const y = await byName("Yumeko");
     const look = await lookOf(y.id);

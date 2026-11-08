@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { buildShotContext } from "../context";
 import { approvalSnapshot } from "../fingerprint";
 import { buildSeedProject } from "../../data/seed";
+import { deriveReferenceCandidates } from "../generation/compatibility";
+import type { GenerationPackage } from "../generation-package";
 import {
   normalizeExpression,
   orderedIdentityRefs,
@@ -53,5 +55,56 @@ describe("Visual Bible domain", () => {
     expect(vb.done).toBe(0);
     expect(vb.items.find((i) => i.key === "canonical")!.suggestion).toMatch(/defines this Character's face/);
     expect(vb.items.every((i) => i.suggestion !== null || i.done)).toBe(true);
+  });
+  it("a Continuity Lock is unchanged by a canonical identity: the frozen images are sent, in frozen order", () => {
+    const img = (id: string) => ({ id, type: "image", objectPath: `p/${id}`, checksum: "c" });
+    const pkg = (withCanonical: boolean, withLock: boolean) =>
+      ({
+        assets: Object.fromEntries(
+          ["canon", "live-id", "live-look", "lock-id", "lock-look"].map((id) => [id, img(id)]),
+        ),
+        characters: [
+          {
+            characterId: "y",
+            name: "Yumeko",
+            identityReferenceAssetIds: ["live-id"],
+            look: { name: "Formal Black", referenceAssetIds: ["live-look"] },
+            ...(withCanonical ? { canonicalIdentityAssetId: "canon" } : {}),
+            ...(withLock ? { continuityLock: { lockId: "L", name: "Ep1", lockFingerprint: "f" } } : {}),
+          },
+        ],
+        references: {
+          referenceAssetIds: [],
+          characterContinuity: withLock
+            ? [
+                {
+                  characterId: "y",
+                  characterName: "Yumeko",
+                  lockId: "L",
+                  name: "Ep1",
+                  facts: { look: { name: "Formal Black" } },
+                  references: [
+                    { position: 1, role: "look", identitySlot: null, label: "look", assetId: "lock-look" },
+                    {
+                      position: 0,
+                      role: "identity",
+                      identitySlot: "front",
+                      label: "front",
+                      assetId: "lock-id",
+                    },
+                  ],
+                },
+              ]
+            : undefined,
+        },
+        lighting: {},
+      }) as unknown as GenerationPackage;
+    const ids = (p: GenerationPackage) => deriveReferenceCandidates(p).map((c) => c.assetId);
+    // locked: canonical ignored, exactly as without one
+    expect(ids(pkg(true, true))).toEqual(ids(pkg(false, true)));
+    expect(ids(pkg(true, true))).toEqual(["lock-id", "lock-look"]);
+    // unlocked: canonical → selected Look → other identity; without canonical the pre-I4 order
+    expect(ids(pkg(true, false))).toEqual(["canon", "live-look", "live-id"]);
+    expect(ids(pkg(false, false))).toEqual(["live-id", "live-look"]);
   });
 });

@@ -111,3 +111,20 @@ generated or replaced without the creator.
 - **Freshness:** changing the canonical identity changes the Shot fingerprint.
 
 Also: `src/domain/__tests__/visual-bible.test.ts` (4 pure tests), and browser story H.
+
+## 5. Integration with I3b (High Quality Removal)
+
+Rebased onto `phase-5b-image-pipeline` after #68. The Images panel keeps one control per action:
+
+- **Generated images:** Use as Canonical and Remove Background.
+- **Cutouts, local or Photoroom:** Use as Cutout.
+- **Every finished image:** Use as Character Reference and Use as Look.
+- **A locally refused busy image:** High Quality Removal, with its price and the Photoroom privacy copy. The offer
+  never appears in the Visual Bible, and designating an image never calls a provider.
+
+Evidence:
+
+- `src/components/images/__tests__/merged-image-panels.test.ts` (rendered markup, 4 tests);
+- the I3b suite's "a local or a Photoroom cutout may be designated" test;
+- the cross-project test in `src/server/__tests__/visual-bible.test.ts`;
+- the Continuity Lock test in `src/domain/__tests__/visual-bible.test.ts`.
