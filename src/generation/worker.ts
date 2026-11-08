@@ -434,7 +434,8 @@ export class GenerationWorker {
           providerStatus: submission.providerStatus,
           submittedAt: accepted,
           nextRunAt: new Date(this.now().getTime() + (next === "ingesting" ? 0 : interval)).toISOString(),
-          releaseLease: true,
+          // a provider that finished synchronously (Phase 5B-I2, OpenAI Images) keeps the lease: ingest right now
+          releaseLease: next !== "ingesting",
           lastErrorCode: null,
           lastErrorCategory: null,
           lastErrorMessage: "",
@@ -442,6 +443,12 @@ export class GenerationWorker {
         },
         accepted,
       );
+      if (next === "ingesting") {
+        // The result may exist only in this process (inline bytes of a synchronous call): continue straight into
+        // ingestion under the same lease, exactly like a poll that finds the job succeeded.
+        const fresh = (await this.store.getJob(current.id))!;
+        return this.ingest({ ...claimed, job: { ...fresh, leaseToken: token } }, adapter, request);
+      }
     } catch (err) {
       if (isIllegalTransition(err)) {
         // Cancellation arrived while the provider call was in flight. The provider HAS accepted the request:

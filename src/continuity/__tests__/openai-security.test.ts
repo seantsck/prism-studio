@@ -43,7 +43,18 @@ describe("OpenAI credential handling", () => {
     const importers = walk("src")
       .filter((p) => /from "openai"|from "openai\/|import\("openai"\)/.test(readFileSync(p, "utf8")))
       .map((p) => p.replace(/\\/g, "/"));
-    expect(importers).toEqual(["src/continuity/providers/openai/sdk-transport.ts"]);
+    // Phase 5B-I2 adds exactly one more: the OpenAI Images transport, itself only imported lazily by its adapter
+    expect(importers.sort()).toEqual([
+      "src/continuity/providers/openai/sdk-transport.ts",
+      "src/generation/providers/openai-image/sdk-transport.ts",
+    ]);
+    const adapter = readFileSync("src/generation/providers/openai-image/adapter.ts", "utf8");
+    expect(adapter).toMatch(/await import\("\.\/sdk-transport"\)/);
+    // nothing imports that transport statically (only the provider's own directory could reach "./sdk-transport")
+    const staticImporters = walk("src/generation")
+      .map((p) => p.replace(/\\/g, "/"))
+      .filter((p) => /from "[^"]*sdk-transport"/.test(readFileSync(p, "utf8")));
+    expect(staticImporters).toEqual([]);
   });
 
   it("is redacted from log text, both by literal env value and by key shape", () => {
