@@ -28,6 +28,7 @@
     "test:e2e:supabase": "playwright test -c playwright.supabase.config.ts",
     "worker:generation": "tsx --env-file=.env.local scripts/generation-worker.mts",
     "worker:generation:container": "tsx scripts/generation-worker.mts",
+    "worker:story": "tsx --env-file=.env.local scripts/story-worker.mts",
     "daemon:acceptance": "tsx --env-file=.env.local scripts/daemon-acceptance.mts",
     "db:generation": "tsx --env-file=.env.local scripts/db-generation.mts",
     "db:generation:cleanup": "tsx --env-file=.env.local scripts/generation-cleanup.mts",

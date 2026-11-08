@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { buildSeedProject } from "../src/data/seed";
 
 /**
  * Phase 5B-I1 / I1b on its own memory server (memory-5b-isolated): Character, Location and Shot images through the
@@ -16,6 +17,9 @@ import { expect, test, type Page } from "@playwright/test";
  *   J  Shot 3A:   Production Frame Inputs from the Visual Bibles (Yumeko canonical + Look, the selected Lobby view,
  *                 the Lobby canonical) → Generate Production Frame → Use as Production Frame → refresh → Generate
  *                 Alternatives → the canonical frame is unchanged (5B-I6)
+ *   K  Import Story: paste the Ojou-sama screenplay → Analyze with the free test analyser → Proposal → review (deselect a
+ *                 Shot, edit a Scene) → Apply selected → the new Episode's Shot opens with its Production Frame Inputs
+ *                 (5B-S1)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -450,4 +454,64 @@ test("J — Shot 3A: Production Frame Inputs come from the Visual Bibles; promot
     .not.toBe(freshAttempt);
   await expect(current).toHaveAttribute("data-attempt", freshAttempt!);
   await expect(page.getByTestId("pf-selected")).toHaveAttribute("data-version", pfBefore ?? "");
+});
+
+test("K — Import Story: screenplay → Production Proposal → review → Apply selected → a Shot ready for the image pipeline", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  const script = buildSeedProject().episodes[0]!.scriptText;
+  await page.goto(`${P}/story`);
+  await page.getByTestId("story-paste-form").getByTestId("story-title").fill("Ojou-sama (imported)");
+  await page.getByTestId("story-text").fill(script);
+  // the free test analyser is preselected (no paid model, no provider call)
+  await expect(page.getByTestId("story-paste-form").getByTestId("story-model")).toHaveValue(
+    "prism-test/screenplay-parser-v1",
+  );
+  await page.getByTestId("story-paste-form").getByTestId("story-analyze").click();
+  await page.waitForURL(/\/story\/[0-9a-f-]{36}$/, { timeout: 60_000 });
+  const proposalUrl = page.url();
+  await expect
+    .poll(
+      async () => {
+        await page.goto(proposalUrl);
+        return page.getByTestId("story-status").getAttribute("data-status");
+      },
+      { timeout: 60_000, intervals: [1000] },
+    )
+    .toBe("ready");
+  await expect(page.getByTestId("story-counts")).toContainText("5 Characters");
+  await expect(page.getByTestId("story-counts")).toContainText("5 Locations");
+  await expect(page.getByTestId("story-counts")).toContainText("6 Scenes");
+  const characters = page.getByTestId("story-section-character");
+  for (const name of ["Yumeko", "Sean", "Takumi"]) await expect(characters).toContainText(name);
+  const locations = page.getByTestId("story-section-location");
+  for (const name of ["Grand Celeste Lobby", "Sky-View Restaurant", "Hotel Hallway", "Tokyo Night Streets"])
+    await expect(locations).toContainText(name);
+  // the project already has Yumeko: surfaced as a possible match, never merged silently
+  const yumeko = characters.getByTestId("story-item").filter({ hasText: "Yumeko" });
+  await expect(yumeko.getByTestId("story-match")).toContainText("Possible match: existing Character Yumeko");
+  await expect(yumeko.getByTestId("story-source")).toContainText("Why: lines");
+  // deselect one optional item: the first suggested Shot
+  const shots = page.getByTestId("story-section-shot").getByTestId("story-item");
+  await shots.first().getByTestId("story-include").uncheck();
+  // edit one proposal field: the Lobby Scene's summary
+  const lobby = page
+    .getByTestId("story-section-scene")
+    .getByTestId("story-item")
+    .filter({ hasText: "LOBBY" });
+  await lobby.locator("summary", { hasText: "Edit" }).click();
+  await lobby.getByTestId("story-edit-summary").fill("Alone at last, Yumeko lets the mask drop.");
+  await page.getByTestId("story-apply").click();
+  await expect(page.getByTestId("story-applied")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("story-status")).toHaveAttribute("data-status", "applied");
+  // the created Shot opens in Shot Prep and reads its Production Frame Inputs from existing Characters / Locations
+  const shotHref = await page.getByTestId("story-applied-shot").getAttribute("href");
+  await page.goto(`${shotHref}?section=production_frame`);
+  const inputs = page.getByTestId("pf-inputs");
+  await expect(inputs).toBeVisible({ timeout: 30_000 });
+  await expect(inputs.getByTestId("pf-inputs-location")).toContainText("Grand Celeste");
+  // the new Episode holds the edited Lobby Scene
+  await page.goto(`${P}/story`);
+  await expect(page.getByTestId("story-proposal-row").first()).toContainText("applied");
 });
