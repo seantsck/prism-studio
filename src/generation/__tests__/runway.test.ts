@@ -379,7 +379,7 @@ describe("Runway adapter I/O (fake SDK boundary, no network, no credits)", () =>
     expect(later.retryAfterMs!).toBeGreaterThan(early.retryAfterMs!);
   });
 
-  it("maps task failures: safety → content_rejected; internal → provider_unavailable; others permanent", async () => {
+  it("maps documented Runway task-failure families without hiding BAD_OUTPUT as an outage", async () => {
     const { fake, provider } = make();
     const poll = async (code: string | undefined) => {
       fake.script.set("t", [
@@ -390,12 +390,26 @@ describe("Runway adapter I/O (fake SDK boundary, no network, no credits)", () =>
         ctx(),
       );
     };
+
     const safety = await poll("SAFETY.INPUT.TEXT");
     expect(safety.state).toBe("failed");
     expect(safety.failure).toMatchObject({ category: "content_rejected", code: "SAFETY.INPUT.TEXT" });
-    expect(safety.failure!.message).not.toContain("secret detail");
-    expect((await poll("INTERNAL.BAD_OUTPUT.CODE01")).failure?.category).toBe("provider_unavailable");
-    expect((await poll(undefined)).failure?.category).toBe("permanent");
+    expect((await poll("INPUT_PREPROCESSING.SAFETY.TEXT")).failure?.category).toBe("content_rejected");
+    expect((await poll("ASSET.INVALID")).failure?.category).toBe("invalid_request");
+    expect((await poll("INPUT_PREPROCESSING.INTERNAL")).failure?.category).toBe("provider_unavailable");
+    expect((await poll("THIRD_PARTY.UNAVAILABLE")).failure?.category).toBe("provider_unavailable");
+
+    const badOutput = await poll("INTERNAL.BAD_OUTPUT.CODE01");
+    expect(badOutput.failure).toMatchObject({
+      category: "provider_unavailable",
+      code: "INTERNAL.BAD_OUTPUT.CODE01",
+    });
+    expect(badOutput.failure!.message).toContain("internal quality or system checks");
+    expect(badOutput.failure!.message).not.toContain("temporarily unavailable");
+    expect(badOutput.failure!.message).not.toContain("secret detail");
+
+    expect((await poll(undefined)).failure?.category).toBe("provider_unavailable");
+    expect((await poll("SOMETHING.ELSE")).failure?.category).toBe("permanent");
   });
 
   it("maps HTTP/SDK errors into the taxonomy without leaking provider payloads", () => {
