@@ -14,19 +14,19 @@ try{
     const x=await pool.query("select id,mime,byte_size,checksum,storage_provider,bucket,object_path from assets where id=$1",[outputId]);
     if(x.rows[0]) asset={id:x.rows[0].id,mime:x.rows[0].mime,byteSize:x.rows[0].byte_size,checksumPrefix:String(x.rows[0].checksum||"").slice(0,16),stored:Boolean(x.rows[0].bucket&&x.rows[0].object_path&&x.rows[0].storage_provider==="supabase")};
   }
-  const ev=await pool.query("select to_jsonb(e) j from generation_job_events e where job_id=$1 order by created_at",[jobId]);
+  const oq=await pool.query("select count(*)::int n from generation_outputs where attempt_id=$1",[attemptId]);
   console.log("STATUS="+JSON.stringify({
     job:{
       id:j?.id,status:j?.status,provider:j?.provider,model:j?.model,
       providerJobIdSet:Boolean(j?.provider_job_id),providerJobId:j?.provider_job_id||null,
       estimatedCost:j?.estimated_cost,actualCost:j?.actual_cost,
       errorCode:j?.error_code||null,errorMessage:j?.error_message||null,
-      finishedAt:j?.finished_at||null
+      leaseOwnerSet:Boolean(j?.lease_owner),finishedAt:j?.finished_at||null
     },
     attempt:{
       status:a?.status,costUsd:a?.cost_usd,outputAssetId:a?.output_asset_id||null,durationMs:a?.duration_ms
     },
-    asset,
-    events:ev.rows.map((r)=>({event:r.j?.event_type||r.j?.type||r.j?.event,status:r.j?.status||null,createdAt:r.j?.created_at}))
+    outputRows:Number(oq.rows[0]?.n||0),
+    asset
   }));
 }finally{await pool.end();}
