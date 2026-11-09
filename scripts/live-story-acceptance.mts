@@ -1,7 +1,8 @@
 import pg from "pg";
 import { AdminRepository } from "../src/data/postgres-repository";
 import { PostgresWritingData } from "../src/data/writing-postgres";
-import { canonical, estimateWritingInputTokens, scopeOf, sceneRanges, WRITING_SCHEMA_VERSION, writingOutputTokens } from "../src/domain/story/writing";
+import { canonical, estimateWritingInputTokens, scopeOf, WRITING_SCHEMA_VERSION, writingOutputTokens } from "../src/domain/story/writing";
+import { sceneRanges } from "../src/domain/story/revisions";
 import { sourceFingerprint } from "../src/domain/story/source";
 import { buildWritingContext } from "../src/story/writing-context";
 import { WRITING_INSTRUCTIONS, WRITING_PROMPT_VERSION, writingInput } from "../src/story/writing-prompt";
