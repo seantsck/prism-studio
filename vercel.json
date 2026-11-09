@@ -1,0 +1,3 @@
+{
+  "buildCommand": "npm test -- src/generation/__tests__/runway.test.ts && npm run typecheck && npm run build"
+}
