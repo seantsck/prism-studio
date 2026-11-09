@@ -1,11 +1,15 @@
 import {
   clampTimeline,
+  dissolveMix,
   itemAt,
+  outgoingAt,
   placementSourceMs,
   placementsAt,
+  titleAt,
   videoSourceMs,
   type PlaybackItem,
   type PlaybackPlan,
+  type PlaybackTitle,
 } from "@/domain/edit/playback";
 
 /**
@@ -37,8 +41,13 @@ export interface ControllerDeps {
   now(): number;
   requestFrame(cb: () => void): number;
   cancelFrame(id: number): void;
-  /** the single picture element (video items) */
+  /** the picture element of the item playing (video items) */
   video: MediaPort;
+  /**
+   * 5B-V3: the element of the OUTGOING item under a cross dissolve (always muted). Optional: without it a dissolve
+   * shows the incoming picture over the outgoing one only when the outgoing one is a still.
+   */
+  under?: MediaPort;
   /** one element per sounding placement */
   createAudio(): MediaPort;
 }
@@ -49,8 +58,16 @@ export interface PlaybackSnapshot {
   /** the playhead is at the end of the edit */
   ended: boolean;
   item: PlaybackItem | null;
+  /** 5B-V3: inside a dissolve, the outgoing item still visible under `item` */
+  outgoing: PlaybackItem | null;
+  /** 5B-V3: how much of `item` shows (0 … 1); 1 outside a dissolve */
+  mix: number;
+  /** 5B-V3: the title card on screen, if any */
+  title: PlaybackTitle | null;
   /** video item: where its source should be now; null otherwise */
   videoSourceMs: number | null;
+  /** the outgoing video item under a dissolve: where its source should be now */
+  underSourceMs: number | null;
   videoMuted: boolean;
   /** the placements sounding now, with where in its take each should be */
   placements: Array<{ key: string; sourceMs: number; audible: boolean }>;
@@ -73,8 +90,10 @@ export class RoughCutController {
   private playing = false;
   private last = 0;
   private frame: number | null = null;
-  private videoItemId: string | null = null;
-  private videoStarted = false;
+  private layers = {
+    video: { itemId: null as string | null, started: false },
+    under: { itemId: null as string | null, started: false },
+  };
   private audio = new Map<string, AudioEntry>();
   private failedPictures = new Set<string>();
   private failedTakes = new Set<string>();
@@ -87,19 +106,28 @@ export class RoughCutController {
     private readonly onChange: (s: PlaybackSnapshot) => void = () => undefined,
   ) {
     deps.video.onError(() => {
-      if (this.videoItemId) this.failedPictures.add(this.videoItemId);
+      if (this.layers.video.itemId) this.failedPictures.add(this.layers.video.itemId);
+      this.emit();
+    });
+    deps.under?.onError(() => {
+      if (this.layers.under.itemId) this.failedPictures.add(this.layers.under.itemId);
       this.emit();
     });
   }
 
   snapshot(): PlaybackSnapshot {
     const item = itemAt(this.plan, this.t);
+    const outgoing = outgoingAt(this.plan, this.t);
     return {
       playing: this.playing,
       timeMs: this.t,
       ended: this.t >= this.plan.totalMs,
       item,
+      outgoing,
+      mix: item ? dissolveMix(item, this.t) : 1,
+      title: titleAt(this.plan, this.t),
       videoSourceMs: item ? videoSourceMs(item, this.t) : null,
+      underSourceMs: outgoing ? videoSourceMs(outgoing, this.t) : null,
       videoMuted: !(item?.clipAudio ?? false),
       placements: placementsAt(this.plan, this.t).map((p) => ({
         key: p.key,
@@ -162,6 +190,7 @@ export class RoughCutController {
     for (const e of this.audio.values()) e.port.dispose();
     this.audio.clear();
     this.deps.video.load(null);
+    this.deps.under?.load(null);
   }
 
   private schedule() {
@@ -189,7 +218,9 @@ export class RoughCutController {
 
   private pauseMedia() {
     this.deps.video.pause();
-    this.videoStarted = false;
+    this.deps.under?.pause();
+    this.layers.video.started = false;
+    this.layers.under.started = false;
     for (const e of this.audio.values()) {
       e.port.pause();
       e.started = false;
@@ -207,28 +238,10 @@ export class RoughCutController {
   /** Points every element at where the master clock says it should be. `force` re-seeks unconditionally. */
   private sync(force: boolean) {
     const item = itemAt(this.plan, this.t);
-    // picture
-    const video = this.deps.video;
-    if (item && item.kind === "video" && item.pictureUrl && !this.failedPictures.has(item.itemId)) {
-      const expected = videoSourceMs(item, this.t)!;
-      const fresh = this.videoItemId !== item.itemId || video.url !== item.pictureUrl;
-      if (fresh) {
-        this.videoItemId = item.itemId;
-        this.videoStarted = false;
-        if (video.url !== item.pictureUrl) video.load(item.pictureUrl);
-      }
-      if (fresh || force || Math.abs(video.currentTimeMs() - expected) > DRIFT_MS) video.seekMs(expected);
-      video.setMuted(!item.clipAudio);
-      if (this.playing && !this.videoStarted) {
-        this.videoStarted = true;
-        const id = item.itemId;
-        this.start(video, () => this.failedPictures.add(id));
-      }
-    } else if (this.videoItemId !== null) {
-      video.pause();
-      this.videoStarted = false;
-      this.videoItemId = null;
-    }
+    // picture: the item playing, and (5B-V3) the outgoing item under a dissolve
+    this.syncPicture(this.deps.video, this.layers.video, item, force, !(item?.clipAudio ?? false));
+    if (this.deps.under)
+      this.syncPicture(this.deps.under, this.layers.under, outgoingAt(this.plan, this.t), force, true);
     // performance: each sounding placement independently
     const sounding = placementsAt(this.plan, this.t);
     const keys = new Set(sounding.map((p) => p.key));
@@ -261,6 +274,36 @@ export class RoughCutController {
         const key = p.key;
         this.start(entry.port, () => this.failedTakes.add(key));
       }
+    }
+  }
+
+  /** Points one picture element at `item` (or releases it), exactly as the master clock says. */
+  private syncPicture(
+    port: MediaPort,
+    layer: { itemId: string | null; started: boolean },
+    item: PlaybackItem | null,
+    force: boolean,
+    muted: boolean,
+  ) {
+    if (item && item.kind === "video" && item.pictureUrl && !this.failedPictures.has(item.itemId)) {
+      const expected = videoSourceMs(item, this.t)!;
+      const fresh = layer.itemId !== item.itemId || port.url !== item.pictureUrl;
+      if (fresh) {
+        layer.itemId = item.itemId;
+        layer.started = false;
+        if (port.url !== item.pictureUrl) port.load(item.pictureUrl);
+      }
+      if (fresh || force || Math.abs(port.currentTimeMs() - expected) > DRIFT_MS) port.seekMs(expected);
+      port.setMuted(muted);
+      if (this.playing && !layer.started) {
+        layer.started = true;
+        const id = item.itemId;
+        this.start(port, () => this.failedPictures.add(id));
+      }
+    } else if (layer.itemId !== null) {
+      port.pause();
+      layer.started = false;
+      layer.itemId = null;
     }
   }
 

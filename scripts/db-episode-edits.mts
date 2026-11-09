@@ -15,6 +15,10 @@
 // (a referenced Shot / attempt / frame cannot be deleted directly, the edit intact; after removing the item the Shot
 // can; an upstream approval / delivery change never rewrites the edit; a Project delete cascades). No provider call.
 //
+// Phase 5B-V3 (migration 0058): transitions (shape, predecessor, fit against both neighbours, all at commit), title
+// cards (shape), saved revisions (owner select / insert only, immutable even to the table owner, restore = a new
+// revision, cascade with the edit / Project), the V3 ops in the memory / Postgres parity script, and no worker grant.
+//
 // Requires migration 0043 to be APPLIED: the suite refuses to start (and writes nothing) when it is not.
 import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
@@ -27,7 +31,13 @@ import {
   type NewEditItem,
 } from "../src/data/episode-edit-repository";
 import { AdminRepository, rlsPreamble } from "../src/data/postgres-repository";
-import type { AudioPlacement, EpisodeEdit, VisualSource } from "../src/domain/edit/model";
+import {
+  itemDurationMs,
+  type AudioPlacement,
+  type EpisodeEdit,
+  type VisualSource,
+} from "../src/domain/edit/model";
+import { editStateFingerprint } from "../src/domain/edit/revision";
 import type { ProductionFrame } from "../src/domain/production-frame";
 import type { Asset } from "../src/domain/schemas";
 import { assertDevUserExists, readDevUserEnv } from "./lib/dev-user.mjs";
@@ -565,6 +575,65 @@ try {
     ["explicit silence", (e) => [{ op: "clear_performance", itemId: at(e, A) }]],
     ["remove an item", (e) => [{ op: "remove", itemId: at(e, C) }]],
     [
+      "V3: a cross dissolve into the second item",
+      (e) => [
+        {
+          op: "set_transition",
+          itemId: e.items[1]!.id,
+          expectedPredecessorId: e.items[0]!.id,
+          kind: "dissolve",
+          durationMs: 200,
+        },
+      ],
+    ],
+    [
+      "V3: a dissolve longer than its neighbours allow refused",
+      (e) => [
+        {
+          op: "set_transition",
+          itemId: e.items[1]!.id,
+          expectedPredecessorId: e.items[0]!.id,
+          kind: "dissolve",
+          durationMs: 1_000_000,
+        },
+      ],
+    ],
+    [
+      "V3: a transition against a stale predecessor refused",
+      (e) => [
+        {
+          op: "set_transition",
+          itemId: e.items[1]!.id,
+          expectedPredecessorId: e.items[1]!.id,
+          kind: "dissolve",
+          durationMs: 200,
+        },
+      ],
+    ],
+    [
+      "V3: an opening title card",
+      () => [
+        {
+          op: "set_title",
+          placement: "opening",
+          title: "お嬢様、僕と結婚してください。",
+          subtitle: "Episode 1 — The Arrangement",
+          durationMs: 4000,
+          style: "film",
+        },
+      ],
+    ],
+    [
+      "V3: an empty title refused",
+      () => [
+        { op: "set_title", placement: "closing", title: " ", subtitle: "", durationMs: 2000, style: "film" },
+      ],
+    ],
+    [
+      "V3: a reorder makes the dissolve a cut again",
+      (e) => [{ op: "reorder", itemIds: [...e.items].reverse().map((i) => i.id) }],
+    ],
+    [
       "a stale revision refused",
       () => [{ op: "set_hold", itemId: "00000000-0000-4000-8000-000000000000", durationMs: 1 }],
       -1,
@@ -574,7 +643,14 @@ try {
     e && {
       revision: e.revision,
       editRate: e.editRate,
-      items: e.items.map((i) => ({ ...i, id: undefined })),
+      items: e.items.map((i) => ({
+        ...i,
+        id: undefined,
+        incomingTransition: i.incomingTransition
+          ? { kind: i.incomingTransition.kind, durationMs: i.incomingTransition.durationMs }
+          : null,
+      })),
+      titles: (e.titles ?? []).map((t) => ({ ...t, id: undefined })),
     };
   const runScript = async (repo: EpisodeEditRepository) => {
     const outcomes: string[] = [];
@@ -637,6 +713,13 @@ try {
     "invalid",
     "ok",
     "ok",
+    // 5B-V3
+    "ok",
+    "invalid",
+    "conflict",
+    "ok",
+    "invalid",
+    "ok",
     "conflict",
   ];
   steps.forEach(([name], i) =>
@@ -649,6 +732,13 @@ try {
     "parity: the resulting edits are identical (memory vs Postgres, ids aside)",
     JSON.stringify(strip(pgRun.edit)) === JSON.stringify(strip(memRun.edit)),
     `${JSON.stringify(strip(pgRun.edit))} vs ${JSON.stringify(strip(memRun.edit))}`,
+  );
+  check(
+    "V3 parity: the title card persisted and the reordered cut is a straight cut again (both backends)",
+    pgRun.edit.titles?.[0]?.title === "お嬢様、僕と結婚してください。" &&
+      memRun.edit.titles?.[0]?.durationMs === 4000 &&
+      pgRun.edit.items.every((i) => !i.incomingTransition) &&
+      memRun.edit.items.every((i) => !i.incomingTransition),
   );
   const reread = await owner.getForEpisode(P, E1);
   check(
@@ -1049,12 +1139,306 @@ try {
     strangerUpdate.rowCount === 0 && strangerUpdate.error === null,
   );
 
+  // ── 9. Phase 5B-V3 (0058): transitions, titles, saved revisions ──
+  {
+    const rev3 = "episode_edit_revisions";
+    const r = await q("select relrowsecurity from pg_class where relname = $1 and relkind = 'r'", [rev3]);
+    check(`${rev3} exists with row-level security enabled`, r.rows[0]?.relrowsecurity === true);
+    const pols = (
+      await q("select cmd from pg_policies where schemaname = 'public' and tablename = $1 order by cmd", [
+        rev3,
+      ])
+    ).rows.map((x) => x.cmd);
+    check(
+      `${rev3}: owner SELECT and INSERT policies only (no update / delete)`,
+      pols.join() === "INSERT,SELECT",
+    );
+    for (const role of ["prism_generation_worker", "prism_continuity_worker"]) {
+      if ((await q("select 1 from pg_roles where rolname = $1", [role])).rowCount === 0) continue;
+      const pr = (
+        await q(
+          `select has_table_privilege($1, $2, 'select') as s, has_table_privilege($1, $2, 'insert') as i,
+                  has_table_privilege($1, $2, 'update') as u, has_table_privilege($1, $2, 'delete') as d`,
+          [role, `public.${rev3}`],
+        )
+      ).rows[0];
+      check(`${role} has NO privilege on ${rev3}`, !pr.s && !pr.i && !pr.u && !pr.d);
+    }
+
+    // a working edit with two items to join
+    let v3 = (await owner.get(P, editId))!;
+    if (v3.items.length < 2)
+      v3 = await owner.apply({
+        editId,
+        projectId: P,
+        expectedRevision: v3.revision,
+        ops: [{ op: "add", item: item(C, none(3000)), atPosition: v3.items.length }],
+        userId: dev.id,
+        now: NOW(),
+      });
+    const [first, second] = v3.items as [EpisodeEdit["items"][number], EpisodeEdit["items"][number]];
+    const maxMs = Math.min(
+      2000,
+      Math.floor(Math.min(itemDurationMs(first.visual), itemDurationMs(second.visual)) / 2),
+    );
+    check("V3 fixture: two items that fit a 0.1 s dissolve", maxMs >= 100, String(maxMs));
+
+    // database backstops (raw SQL as the owner, committed)
+    await barrier(
+      "V3 DB: a malformed transition is refused (shape check)",
+      [
+        [
+          "update episode_edit_items set incoming_transition = $2::jsonb where id = $1",
+          [second.id, '{"kind":"wipe","durationMs":500,"fromItemId":"' + first.id + '"}'],
+        ],
+      ],
+      /transition_valid|check constraint/,
+    );
+    await barrier(
+      "V3 DB: a dissolve naming another item than its predecessor is refused at commit",
+      [
+        [
+          "update episode_edit_items set incoming_transition = $2::jsonb where id = $1",
+          [second.id, JSON.stringify({ kind: "dissolve", durationMs: 100, fromItemId: second.id })],
+        ],
+      ],
+      /immediately before it/,
+    );
+    await barrier(
+      "V3 DB: a dissolve on the first item is refused at commit",
+      [
+        [
+          "update episode_edit_items set incoming_transition = $2::jsonb where id = $1",
+          [first.id, JSON.stringify({ kind: "dissolve", durationMs: 100, fromItemId: second.id })],
+        ],
+      ],
+      /immediately before it/,
+    );
+    if (maxMs < 2000)
+      await barrier(
+        "V3 DB: a dissolve longer than half of the shorter neighbour is refused at commit",
+        [
+          [
+            "update episode_edit_items set incoming_transition = $2::jsonb where id = $1",
+            [second.id, JSON.stringify({ kind: "dissolve", durationMs: maxMs + 1, fromItemId: first.id })],
+          ],
+        ],
+        /longer than its neighbours allow/,
+      );
+    await barrier(
+      "V3 DB: two opening titles are refused (titles check)",
+      [
+        [
+          "update episode_edits set titles = $2::jsonb where id = $1",
+          [
+            editId,
+            JSON.stringify([
+              { id: id(), placement: "opening", title: "A", subtitle: "", durationMs: 1000, style: "film" },
+              { id: id(), placement: "opening", title: "B", subtitle: "", durationMs: 1000, style: "film" },
+            ]),
+          ],
+        ],
+      ],
+      /titles_valid|check constraint/,
+    );
+    await barrier(
+      "V3 DB: a title held for 60 s is refused (titles check)",
+      [
+        [
+          "update episode_edits set titles = $2::jsonb where id = $1",
+          [
+            editId,
+            JSON.stringify([
+              { id: id(), placement: "opening", title: "A", subtitle: "", durationMs: 60000, style: "film" },
+            ]),
+          ],
+        ],
+      ],
+      /titles_valid|check constraint/,
+    );
+
+    // through the repository: a dissolve and a title, then save revision A
+    v3 = await owner.apply({
+      editId,
+      projectId: P,
+      expectedRevision: v3.revision,
+      ops: [
+        {
+          op: "set_transition",
+          itemId: second.id,
+          expectedPredecessorId: first.id,
+          kind: "dissolve",
+          durationMs: 100,
+        },
+        {
+          op: "set_title",
+          placement: "opening",
+          title: "お嬢様",
+          subtitle: "Episode 1",
+          durationMs: 3000,
+          style: "film",
+        },
+      ],
+      userId: dev.id,
+      now: NOW(),
+    });
+    check(
+      "V3: a dissolve and an opening title persist and read back",
+      v3.items[1]!.incomingTransition?.durationMs === 100 && v3.titles?.[0]?.title === "お嬢様",
+    );
+    const savedA = await owner.saveRevision({
+      editId,
+      projectId: P,
+      expectedRevision: v3.revision,
+      label: "A",
+      userId: dev.id,
+      now: NOW(),
+    });
+    check(
+      "V3: Save revision stores the exact state (fingerprint) at the working revision, number 1, without a new working revision",
+      savedA.number === 1 &&
+        savedA.fingerprint === editStateFingerprint(v3) &&
+        savedA.editRevision === v3.revision &&
+        (await owner.get(P, editId))!.revision === v3.revision,
+    );
+    check(
+      "V3: saving the same state again is refused (conflict)",
+      (await code(
+        owner.saveRevision({
+          editId,
+          projectId: P,
+          expectedRevision: v3.revision,
+          label: "",
+          userId: dev.id,
+          now: NOW(),
+        }),
+      )) === "conflict",
+    );
+    check(
+      "V3: saving against a stale working revision is refused (conflict)",
+      (await code(
+        owner.saveRevision({
+          editId,
+          projectId: P,
+          expectedRevision: v3.revision - 1,
+          label: "",
+          userId: dev.id,
+          now: NOW(),
+        }),
+      )) === "conflict",
+    );
+    const aRow = JSON.stringify(
+      (await q("select * from episode_edit_revisions where id = $1", [savedA.id])).rows[0],
+    );
+    // immutability: the owner has no update / delete policy; even the table owner's update is refused by the trigger
+    const ownerUpdate = await asOwner("update episode_edit_revisions set label = 'changed' where id = $1", [
+      savedA.id,
+    ]);
+    check(
+      "V3 DB: the owner cannot update a saved revision (no row)",
+      ownerUpdate.rowCount === 0,
+      ownerUpdate.error ?? "",
+    );
+    const ownerDelete = await asOwner("delete from episode_edit_revisions where id = $1", [savedA.id]);
+    check(
+      "V3 DB: the owner cannot delete a saved revision (no row)",
+      ownerDelete.rowCount === 0,
+      ownerDelete.error ?? "",
+    );
+    const superUpdate = await q("update episode_edit_revisions set label = 'changed' where id = $1", [
+      savedA.id,
+    ]).then(
+      () => null,
+      (e: Error) => e.message,
+    );
+    check(
+      "V3 DB: a saved revision is immutable even to the table owner (trigger)",
+      /immutable/.test(superUpdate ?? ""),
+      superUpdate ?? "accepted",
+    );
+    check(
+      "V3 RLS: a stranger reads no saved revision and cannot save one",
+      (await strangerSvc.listRevisions(P, editId)).length === 0 &&
+        (await code(
+          strangerSvc.saveRevision({
+            editId,
+            projectId: P,
+            expectedRevision: v3.revision,
+            label: "",
+            userId: stranger,
+            now: NOW(),
+          }),
+        )) === "not_found",
+    );
+
+    // change, save B, restore A: a NEW working revision and a NEW saved revision; A untouched
+    v3 = await owner.apply({
+      editId,
+      projectId: P,
+      expectedRevision: v3.revision,
+      ops: [
+        { op: "set_transition", itemId: second.id, expectedPredecessorId: first.id, kind: "cut" },
+        { op: "remove_title", placement: "opening" },
+      ],
+      userId: dev.id,
+      now: NOW(),
+    });
+    const savedB = await owner.saveRevision({
+      editId,
+      projectId: P,
+      expectedRevision: v3.revision,
+      label: "B",
+      userId: dev.id,
+      now: NOW(),
+    });
+    const restored = await owner.restoreRevision({
+      editId,
+      projectId: P,
+      expectedRevision: v3.revision,
+      revisionId: savedA.id,
+      userId: dev.id,
+      now: NOW(),
+    });
+    check(
+      "V3: restore makes A's state current as a new working revision",
+      restored.edit.revision === v3.revision + 1 &&
+        editStateFingerprint(restored.edit) === savedA.fingerprint &&
+        restored.edit.items[1]!.incomingTransition?.durationMs === 100 &&
+        restored.edit.titles?.[0]?.title === "お嬢様",
+    );
+    check(
+      "V3: …recorded as saved revision 3, restored from A; A and B are unchanged",
+      restored.revision.number === 3 &&
+        restored.revision.restoredFromId === savedA.id &&
+        savedB.number === 2 &&
+        JSON.stringify(
+          (await q("select * from episode_edit_revisions where id = $1", [savedA.id])).rows[0],
+        ) === aRow,
+    );
+    check(
+      "V3: the stored edit reads back exactly as the restore returned it",
+      JSON.stringify(await owner.get(P, editId)) === JSON.stringify(restored.edit),
+    );
+    check(
+      "V3: listRevisions returns 1, 2, 3 in order",
+      (await owner.listRevisions(P, editId)).map((x) => x.number).join() === "1,2,3",
+    );
+  }
+
   // ── 8. a Project delete cascades through its edit ──
-  await owner.create({
+  const p2Edit = await owner.create({
     projectId: P2,
     episodeId: E3,
     editRate: RATE,
     items: [item(Z, video(cZ, 0, 2000))],
+    userId: dev.id,
+    now: NOW(),
+  });
+  await owner.saveRevision({
+    editId: p2Edit.id,
+    projectId: P2,
+    expectedRevision: p2Edit.revision,
+    label: "to be cascaded",
     userId: dev.id,
     now: NOW(),
   });
@@ -1067,11 +1451,12 @@ try {
   const p2Left = (
     await q(
       `select (select count(*) from episode_edits where project_id = $1) + (select count(*) from episode_edit_items where project_id = $1)
-        + (select count(*) from episode_edit_audio_placements where project_id = $1) as n`,
+        + (select count(*) from episode_edit_audio_placements where project_id = $1)
+        + (select count(*) from episode_edit_revisions where project_id = $1) as n`,
       [P2],
     )
   ).rows[0].n;
-  check("…and leaves no edit, item or placement", Number(p2Left) === 0, String(p2Left));
+  check("…and leaves no edit, item, placement or saved revision", Number(p2Left) === 0, String(p2Left));
 } catch (err) {
   check("suite ran to completion", false, (err as Error).stack ?? String(err));
 } finally {
