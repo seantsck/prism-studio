@@ -58,6 +58,8 @@ export interface BoardAnimation {
   staleReasons: string[];
   /** The adaptation plan needs a crop/pad/trim conform and none exists yet: the provider original is not production-shaped. */
   conformRequired: boolean;
+  /** Phase 5B-V1: this clip is the Shot's selected Shot Clip / another clip is / it started from an earlier frame. */
+  shotClip?: { selected: boolean; otherSelected: boolean; fromEarlierFrame: boolean };
 }
 
 /** Phase 2H: the set-level source of an animation set (frozen on the set at creation). */
@@ -574,6 +576,7 @@ function CandidateCard({
       data-testid="candidate-card"
       data-label={c.label}
       data-model={c.modelId}
+      data-attempt={c.attemptId}
       data-status={c.status}
       data-decision={decision}
       data-preferred={c.preferred ? "1" : "0"}
@@ -666,6 +669,11 @@ function CandidateCard({
                 : "NOT the frozen frame"}
             </span>
           </div>
+          {c.animation.shotClip?.fromEarlierFrame ? (
+            <div className="text-warn" data-testid="clip-earlier-frame">
+              Generated from an earlier Production Frame.
+            </div>
+          ) : null}
           {c.animation.staleReasons.length > 0 ? (
             <div className="text-warn" data-testid="candidate-stale-reasons">
               {c.animation.staleReasons.join(" · ")}. Kept as history; animate again from the current frame.
@@ -910,19 +918,52 @@ function CandidateCard({
               ) : null}
             </div>
           ) : canPromote ? (
-            <ActionForm
-              action={promoteCandidate}
-              quiet={false}
-              successMessage="Promoted to shot"
-              confirmMessage={`Promote candidate ${c.label} (${c.modelLabel}) to the shot? This approves it as the shot's output; the other candidates are kept.`}
-              className="pt-1"
-            >
-              {hidden}
-              <input type="hidden" name="confirm" value="1" />
-              <Button size="sm" variant="primary" type="submit" disabled={c.promoted} data-testid="promote">
-                {c.promoted ? "Promoted" : "Promote to Shot"}
-              </Button>
-            </ActionForm>
+            c.animation ? (
+              // Phase 5B-V1: an animation becomes the Shot Clip explicitly; replacing the current one needs a tick
+              <ActionForm
+                action={promoteCandidate}
+                quiet={false}
+                successMessage="Shot Clip selected"
+                className="space-y-1 pt-1"
+              >
+                {hidden}
+                <input type="hidden" name="confirm" value="1" />
+                {c.animation.shotClip?.otherSelected && !c.animation.shotClip.selected ? (
+                  <label className="flex items-center gap-1.5 text-[11px] text-warn">
+                    <input
+                      type="checkbox"
+                      name="confirmReplace"
+                      value="1"
+                      data-testid="confirm-replace-clip"
+                    />
+                    Replace the current Shot Clip (it stays in the Shot&apos;s history)
+                  </label>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant="primary"
+                  type="submit"
+                  disabled={c.animation.shotClip?.selected ?? c.promoted}
+                  data-testid="use-as-shot-clip"
+                >
+                  {(c.animation.shotClip?.selected ?? c.promoted) ? "Current Shot Clip" : "Use as Shot Clip"}
+                </Button>
+              </ActionForm>
+            ) : (
+              <ActionForm
+                action={promoteCandidate}
+                quiet={false}
+                successMessage="Promoted to shot"
+                confirmMessage={`Promote candidate ${c.label} (${c.modelLabel}) to the shot? This approves it as the shot's output; the other candidates are kept.`}
+                className="pt-1"
+              >
+                {hidden}
+                <input type="hidden" name="confirm" value="1" />
+                <Button size="sm" variant="primary" type="submit" disabled={c.promoted} data-testid="promote">
+                  {c.promoted ? "Promoted" : "Promote to Shot"}
+                </Button>
+              </ActionForm>
+            )
           ) : null}
         </div>
       ) : null}

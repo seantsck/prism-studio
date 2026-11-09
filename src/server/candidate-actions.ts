@@ -15,6 +15,8 @@ import {
 } from "@/domain/generation/reviews";
 import { PREFERENCES, type RecommendationPreference } from "@/domain/generation/recommendation";
 import { candidateSetPurpose } from "@/domain/generation/candidates";
+import { isAnimationAttempt } from "@/domain/generation/schemas";
+import { SHOT_CLIP_REPLACE_CONFIRM } from "@/domain/generation/video-inputs";
 import {
   isProductionFrameAttempt,
   parseGenerationPurpose,
@@ -50,7 +52,10 @@ const selectionsSchema = z
         .optional(),
       /** Phase 5B-I6: the creator's direction (Production Frame candidates); bounded, never a protected line. */
       direction: z
-        .object({ kind: z.enum(["additional", "alternate_composition"]), text: z.string().max(500) })
+        .object({
+          kind: z.enum(["additional", "alternate_composition", "motion"]),
+          text: z.string().max(500),
+        })
         .nullable()
         .optional(),
     }),
@@ -293,6 +298,12 @@ async function promoteCandidate_impl(form: FormData) {
     );
   if (view.attempt.status !== "succeeded")
     throw new UserFacingError("Only a completed generation can be promoted.");
+  // 5B-V1 Use as Shot Clip: replacing the Shot's current clip is explicit (the previous clip stays in history)
+  const current = data.attempts.find(
+    (a) => a.shotId === view.attempt.shotId && a.approved && a.id !== view.attempt.id,
+  );
+  if (current && isAnimationAttempt(view.attempt) && str(form, "confirmReplace") !== "1")
+    throw new UserFacingError(SHOT_CLIP_REPLACE_CONFIRM);
   const now = new Date().toISOString();
   await generation.reviewAttempt(view.attempt.id, {
     status: "approved",

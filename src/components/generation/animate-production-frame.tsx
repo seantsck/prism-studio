@@ -10,6 +10,7 @@ import { buildSharedEvaluation } from "@/generation/submission";
 import { assetUrl } from "@/lib/utils";
 import { getCandidateRepo } from "@/server/candidates";
 import { getGenerationConfig, getRegistry } from "@/server/generation";
+import { ShotClipPanel } from "./shot-clip-panel";
 
 const secs = (ms: number) => `${Number((ms / 1000).toFixed(2))} s`;
 
@@ -47,6 +48,13 @@ export async function AnimateProductionFrame({ data, shotId }: { data: ProjectDa
       })
     : null;
   const cfg = getGenerationConfig();
+  // 5B-V1: every animation clip of the Shot belongs to one 2H animation candidate set
+  const allSets = (await candidateRepo.listSets(data.project.id, { shotId, limit: 200 })).filter(
+    (s) => candidateSetPurpose(s.set) === "animate_production_frame",
+  );
+  const candidateSetOf = new Map(
+    allSets.flatMap((s) => s.members.flatMap((m) => (m.attemptId ? [[m.attemptId, s.set.id] as const] : []))),
+  );
 
   return (
     <div className="space-y-3" data-testid="animate-panel" data-ready={source.ok ? "1" : "0"}>
@@ -120,6 +128,14 @@ export async function AnimateProductionFrame({ data, shotId }: { data: ProjectDa
           </dd>
         </dl>
       </div>
+
+      <ShotClipPanel
+        data={data}
+        ctx={ctx}
+        pkg={pkg}
+        models={getRegistry().usable()}
+        candidateSetOf={candidateSetOf}
+      />
 
       {!source.ok ? (
         <ul className="space-y-1" data-testid="animate-blocked">

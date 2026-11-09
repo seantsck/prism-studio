@@ -3,6 +3,7 @@ import { NOT_SHOT_OUTPUT_APPROVAL_MESSAGE } from "@/data/generation-repository";
 import { MemoryRepository } from "@/data/memory-repository";
 import { seed, shotByCode } from "@/domain/__tests__/helpers";
 import { generationAttemptSchema, type GenerationAttempt, type ProjectData } from "@/domain/schemas";
+import { SHOT_CLIP_REPLACE_CONFIRM } from "@/domain/generation/video-inputs";
 import { reviewGeneration } from "../generation-actions";
 
 vi.mock("server-only", () => ({}));
@@ -114,9 +115,21 @@ describe("creative approval is restricted to Shot outputs", () => {
     expect(await approvedIds(repo)).toEqual([video.id]);
   });
 
-  it("an animate_production_frame attempt is still approvable and supersedes the previous approval", async () => {
-    const { repo, animation } = setup();
-    expect((await reviewGeneration(approveForm(animation.id))).ok).toBe(true);
+  it("an animate_production_frame attempt is still approvable; replacing the Shot's approved output needs confirmation (5B-V1)", async () => {
+    const { repo, video, animation } = setup();
+    // 5B-V1: an animation replacing the Shot's current approved output (its Shot Clip) is an explicit decision
+    expect(await reviewGeneration(approveForm(animation.id))).toMatchObject({
+      ok: false,
+      error: SHOT_CLIP_REPLACE_CONFIRM,
+    });
+    expect(await approvedIds(repo)).toEqual([video.id]);
+    expect(
+      (
+        await reviewGeneration(
+          form({ projectSlug: SLUG, attemptId: animation.id, decision: "approve", confirmReplace: "1" }),
+        )
+      ).ok,
+    ).toBe(true);
     expect(await approvedIds(repo)).toEqual([animation.id]);
   });
 

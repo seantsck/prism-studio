@@ -227,7 +227,11 @@ export function prepareSubmission(args: {
     purpose: args.purpose,
     direction: args.direction,
   });
-  const direction = args.purpose === "production_frame" ? normalizeDirection(args.direction) : null;
+  // 5B-I6 still direction, or 5B-V1 an animation alternative's motion direction (both recorded on the attempt)
+  const direction =
+    args.purpose === "production_frame" || args.purpose === "animate_production_frame"
+      ? normalizeDirection(args.direction)
+      : null;
   const baseRequest = buildGenerationRequest({
     pkg,
     model,
