@@ -35,6 +35,7 @@ import { getRepo, requireProjectFresh } from "./repo";
 import { checksum, getUploadStorage, storageForAsset } from "./storage";
 import { getStoryRegistry, getStoryRepo } from "./story";
 import { reviewOf } from "./story-review";
+import { recordImportedScript } from "./script-sync";
 
 /**
  * Phase 5B-S1: Import Story → Production Proposal → review → Apply selected. These actions QUEUE an analysis (the
@@ -410,7 +411,10 @@ async function apply_impl(form: FormData): Promise<ActionResult> {
     await projectRepo.upsert(pid, "characters", c);
   for (const l of [...plan.locations.create, ...plan.locations.update])
     await projectRepo.upsert(pid, "locations", l);
-  if (plan.episode.create) await projectRepo.upsert(pid, "episodes", plan.episode.create);
+  if (plan.episode.create) {
+    await projectRepo.upsert(pid, "episodes", plan.episode.create);
+    await recordImportedScript(pid, plan.episode.create.id, plan.episode.create.scriptText, record.id);
+  }
   for (const s of plan.scenes) await projectRepo.upsert(pid, "scenes", s);
   for (const s of plan.shots) await projectRepo.upsert(pid, "shots", s);
   await guarded(() =>

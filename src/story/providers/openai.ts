@@ -5,13 +5,18 @@ import {
   type OpenAIInputItem,
   type OpenAITransport,
 } from "@/continuity/providers/openai/transport";
+import { WRITING_JSON_SCHEMA } from "@/domain/story/writing";
 import { analysisInput, revisionInput, STORY_INSTRUCTIONS } from "../prompt";
 import type {
   StoryAnalysisRequest,
   StoryAnalysisResult,
   StoryIntelligenceProvider,
   StoryModel,
+  StoryUsage,
+  WritingCallResult,
+  WritingRequest,
 } from "../provider";
+import { WRITING_INSTRUCTIONS, writingInput } from "../writing-prompt";
 
 /**
  * Phase 5B-S1: OpenAI Story Intelligence — the FIRST real provider. It reuses Prism's existing, verified OpenAI
@@ -77,6 +82,78 @@ export class OpenAIStoryProvider implements StoryIntelligenceProvider {
   }
 
   async analyze(req: StoryAnalysisRequest): Promise<StoryAnalysisResult> {
+    const r = await this.structured({
+      instructions: STORY_INSTRUCTIONS,
+      text: req.revise
+        ? revisionInput(req.text, req.revise.previous, req.revise.section, req.revise.note)
+        : analysisInput(req.text, req.title),
+      jsonSchema: PROPOSAL_JSON_SCHEMA,
+      schemaName: "production_proposal",
+      modelId: req.model.modelId,
+      maxOutputTokens: req.model.maxOutputTokens,
+      timeoutMs: 300_000,
+      validate: req.validate,
+      what: "analysis",
+      invalid: "That answer is not a valid Production Proposal.",
+      schemaLabel: "the Production Proposal schema",
+      signal: req.signal,
+    });
+    return r.ok ? { ok: true, proposal: r.value, usage: r.usage, providerCalls: r.providerCalls } : r;
+  }
+
+  /** Phase 5B-S2: one writing turn. Same transport, same two-call contract, a strict writing schema. */
+  async write(req: WritingRequest): Promise<WritingCallResult> {
+    const r = await this.structured({
+      instructions: WRITING_INSTRUCTIONS,
+      text: writingInput({
+        mode: req.mode,
+        instruction: req.instruction,
+        count: req.count,
+        scopeKind: req.scopeKind,
+        context: req.context,
+        targetText: req.targetText,
+        draftText: req.draftText,
+      }),
+      jsonSchema: WRITING_JSON_SCHEMA,
+      schemaName: "writing_proposal",
+      modelId: req.model.modelId,
+      maxOutputTokens: Math.min(req.maxOutputTokens, req.model.maxOutputTokens),
+      timeoutMs: 180_000,
+      validate: (raw) => {
+        const v = req.validate(raw);
+        return v.ok ? { ok: true, value: v.result } : v;
+      },
+      what: "writing request",
+      invalid: "That answer does not have the expected shape.",
+      schemaLabel: "the expected writing shape",
+      signal: req.signal,
+    });
+    return r.ok ? { ok: true, result: r.value, usage: r.usage, providerCalls: r.providerCalls } : r;
+  }
+
+  /**
+   * The shared two-call contract: the answer and, if Prism's validator rejects it, ONE correction turn carrying the
+   * validation errors (never script excerpts). A timeout / network failure is ambiguous and never re-sent.
+   */
+  private async structured<T>(o: {
+    instructions: string;
+    text: string;
+    jsonSchema: Record<string, unknown>;
+    schemaName: string;
+    modelId: string;
+    maxOutputTokens: number;
+    timeoutMs: number;
+    validate: (
+      raw: unknown,
+    ) => { ok: true; value: T } | { ok: true; proposal: T } | { ok: false; errors: string[] };
+    what: string;
+    invalid: string;
+    schemaLabel: string;
+    signal?: AbortSignal;
+  }): Promise<
+    | { ok: true; value: T; usage: StoryUsage; providerCalls: number }
+    | Extract<StoryAnalysisResult, { ok: false }>
+  > {
     const usage = { inputTokens: 0 as number | null, outputTokens: 0 as number | null };
     const key = this.key();
     if (!key)
@@ -91,33 +168,22 @@ export class OpenAIStoryProvider implements StoryIntelligenceProvider {
     const transport = this.opts.transport
       ? this.opts.transport(key)
       : new (await import("@/continuity/providers/openai/sdk-transport")).SdkOpenAITransport({ apiKey: key });
-    const first: OpenAIInputItem = {
-      role: "user",
-      content: [
-        {
-          type: "input_text",
-          text: req.revise
-            ? revisionInput(req.text, req.revise.previous, req.revise.section, req.revise.note)
-            : analysisInput(req.text, req.title),
-        },
-      ],
-    };
-    const input: OpenAIInputItem[] = [first];
+    const input: OpenAIInputItem[] = [{ role: "user", content: [{ type: "input_text", text: o.text }] }];
     let calls = 0;
     for (let turn = 0; turn < 2; turn++) {
       calls++;
       let res;
       try {
         res = await transport.create({
-          model: req.model.modelId,
-          instructions: STORY_INSTRUCTIONS,
+          model: o.modelId,
+          instructions: o.instructions,
           input,
-          jsonSchema: PROPOSAL_JSON_SCHEMA,
-          schemaName: "production_proposal",
-          maxOutputTokens: req.model.maxOutputTokens,
+          jsonSchema: o.jsonSchema,
+          schemaName: o.schemaName,
+          maxOutputTokens: o.maxOutputTokens,
           reasoningEffort: "low",
-          timeoutMs: 300_000,
-          signal: req.signal,
+          timeoutMs: o.timeoutMs,
+          signal: o.signal,
         });
       } catch (err) {
         const e = err instanceof OpenAITransportError ? err : null;
@@ -125,7 +191,7 @@ export class OpenAIStoryProvider implements StoryIntelligenceProvider {
         return {
           ok: false,
           code: ambiguous ? "ambiguous" : "provider_error",
-          message: e?.message ?? "The analysis request failed.",
+          message: e?.message ?? `The ${o.what} failed.`,
           usage,
           providerCalls: calls,
           retryable: !ambiguous && (e!.category === "rate_limit" || e!.category === "overloaded"),
@@ -141,7 +207,7 @@ export class OpenAIStoryProvider implements StoryIntelligenceProvider {
         return {
           ok: false,
           code: "refused",
-          message: "The model declined to analyse this text.",
+          message: `The model declined this ${o.what}.`,
           usage,
           providerCalls: calls,
           retryable: false,
@@ -150,33 +216,32 @@ export class OpenAIStoryProvider implements StoryIntelligenceProvider {
         return {
           ok: false,
           code: "incomplete",
-          message: `The analysis was cut short (${res.incompleteReason ?? "incomplete"}). Try a shorter text or a section.`,
+          message: `The ${o.what} was cut short (${res.incompleteReason ?? "incomplete"}). Try a shorter text.`,
           usage,
           providerCalls: calls,
           retryable: false,
         };
-      const v = req.validate(res.text ?? "");
-      if (v.ok) return { ok: true, proposal: v.proposal, usage, providerCalls: calls };
-      // one correction turn: the model sees its answer and Prism's validation errors (never source excerpts)
+      const v = o.validate(res.text ?? "");
+      if (v.ok) return { ok: true, value: "value" in v ? v.value : v.proposal, usage, providerCalls: calls };
+      if (turn === 1)
+        return {
+          ok: false,
+          code: "invalid_output",
+          message: `The ${o.what} did not match ${o.schemaLabel}: ${v.errors.slice(0, 3).join("; ")}`,
+          usage,
+          providerCalls: calls,
+          retryable: false,
+        };
       input.push({ role: "assistant", content: [{ type: "output_text", text: res.text ?? "" }] });
       input.push({
         role: "user",
         content: [
           {
             type: "input_text",
-            text: `That answer is not a valid Production Proposal. Fix these problems and answer again with the complete object:\n- ${v.errors.join("\n- ")}`,
+            text: `${o.invalid} Fix these problems and answer again with the complete object:\n- ${v.errors.join("\n- ")}`,
           },
         ],
       });
-      if (turn === 1)
-        return {
-          ok: false,
-          code: "invalid_output",
-          message: `The analysis did not match the Production Proposal schema: ${v.errors.slice(0, 3).join("; ")}`,
-          usage,
-          providerCalls: calls,
-          retryable: false,
-        };
     }
     return {
       ok: false,

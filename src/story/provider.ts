@@ -1,5 +1,7 @@
 import type { ProductionProposal } from "@/domain/story/proposal";
+import type { ScopeKind, WritingMode, WritingResult } from "@/domain/story/writing";
 import type { ProposalSection } from "./prompt";
+import type { WritingContext } from "./writing-prompt";
 
 /**
  * Phase 5B-S1: the provider-neutral Story Intelligence boundary. Domain and UI code only ever see a Prism
@@ -8,6 +10,14 @@ import type { ProposalSection } from "./prompt";
  *   analyzeScript   source text → a full proposal
  *   reviseProposal  source text + previous proposal + one section → a full proposal with that section revised
  *                   (analyzeSection is the same operation; S1 regenerates one section through it)
+ *
+ * Phase 5B-S2 adds ONE writing operation, `write`, over provider-neutral domain inputs and outputs. Its `operation`
+ * covers the conceptual calls:
+ *   rewriteStoryRange   operation "rewrite"   (rewrite / dialogue / tone / condense / expand / custom modes)
+ *   continueStory       operation "continue"
+ *   brainstormStory     operation "brainstorm"
+ *   reviseStoryProposal operation "revise"    (Revise again: a DRAFT alternative + a new instruction)
+ * The answer is always a Prism `WritingResult` (validated by `validateWriting`), never a vendor shape.
  *
  * Implementations: `FakeStoryProvider` (free, deterministic, no network) and `OpenAIStoryProvider` (the first real
  * provider). A Claude implementation only has to implement this interface.
@@ -54,20 +64,52 @@ export type StoryAnalysisResult =
       retryable: boolean;
     };
 
+export type WritingOperation = "rewrite" | "continue" | "brainstorm" | "revise";
+
+export const writingOperation = (mode: WritingMode, revising: boolean): WritingOperation =>
+  revising ? "revise" : mode === "continue" ? "continue" : mode === "brainstorm" ? "brainstorm" : "rewrite";
+
+export interface WritingRequest {
+  model: StoryModel;
+  operation: WritingOperation;
+  mode: WritingMode;
+  scopeKind: ScopeKind;
+  instruction: string;
+  /** Alternatives (or ideas, for a brainstorm) requested. */
+  count: number;
+  targetText: string;
+  /** Revise again: the alternative being revised. */
+  draftText: string | null;
+  context: WritingContext;
+  /** The output budget frozen with the estimate (never above the model maximum). */
+  maxOutputTokens: number;
+  validate: (raw: unknown) => { ok: true; result: WritingResult } | { ok: false; errors: string[] };
+  signal?: AbortSignal;
+}
+
+export type WritingCallResult =
+  | { ok: true; result: WritingResult; usage: StoryUsage; providerCalls: number }
+  | Extract<StoryAnalysisResult, { ok: false }>;
+
 export interface StoryIntelligenceProvider {
   readonly id: string;
   models(): StoryModel[];
   /** Missing credentials / not enabled: the reason, or null when usable. Checked by the web AND the worker. */
   unavailable(model: StoryModel): string | null;
   analyze(req: StoryAnalysisRequest): Promise<StoryAnalysisResult>;
+  /** Phase 5B-S2: one writing turn (rewrite / continue / brainstorm / revise). */
+  write(req: WritingRequest): Promise<WritingCallResult>;
 }
 
 /** Ceiling estimate (USD) for a request: input tokens + the full output budget at the model's prices. */
-export function estimateUsd(model: StoryModel, inputTokens: number): number {
+export function estimateUsd(
+  model: StoryModel,
+  inputTokens: number,
+  outputTokens = model.maxOutputTokens,
+): number {
   if (!model.paid || !model.pricing) return 0;
   const raw =
-    (inputTokens * model.pricing.inputPerMillionUsd +
-      model.maxOutputTokens * model.pricing.outputPerMillionUsd) /
+    (inputTokens * model.pricing.inputPerMillionUsd + outputTokens * model.pricing.outputPerMillionUsd) /
     1_000_000;
   return Math.ceil(raw * 10000) / 10000;
 }

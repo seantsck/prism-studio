@@ -20,6 +20,10 @@ import { buildSeedProject } from "../src/data/seed";
  *   K  Import Story: paste the Ojou-sama screenplay → Analyze with the free test analyser → Proposal → review (deselect a
  *                 Shot, edit a Scene) → Apply selected → the new Episode's Shot opens with its Production Frame Inputs
  *                 (5B-S1)
+ *   L  Write: Ojou-sama Episode 1, Scene 6 → select the exchange → Ask Prism (guarded Yumeko) → inspect the diff →
+ *                 Reject → ask again → Accept → refresh: the accepted revision is the screenplay and the old one is in the
+ *                 history → three warmer alternatives for the last line → Accept B → only B is canon; the Shot shows
+ *                 "Story changed after production breakdown" (5B-S2)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -514,4 +518,92 @@ test("K — Import Story: screenplay → Production Proposal → review → Appl
   // the new Episode holds the edited Lobby Scene
   await page.goto(`${P}/story`);
   await expect(page.getByTestId("story-proposal-row").first()).toContainText("applied");
+});
+
+test("L — Write: guarded Yumeko proposal → diff → reject → accept the second → history → three alternatives, one canon", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  const seed = buildSeedProject();
+  const ep1 = seed.episodes[0]!;
+  const scene6 = seed.scenes.find((s) => s.episodeId === ep1.id && s.sceneNumber === "6")!;
+  const shot6 = seed.shots.find((s) => s.sceneId === scene6.id)!;
+  await page.goto(`${EP}/write`);
+  await page.getByRole("link", { name: /^6\. INT\. SKY-VIEW RESTAURANT/ }).click();
+  await page.waitForURL(/scene=/);
+  const script = page.getByLabel("Screenplay text");
+  const original = await script.inputValue();
+  expect(original).toContain("SEAN approaches the table and stops.");
+
+  /** Selects `from` … end of `to` in the screenplay view (fires the native select event). */
+  const select = async (from: string, to: string) => {
+    await script.evaluate(
+      (el, [a, b]) => {
+        const t = el as HTMLTextAreaElement;
+        const start = t.value.indexOf(a!);
+        const end = t.value.indexOf(b!, start) + b!.length;
+        t.focus();
+        t.setSelectionRange(start, end);
+        t.dispatchEvent(new Event("select"));
+      },
+      [from, to],
+    );
+    await expect(page.getByTestId("selection-status")).toContainText("Selected");
+  };
+  const ask = async (instruction: string) => {
+    await page.getByLabel("Instruction for Prism").fill(instruction);
+    await page.getByRole("button", { name: "Ask Prism", exact: true }).click();
+  };
+  const turn = (n: number) => page.getByTestId(`turn-${n}`);
+  const GUARDED =
+    "Make Yumeko more guarded and emotionally restrained without changing what happens in the scene.";
+
+  // 1. select the exchange, ask Prism (free test writer: no provider call)
+  await select("SEAN approaches", "結婚してください。");
+  await ask(GUARDED);
+  await page.waitForURL(/session=/, { timeout: 30_000 });
+  await expect(turn(1).getByTestId("version-A")).toBeVisible({ timeout: 60_000 });
+  // 2. the proposal shows a diff and is labelled as a suggestion; the screenplay is untouched
+  await expect(turn(1).getByText("AI suggestion — not canon")).toBeVisible();
+  await expect(turn(1).getByTestId("revision-diff").locator("ins", { hasText: "Yumeko" })).toBeVisible();
+  await expect(turn(1).getByTestId("revision-diff")).toContainText("line");
+  await expect(script).toHaveValue(original);
+  // 3. reject it: nothing changes
+  await turn(1).getByRole("button", { name: "Reject" }).click();
+  await expect(turn(1).getByText("Rejected")).toBeVisible({ timeout: 30_000 });
+  await expect(script).toHaveValue(original);
+  // 4. ask again, accept the second proposal
+  await select("SEAN approaches", "結婚してください。");
+  await ask(`${GUARDED} Keep it subtle.`);
+  await expect(turn(2).getByTestId("version-A")).toBeVisible({ timeout: 60_000 });
+  await turn(2).getByRole("button", { name: "Accept version A" }).click();
+  await expect(turn(2).getByText("Accepted version A")).toBeVisible({ timeout: 30_000 });
+  // 5. refresh: the accepted revision is the screenplay; the old one is recoverable in the history
+  await page.reload();
+  await expect(script).not.toHaveValue(original);
+  await expect(script).toHaveValue(/Yumeko holds his gaze, giving nothing away\./);
+  const history = page.getByTestId("revision-history");
+  await expect(history).toContainText("#2 Creator-approved Prism AI revision");
+  await expect(history).toContainText("#1 Script before Prism AI history began");
+  const first = history.locator("li").filter({ hasText: "#1 " });
+  await first.locator("summary", { hasText: "View text" }).click();
+  await expect(first.locator("pre")).toContainText("SEAN approaches the table and stops.");
+  await expect(first.locator("pre")).not.toContainText("Yumeko holds his gaze");
+  await expect(first.getByRole("button", { name: "Restore revision 1" })).toBeVisible();
+  // 6. three warmer alternatives for the last line; choose B; only B becomes canon
+  await select("お嬢様、僕と結婚してください。", "お嬢様、僕と結婚してください。");
+  await ask("Give me three warmer alternatives for the last line.");
+  for (const v of ["A", "B", "C"])
+    await expect(turn(3).getByTestId(`version-${v}`)).toBeVisible({ timeout: 60_000 });
+  await turn(3).getByRole("button", { name: "Accept version B" }).click();
+  await expect(turn(3).getByText("Accepted version B")).toBeVisible({ timeout: 30_000 });
+  await page.reload();
+  const canon = await script.inputValue();
+  expect(canon).toContain("SEAN\n(gently)\nお嬢様、僕と結婚してください。");
+  expect(canon).not.toContain("(warmly)");
+  expect(canon).not.toContain("(with a small smile)");
+  await expect(history).toContainText("#3 Creator-approved Prism AI revision (version B");
+  // 7. downstream: the Scene's Shot is flagged, nothing deleted
+  await page.goto(`${EP}/shots/${shot6.id}`);
+  await expect(page.getByTestId("story-changed")).toContainText("Story changed after production breakdown");
 });

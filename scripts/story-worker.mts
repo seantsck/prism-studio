@@ -6,14 +6,18 @@
 // (PRISM_STUDIO_PROVIDER_OPENAI_STORY_API_KEY). It claims queued Production Proposals (FOR UPDATE SKIP LOCKED + lease),
 // re-checks the spend gate against the frozen estimate and confirmation, calls the provider, validates the answer and
 // writes the result once. It reads no project content and never creates Characters, Locations, Scenes or Shots.
+// Phase 5B-S2: it also claims writing proposals (writing_proposals, 0055) and writes their result once; it never
+// writes a screenplay (accepting a revision is the creator's action on the web).
 //
 // Database credential — fail CLOSED:
-//   PRISM_STUDIO_STORY_WORKER_DB_URL               a login for the least-privilege role prism_story_worker (0054)
+//   PRISM_STUDIO_STORY_WORKER_DB_URL               a login for the least-privilege role prism_story_worker (0054);
+//                                                  provisioned with `npm run story:db:provision` (docs/phase-5b-s2-…)
 //   PRISM_STUDIO_STORY_WORKER_DEV_ASSUME_ROLE=1    DEVELOPMENT only: the admin SUPABASE_DB_URL with every session forced
 //                                                  into prism_story_worker (never in production)
 // Nothing secret is printed.
 import pg from "pg";
 import { PostgresStoryWorkerStore } from "../src/data/story-postgres";
+import { PostgresWritingWorkerStore } from "../src/data/writing-postgres";
 import { createStoryRegistry } from "../src/story/registry";
 import { StoryWorker } from "../src/story/worker";
 import { installRedactingHandlers } from "./lib/safety.mjs";
@@ -46,6 +50,7 @@ if (role !== "prism_story_worker") {
 const registry = createStoryRegistry(process.env);
 const worker = new StoryWorker({
   store: new PostgresStoryWorkerStore(pool),
+  writing: new PostgresWritingWorkerStore(pool),
   registry,
   workerId: `story-${process.pid}`,
 });

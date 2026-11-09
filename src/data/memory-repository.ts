@@ -10,6 +10,7 @@ import { MemoryMediaQaService } from "./media-qa-memory";
 import { MemoryPrevisService } from "./previs-memory";
 import { MemoryProductionFrameService } from "./production-frame-memory";
 import { MemoryStoryService } from "./story-memory";
+import { MemoryWritingService } from "./writing-memory";
 import type { Repository } from "./repository";
 import type {
   Asset,
@@ -104,6 +105,17 @@ export class MemoryRepository implements Repository {
   get story(): MemoryStoryService {
     this.storyService ??= new MemoryStoryService((projectId) => this.projects.has(projectId));
     return this.storyService;
+  }
+
+  /** The AI writing assistant: sessions, revision proposals, script revisions (Phase 5B-S2; same semantics as Postgres). */
+  private writingService?: MemoryWritingService;
+  get writing(): MemoryWritingService {
+    this.writingService ??= new MemoryWritingService({
+      ownsProject: (projectId) => this.projects.has(projectId),
+      episodeInProject: (projectId, episodeId) =>
+        Boolean(this.projects.get(projectId)?.episodes.some((e) => e.id === episodeId)),
+    });
+    return this.writingService;
   }
 
   /** Location Views and the Shots' view selections (Phase 2G.3; same semantics as Postgres). Independent of 3D. */

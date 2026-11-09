@@ -10,12 +10,16 @@ import type { StoryIntelligenceProvider, StoryModel } from "./provider";
  *   PRISM_STUDIO_STORY_AI_PROVIDERS     comma list (default "openai"); the free test analyser is added only with
  *                                       PRISM_STUDIO_ENABLE_MOCK_PROVIDER=1
  *   PRISM_STUDIO_ALLOW_PAID_STORY_AI    "true" to allow paid analysis at all (default off: nothing silently spends)
- *   PRISM_STUDIO_STORY_AI_MAX_USD       per-analysis ceiling (default 1)
+ *   PRISM_STUDIO_STORY_AI_MAX_USD       per-request ceiling (default 1)
+ *   PRISM_STUDIO_STORY_AI_SESSION_MAX_USD  the most one capped writing session may be allowed (default 1; S2)
  *   PRISM_STUDIO_PROVIDER_OPENAI_STORY_API_KEY   worker only (see providers/openai.ts)
  */
 export interface StorySpendPolicy {
   paidEnabled: boolean;
+  /** Per request (analysis or writing turn). */
   maxUsd: number;
+  /** Phase 5B-S2: the most a creator may allow for one capped writing session. */
+  sessionMaxUsd: number;
 }
 
 export class StoryRegistry {
@@ -51,9 +55,11 @@ export class StoryRegistry {
 
 export function readStorySpend(env: Record<string, string | undefined>): StorySpendPolicy {
   const max = Number(env.PRISM_STUDIO_STORY_AI_MAX_USD ?? "1");
+  const session = Number(env.PRISM_STUDIO_STORY_AI_SESSION_MAX_USD ?? "1");
   return {
     paidEnabled: env.PRISM_STUDIO_ALLOW_PAID_STORY_AI === "true",
     maxUsd: Number.isFinite(max) && max >= 0 ? max : 1,
+    sessionMaxUsd: Number.isFinite(session) && session >= 0 ? session : 1,
   };
 }
 
