@@ -1,0 +1,15 @@
+FROM node:24-bookworm-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk \
+ && rm -rf /var/lib/apt/lists/*
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PRISM_STUDIO_PERSISTENCE=supabase
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --include=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force
+COPY tsconfig.json ./
+COPY src ./src
+COPY scripts ./scripts
+USER node
+CMD ["node", "--import", "tsx", "scripts/render-worker.mts"]
