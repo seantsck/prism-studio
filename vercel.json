@@ -18,6 +18,20 @@
         "timeoutSeconds": 5,
         "failureThreshold": 4
       }
+    },
+    "story": {
+      "root": "./",
+      "entrypoint": "Dockerfile.story-worker",
+      "instances": { "iad1": 1 },
+      "resources": { "requests": { "memory": "1Gi" } },
+      "terminationGracePeriodSeconds": 120
+    },
+    "render": {
+      "root": "./",
+      "entrypoint": "Dockerfile.render-worker",
+      "instances": { "iad1": 1 },
+      "resources": { "requests": { "memory": "2Gi" } },
+      "terminationGracePeriodSeconds": 120
     }
   }
 }
