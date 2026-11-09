@@ -9,7 +9,7 @@ try {
   const q=await pool.query(`
     select
       a.id as asset_id,
-      a.filename,
+      a.name,
       a.mime,
       a.width,
       a.height,
@@ -51,7 +51,7 @@ try {
   `,[projectId]);
   console.log("STORED_IMAGE_AUDIT="+JSON.stringify(q.rows.map(r=>({
     assetId:r.asset_id,
-    filename:r.filename,
+    name:r.name,
     mime:r.mime,
     width:r.width,
     height:r.height,
