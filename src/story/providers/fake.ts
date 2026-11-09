@@ -5,7 +5,10 @@ import type {
   StoryAnalysisResult,
   StoryIntelligenceProvider,
   StoryModel,
+  WritingCallResult,
+  WritingRequest,
 } from "../provider";
+import { fakeWriting } from "./fake-writer";
 
 /**
  * Phase 5B-S1: "Prism AI (test)" — a FREE, deterministic Story Intelligence provider with no network. It reads the
@@ -163,12 +166,16 @@ export class FakeStoryProvider implements StoryIntelligenceProvider {
   readonly id = FAKE_STORY_PROVIDER_ID;
   /** Every request the provider received (tests assert counts). */
   readonly calls: Array<{ modelId: string; textLength: number; revise: string | null }> = [];
+  /** Every writing request, in full (tests assert the frozen context and the isolation of script text). */
+  readonly writeCalls: WritingRequest[] = [];
 
   constructor(
     private readonly opts: {
       enabled?: boolean;
       /** Scripted raw answers, consumed one per call (a test of malformed output / correction). */
       answers?: unknown[];
+      /** Scripted raw WRITING answers, consumed one per call. */
+      writeAnswers?: unknown[];
     } = {},
   ) {}
 
@@ -178,6 +185,29 @@ export class FakeStoryProvider implements StoryIntelligenceProvider {
 
   unavailable() {
     return this.opts.enabled === false ? "The free test analyser is not enabled on this server." : null;
+  }
+
+  async write(req: WritingRequest): Promise<WritingCallResult> {
+    let calls = 0;
+    const answer = (): unknown => {
+      calls++;
+      this.writeCalls.push(req);
+      if (this.opts.writeAnswers && this.opts.writeAnswers.length) return this.opts.writeAnswers.shift();
+      return fakeWriting(req);
+    };
+    let v = req.validate(answer());
+    if (!v.ok) v = req.validate(answer()); // one correction turn, like a real provider
+    const usage = { inputTokens: 0, outputTokens: 0 };
+    return v.ok
+      ? { ok: true, result: v.result, usage, providerCalls: calls }
+      : {
+          ok: false,
+          code: "invalid_output",
+          message: `The writing did not match the expected shape: ${v.errors.slice(0, 3).join("; ")}`,
+          usage,
+          providerCalls: calls,
+          retryable: false,
+        };
   }
 
   async analyze(req: StoryAnalysisRequest): Promise<StoryAnalysisResult> {

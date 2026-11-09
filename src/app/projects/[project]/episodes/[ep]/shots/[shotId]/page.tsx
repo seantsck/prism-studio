@@ -7,6 +7,8 @@ import { masterFramePromotionState } from "@/domain/previs/spatial-status";
 import { currentSpatialStateFor } from "@/server/master-frame-promotion";
 import { getPrevisRepo } from "@/server/previs";
 import { requireProject } from "@/server/repo";
+import { StoryChangedNotice } from "@/components/writing/story-changed-notice";
+import { openStoryChangeFor } from "@/server/story";
 
 export default async function ShotPrepPage({
   params,
@@ -62,34 +64,47 @@ export default async function ShotPrepPage({
         { locationId: sceneNow!.locationId },
       )
     : null;
+  // Phase 5B-S2: an accepted screenplay change touched this Shot's Scene (a database without 0055 has none)
+  const sceneOfShot = data.scenes.find((x) => x.id === shotNow?.sceneId) ?? null;
+  const storyChanged = sceneOfShot ? await openStoryChangeFor(data.project.id, sceneOfShot.id) : false;
   return (
-    <ShotPrepView
-      data={data}
-      episode={episode}
-      shotId={shotId}
-      openSection={section}
-      masterFrames={masterFrames}
-      previs={{
-        pathFingerprint: path?.pathFingerprint ?? null,
-        pathRevision: path?.revision ?? null,
-        keyframeCount: path?.path.keyframes.length ?? 0,
-        durationMs: path?.durationMs ?? null,
-        currentAudioMixFingerprint: plan ? audioMixFingerprint(plan) : null,
-        currentBlockingFingerprint,
-        clips: clips.map((c) => ({
-          id: c.id,
-          assetId: c.assetId,
-          pathRevision: c.pathRevision,
-          pathFingerprint: c.pathFingerprint,
-          sceneFingerprint: c.sceneFingerprint,
-          renderedAt: c.renderedAt,
-          container: c.container,
-          codec: c.codec,
-          hasAudio: c.hasAudio,
-          audioMixFingerprint: c.audioMixFingerprint,
-          blockingFingerprint: c.blockingFingerprint,
-        })),
-      }}
-    />
+    <>
+      {storyChanged && sceneOfShot ? (
+        <StoryChangedNotice
+          slug={slug}
+          episodeSlug={episode.slug}
+          sceneId={sceneOfShot.id}
+          sceneLabel={`Scene ${sceneOfShot.sceneNumber}`}
+        />
+      ) : null}
+      <ShotPrepView
+        data={data}
+        episode={episode}
+        shotId={shotId}
+        openSection={section}
+        masterFrames={masterFrames}
+        previs={{
+          pathFingerprint: path?.pathFingerprint ?? null,
+          pathRevision: path?.revision ?? null,
+          keyframeCount: path?.path.keyframes.length ?? 0,
+          durationMs: path?.durationMs ?? null,
+          currentAudioMixFingerprint: plan ? audioMixFingerprint(plan) : null,
+          currentBlockingFingerprint,
+          clips: clips.map((c) => ({
+            id: c.id,
+            assetId: c.assetId,
+            pathRevision: c.pathRevision,
+            pathFingerprint: c.pathFingerprint,
+            sceneFingerprint: c.sceneFingerprint,
+            renderedAt: c.renderedAt,
+            container: c.container,
+            codec: c.codec,
+            hasAudio: c.hasAudio,
+            audioMixFingerprint: c.audioMixFingerprint,
+            blockingFingerprint: c.blockingFingerprint,
+          })),
+        }}
+      />
+    </>
   );
 }
