@@ -5,6 +5,7 @@ import {
   type OpenAIInputItem,
   type OpenAITransport,
 } from "@/continuity/providers/openai/transport";
+import { SHOT_PLAN_JSON_SCHEMA } from "@/domain/story/shot-list";
 import { WRITING_JSON_SCHEMA } from "@/domain/story/writing";
 import { analysisInput, revisionInput, STORY_INSTRUCTIONS } from "../prompt";
 import type {
@@ -12,10 +13,13 @@ import type {
   StoryAnalysisResult,
   StoryIntelligenceProvider,
   StoryModel,
+  ShotPlanCallResult,
+  ShotPlanRequest,
   StoryUsage,
   WritingCallResult,
   WritingRequest,
 } from "../provider";
+import { SHOT_PLANNER_INSTRUCTIONS, shotPlannerInput } from "../shot-planner-prompt";
 import { WRITING_INSTRUCTIONS, writingInput } from "../writing-prompt";
 
 /**
@@ -129,6 +133,33 @@ export class OpenAIStoryProvider implements StoryIntelligenceProvider {
       signal: req.signal,
     });
     return r.ok ? { ok: true, result: r.value, usage: r.usage, providerCalls: r.providerCalls } : r;
+  }
+
+  /** Phase 5B-S4: a Shot List for one Scene. Same transport, same two-call contract, a strict shot-list schema. */
+  async planShots(req: ShotPlanRequest): Promise<ShotPlanCallResult> {
+    const r = await this.structured({
+      instructions: SHOT_PLANNER_INSTRUCTIONS,
+      text: shotPlannerInput({
+        context: req.context,
+        sceneText: req.sceneText,
+        scope: req.scope,
+        basePlan: req.basePlan,
+      }),
+      jsonSchema: SHOT_PLAN_JSON_SCHEMA,
+      schemaName: "shot_list",
+      modelId: req.model.modelId,
+      maxOutputTokens: Math.min(req.maxOutputTokens, req.model.maxOutputTokens),
+      timeoutMs: 180_000,
+      validate: (raw) => {
+        const v = req.validate(raw);
+        return v.ok ? { ok: true, value: v.plan } : v;
+      },
+      what: "shot planning request",
+      invalid: "That answer is not a valid shot list.",
+      schemaLabel: "the shot list schema",
+      signal: req.signal,
+    });
+    return r.ok ? { ok: true, plan: r.value, usage: r.usage, providerCalls: r.providerCalls } : r;
   }
 
   /**

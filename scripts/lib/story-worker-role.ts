@@ -9,12 +9,25 @@ export const STORY_WORKER_CONNECTION_LIMIT = 5;
 export const MIN_STORY_DB_PASSWORD = 24;
 
 /** The tables the Story worker may READ (only rows in flight, by RLS) and nothing else. */
-export const STORY_WORKER_READABLE = ["story_proposals", "writing_proposals"] as const;
+export const STORY_WORKER_READABLE = ["story_proposals", "writing_proposals", "shot_list_proposals"] as const;
 /** Columns the worker may UPDATE (the result and its lease), per table. */
 export const STORY_WORKER_UPDATABLE: Record<(typeof STORY_WORKER_READABLE)[number], string[]> = {
   story_proposals: [
     "status",
     "proposal",
+    "usage",
+    "actual_usd",
+    "provider_calls",
+    "error",
+    "attempts",
+    "next_run_at",
+    "lease_owner",
+    "lease_expires_at",
+    "completed_at",
+  ],
+  shot_list_proposals: [
+    "status",
+    "plan",
     "usage",
     "actual_usd",
     "provider_calls",

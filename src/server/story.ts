@@ -2,6 +2,7 @@ import "server-only";
 import type { MemoryRepository } from "@/data/memory-repository";
 import type { MemoryStoryService } from "@/data/story-memory";
 import type { StoryProposalRepository } from "@/data/story-repository";
+import type { ShotListRepository } from "@/data/shot-list-repository";
 import type { WritingRepository } from "@/data/writing-repository";
 import { persistenceMode } from "@/lib/supabase/config";
 import { createStoryRegistry, type StoryRegistry } from "@/story/registry";
@@ -50,11 +51,26 @@ export async function getWritingRepo(opts: { startInlineWorker?: boolean } = {})
   return new PostgresWritingData(getPool(), rlsPreamble({ sub: user.id, email: user.email }));
 }
 
+/** Phase 5B-S4: Shot List Proposals, as the signed-in user. */
+export async function getShotListRepo(
+  opts: { startInlineWorker?: boolean } = {},
+): Promise<ShotListRepository> {
+  if (persistenceMode() === "memory") {
+    const repo = (await getRepo()) as MemoryRepository;
+    if (opts.startInlineWorker !== false) ensureInlineStoryWorker(repo.story, repo);
+    return repo.shotLists;
+  }
+  const user = await requireUser();
+  const { PostgresShotListData } = await import("@/data/shot-list-postgres");
+  const { rlsPreamble } = await import("@/data/postgres-repository");
+  return new PostgresShotListData(getPool(), rlsPreamble({ sub: user.id, email: user.email }));
+}
+
 function ensureInlineStoryWorker(service: MemoryStoryService, repo?: MemoryRepository) {
   if (globalThis.__prismInlineStoryWorker || process.env.PRISM_STUDIO_INLINE_WORKER === "0") return;
   const worker = new StoryWorker({
     store: service,
-    ...(repo ? { writing: repo.writing } : {}),
+    ...(repo ? { writing: repo.writing, shotLists: repo.shotLists } : {}),
     registry: getStoryRegistry(),
     workerId: "inline-story-worker",
   });
@@ -70,6 +86,7 @@ export async function tickInlineStoryWorker(): Promise<number> {
   return new StoryWorker({
     store: repo.story,
     writing: repo.writing,
+    shotLists: repo.shotLists,
     registry: getStoryRegistry(),
     workerId: "tick-story-worker",
   }).tick(5);

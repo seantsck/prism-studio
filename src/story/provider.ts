@@ -1,4 +1,5 @@
 import type { ProductionProposal } from "@/domain/story/proposal";
+import type { ShotPlan, ShotPlanScope, ShotPlanningContext } from "@/domain/story/shot-list";
 import type { ScopeKind, WritingMode, WritingResult } from "@/domain/story/writing";
 import type { ProposalSection } from "./prompt";
 import type { WritingContext } from "./writing-prompt";
@@ -17,6 +18,7 @@ import type { WritingContext } from "./writing-prompt";
  *   continueStory       operation "continue"
  *   brainstormStory     operation "brainstorm"
  *   reviseStoryProposal operation "revise"    (Revise again: a DRAFT alternative + a new instruction)
+ * Phase 5B-S4 adds `planShots(ShotPlanRequest) → ShotPlan` (a whole Scene, or one Shot regenerated).
  * The answer is always a Prism `WritingResult` (validated by `validateWriting`), never a vendor shape.
  *
  * Implementations: `FakeStoryProvider` (free, deterministic, no network) and `OpenAIStoryProvider` (the first real
@@ -99,7 +101,26 @@ export interface StoryIntelligenceProvider {
   analyze(req: StoryAnalysisRequest): Promise<StoryAnalysisResult>;
   /** Phase 5B-S2: one writing turn (rewrite / continue / brainstorm / revise). */
   write(req: WritingRequest): Promise<WritingCallResult>;
+  /** Phase 5B-S4: a Shot List for one Scene (or one Shot of an earlier plan, regenerated). */
+  planShots(req: ShotPlanRequest): Promise<ShotPlanCallResult>;
 }
+
+/** Phase 5B-S4: `planShots` — provider-neutral input (the frozen Scene snapshot) and output (a Prism ShotPlan). */
+export interface ShotPlanRequest {
+  model: StoryModel;
+  context: ShotPlanningContext;
+  sceneText: string;
+  scope: ShotPlanScope;
+  /** A one-Shot regeneration: the plan it revises. */
+  basePlan: ShotPlan | null;
+  maxOutputTokens: number;
+  validate: (raw: unknown) => { ok: true; plan: ShotPlan } | { ok: false; errors: string[] };
+  signal?: AbortSignal;
+}
+
+export type ShotPlanCallResult =
+  | { ok: true; plan: ShotPlan; usage: StoryUsage; providerCalls: number }
+  | Extract<StoryAnalysisResult, { ok: false }>;
 
 /** Ceiling estimate (USD) for a request: input tokens + the full output budget at the model's prices. */
 export function estimateUsd(

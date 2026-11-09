@@ -5,9 +5,12 @@ import type {
   StoryAnalysisResult,
   StoryIntelligenceProvider,
   StoryModel,
+  ShotPlanCallResult,
+  ShotPlanRequest,
   WritingCallResult,
   WritingRequest,
 } from "../provider";
+import { fakeShotPlan } from "./fake-planner";
 import { fakeWriting } from "./fake-writer";
 
 /**
@@ -168,6 +171,8 @@ export class FakeStoryProvider implements StoryIntelligenceProvider {
   readonly calls: Array<{ modelId: string; textLength: number; revise: string | null }> = [];
   /** Every writing request, in full (tests assert the frozen context and the isolation of script text). */
   readonly writeCalls: WritingRequest[] = [];
+  /** Every Shot planning request, in full. */
+  readonly planCalls: ShotPlanRequest[] = [];
 
   constructor(
     private readonly opts: {
@@ -176,6 +181,8 @@ export class FakeStoryProvider implements StoryIntelligenceProvider {
       answers?: unknown[];
       /** Scripted raw WRITING answers, consumed one per call. */
       writeAnswers?: unknown[];
+      /** Scripted raw SHOT PLAN answers, consumed one per call. */
+      planAnswers?: unknown[];
     } = {},
   ) {}
 
@@ -185,6 +192,29 @@ export class FakeStoryProvider implements StoryIntelligenceProvider {
 
   unavailable() {
     return this.opts.enabled === false ? "The free test analyser is not enabled on this server." : null;
+  }
+
+  async planShots(req: ShotPlanRequest): Promise<ShotPlanCallResult> {
+    let calls = 0;
+    const answer = (): unknown => {
+      calls++;
+      this.planCalls.push(req);
+      if (this.opts.planAnswers && this.opts.planAnswers.length) return this.opts.planAnswers.shift();
+      return fakeShotPlan(req);
+    };
+    let v = req.validate(answer());
+    if (!v.ok) v = req.validate(answer()); // one correction turn, like a real provider
+    const usage = { inputTokens: 0, outputTokens: 0 };
+    return v.ok
+      ? { ok: true, plan: v.plan, usage, providerCalls: calls }
+      : {
+          ok: false,
+          code: "invalid_output",
+          message: `The shot list did not match the expected shape: ${v.errors.slice(0, 3).join("; ")}`,
+          usage,
+          providerCalls: calls,
+          retryable: false,
+        };
   }
 
   async write(req: WritingRequest): Promise<WritingCallResult> {

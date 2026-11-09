@@ -2,7 +2,9 @@ import type { ProposalReview } from "@/domain/story/review";
 import { validateProposal } from "@/domain/story/proposal";
 import { lineCount } from "@/domain/story/source";
 import type { StoryWorkerStore } from "@/data/story-repository";
+import type { ShotListProposal, ShotListWorkerStore } from "@/data/shot-list-repository";
 import type { WritingProposal, WritingWorkerStore } from "@/data/writing-repository";
+import { validateShotPlan } from "@/domain/story/shot-list";
 import { validateWriting } from "@/domain/story/writing";
 import { actualUsd, writingOperation, type StoryModel } from "./provider";
 import type { StoryRegistry } from "./registry";
@@ -30,6 +32,8 @@ export class StoryWorker {
       store: StoryWorkerStore;
       /** Phase 5B-S2 writing proposals (optional: an S1-only store keeps working). */
       writing?: WritingWorkerStore;
+      /** Phase 5B-S4 Shot List Proposals (optional). */
+      shotLists?: ShotListWorkerStore;
       registry: StoryRegistry;
       workerId: string;
       leaseMs?: number;
@@ -60,7 +64,72 @@ export class StoryWorker {
 
   async tick(limit = 2): Promise<number> {
     const processed = await this.tickProposals(limit);
-    return processed + (this.deps.writing ? await this.tickWriting(limit) : 0);
+    const writing = this.deps.writing ? await this.tickWriting(limit) : 0;
+    return processed + writing + (this.deps.shotLists ? await this.tickShotLists(limit) : 0);
+  }
+
+  private async tickShotLists(limit: number): Promise<number> {
+    const store = this.deps.shotLists!;
+    await store.expireAbandoned(this.now());
+    let processed = 0;
+    for (let i = 0; i < limit; i++) {
+      const row = await store.claim(this.deps.workerId, this.deps.leaseMs ?? 600_000, this.now());
+      if (!row) break;
+      processed++;
+      await this.plan(store, row);
+    }
+    return processed;
+  }
+
+  /** Phase 5B-S4: one Shot List — the same gate, one `planShots` call, `validateShotPlan`, the result written once. */
+  private async plan(store: ShotListWorkerStore, row: ShotListProposal) {
+    const fail = (code: string, message: string) =>
+      store.fail(row.id, this.deps.workerId, {
+        error: { code, message },
+        usage: null,
+        actualUsd: null,
+        providerCalls: 0,
+        now: this.now(),
+      });
+    const model = this.deps.registry.model(row.provider, row.model);
+    const provider = this.deps.registry.provider(row.provider);
+    if (!model || !provider) return fail("model_unavailable", "That model is not available on the worker.");
+    const refusal = this.spendRefusal(model, row);
+    if (refusal) return fail(...refusal);
+    if (row.scope.kind === "shot" && !row.basePlan)
+      return fail("parent_missing", "The plan to revise is missing.");
+    const result = await provider.planShots({
+      model,
+      context: row.context,
+      sceneText: row.sceneText,
+      scope: row.scope,
+      basePlan: row.basePlan,
+      maxOutputTokens: row.estimate.maxOutputTokens,
+      validate: (raw) => validateShotPlan(raw, row.context, row.scope, row.basePlan),
+    });
+    const usd = actualUsd(model, result.usage);
+    if (result.ok)
+      return store.complete(row.id, this.deps.workerId, {
+        plan: result.plan,
+        usage: result.usage,
+        actualUsd: usd,
+        providerCalls: result.providerCalls,
+        now: this.now(),
+      });
+    if (result.retryable)
+      return store.retryLater(
+        row.id,
+        this.deps.workerId,
+        new Date(Date.parse(this.now()) + 60_000).toISOString(),
+        result.providerCalls,
+      );
+    return store.fail(row.id, this.deps.workerId, {
+      error: { code: result.code, message: result.message },
+      usage: result.usage,
+      actualUsd: usd,
+      providerCalls: result.providerCalls,
+      now: this.now(),
+    });
   }
 
   private async tickWriting(limit: number): Promise<number> {

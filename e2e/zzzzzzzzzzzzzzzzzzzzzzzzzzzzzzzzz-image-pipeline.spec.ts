@@ -24,6 +24,9 @@ import { buildSeedProject } from "../src/data/seed";
  *                 Reject → ask again → Accept → refresh: the accepted revision is the screenplay and the old one is in the
  *                 history → three warmer alternatives for the last line → Accept B → only B is canon; the Shot shows
  *                 "Story changed after production breakdown" (5B-S2)
+ *   M  Plan Shots: Ojou-sama Scene 3 → Plan Shots with Prism → review (duplicate, reorder, edit, deselect, replace 3A with
+ *                 approval) → Apply → Shot 3A's Characters / Location feed the I6 Production Frame Inputs → a screenplay
+ *                 change through S2 marks the plan story-changed; nothing is replaced (5B-S4)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -606,4 +609,83 @@ test("L — Write: guarded Yumeko proposal → diff → reject → accept the se
   // 7. downstream: the Scene's Shot is flagged, nothing deleted
   await page.goto(`${EP}/shots/${shot6.id}`);
   await expect(page.getByTestId("story-changed")).toContainText("Story changed after production breakdown");
+});
+
+test("M — Plan Shots: Scene 3 → Shot List → reorder / edit / deselect → Apply → Shot 3A feeds Production Frames → story change", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  const seed = buildSeedProject();
+  const ep1 = seed.episodes[0]!;
+  const scene3 = seed.scenes.find((s) => s.episodeId === ep1.id && s.sceneNumber === "3")!;
+  const shot3A = seed.shots.find((s) => s.sceneId === scene3.id && s.shotCode === "3A")!;
+  // 1. Scene 3 → Plan Shots with Prism (free test planner)
+  await page.goto(`${EP}/scenes`);
+  const row = page.locator("details").filter({ hasText: "INT. GRAND CELESTE LOBBY - NIGHT" });
+  await row.getByTestId("plan-shots-link").click();
+  await page.waitForURL(/\/scenes\/[0-9a-f-]{36}\/plan/);
+  await expect(page.getByTestId("plan-scene-text")).toContainText("Yumeko stands alone at the elevators.");
+  await page.getByTestId("plan-shots").click();
+  await page.waitForURL(/proposal=/, { timeout: 30_000 });
+  await expect(page.getByTestId("plan-status")).toHaveAttribute("data-status", "ready", { timeout: 60_000 });
+  // 2. review: an ordered list with sources and reasons
+  const items = page.getByTestId("plan-shot");
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(0).getByTestId("plan-shot-title")).toContainText("Lobby master");
+  await expect(items.nth(1).getByTestId("plan-shot-title")).toContainText("Yumeko medium close");
+  await expect(items.nth(1).getByTestId("plan-shot-source")).toContainText("Source: lines 23–24");
+  await expect(items.nth(1).getByTestId("plan-shot-dialogue")).toContainText("もう帰りたい");
+  await expect(items.nth(0).getByTestId("plan-shot-match")).toContainText("3A");
+  // 3. a variant of the Yumeko Shot (optional coverage), then reorder: Yumeko first
+  await items.nth(1).getByRole("button", { name: "Duplicate" }).click();
+  await expect(items).toHaveCount(3, { timeout: 30_000 });
+  await page.getByRole("button", { name: "Move Yumeko medium close up" }).first().click();
+  await expect(items.nth(0).getByTestId("plan-shot-title")).toContainText("Yumeko medium close", {
+    timeout: 30_000,
+  });
+  // 4. edit one purpose; deselect the optional variant; the master replaces the existing 3A (explicit approval)
+  const yumeko = items.nth(0);
+  await yumeko.locator("summary", { hasText: "Edit" }).click();
+  await yumeko.getByTestId("plan-edit-purpose").fill("Alone, Yumeko finally says what she wants.");
+  const variant = items.filter({ hasText: "variant" });
+  await variant.getByRole("checkbox", { name: /^Include/ }).uncheck();
+  const master = items.filter({ hasText: "Lobby master" });
+  await master.getByRole("combobox", { name: /^Apply Lobby master as/ }).selectOption(shot3A.id);
+  await page.getByRole("checkbox", { name: /I approve replacing/ }).check();
+  await page.getByTestId("plan-apply").click();
+  await expect(page.getByTestId("plan-applied")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("plan-status")).toHaveAttribute("data-status", "applied");
+  await expect(page.getByTestId("plan-applied")).toContainText("1 created, 1 replaced");
+  // 5. Shot 3A: Character + Location relationships, and the existing I6 Production Frame Inputs read them
+  await page.goto(`${EP}/shots/${shot3A.id}?section=production_frame`);
+  const inputs = page.getByTestId("pf-inputs");
+  await expect(inputs).toBeVisible({ timeout: 30_000 });
+  await expect(inputs.getByTestId("pf-inputs-characters")).toContainText("Yumeko");
+  await expect(inputs.getByTestId("pf-inputs-location")).toContainText("Grand Celeste Lobby");
+  await expect(page.getByText("Lobby master").first()).toBeVisible();
+  // 6. change the Scene through the S2 revision path (Write → accept); the applied plan is marked, never replaced
+  await page.goto(`${EP}/write?scene=${scene3.id}`);
+  const script = page.getByLabel("Screenplay text");
+  await script.evaluate((el) => {
+    const t = el as HTMLTextAreaElement;
+    const a = t.value.indexOf("The lobby is hushed.");
+    t.focus();
+    t.setSelectionRange(a, a + "The lobby is hushed. Yumeko stands alone at the elevators.".length);
+    t.dispatchEvent(new Event("select"));
+  });
+  await page.getByLabel("Instruction for Prism").fill("Make the lobby feel tense.");
+  await page.getByRole("button", { name: "Ask Prism", exact: true }).click();
+  const turn = page.locator('[data-testid^="turn-"]').last();
+  await expect(turn.getByRole("button", { name: "Accept version A" })).toBeVisible({ timeout: 60_000 });
+  await turn.getByRole("button", { name: "Accept version A" }).click();
+  await expect(turn.getByText("Accepted version A")).toBeVisible({ timeout: 30_000 });
+  await page.goto(`${EP}/scenes/${scene3.id}/plan`);
+  await expect(page.getByTestId("plan-story-changed")).toContainText(
+    "Story changed after production breakdown",
+  );
+  await expect(page.getByTestId("plan-versions")).toContainText("story changed");
+  await expect(page.getByTestId("plan-shots")).toHaveText("Re-plan Shots");
+  // nothing was replaced or deleted: 3A and the new 3B are still the Scene's Shots
+  await expect(page.getByTestId("plan-existing-shots")).toContainText("3A — Lobby master");
+  await expect(page.getByTestId("plan-existing-shots")).toContainText("3B — Yumeko medium close");
 });

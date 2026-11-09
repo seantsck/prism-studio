@@ -17,6 +17,7 @@
 // Nothing secret is printed.
 import pg from "pg";
 import { PostgresStoryWorkerStore } from "../src/data/story-postgres";
+import { PostgresShotListWorkerStore } from "../src/data/shot-list-postgres";
 import { PostgresWritingWorkerStore } from "../src/data/writing-postgres";
 import { createStoryRegistry } from "../src/story/registry";
 import { StoryWorker } from "../src/story/worker";
@@ -51,6 +52,7 @@ const registry = createStoryRegistry(process.env);
 const worker = new StoryWorker({
   store: new PostgresStoryWorkerStore(pool),
   writing: new PostgresWritingWorkerStore(pool),
+  shotLists: new PostgresShotListWorkerStore(pool),
   registry,
   workerId: `story-${process.pid}`,
 });
