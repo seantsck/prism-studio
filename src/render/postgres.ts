@@ -220,7 +220,8 @@ export class PostgresRenderWorkerStore implements RenderWorkerStore {
   }
 
   private async leased(c: PoolClient, renderId: string, token: string, set: string, params: unknown[]) {
-    // no RETURNING: the role may only SELECT active renders, and a completed / failed row is no longer one
+    // no RETURNING: the worker's UPDATE policy covers ACTIVE renders only, so a row just made completed / failed is
+    // checked against it no longer; rowCount alone says whether the leased write landed
     const r = await c.query(`update episode_renders set ${set} where id = $1 and lease_token = $2`, [
       renderId,
       token,

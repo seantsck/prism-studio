@@ -8,6 +8,7 @@ import { draftProductionFrame } from "@/domain/production-frame";
 import type { Asset, ProjectData } from "@/domain/schemas";
 import { submitCandidateSet } from "@/generation/candidate-set";
 import { makeHarness, type Harness } from "@/generation/__tests__/helpers";
+import type { OutputSink } from "@/generation/sink";
 import { assertPathInProject } from "@/lib/storage-paths";
 import { mediaToolEnv } from "@/media/ffmpeg";
 import { FfmpegEpisodeRenderer } from "@/render/ffmpeg-renderer";
@@ -580,4 +581,46 @@ describe.skipIf(!HAS_FFMPEG)("5B-V4 Ojou-sama final film (real ffmpeg, mock medi
     expect(p.render).toMatchObject({ missing: [], canRender: true, cost: expect.stringContaining("$0.00") });
     void (await loadEditMediaFacts(d, d.episodes[0]!.id));
   });
+
+  it("closeout: on Storage that never overwrites (hosted), a crash after the final upload and a corrupted cached segment still retry to completion", async () => {
+    // hosted Supabase Storage uploads with upsert: false — an existing object is refused, never replaced
+    const noOverwrite = {
+      name: h.sink.name,
+      bucket: h.sink.bucket,
+      get: (p: string) => h.sink.get(p),
+      remove: (p: string) => h.sink.remove(p),
+      put: async (p: string, bytes: Uint8Array) => {
+        if (await h.sink.get(p)) throw new Error("Storage upload failed: The resource already exists");
+        await h.sink.put(p, bytes);
+      },
+    } satisfies OutputSink;
+    const body = buildRenderPlan(second.manifest, second.profile).pieces.find((p) => p.kind === "body")!;
+    const entry = (await h.repo.renders.getSegment(second.projectId, body.cacheKey))!;
+    await h.sink.put(entry.videoPath, new Uint8Array([9, 9, 9])); // corrupted leftover at a deterministic path
+    expect(await act(requestEpisodeRender, null)).toMatchObject({ ok: true });
+    // the worker dies after uploading the final MP4, before the database records it
+    const store = Object.create(h.repo.renders) as typeof h.repo.renders;
+    store.complete = async () => {
+      throw new Error("simulated crash after the final upload");
+    };
+    const crash = await worker({ storage: noOverwrite, store }).runOnce();
+    expect(crash).toMatchObject({ status: "failed", rendered: 1 });
+    const fourth = (await renders())[3]!;
+    expect(fourth).toMatchObject({ status: "failed", output: null });
+    expect(
+      await h.sink.get(
+        `${fourth.projectId}/${renderOutputAssetId(fourth.id)}/ojousama-episode-1-the-arrangement.mp4`,
+      ),
+    ).toBeTruthy();
+    expect(await retryEpisodeRender(form({ projectSlug: SLUG, renderId: fourth.id }))).toMatchObject({
+      ok: true,
+    });
+    const again = await worker({ storage: noOverwrite }).runOnce();
+    expect(again).toMatchObject({ status: "completed", rendered: 0 });
+    const done = (await renders())[3]!;
+    expect(done).toMatchObject({ status: "completed", attemptCount: 2 });
+    expect(done.output!.frames).toBe(second.output!.frames);
+    const asset = (await raw()).assets.find((a) => a.id === renderOutputAssetId(fourth.id))!;
+    expect(sha256((await h.sink.get(asset.objectPath!))!)).toBe(asset.checksum);
+  }, 240_000);
 });

@@ -88,11 +88,32 @@ const expectedTables = [
   // Phase 3A.4C: the frozen subject of a transition (cut) continuity run
   "continuity_transition_subjects",
 ];
-// 0050 (Phase 4D-I2) is expected only once the ledger records it: this script also validates databases still at 0049
-const has0050 =
-  (await rows("select 1 from public.prism_migrations where name = '0050_shot_setup_templates.sql'"))
-    .length === 1;
-if (has0050) expectedTables.push("shot_setup_templates", "shot_setup_copies");
+// Tables of later migrations are expected only once the ledger records that migration: this script also validates
+// databases that are behind the repository (hosted DEV before a migration window, a database still at 0049, …).
+const tablesByMigration = {
+  "0050_shot_setup_templates.sql": ["shot_setup_templates", "shot_setup_copies"],
+  // Phase 5B (0051–0053 add columns / values only, no tables)
+  "0054_story_proposals.sql": ["story_proposals"],
+  "0055_story_writing.sql": [
+    "script_revisions",
+    "writing_sessions",
+    "scene_story_changes",
+    "writing_proposals",
+  ],
+  "0056_shot_list_proposals.sql": ["shot_list_proposals"],
+  "0057_shot_direction_proposals.sql": ["shot_direction_proposals"],
+  "0058_episode_edit_v3.sql": ["episode_edit_revisions"],
+  "0059_episode_renders.sql": ["episode_renders", "render_segment_cache"],
+};
+const appliedNames = new Set(
+  (
+    await rows("select name from public.prism_migrations where name = any($1)", [
+      Object.keys(tablesByMigration),
+    ])
+  ).map((r) => r.name),
+);
+for (const [name, added] of Object.entries(tablesByMigration))
+  if (appliedNames.has(name)) expectedTables.push(...added);
 const tables = (await rows("select tablename, rowsecurity from pg_tables where schemaname='public'")).filter(
   (t) => t.tablename !== "prism_migrations",
 );
@@ -213,7 +234,8 @@ const must = {
     "shot_previs_clips_provenance_guard",
   ],
 };
-if (has0050) must.triggers.push("shot_setup_templates_guard", "shot_setup_templates_set_updated_at");
+if (appliedNames.has("0050_shot_setup_templates.sql"))
+  must.triggers.push("shot_setup_templates_guard", "shot_setup_templates_set_updated_at");
 const missingIdx = must.indexes.filter((i) => !idx.some((x) => x.indexname === i));
 const missingTrig = must.triggers.filter((t) => !trig.some((x) => x.tgname === t));
 const fn = await rows(

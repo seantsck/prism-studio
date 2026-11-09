@@ -31,6 +31,8 @@
     "worker:story": "tsx --env-file=.env.local scripts/story-worker.mts",
     "worker:render": "tsx --env-file=.env.local scripts/render-worker.mts",
     "db:renders": "tsx --env-file=.env.local scripts/db-renders.mts",
+    "render:db:provision": "tsx --env-file=.env.local scripts/render-db-provision.mts",
+    "render:health": "tsx scripts/render-health.mts",
     "story:db:provision": "tsx --env-file=.env.local scripts/story-db-provision.mts",
     "daemon:acceptance": "tsx --env-file=.env.local scripts/daemon-acceptance.mts",
     "db:generation": "tsx --env-file=.env.local scripts/db-generation.mts",
