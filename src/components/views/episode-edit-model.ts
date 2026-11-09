@@ -3,6 +3,8 @@ import { formatDuration, formatSeconds } from "@/domain/duration";
 import { editRateLabel, type EditRate } from "@/domain/edit/edit-rate";
 import { VIDEO_SOURCE_VIOLATION_TEXT, type EditMediaFacts } from "@/domain/edit/eligibility";
 import type { SavedEditRevision } from "@/data/episode-edit-repository";
+import type { EpisodeRender } from "@/render/repository";
+import { renderPanelOf, type RenderPanelVM } from "./episode-render-model";
 import {
   DISSOLVE_DEFAULT_MS,
   DISSOLVE_MIN_MS,
@@ -230,6 +232,8 @@ export interface EditPageVM {
   savedAs: number | null;
   /** 5B-V3: the render manifest of exactly this state */
   manifest: ManifestVM;
+  /** 5B-V4: Render Episode (before) and this Episode's renders (after) */
+  render: RenderPanelVM;
 }
 
 /** What the rough-sequence player needs: the pure plan plus display labels (no other facts). */
@@ -702,6 +706,7 @@ export function editPage(
   edit: EpisodeEdit,
   media: EditMediaFacts,
   savedRevisions: readonly SavedEditRevision[] = [],
+  renders: readonly EpisodeRender[] = [],
 ): EditPageVM {
   const view = buildEpisodeEditView(data, edit, media);
   const runs = runsOf(data, view);
@@ -764,6 +769,7 @@ export function editPage(
     revisions,
     savedAs,
     manifest: manifestOf(data, edit),
+    render: renderPanelOf(data, edit, savedAs, renders),
   };
 }
 

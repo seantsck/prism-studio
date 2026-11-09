@@ -4,6 +4,7 @@ import { LOCAL_USER_ID, buildSeedProject } from "./seed";
 import { MemoryCandidateService } from "./candidates-memory";
 import { MemoryCharacterContinuityService } from "./character-continuity-memory";
 import { MemoryEpisodeEditService } from "./episode-edit-memory";
+import { MemoryRenderService } from "@/render/memory";
 import { MemoryGenerationService } from "./generation-memory";
 import { MemoryLocationViewService } from "./location-view-memory";
 import { MemoryMediaQaService } from "./media-qa-memory";
@@ -48,6 +49,7 @@ export class MemoryRepository implements Repository {
   private locationViewService: MemoryLocationViewService | undefined;
   private characterContinuityService: MemoryCharacterContinuityService | undefined;
   private episodeEditService: MemoryEpisodeEditService | undefined;
+  private renderService: MemoryRenderService | undefined;
   /** The memory twin of `updated_at` on the rows a cut's fingerprints depend on (`getCutSettlementClock`). */
   private stamps = new Map<string, string>();
   private readonly createdAt = new Date().toISOString();
@@ -158,6 +160,17 @@ export class MemoryRepository implements Repository {
       touchShot: (projectId, shotId) => this.touchShot(projectId, shotId),
     });
     return this.characterContinuityService;
+  }
+
+  /** Episode renders (Phase 5B-V4; same semantics as Postgres and migration 0059). */
+  get renders(): MemoryRenderService {
+    this.renderService ??= new MemoryRenderService({
+      all: () => [...this.projects.values()],
+      insertAsset: async (projectId, asset) => {
+        await this.upsert(projectId, "assets", asset);
+      },
+    });
+    return this.renderService;
   }
 
   /** Episode edits (Phase 2I.1; same semantics as Postgres and migration 0043). */

@@ -322,7 +322,12 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 120_000,
       // Phase 5B-I3: `next start` runs in production mode, where the local matting engine is listed explicitly
-      env: { ...memoryEnv(3116), PRISM_STUDIO_GENERATION_PROVIDERS: "prism-matting" },
+      // Phase 5B-V4: the in-process render worker encodes with the fast x264 preset (part of the profile identity)
+      env: {
+        ...memoryEnv(3116),
+        PRISM_STUDIO_GENERATION_PROVIDERS: "prism-matting",
+        PRISM_STUDIO_RENDER_PRESET: "ultrafast",
+      },
     },
   ],
 });
