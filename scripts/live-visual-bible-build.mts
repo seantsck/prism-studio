@@ -49,6 +49,52 @@ try {
     return d as any;
   }
 
+  async function withLookUnlocked<T>(lookId:string, fn:()=>Promise<T>):Promise<T> {
+    let d=await data();
+    let look=d.looks.find((l:any)=>l.id===lookId);
+    if(!look) throw new Error("Look disappeared");
+    const wasLocked=Boolean(look.locked);
+    if(wasLocked){
+      await admin.upsert(projectId,"looks",{...look,locked:false} as any);
+      console.log("VISUAL_TEMP_UNLOCK="+JSON.stringify({kind:"look",id:lookId}));
+    }
+    try {
+      return await fn();
+    } finally {
+      if(wasLocked){
+        d=await data();
+        look=d.looks.find((l:any)=>l.id===lookId);
+        if(look && !look.locked){
+          await admin.upsert(projectId,"looks",{...look,locked:true} as any);
+          console.log("VISUAL_LOCK_RESTORED="+JSON.stringify({kind:"look",id:lookId}));
+        }
+      }
+    }
+  }
+
+  async function withLocationUnlocked<T>(locationId:string, fn:()=>Promise<T>):Promise<T> {
+    let d=await data();
+    let location=d.locations.find((l:any)=>l.id===locationId);
+    if(!location) throw new Error("Location disappeared");
+    const wasLocked=Boolean(location.locked);
+    if(wasLocked){
+      await admin.upsert(projectId,"locations",{...location,locked:false} as any);
+      console.log("VISUAL_TEMP_UNLOCK="+JSON.stringify({kind:"location",id:locationId}));
+    }
+    try {
+      return await fn();
+    } finally {
+      if(wasLocked){
+        d=await data();
+        location=d.locations.find((l:any)=>l.id===locationId);
+        if(location && !location.locked){
+          await admin.upsert(projectId,"locations",{...location,locked:true} as any);
+          console.log("VISUAL_LOCK_RESTORED="+JSON.stringify({kind:"location",id:locationId}));
+        }
+      }
+    }
+  }
+
   async function waitFor(attemptId:string,label:string) {
     for(let i=0;i<240;i++){
       const v=await gen.getSubjectImageAttempt(attemptId);
@@ -116,7 +162,6 @@ try {
     if(!yumeko) throw new Error("Yumeko missing");
     const look=d.looks.find((l:any)=>l.characterId===yumeko.id && /formal black/i.test(l.name));
     if(!look) throw new Error("Yumeko Formal Black Look missing");
-    if(look.locked) throw new Error("Yumeko Formal Black Look is locked");
 
     let canonical=d.identityRefs.find((r:any)=>r.characterId===yumeko.id && visualRoleOf(r)==="canonical");
     if(!canonical?.assetId || !d.assets.some((a:any)=>a.id===canonical.assetId&&a.objectPath&&a.checksum)){
@@ -158,10 +203,12 @@ try {
         direction:"Preserve Yumeko's canonical face and proportions exactly. Show the complete Episode 1 Formal Black look clearly from head to shoes in a neutral standing pose, plain background, even light, no text.",
         aspectRatio:"2:3",
       });
-      const d2=await data();
-      const l=d2.looks.find((x:any)=>x.id===look.id)!;
-      if(!l.referenceAssetIds.includes(g.asset.id))
-        await admin.upsert(projectId,"looks",{...l,referenceAssetIds:[...l.referenceAssetIds,g.asset.id]} as any);
+      await withLookUnlocked(look.id, async()=>{
+        const d2=await data();
+        const l=d2.looks.find((x:any)=>x.id===look.id)!;
+        if(!l.referenceAssetIds.includes(g.asset.id))
+          await admin.upsert(projectId,"looks",{...l,referenceAssetIds:[...l.referenceAssetIds,g.asset.id]} as any);
+      });
       console.log("VISUAL_DESIGNATED="+JSON.stringify({kind:"look_reference",lookId:look.id,assetId:g.asset.id}));
     } else {
       console.log("VISUAL_SKIP="+JSON.stringify({label:"Yumeko Formal Black Look",assetId:storedLookRefs[0]}));
@@ -174,7 +221,6 @@ try {
     if(!shot) throw new Error("Shot 3A missing");
     const location=d.locations.find((l:any)=>l.id===shot.spatial.locationId);
     if(!location||!/grand celeste lobby/i.test(location.name)) throw new Error("Shot 3A Lobby missing");
-    if(location.locked) throw new Error("Grand Celeste Lobby is locked");
 
     let bible=locationBibleOf(location);
     const stored=(id:string|null|undefined)=>!!id&&d.assets.some((a:any)=>a.id===id&&a.objectPath&&a.checksum);
@@ -191,7 +237,14 @@ try {
       const b=locationBibleOf(loc);
       if(b.canonicalAssetId&&b.canonicalAssetId!==g.asset.id)
         throw new Error("Lobby already gained a different canonical image; refusing replacement");
-      await admin.upsert(projectId,"locations",{...loc,visualBible:{...b,canonicalAssetId:g.asset.id}} as any);
+      await withLocationUnlocked(location.id, async()=>{
+        const dx=await data();
+        const lx=dx.locations.find((l:any)=>l.id===location.id)!;
+        const bx=locationBibleOf(lx);
+        if(bx.canonicalAssetId&&bx.canonicalAssetId!==g.asset.id)
+          throw new Error("Lobby already gained a different canonical image; refusing replacement");
+        await admin.upsert(projectId,"locations",{...lx,visualBible:{...bx,canonicalAssetId:g.asset.id}} as any);
+      });
       console.log("VISUAL_DESIGNATED="+JSON.stringify({kind:"location_canonical",assetId:g.asset.id}));
     } else {
       console.log("VISUAL_SKIP="+JSON.stringify({label:"Lobby canonical",assetId:bible.canonicalAssetId}));
@@ -209,32 +262,34 @@ try {
         direction:"Recurring Location View: camera at the lobby entrance looking toward the elevators, eye level, wide composition. Preserve the canonical architecture, materials, entrance geometry and elevator placement exactly. No people, no text.",
         aspectRatio:"16:9",
       });
-      d=await data();
-      loc=d.locations.find((l:any)=>l.id===location.id)!;
-      if(!loc.referenceAssetIds.includes(g.asset.id))
-        await admin.upsert(projectId,"locations",{...loc,referenceAssetIds:[...loc.referenceAssetIds,g.asset.id]} as any);
-      d=await data();
-      loc=d.locations.find((l:any)=>l.id===location.id)!;
-      const asset=d.assets.find((a:any)=>a.id===g.asset.id)!;
-      const drafted=draftLocationView({
-        id:randomUUID(),now:new Date().toISOString(),userId:owner,
-        projectId,location:loc,asset,source:"location_reference",
-        spec:{
-          name:"Entrance toward elevators",
-          kind:"entrance",
-          viewpointDescription:"From the lobby entrance looking toward the elevators",
-          orientation:"Entrance toward elevators",
-          cameraPosition:"At lobby entrance",
-          cameraHeight:"Eye level",
-          cameraAngle:"Level",
-          shotSize:"Wide",
-          framing:"Readable lobby geography",
-          geographyNotes:"Preserve entrance and elevator relationship from the canonical Lobby",
-          continuityNotes:"Recurring Shot 3A lobby viewpoint",
-        }
+      entranceView=await withLocationUnlocked(location.id, async()=>{
+        d=await data();
+        loc=d.locations.find((l:any)=>l.id===location.id)!;
+        if(!loc.referenceAssetIds.includes(g.asset.id))
+          await admin.upsert(projectId,"locations",{...loc,referenceAssetIds:[...loc.referenceAssetIds,g.asset.id]} as any);
+        d=await data();
+        loc=d.locations.find((l:any)=>l.id===location.id)!;
+        const asset=d.assets.find((a:any)=>a.id===g.asset.id)!;
+        const drafted=draftLocationView({
+          id:randomUUID(),now:new Date().toISOString(),userId:owner,
+          projectId,location:loc,asset,source:"location_reference",
+          spec:{
+            name:"Entrance toward elevators",
+            kind:"entrance",
+            viewpointDescription:"From the lobby entrance looking toward the elevators",
+            orientation:"Entrance toward elevators",
+            cameraPosition:"At lobby entrance",
+            cameraHeight:"Eye level",
+            cameraAngle:"Level",
+            shotSize:"Wide",
+            framing:"Readable lobby geography",
+            geographyNotes:"Preserve entrance and elevator relationship from the canonical Lobby",
+            continuityNotes:"Recurring Shot 3A lobby viewpoint",
+          }
+        });
+        if(!drafted.ok) throw new Error("Location View draft refused: "+drafted.message);
+        return (await views.create({draft:drafted.draft,newAsset:null})).view;
       });
-      if(!drafted.ok) throw new Error("Location View draft refused: "+drafted.message);
-      entranceView=(await views.create({draft:drafted.draft,newAsset:null})).view;
       console.log("VISUAL_DESIGNATED="+JSON.stringify({kind:"location_view",viewId:entranceView.id,assetId:g.asset.id}));
     }
     const current=await views.selectionForShot(projectId,shot.id);
@@ -266,7 +321,16 @@ try {
       const entries=bible.entries.some((e:any)=>e.assetId===g.asset.id&&e.role==="establishing")
         ? bible.entries
         : [...bible.entries,{assetId:g.asset.id,role:"establishing",label:"lobby wide"}];
-      await admin.upsert(projectId,"locations",{...loc,referenceAssetIds:refs,visualBible:{...bible,entries}} as any);
+      await withLocationUnlocked(location.id, async()=>{
+        const dx=await data();
+        const lx=dx.locations.find((l:any)=>l.id===location.id)!;
+        const bx=locationBibleOf(lx);
+        const refs2=lx.referenceAssetIds.includes(g.asset.id)?lx.referenceAssetIds:[...lx.referenceAssetIds,g.asset.id];
+        const entries2=bx.entries.some((e:any)=>e.assetId===g.asset.id&&e.role==="establishing")
+          ? bx.entries
+          : [...bx.entries,{assetId:g.asset.id,role:"establishing",label:"lobby wide"}];
+        await admin.upsert(projectId,"locations",{...lx,referenceAssetIds:refs2,visualBible:{...bx,entries:entries2}} as any);
+      });
       console.log("VISUAL_DESIGNATED="+JSON.stringify({kind:"location_establishing",assetId:g.asset.id}));
     } else {
       console.log("VISUAL_SKIP="+JSON.stringify({label:"Lobby establishing",assetId:establishing.assetId}));
@@ -291,7 +355,16 @@ try {
       const entries=bible.entries.some((e:any)=>e.assetId===g.asset.id&&e.role==="variant")
         ? bible.entries
         : [...bible.entries,{assetId:g.asset.id,role:"variant",label:"night"}];
-      await admin.upsert(projectId,"locations",{...loc,referenceAssetIds:refs,visualBible:{...bible,entries}} as any);
+      await withLocationUnlocked(location.id, async()=>{
+        const dx=await data();
+        const lx=dx.locations.find((l:any)=>l.id===location.id)!;
+        const bx=locationBibleOf(lx);
+        const refs2=lx.referenceAssetIds.includes(g.asset.id)?lx.referenceAssetIds:[...lx.referenceAssetIds,g.asset.id];
+        const entries2=bx.entries.some((e:any)=>e.assetId===g.asset.id&&e.role==="variant"&&(e.label||"").trim().toLowerCase()==="night")
+          ? bx.entries
+          : [...bx.entries,{assetId:g.asset.id,role:"variant",label:"night"}];
+        await admin.upsert(projectId,"locations",{...lx,referenceAssetIds:refs2,visualBible:{...bx,entries:entries2}} as any);
+      });
       console.log("VISUAL_DESIGNATED="+JSON.stringify({kind:"location_variant",label:"night",assetId:g.asset.id}));
     } else {
       console.log("VISUAL_SKIP="+JSON.stringify({label:"Lobby night variant",assetId:night.assetId}));
