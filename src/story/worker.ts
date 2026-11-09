@@ -2,8 +2,10 @@ import type { ProposalReview } from "@/domain/story/review";
 import { validateProposal } from "@/domain/story/proposal";
 import { lineCount } from "@/domain/story/source";
 import type { StoryWorkerStore } from "@/data/story-repository";
+import type { ShotDirectionProposal, ShotDirectionWorkerStore } from "@/data/shot-direction-repository";
 import type { ShotListProposal, ShotListWorkerStore } from "@/data/shot-list-repository";
 import type { WritingProposal, WritingWorkerStore } from "@/data/writing-repository";
+import { validateShotDirection } from "@/domain/story/shot-direction";
 import { validateShotPlan } from "@/domain/story/shot-list";
 import { validateWriting } from "@/domain/story/writing";
 import { actualUsd, writingOperation, type StoryModel } from "./provider";
@@ -34,6 +36,8 @@ export class StoryWorker {
       writing?: WritingWorkerStore;
       /** Phase 5B-S4 Shot List Proposals (optional). */
       shotLists?: ShotListWorkerStore;
+      /** Phase 5B-S5 Storyboard Direction Proposals (optional). */
+      directions?: ShotDirectionWorkerStore;
       registry: StoryRegistry;
       workerId: string;
       leaseMs?: number;
@@ -65,7 +69,68 @@ export class StoryWorker {
   async tick(limit = 2): Promise<number> {
     const processed = await this.tickProposals(limit);
     const writing = this.deps.writing ? await this.tickWriting(limit) : 0;
-    return processed + writing + (this.deps.shotLists ? await this.tickShotLists(limit) : 0);
+    const lists = this.deps.shotLists ? await this.tickShotLists(limit) : 0;
+    return processed + writing + lists + (this.deps.directions ? await this.tickDirections(limit) : 0);
+  }
+
+  private async tickDirections(limit: number): Promise<number> {
+    const store = this.deps.directions!;
+    await store.expireAbandoned(this.now());
+    let processed = 0;
+    for (let i = 0; i < limit; i++) {
+      const row = await store.claim(this.deps.workerId, this.deps.leaseMs ?? 600_000, this.now());
+      if (!row) break;
+      processed++;
+      await this.direct(store, row);
+    }
+    return processed;
+  }
+
+  /** Phase 5B-S5: one Storyboard Direction — the same gate, one `directShot` call, validation, written once. */
+  private async direct(store: ShotDirectionWorkerStore, row: ShotDirectionProposal) {
+    const fail = (code: string, message: string) =>
+      store.fail(row.id, this.deps.workerId, {
+        error: { code, message },
+        usage: null,
+        actualUsd: null,
+        providerCalls: 0,
+        now: this.now(),
+      });
+    const model = this.deps.registry.model(row.provider, row.model);
+    const provider = this.deps.registry.provider(row.provider);
+    if (!model || !provider) return fail("model_unavailable", "That model is not available on the worker.");
+    const refusal = this.spendRefusal(model, row);
+    if (refusal) return fail(...refusal);
+    const result = await provider.directShot({
+      model,
+      context: row.context,
+      instruction: row.instruction,
+      maxOutputTokens: row.estimate.maxOutputTokens,
+      validate: (raw) => validateShotDirection(raw, row.context),
+    });
+    const usd = actualUsd(model, result.usage);
+    if (result.ok)
+      return store.complete(row.id, this.deps.workerId, {
+        direction: result.direction,
+        usage: result.usage,
+        actualUsd: usd,
+        providerCalls: result.providerCalls,
+        now: this.now(),
+      });
+    if (result.retryable)
+      return store.retryLater(
+        row.id,
+        this.deps.workerId,
+        new Date(Date.parse(this.now()) + 60_000).toISOString(),
+        result.providerCalls,
+      );
+    return store.fail(row.id, this.deps.workerId, {
+      error: { code: result.code, message: result.message },
+      usage: result.usage,
+      actualUsd: usd,
+      providerCalls: result.providerCalls,
+      now: this.now(),
+    });
   }
 
   private async tickShotLists(limit: number): Promise<number> {

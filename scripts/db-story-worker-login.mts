@@ -72,7 +72,12 @@ try {
       "authenticates AS prism_story_worker (current_user = session_user)",
       who.c === STORY_WORKER_ROLE && who.s === STORY_WORKER_ROLE,
     );
-    for (const t of ["story_proposals", "writing_proposals", "shot_list_proposals"]) {
+    for (const t of [
+      "story_proposals",
+      "writing_proposals",
+      "shot_list_proposals",
+      "shot_direction_proposals",
+    ]) {
       const r = await worker.query(`select count(*)::int as n from ${t}`).then(
         () => "ok",
         (e: Error) => e.message,

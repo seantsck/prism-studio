@@ -12,6 +12,7 @@ import { MemoryProductionFrameService } from "./production-frame-memory";
 import { MemoryStoryService } from "./story-memory";
 import { MemoryWritingService } from "./writing-memory";
 import { MemoryShotListService } from "./shot-list-memory";
+import { MemoryShotDirectionService } from "./shot-direction-memory";
 import type { Repository } from "./repository";
 import type {
   Asset,
@@ -128,6 +129,15 @@ export class MemoryRepository implements Repository {
       ),
     );
     return this.shotListService;
+  }
+
+  /** Shot → Storyboard Direction Proposals (Phase 5B-S5; same semantics as Postgres). */
+  private shotDirectionService?: MemoryShotDirectionService;
+  get shotDirections(): MemoryShotDirectionService {
+    this.shotDirectionService ??= new MemoryShotDirectionService((projectId, sceneId, shotId) =>
+      Boolean(this.projects.get(projectId)?.shots.some((s) => s.id === shotId && s.sceneId === sceneId)),
+    );
+    return this.shotDirectionService;
   }
 
   /** Location Views and the Shots' view selections (Phase 2G.3; same semantics as Postgres). Independent of 3D. */

@@ -2,6 +2,7 @@ import "server-only";
 import type { MemoryRepository } from "@/data/memory-repository";
 import type { MemoryStoryService } from "@/data/story-memory";
 import type { StoryProposalRepository } from "@/data/story-repository";
+import type { ShotDirectionRepository } from "@/data/shot-direction-repository";
 import type { ShotListRepository } from "@/data/shot-list-repository";
 import type { WritingRepository } from "@/data/writing-repository";
 import { persistenceMode } from "@/lib/supabase/config";
@@ -66,11 +67,26 @@ export async function getShotListRepo(
   return new PostgresShotListData(getPool(), rlsPreamble({ sub: user.id, email: user.email }));
 }
 
+/** Phase 5B-S5: Storyboard Direction Proposals, as the signed-in user. */
+export async function getShotDirectionRepo(
+  opts: { startInlineWorker?: boolean } = {},
+): Promise<ShotDirectionRepository> {
+  if (persistenceMode() === "memory") {
+    const repo = (await getRepo()) as MemoryRepository;
+    if (opts.startInlineWorker !== false) ensureInlineStoryWorker(repo.story, repo);
+    return repo.shotDirections;
+  }
+  const user = await requireUser();
+  const { PostgresShotDirectionData } = await import("@/data/shot-direction-postgres");
+  const { rlsPreamble } = await import("@/data/postgres-repository");
+  return new PostgresShotDirectionData(getPool(), rlsPreamble({ sub: user.id, email: user.email }));
+}
+
 function ensureInlineStoryWorker(service: MemoryStoryService, repo?: MemoryRepository) {
   if (globalThis.__prismInlineStoryWorker || process.env.PRISM_STUDIO_INLINE_WORKER === "0") return;
   const worker = new StoryWorker({
     store: service,
-    ...(repo ? { writing: repo.writing, shotLists: repo.shotLists } : {}),
+    ...(repo ? { writing: repo.writing, shotLists: repo.shotLists, directions: repo.shotDirections } : {}),
     registry: getStoryRegistry(),
     workerId: "inline-story-worker",
   });
@@ -87,6 +103,7 @@ export async function tickInlineStoryWorker(): Promise<number> {
     store: repo.story,
     writing: repo.writing,
     shotLists: repo.shotLists,
+    directions: repo.shotDirections,
     registry: getStoryRegistry(),
     workerId: "tick-story-worker",
   }).tick(5);

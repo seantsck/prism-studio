@@ -27,6 +27,9 @@ import { buildSeedProject } from "../src/data/seed";
  *   M  Plan Shots: Ojou-sama Scene 3 → Plan Shots with Prism → review (duplicate, reorder, edit, deselect, replace 3A with
  *                 approval) → Apply → Shot 3A's Characters / Location feed the I6 Production Frame Inputs → a screenplay
  *                 change through S2 marks the plan story-changed; nothing is replaced (5B-S4)
+ *   N  Direct with Prism: Shot 3A (selected Location View = hard constraint) → Camera / Blocking / Lighting /
+ *                 Composition / Storyboard → edit + save → Apply Direction → same Shot → the I6 Production Frame Inputs
+ *                 show the camera, blocking and lighting → 3B keeps Yumeko screen-right (5B-S5)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -688,4 +691,84 @@ test("M — Plan Shots: Scene 3 → Shot List → reorder / edit / deselect → 
   // nothing was replaced or deleted: 3A and the new 3B are still the Scene's Shots
   await expect(page.getByTestId("plan-existing-shots")).toContainText("3A — Lobby master");
   await expect(page.getByTestId("plan-existing-shots")).toContainText("3B — Yumeko medium close");
+});
+
+test("N — Direct with Prism: Shot 3A → direction → edit → Apply → same Shot feeds I6; 3B keeps the screen direction", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  const seed = buildSeedProject();
+  const shot3A = seed.shots.find((s) => s.shotCode === "3A")!;
+  const waitReady = async () => {
+    await page.waitForURL(/\/direct\?proposal=/, { timeout: 30_000 });
+    await expect
+      .poll(
+        async () => {
+          await page.reload();
+          return page.getByTestId("dir-status").getAttribute("data-status");
+        },
+        { timeout: 60_000, intervals: [1000] },
+      )
+      .toBe("ready");
+  };
+  // 1. Shot 3A → Direct with Prism (the selected Location View from story J is a hard constraint)
+  await page.goto(`${EP}/shots/${shot3A.id}`);
+  await page.getByTestId("direct-with-prism").click();
+  await page.waitForURL(/\/direct$/);
+  await expect(page.getByTestId("dir-context-view")).toContainText(
+    "Entrance toward elevators (a hard constraint)",
+  );
+  await page.getByTestId("dir-direct").click();
+  await waitReady();
+  // 2. the sections
+  for (const s of ["camera", "blocking", "lighting", "composition", "continuity", "storyboard"])
+    await expect(page.getByTestId(`dir-section-${s}`)).toBeVisible();
+  await expect(page.getByTestId("dir-storyboardDescription")).toHaveValue(
+    /from the Entrance toward elevators view in Grand Celeste Lobby/,
+  );
+  await expect(page.getByTestId("dir-blocking")).toContainText("Yumeko — screen right, midground");
+  await expect(page.getByTestId("dir-section-camera")).toContainText(
+    'Uses the selected "Entrance toward elevators" view.',
+  );
+  // 3. edit one field, save the review
+  const key = "Warm chandelier overhead, cool city spill through the glass";
+  await page.getByTestId("dir-lighting.key").fill(key);
+  await page.getByRole("button", { name: "Save review" }).click();
+  await expect
+    .poll(async () => (await page.reload(), page.getByTestId("dir-lighting.key").inputValue()), {
+      timeout: 30_000,
+    })
+    .toBe(key);
+  // 4. Apply Direction → refresh → the same Shot, now directed
+  await page.getByTestId("dir-apply").click();
+  await expect(page.getByTestId("dir-applied")).toBeVisible({ timeout: 30_000 });
+  await page.reload();
+  await expect(page.getByTestId("dir-status")).toHaveAttribute("data-status", "applied");
+  await page.getByRole("link", { name: "Production Frame Inputs →" }).click();
+  await page.waitForURL(new RegExp(`/shots/${shot3A.id}\\?section=production_frame`));
+  // 5. the EXISTING I6 Production Frame Inputs show the applied camera, blocking and lighting
+  const inputs = page.getByTestId("pf-inputs");
+  await expect(inputs).toBeVisible({ timeout: 30_000 });
+  const direction = inputs.getByTestId("pf-inputs-direction");
+  await expect(direction).toContainText("wide environmental");
+  await expect(direction).toContainText("Hushed, lonely");
+  await expect(direction).toContainText("Angle: eye level");
+  await expect(direction).toContainText("Yumeko in the midground, frame right");
+  await expect(inputs.getByTestId("pf-inputs-characters")).toContainText("Yumeko — screen right, midground");
+  await expect(inputs.getByTestId("pf-inputs-location")).toContainText(
+    "Grand Celeste Lobby — Entrance toward elevators",
+  );
+  // 6. the next Shot in the Scene keeps Yumeko where 3A put her
+  await page.goto(`${EP}/shots`);
+  await page.getByRole("link", { name: "3B", exact: true }).click();
+  await page.waitForURL(/\/shots\/[0-9a-f-]{36}/);
+  await page.getByTestId("direct-with-prism").click();
+  await page.waitForURL(/\/direct$/);
+  await expect(page.getByTestId("dir-context-adjacent")).toContainText("3A Lobby master");
+  await page.getByTestId("dir-direct").click();
+  await waitReady();
+  await expect(page.getByTestId("dir-blocking")).toContainText("Yumeko — screen right");
+  await expect(page.getByTestId("dir-section-continuity")).toContainText("Cuts with 3A (Lobby master)");
+  await page.getByTestId("dir-apply").click();
+  await expect(page.getByTestId("dir-applied")).toBeVisible({ timeout: 30_000 });
 });

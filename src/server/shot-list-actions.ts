@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { ShotListError, type ShotListProposal } from "@/data/shot-list-repository";
-import { WritingError, type SpendAuthorization } from "@/data/writing-repository";
+import { WritingError } from "@/data/writing-repository";
 import type { ProjectData, Scene } from "@/domain/schemas";
 import {
   planningOutputTokens,
@@ -33,6 +33,7 @@ import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { getRepo, requireProjectFresh } from "./repo";
 import { actorId } from "./script-sync";
 import { getShotListRepo, getStoryRegistry, getWritingRepo } from "./story";
+import { authorizeStorySpend, chooseStoryModel } from "./story-spend";
 
 /**
  * Phase 5B-S4: Scene → Plan Shots with Prism → Shot List Proposal → review → Apply. These actions QUEUE planning (the
@@ -58,18 +59,6 @@ function sceneOf(data: ProjectData, id: string): { scene: Scene; episode: Projec
   const episode = scene ? data.episodes.find((e) => e.id === scene.episodeId) : undefined;
   if (!scene || !episode) throw new UserFacingError("Choose one of this project's Scenes.");
   return { scene, episode };
-}
-
-function chooseModel(form: FormData) {
-  const registry = getStoryRegistry();
-  const listed = registry.models();
-  const wanted = str(form, "model");
-  const pick = wanted
-    ? listed.find((m) => `${m.provider}/${m.modelId}` === wanted)
-    : listed.find((m) => m.available);
-  if (!pick) throw new UserFacingError("Prism AI is not set up on this server.");
-  if (!pick.available) throw new UserFacingError(pick.reason ?? "That model is not available.");
-  return { registry, model: registry.model(pick.provider, pick.modelId)! };
 }
 
 /**
@@ -98,41 +87,24 @@ async function queuePlan(
       );
   }
   const basePlan = scope.kind === "shot" ? parent!.plan : null;
-  const { registry, model } = chooseModel(form);
+  const registry = getStoryRegistry();
+  const model = chooseStoryModel(registry, str(form, "model"));
   const inputTokens = estimateWritingInputTokens(
     SHOT_PLANNER_INSTRUCTIONS,
     shotPlannerInput({ context: snap.context, sceneText: snap.sceneText, scope, basePlan }),
   );
   const maxOutputTokens = planningOutputTokens(snap.context, model.maxOutputTokens || 32_000);
   const usd = estimateUsd(model, inputTokens, maxOutputTokens);
-  let confirmedUsd: number | null = null;
-  let spendAuthorization: SpendAuthorization = "free";
-  if (model.paid) {
-    if (inputTokens + maxOutputTokens > model.contextTokens)
-      throw new UserFacingError("This Scene is too long to plan.");
-    if (usd > registry.spend.maxUsd)
-      throw new UserFacingError(
-        `The estimated cost ($${usd.toFixed(4)}) is over this server's per-request limit ($${registry.spend.maxUsd.toFixed(2)}).`,
-      );
-    const confirmed = Number(str(form, "confirmedTotalUsd"));
-    if (str(form, "confirmedTotalUsd") && Number.isFinite(confirmed) && confirmed + 1e-9 >= usd) {
-      confirmedUsd = confirmed;
-      spendAuthorization = "confirmed";
-    } else {
-      // the capped allowance of the Episode's newest live writing session (S2), reserved atomically
-      const writing = await getWritingRepo({ startInlineWorker: false });
-      const live = (await writing.listSessions(data.project.id, episode.id)).find(
-        (s) => s.budgetExpiresAt && s.budgetExpiresAt > now() && s.reservedUsd + usd <= s.budgetUsd + 1e-9,
-      );
-      if (!live)
-        throw new UserFacingError(
-          `Estimated cost: $${usd.toFixed(4)} (about ${inputTokens.toLocaleString("en-US")} input tokens and up to ${maxOutputTokens.toLocaleString("en-US")} output tokens with ${model.label}). Enter ${usd.toFixed(4)} in "Confirm total", or allow a capped writing session for this Episode.`,
-        );
-      await guarded(() => writing.reserveBudget(data.project.id, live.id, usd, now()));
-      confirmedUsd = usd;
-      spendAuthorization = "session";
-    }
-  }
+  const { confirmedUsd, spendAuthorization } = await authorizeStorySpend({
+    form,
+    registry,
+    model,
+    projectId: data.project.id,
+    episodeId: episode.id,
+    usd,
+    inputTokens,
+    maxOutputTokens,
+  });
   const revisions = await (
     await getWritingRepo({ startInlineWorker: false })
   ).listRevisions(data.project.id, episode.id);
