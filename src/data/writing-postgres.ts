@@ -174,6 +174,19 @@ export class PostgresWritingData implements WritingRepository {
     });
   }
 
+  async reserveBudget(projectId: string, sessionId: string, usd: number, now: string) {
+    await this.tx(async (c) => {
+      const r = await c.query(
+        `update writing_sessions set reserved_usd = reserved_usd + $3
+          where id = $1 and project_id = $2 and budget_expires_at > $4::timestamptz and reserved_usd + $3 <= budget_usd
+          returning id`,
+        [sessionId, projectId, usd, now],
+      );
+      if (r.rowCount === 0)
+        throw new WritingError("budget", "The writing session's spend allowance is used up or expired.");
+    });
+  }
+
   async createProposal(p: NewWritingProposal, opts: { reserveUsd: number | null; now: string }) {
     return this.tx(async (c) => {
       await c.query("select pg_advisory_xact_lock(hashtext('writing_proposals:' || $1::text))", [

@@ -11,6 +11,7 @@ import { MemoryPrevisService } from "./previs-memory";
 import { MemoryProductionFrameService } from "./production-frame-memory";
 import { MemoryStoryService } from "./story-memory";
 import { MemoryWritingService } from "./writing-memory";
+import { MemoryShotListService } from "./shot-list-memory";
 import type { Repository } from "./repository";
 import type {
   Asset,
@@ -116,6 +117,17 @@ export class MemoryRepository implements Repository {
         Boolean(this.projects.get(projectId)?.episodes.some((e) => e.id === episodeId)),
     });
     return this.writingService;
+  }
+
+  /** Scene → Shot List Proposals (Phase 5B-S4; same semantics as Postgres). */
+  private shotListService?: MemoryShotListService;
+  get shotLists(): MemoryShotListService {
+    this.shotListService ??= new MemoryShotListService((projectId, episodeId, sceneId) =>
+      Boolean(
+        this.projects.get(projectId)?.scenes.some((s) => s.id === sceneId && s.episodeId === episodeId),
+      ),
+    );
+    return this.shotListService;
   }
 
   /** Location Views and the Shots' view selections (Phase 2G.3; same semantics as Postgres). Independent of 3D. */

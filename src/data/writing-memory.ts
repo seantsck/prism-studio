@@ -62,6 +62,14 @@ export class MemoryWritingService implements WritingRepository, WritingWorkerSto
     return clone(s);
   }
 
+  async reserveBudget(projectId: string, sessionId: string, usd: number, now: string) {
+    const s = this.sessions.find((x) => x.id === sessionId && x.projectId === projectId);
+    const live = s?.budgetExpiresAt != null && s.budgetExpiresAt > now;
+    if (!s || !live || s.reservedUsd + usd > s.budgetUsd + 1e-9)
+      throw new WritingError("budget", "The writing session's spend allowance is used up or expired.");
+    s.reservedUsd = round6(s.reservedUsd + usd);
+  }
+
   // ── proposals ──
   async createProposal(p: NewWritingProposal, opts: { reserveUsd: number | null; now: string }) {
     const session = this.sessions.find((x) => x.id === p.sessionId && x.projectId === p.projectId);

@@ -156,6 +156,12 @@ export interface WritingRepository {
   createSession(
     s: Omit<WritingSession, "budgetUsd" | "reservedUsd" | "budgetExpiresAt">,
   ): Promise<WritingSession>;
+  /**
+   * Phase 5B-S4: reserve `usd` of a session's unexpired allowance for ANOTHER Story request (a Shot List) — atomic,
+   * never exceeding the allowance; refuses with code `budget`. A failed later insert leaves the reservation counted
+   * (conservative: spend can only be over-counted, never under-counted).
+   */
+  reserveBudget(projectId: string, sessionId: string, usd: number, now: string): Promise<void>;
   getSession(projectId: string, id: string): Promise<WritingSession | null>;
   listSessions(projectId: string, episodeId: string): Promise<WritingSession[]>;
   /** A new capped authorization: budget = already reserved + amount, until `expiresAt`. */

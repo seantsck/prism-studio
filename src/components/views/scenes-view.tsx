@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Badge, Button, Field, PageHeader, Panel } from "@/components/ui";
 import type { Episode, ProjectData } from "@/domain/schemas";
 import { saveScene } from "@/server/actions";
@@ -34,6 +35,13 @@ export function ScenesView({ data, episode }: { data: ProjectData; episode: Epis
                   <Badge>{shots.length} shots</Badge>
                   <Badge>{lines.length} lines</Badge>
                   <Badge tone={loc ? "neutral" : "warn"}>{loc?.name ?? "no location"}</Badge>
+                  <Link
+                    href={`/projects/${data.project.slug}/episodes/${episode.slug}/scenes/${s.id}/plan`}
+                    className="rounded-[3px] border border-line2 px-2 py-0.5 text-[11.5px] text-accent hover:bg-panel2"
+                    data-testid="plan-shots-link"
+                  >
+                    Plan Shots with Prism →
+                  </Link>
                 </span>
               </summary>
               <ActionForm

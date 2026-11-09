@@ -13,12 +13,11 @@ const code = sql.replace(/--.*$/gm, "");
 const TABLES = ["script_revisions", "writing_sessions", "writing_proposals", "scene_story_changes"];
 
 describe("migration 0055: AI writing assistant", () => {
-  it("is the latest migration, follows 0054, and leaves 0051–0054 byte-for-byte unchanged", () => {
+  it("follows 0054, and leaves 0051–0054 byte-for-byte unchanged", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe(FILE);
-    expect(files.at(-2)).toBe("0054_story_proposals.sql");
+    expect(files[files.indexOf(FILE) - 1]).toBe("0054_story_proposals.sql");
     const sums: Record<string, string> = {
       "0051_generation_subjects.sql": "1f9ca2000ea666955bd518c848eb41ee58d3cc5bbd4296130ff5e5c8803bb620",
       "0052_character_visual_roles.sql": "3bbbae94ddd0e2bb4a168a4f8c89ba79a1ddb606e931bf701a144e3b20b62698",
