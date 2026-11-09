@@ -2,17 +2,26 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "echo workers-only project: no web install",
-  "buildCommand": "echo workers-only project: no web build",
+  "buildCommand": "node scripts/openai-image-http-preflight.mjs && node -e \"console.error('OPENAI_IMAGE_HTTP_PREFLIGHT_COMPLETE');process.exit(1)\"",
   "outputDirectory": "deploy/workers-staging/static",
   "daemons": {
     "generation": {
       "root": "./",
       "entrypoint": "Dockerfile.generation-worker",
-      "instances": { "iad1": 1 },
-      "resources": { "requests": { "memory": "1Gi" } },
+      "instances": {
+        "iad1": 1
+      },
+      "resources": {
+        "requests": {
+          "memory": "1Gi"
+        }
+      },
       "terminationGracePeriodSeconds": 120,
       "livenessProbe": {
-        "httpGet": { "port": 8080, "path": "/healthz" },
+        "httpGet": {
+          "port": 8080,
+          "path": "/healthz"
+        },
         "initialDelaySeconds": 60,
         "periodSeconds": 30,
         "timeoutSeconds": 5,
@@ -22,11 +31,20 @@
     "story": {
       "root": "./",
       "entrypoint": "Dockerfile.story-worker",
-      "instances": { "iad1": 1 },
-      "resources": { "requests": { "memory": "1Gi" } },
+      "instances": {
+        "iad1": 1
+      },
+      "resources": {
+        "requests": {
+          "memory": "1Gi"
+        }
+      },
       "terminationGracePeriodSeconds": 120,
       "livenessProbe": {
-        "httpGet": { "port": 8080, "path": "/healthz" },
+        "httpGet": {
+          "port": 8080,
+          "path": "/healthz"
+        },
         "initialDelaySeconds": 20,
         "periodSeconds": 30,
         "timeoutSeconds": 5,
@@ -36,11 +54,20 @@
     "render": {
       "root": "./",
       "entrypoint": "Dockerfile.render-worker",
-      "instances": { "iad1": 1 },
-      "resources": { "requests": { "memory": "2Gi" } },
+      "instances": {
+        "iad1": 1
+      },
+      "resources": {
+        "requests": {
+          "memory": "2Gi"
+        }
+      },
       "terminationGracePeriodSeconds": 120,
       "livenessProbe": {
-        "httpGet": { "port": 8080, "path": "/healthz" },
+        "httpGet": {
+          "port": 8080,
+          "path": "/healthz"
+        },
         "initialDelaySeconds": 90,
         "periodSeconds": 30,
         "timeoutSeconds": 5,
