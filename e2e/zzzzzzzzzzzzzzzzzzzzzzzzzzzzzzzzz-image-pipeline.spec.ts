@@ -30,6 +30,9 @@ import { buildSeedProject } from "../src/data/seed";
  *   N  Direct with Prism: Shot 3A (selected Location View = hard constraint) → Camera / Blocking / Lighting /
  *                 Composition / Storyboard → edit + save → Apply Direction → same Shot → the I6 Production Frame Inputs
  *                 show the camera, blocking and lighting → 3B keeps Yumeko screen-right (5B-S5)
+ *   O  The integrated loop by navigation only: Import Story → Write (accept) → Scenes → Plan Shots (re-plan, apply) →
+ *                 Shot 3A (story changed) → Direct with Prism (needs review → direct again → apply) → Production Frame
+ *                 Inputs (Visual Bibles + View + direction + story) → mock candidate → conform → canonical (5B loop)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -771,4 +774,125 @@ test("N — Direct with Prism: Shot 3A → direction → edit → Apply → same
   await expect(page.getByTestId("dir-section-continuity")).toContainText("Cuts with 3A (Lobby master)");
   await page.getByTestId("dir-apply").click();
   await expect(page.getByTestId("dir-applied")).toBeVisible({ timeout: 30_000 });
+});
+
+test("O — the integrated loop by navigation: Import Story → Write → Scenes → Plan Shots → Shot → Direct → Production Frame", async ({
+  page,
+}) => {
+  test.setTimeout(420_000);
+  const seed = buildSeedProject();
+  const shot3A = seed.shots.find((s) => s.shotCode === "3A")!;
+  const scene3 = seed.scenes.find((s) => s.id === shot3A.sceneId)!;
+  const shotUrl = `${EP}/shots/${shot3A.id}`;
+  // 1. Import Story (S1): the project menu leads there; story K's proposal is listed as applied
+  await page.goto(P);
+  await page.getByRole("link", { name: "Import Story" }).first().click();
+  await page.waitForURL(/\/story$/);
+  await expect(page.getByTestId("story-proposal-row").first()).toContainText("applied");
+  // 2. Write (S2): the Episode's Write tab → Scene 3 → a Prism revision → Accept → it is canon, with history
+  await page.goto(`${EP}/script`);
+  await page.getByRole("link", { name: "Write", exact: true }).click();
+  await page.waitForURL(/\/write/);
+  await page.getByRole("link", { name: /^3\. INT\. GRAND CELESTE LOBBY/ }).click();
+  await page.waitForURL(/scene=/);
+  const script = page.getByLabel("Screenplay text");
+  await script.evaluate((el) => {
+    const t = el as HTMLTextAreaElement;
+    const a = t.value.indexOf("YUMEKO");
+    t.focus();
+    t.setSelectionRange(a, t.value.length);
+    t.dispatchEvent(new Event("select"));
+  });
+  await page.getByLabel("Instruction for Prism").fill("Make Yumeko more guarded.");
+  await page.getByRole("button", { name: "Ask Prism", exact: true }).click();
+  const turn = page.locator('[data-testid^="turn-"]').last();
+  await expect(turn.getByRole("button", { name: "Accept version A" })).toBeVisible({ timeout: 60_000 });
+  await turn.getByRole("button", { name: "Accept version A" }).click();
+  await expect(turn.getByText("Accepted version A")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("revision-history")).toContainText("Creator-approved Prism AI revision");
+  // 3. Scenes → Plan Shots (S4): the story change asks for a re-plan; plan, apply (new Shots, nothing replaced)
+  await page.getByRole("link", { name: "Scenes", exact: true }).click();
+  await page.waitForURL(/\/scenes$/);
+  await page
+    .locator("details")
+    .filter({ hasText: "INT. GRAND CELESTE LOBBY - NIGHT" })
+    .getByTestId("plan-shots-link")
+    .click();
+  await page.waitForURL(new RegExp(`/scenes/${scene3.id}/plan`));
+  await expect(page.getByTestId("plan-story-changed")).toBeVisible();
+  await page.getByTestId("plan-shots").click();
+  await page.waitForURL(/proposal=/, { timeout: 30_000 });
+  await expect(page.getByTestId("plan-status")).toHaveAttribute("data-status", "ready", { timeout: 60_000 });
+  await expect(page.getByTestId("plan-scene-text")).toContainText("(guardedly)");
+  await page.getByTestId("plan-apply").click();
+  await expect(page.getByTestId("plan-applied")).toBeVisible({ timeout: 30_000 });
+  // 4. → Shot 3A → Direct with Prism (S5): the earlier direction needs review after the story change; direct again
+  await page
+    .getByTestId("plan-existing-shots")
+    .getByRole("link", { name: /^3A — / })
+    .click();
+  await page.waitForURL(new RegExp(`/shots/${shot3A.id}`));
+  await expect(page.getByTestId("story-changed")).toContainText("Story changed after production breakdown");
+  await page.getByTestId("direct-with-prism").click();
+  await page.waitForURL(/\/direct$/);
+  await expect(page.getByTestId("dir-needs-review")).toBeVisible();
+  await page.getByTestId("dir-direct").click();
+  await page.waitForURL(/\/direct\?proposal=/, { timeout: 30_000 });
+  await expect
+    .poll(async () => (await page.reload(), page.getByTestId("dir-status").getAttribute("data-status")), {
+      timeout: 60_000,
+      intervals: [1000],
+    })
+    .toBe("ready");
+  await page.getByTestId("dir-apply").click();
+  await expect(page.getByTestId("dir-applied")).toBeVisible({ timeout: 30_000 });
+  // 5. → Production Frame Inputs: Visual Bibles + View + S5 direction + story, all automatic
+  await page.getByRole("link", { name: "Production Frame Inputs →" }).click();
+  await page.waitForURL(new RegExp(`/shots/${shot3A.id}\\?section=production_frame`));
+  const inputs = page.getByTestId("pf-inputs");
+  await expect(inputs.getByTestId("pf-inputs-characters")).toContainText("Yumeko — Canonical Identity");
+  await expect(inputs.getByTestId("pf-inputs-characters")).toContainText("Formal Black");
+  await expect(inputs.getByTestId("pf-inputs-characters")).toContainText("Yumeko — screen right");
+  await expect(inputs.getByTestId("pf-inputs-location")).toContainText(
+    "Grand Celeste Lobby — Entrance toward elevators",
+  );
+  await expect(inputs.getByTestId("pf-inputs-location")).toContainText("Grand Celeste Lobby — Canonical");
+  await expect(inputs.getByTestId("pf-inputs-direction")).toContainText("Angle: eye level");
+  await expect(inputs.getByTestId("pf-inputs-direction")).toContainText("Hushed, lonely");
+  await expect(inputs.getByTestId("pf-inputs-story")).toContainText("3A — Lobby master");
+  // 6. Generate Production Frame (free mock) → production conform → Use as Production Frame → refresh → canonical
+  const stills = page.getByTestId("shot-generated-still");
+  const newest = async () =>
+    (await stills.count()) ? await stills.first().getAttribute("data-attempt") : null;
+  const before = await newest();
+  await page.getByTestId("shot-generate-image").click();
+  await page.waitForURL(/\/candidates\/[0-9a-f-]{36}/, { timeout: 60_000 });
+  await expect
+    .poll(async () => (await page.goto(`${shotUrl}?section=production_frame`), newest()), {
+      timeout: 120_000,
+      intervals: [2000],
+    })
+    .not.toBe(before);
+  const attempt = await stills.first().getAttribute("data-attempt");
+  const fresh = page.locator(`[data-testid="shot-generated-still"][data-attempt="${attempt}"]`);
+  await fresh.getByTestId("shot-create-conform").click();
+  await expect
+    .poll(
+      async () => (
+        await page.goto(`${shotUrl}?section=production_frame`),
+        fresh.getByTestId("shot-use-as-production-frame").count()
+      ),
+      { timeout: 60_000, intervals: [1500] },
+    )
+    .toBe(1);
+  await fresh.getByTestId("shot-use-as-production-frame").click();
+  const current = page.locator('[data-testid="shot-generated-still"][data-current="true"]');
+  await expect
+    .poll(async () => (await page.goto(`${shotUrl}?section=production_frame`), current.count()), {
+      timeout: 60_000,
+      intervals: [1500],
+    })
+    .toBe(1);
+  await page.reload();
+  await expect(current).toHaveAttribute("data-attempt", attempt!);
 });

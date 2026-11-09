@@ -38,7 +38,10 @@ try {
   if (audit.failures.length) {
     console.error(`Privilege audit FAILED: ${audit.failures.join("; ")}`);
     process.exitCode = 1;
-  } else console.log("Privilege audit: minimal (story_proposals + writing_proposals in flight only).");
+  } else
+    console.log(
+      "Privilege audit: minimal (Story, writing, shot-list and direction proposals in flight only).",
+    );
   if (disposableLocalTarget(url))
     console.log(
       `Disposable target ${safeTarget(url)}: PRISM_STUDIO_STORY_WORKER_DB_URL=postgresql://${STORY_WORKER_ROLE}:<password>@127.0.0.1:<port>/<db>`,
