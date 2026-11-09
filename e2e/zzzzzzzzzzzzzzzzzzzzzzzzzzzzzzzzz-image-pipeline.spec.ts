@@ -40,6 +40,10 @@ import { buildSeedProject } from "../src/data/seed";
  *                 3B / 3C → Play Animatic follows the new order → pause / scrub / next → reset to story order → replace
  *                 3A's Shot Clip → the row says "Replacement available" → Use current Shot Clips → an upstream direction
  *                 change: 3B's clip still plays, "Needs review" (5B-V2)
+ *   R  Episode Edit: the V2 rough cut → trim 3A and 3B → hold 3C 4.5 s → opening title → reorder → cross dissolve
+ *                 3C → 3B → preview from the start (title, scrub into the dissolve, select an item) → Save revision →
+ *                 refresh (same state) → the Shot Clip is still the full clip; the Production Frame unchanged → another
+ *                 revision → restore the first as a new revision (5B-V3)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -1240,4 +1244,205 @@ test("Q — Sequence + Animatic: 3A/3B Shot Clips, 3C Production Frame; reorder,
   await expect(item("3B").getByTestId("item-badges")).toContainText("Needs review");
   await seekTo((await startOf("3B")) + 10);
   await expect(player).toHaveAttribute("data-kind", "video");
+});
+
+test("R — Episode Edit: trims, still hold, opening title, cross dissolve, reorder, preview, saved revisions", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  const OPENING = "お嬢様、僕と結婚してください。";
+  const item = (code: string) => page.locator(`[data-testid="edit-item"][data-shot-code="${code}"]`);
+  const revision = async () => page.getByTestId("edit-revision").innerText();
+  const changed = async (action: () => Promise<void>) => {
+    const before = await revision();
+    await action();
+    await expect.poll(revision, { timeout: 30_000 }).not.toBe(before);
+  };
+  const player = page.getByTestId("edit-player");
+  const seekTo = (ms: number) =>
+    page.getByTestId("player-seek").evaluate((el, v) => {
+      const input = el as HTMLInputElement;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, String(v));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }, Math.round(ms));
+  const editor = (code: string) => item(code).getByTestId("item-editor");
+  const open = async (code: string) => {
+    if (!(await editor(code).evaluate((d) => (d as HTMLDetailsElement).open)))
+      await editor(code).locator("summary").click();
+  };
+  /** Trims a Shot Clip by 0.3 s at the head and 0.2 s at the tail (staying long enough for its placed takes). */
+  const trim = async (code: string) => {
+    await open(code);
+    const out = Number(await editor(code).getByTestId("trim-out").inputValue());
+    const inS = (Number(await editor(code).getByTestId("trim-in").inputValue()) + 0.3).toFixed(1);
+    const outS = (out - 0.2).toFixed(1);
+    await editor(code).getByTestId("trim-in").fill(inS);
+    await editor(code).getByTestId("trim-out").fill(outS);
+    await changed(() => editor(code).getByTestId("apply-trim").click());
+    await expect(item(code)).toHaveAttribute(
+      "data-duration-ms",
+      String(Math.round((Number(outS) - Number(inS)) * 1000)),
+    );
+    return { inMs: Math.round(Number(inS) * 1000), outMs: Math.round(Number(outS) * 1000) };
+  };
+
+  // ── the V2 rough cut from story Q ──
+  await page.goto(`${EP}/edit`);
+  await expect(page.getByTestId("episode-edit-persisted")).toBeVisible();
+  await expect(item("3A").getByTestId("sequence-line")).toContainText("3A — Shot Clip");
+  await expect(item("3B").getByTestId("sequence-line")).toContainText("3B — Shot Clip");
+  await expect(item("3C").getByTestId("sequence-line")).toContainText("3C — Production Frame");
+  await expect(page.getByTestId("edit-saved-state")).toContainText("Not saved yet");
+  const pinned3A = await item("3A").locator("video").first().getAttribute("src");
+
+  // the Production Frame of 3C before editing (verified unchanged at the end)
+  const url3C = await (async () => {
+    await page.goto(`${EP}/shots`);
+    await page.getByRole("link", { name: "3C", exact: true }).first().click();
+    await page.waitForURL(/\/shots\/[0-9a-f-]{36}/);
+    return page.url().split("?")[0]!;
+  })();
+  await page.goto(`${url3C}?section=production_frame`);
+  const pf3C = await page
+    .locator('[data-testid="shot-generated-still"][data-current="true"]')
+    .getAttribute("data-attempt");
+  await page.goto(`${EP}/edit`);
+
+  // ── trim 3A and 3B; hold 3C ──
+  const t3A = await trim("3A");
+  await trim("3B");
+  await open("3C");
+  await editor("3C").getByTestId("hold-duration").fill("4.5");
+  await changed(() => editor("3C").getByTestId("apply-hold").click());
+  await expect(item("3C")).toHaveAttribute("data-duration-ms", "4500");
+
+  // ── opening title ──
+  const opening = page.locator('[data-testid="title-slot"][data-placement="opening"]');
+  await opening.getByTestId("title-text").fill(OPENING);
+  await opening.getByTestId("title-subtitle").fill("Episode 1 — The Arrangement");
+  await opening.getByTestId("title-duration").fill("4");
+  await changed(() => opening.getByTestId("save-title").click());
+  await expect(opening).toHaveAttribute("data-exists", "true");
+  await expect(page.locator('[data-testid="edit-item"]').first()).toHaveAttribute("data-start-ms", "4000");
+
+  // ── reorder: 3C before 3B ──
+  await changed(() => item("3C").getByRole("button", { name: "Move 3C up" }).click());
+  const order = async () =>
+    (
+      await page
+        .locator('[data-testid="edit-item"]')
+        .evaluateAll((els) => els.map((e) => e.getAttribute("data-shot-code")))
+    ).filter((c) => /^3[ABC]$/.test(c ?? ""));
+  expect(await order()).toEqual(["3A", "3C", "3B"]);
+
+  // ── a cross dissolve 3C → 3B ──
+  const totalBefore = Number(await player.getAttribute("data-total-ms"));
+  const tf = item("3B").getByTestId("transition-form");
+  await tf.getByTestId("transition-kind").selectOption("dissolve");
+  await tf.getByTestId("transition-duration").fill("0.75");
+  await changed(() => tf.getByTestId("apply-transition").click());
+  await expect(item("3B")).toHaveAttribute("data-transition", "dissolve");
+  await expect(item("3B").getByTestId("transition-label")).toHaveText("Cross dissolve 0.75 s");
+  await expect(player).toHaveAttribute("data-total-ms", String(totalBefore - 750));
+  // the preview and the render manifest describe the same timeline
+  await expect(page.getByTestId("render-manifest")).toHaveAttribute(
+    "data-total-ms",
+    String(totalBefore - 750),
+  );
+  const start3B = Number(await item("3B").getAttribute("data-start-ms"));
+  const start3C = Number(await item("3C").getAttribute("data-start-ms"));
+  expect(start3B).toBe(start3C + 4500 - 750);
+
+  // ── preview from the beginning: the title, then the cut; scrub into the dissolve ──
+  await page.getByTestId("player-restart").click();
+  await expect(player).toHaveAttribute("data-segment", "title");
+  await expect(page.getByTestId("player-title-text")).toHaveText(OPENING);
+  await expect(page.getByTestId("player-title-subtitle")).toHaveText("Episode 1 — The Arrangement");
+  await page.getByTestId("player-play").click();
+  await expect(player).toHaveAttribute("data-playing", "true");
+  await page.getByTestId("player-play").click();
+  await expect(player).toHaveAttribute("data-playing", "false");
+  await seekTo(start3B + 375); // halfway through the dissolve
+  await expect(player).toHaveAttribute("data-item-id", (await item("3B").getAttribute("data-item-id"))!);
+  await expect(player).toHaveAttribute(
+    "data-outgoing-item-id",
+    (await item("3C").getAttribute("data-item-id"))!,
+  );
+  await expect(player).toHaveAttribute("data-mix", "0.50");
+  // selecting an item moves the playhead to it
+  await item("3A").getByTestId("seek-item").click();
+  await expect(player).toHaveAttribute("data-item-id", (await item("3A").getAttribute("data-item-id"))!);
+  await expect(player).toHaveAttribute("data-time-ms", (await item("3A").getAttribute("data-start-ms"))!);
+  await expect(player).toHaveAttribute("data-video-src-ms", String(t3A.inMs)); // the trim's in point
+
+  // ── save revision → refresh → the same state ──
+  await page.getByTestId("revision-label").fill("A — first cut");
+  await page.getByTestId("save-revision").click();
+  await expect(page.getByTestId("edit-saved-state")).toHaveAttribute("data-saved-as", /^\d+$/, {
+    timeout: 30_000,
+  });
+  const savedA = await page.getByTestId("edit-saved-state").getAttribute("data-saved-as");
+  const revA = await revision();
+  const fingerprintA = await page.getByTestId("render-manifest").getAttribute("data-state-fingerprint");
+  await page.reload();
+  expect(await revision()).toBe(revA);
+  await expect(page.getByTestId("edit-saved-state")).toHaveAttribute("data-saved-as", savedA!);
+  await expect(page.getByTestId("render-manifest")).toHaveAttribute("data-state-fingerprint", fingerprintA!);
+  expect(await order()).toEqual(["3A", "3C", "3B"]);
+  await expect(item("3B")).toHaveAttribute("data-transition", "dissolve");
+  await expect(item("3C")).toHaveAttribute("data-duration-ms", "4500");
+  await expect(opening).toHaveAttribute("data-exists", "true");
+  await expect(item("3A").locator("video").first()).toHaveAttribute("src", pinned3A!);
+
+  // ── the source Shot Clip is still the full clip on the Shot page; the Production Frame is unchanged ──
+  const url3A = await (async () => {
+    await page.goto(`${EP}/shots`);
+    await page.getByRole("link", { name: "3A", exact: true }).first().click();
+    await page.waitForURL(/\/shots\/[0-9a-f-]{36}/);
+    return page.url().split("?")[0]!;
+  })();
+  await page.goto(`${url3A}?section=animate`);
+  const shotVideo = page.getByTestId("shot-clip-current").getByTestId("shot-clip-video");
+  await expect(shotVideo).toHaveAttribute("src", pinned3A!); // the same immutable Asset the edit pins
+  await expect
+    .poll(
+      async () =>
+        shotVideo.evaluate((v: HTMLVideoElement) => (Number.isFinite(v.duration) ? v.duration * 1000 : -1)),
+      {
+        timeout: 30_000,
+      },
+    )
+    .toBeGreaterThanOrEqual(t3A.outMs); // the full clip (the edit plays only its trimmed interval)
+  await page.goto(`${url3C}?section=production_frame`);
+  await expect(page.locator('[data-testid="shot-generated-still"][data-current="true"]')).toHaveAttribute(
+    "data-attempt",
+    pf3C!,
+  );
+
+  // ── another revision, then restore A (a NEW revision; A itself never changes) ──
+  await page.goto(`${EP}/edit`);
+  await opening.getByTestId("title-duration").fill("3");
+  await changed(() => opening.getByTestId("save-title").click());
+  await expect(page.getByTestId("edit-saved-state")).toContainText("Unsaved changes");
+  await page.getByTestId("revision-label").fill("B — shorter title");
+  await page.getByTestId("save-revision").click();
+  const savedB = String(Number(savedA) + 1);
+  await expect(page.getByTestId("edit-saved-state")).toHaveAttribute("data-saved-as", savedB, {
+    timeout: 30_000,
+  });
+  await expect(page.locator(`[data-testid="saved-revision"][data-number="${savedB}"]`)).toHaveAttribute(
+    "data-current",
+    "true",
+  );
+  const rowA = page.locator(`[data-testid="saved-revision"][data-number="${savedA}"]`);
+  await expect(rowA).toHaveAttribute("data-current", "false");
+  await changed(() => rowA.getByTestId("restore-revision").click());
+  const savedC = String(Number(savedA) + 2);
+  await expect(page.getByTestId("edit-saved-state")).toHaveAttribute("data-saved-as", savedC);
+  await expect(page.locator(`[data-testid="saved-revision"][data-number="${savedC}"]`)).toContainText(
+    `restored from #${savedA}`,
+  );
+  await expect(rowA).toHaveAttribute("data-current", "true"); // the same state as A again
+  await expect(opening.getByTestId("title-duration")).toHaveValue("4");
+  await expect(page.getByTestId("render-manifest")).toHaveAttribute("data-state-fingerprint", fingerprintA!);
 });

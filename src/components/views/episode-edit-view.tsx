@@ -6,7 +6,8 @@ import type { Episode, ProjectData } from "@/domain/schemas";
 import type { EpisodeEditPage } from "@/server/episode-edit-page";
 import { createEpisodeEdit, resetEditToStoryOrder, useCurrentShotMedia } from "@/server/episode-edit-actions";
 import { AddShotPanel, ItemEditor, ItemOrderControls, type EditTarget } from "./episode-edit-controls";
-import { EditPlayer } from "./episode-edit-player";
+import { EditPlayer, SeekButton } from "./episode-edit-player";
+import { ManifestPanel, RevisionPanel, TitlePanel, TransitionControl } from "./episode-edit-v3-controls";
 import type { CutMarkerVM } from "./cut-marker-model";
 import type { BadgeVM, RowVM, RunVM, SummaryVM } from "./episode-edit-model";
 import { SEQUENCE_MEDIA_LABEL } from "@/domain/edit/sequence";
@@ -170,9 +171,13 @@ export function EpisodeEditView({
         </div>
         {/* keyed on the revision: a saved change rebuilds playback from the new edit (paused at 0) */}
         <EditPlayer key={page.revision} playback={page.playback} />
+        {/* 5B-V3: saved revisions, title cards and the render manifest of exactly this state */}
+        <RevisionPanel target={target} revisions={page.revisions} savedAs={page.savedAs} />
+        <TitlePanel target={target} titles={page.titles} />
         <Runs runs={page.runs} />
         <Rows rows={page.rows} target={target} continuity={`${base}/continuity`} />
         <AddShotPanel target={target} addable={page.addable} items={page.rows.length} />
+        <ManifestPanel manifest={page.manifest} />
       </div>
     </div>
   );
@@ -275,6 +280,7 @@ function Row({ row, target }: { row: RowVM; target?: EditTarget }) {
       data-item-id={target ? row.key : undefined}
       data-start-ms={row.startMs}
       data-duration-ms={row.durationMs}
+      data-transition={row.transition?.kind ?? ""}
       className="grid grid-cols-[176px_1fr] gap-3 border border-line bg-panel p-2.5 data-[playing=true]:border-accent data-[playing=true]:bg-accent/5"
     >
       <div>
@@ -326,7 +332,17 @@ function Row({ row, target }: { row: RowVM; target?: EditTarget }) {
           <span>Starts {row.start}</span>
           <span>Duration {row.duration}</span>
           {row.planned ? <span>Planned {row.planned}</span> : null}
+          {target ? <SeekButton ms={row.startMs} label={`Preview ${row.shotCode} from its start`} /> : null}
         </div>
+        {/* 5B-V3: the transition INTO this item */}
+        {target && row.transition ? (
+          <TransitionControl
+            target={target}
+            itemId={row.key}
+            shotCode={row.shotCode}
+            transition={row.transition}
+          />
+        ) : null}
         <div className="text-[11.5px]">
           <span>{p.source}</span>
           {p.details.length ? <span className="text-muted"> · {p.details.join(" · ")}</span> : null}

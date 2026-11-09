@@ -20,14 +20,19 @@ const fmt = (ms: number) => {
  * write nothing. The parent keys this component on the edit's revision, so a saved change disposes the old player
  * (media stopped) and a new one starts paused at 0 from the new edit: a player never plays a stale structure.
  */
+/** 5B-V3: the editor asks the player to show an item (or any timeline position) by this window event. */
+export const EDIT_SEEK_EVENT = "prism:edit-seek";
+
 export function EditPlayer({ playback }: { playback: PlaybackVM }) {
   const { plan } = playback;
   const videoRef = useRef<HTMLVideoElement>(null);
+  const underRef = useRef<HTMLVideoElement>(null);
   const controller = useRef<RoughCutController | null>(null);
   const [snap, setSnap] = useState<PlaybackSnapshot | null>(null);
 
   useEffect(() => {
     const el = videoRef.current;
+    const under = underRef.current;
     if (!el) return;
     const c = new RoughCutController(
       plan,
@@ -36,13 +41,21 @@ export function EditPlayer({ playback }: { playback: PlaybackVM }) {
         requestFrame: (cb) => requestAnimationFrame(() => cb()),
         cancelFrame: (id) => cancelAnimationFrame(id),
         video: new DomMediaPort(el),
+        under: under ? new DomMediaPort(under) : undefined,
         createAudio: audioPort,
       },
       setSnap,
     );
     controller.current = c;
     c.seek(0);
+    // 5B-V3: selecting an item in the editor moves the playhead to it (no playback starts without a click)
+    const onSeek = (e: Event) => {
+      const ms = (e as CustomEvent<number>).detail;
+      if (typeof ms === "number") c.seek(ms);
+    };
+    window.addEventListener(EDIT_SEEK_EVENT, onSeek);
     return () => {
+      window.removeEventListener(EDIT_SEEK_EVENT, onSeek);
       c.dispose();
       controller.current = null;
     };
@@ -54,6 +67,21 @@ export function EditPlayer({ playback }: { playback: PlaybackVM }) {
   const pictureFailed = item ? item.unavailable || (snap?.failedPictures.has(item.itemId) ?? false) : false;
   const showVideo = item?.kind === "video" && Boolean(item.pictureUrl) && !pictureFailed;
   const head = playheadLabel(plan, time);
+  // 5B-V3: a dissolve shows the outgoing picture under the incoming one at (1 − mix)
+  const outgoing = snap?.outgoing ?? null;
+  const mix = snap?.mix ?? 1;
+  const outgoingFailed = outgoing
+    ? outgoing.unavailable || (snap?.failedPictures.has(outgoing.itemId) ?? false)
+    : false;
+  const showUnderVideo = outgoing?.kind === "video" && Boolean(outgoing.pictureUrl) && !outgoingFailed;
+  const underStill =
+    outgoing &&
+    (outgoing.kind === "production_frame" || outgoing.kind === "storyboard_frame") &&
+    outgoing.pictureUrl &&
+    !outgoingFailed
+      ? outgoing.pictureUrl
+      : null;
+  const title = snap?.title ?? null;
 
   // the edit list follows the playhead
   useEffect(() => {
@@ -77,53 +105,103 @@ export function EditPlayer({ playback }: { playback: PlaybackVM }) {
       data-video-url={showVideo ? (item?.pictureUrl ?? "") : ""}
       data-video-muted={snap?.videoMuted ? "true" : "false"}
       data-placements={(snap?.placements ?? []).map((p) => `${p.key}@${Math.round(p.sourceMs)}`).join(",")}
+      data-segment={title ? "title" : item ? "item" : ""}
+      data-title={title?.placement ?? ""}
+      data-outgoing-item-id={outgoing?.itemId ?? ""}
+      data-mix={mix.toFixed(2)}
+      data-total-ms={plan.totalMs}
     >
       <header className="flex items-center justify-between border-b border-line px-3 py-2">
         <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Watch this edit</h2>
         <span className="text-[11px] text-faint">
-          Rough-sequence preview of the saved edit (no render, no transitions)
+          Preview of the saved edit: trims, holds, titles and cross dissolves (no render)
         </span>
       </header>
       <div className="relative aspect-video max-h-[360px] w-full overflow-hidden bg-black">
+        {/* 5B-V3: the outgoing picture of a cross dissolve, under the incoming one */}
         <video
-          ref={videoRef}
+          ref={underRef}
           playsInline
           preload="auto"
-          className={showVideo ? "h-full w-full object-contain" : "hidden"}
-          data-testid="player-video"
+          muted
+          className={showUnderVideo ? "absolute inset-0 h-full w-full object-contain" : "hidden"}
+          data-testid="player-under-video"
         />
-        {!showVideo ? (
-          item &&
-          (item.kind === "production_frame" || item.kind === "storyboard_frame") &&
-          item.pictureUrl &&
-          !pictureFailed ? (
-            // eslint-disable-next-line @next/next/no-img-element -- private asset route, not a static image
-            <img
-              src={item.pictureUrl}
-              alt={labels?.kindLabel ?? ""}
-              className="h-full w-full object-contain"
-            />
-          ) : (
+        {!showUnderVideo && underStill ? (
+          // eslint-disable-next-line @next/next/no-img-element -- private asset route, not a static image
+          <img src={underStill} alt="" className="absolute inset-0 h-full w-full object-contain" />
+        ) : null}
+        <div
+          className="absolute inset-0"
+          style={outgoing ? { opacity: mix } : undefined}
+          data-testid="player-incoming"
+        >
+          <video
+            ref={videoRef}
+            playsInline
+            preload="auto"
+            className={showVideo ? "h-full w-full object-contain" : "hidden"}
+            data-testid="player-video"
+          />
+          {!showVideo ? (
+            item &&
+            (item.kind === "production_frame" || item.kind === "storyboard_frame") &&
+            item.pictureUrl &&
+            !pictureFailed ? (
+              // eslint-disable-next-line @next/next/no-img-element -- private asset route, not a static image
+              <img
+                src={item.pictureUrl}
+                alt={labels?.kindLabel ?? ""}
+                className="h-full w-full object-contain"
+              />
+            ) : (
+              <div
+                className="flex h-full w-full flex-col items-center justify-center bg-[repeating-linear-gradient(135deg,#121215,#121215_14px,#0e0e11_14px,#0e0e11_28px)]"
+                data-testid="player-slate"
+              >
+                <div className="font-mono text-2xl text-faint">
+                  {labels?.shotCode ?? (snap?.ended ? "End" : "—")}
+                </div>
+                <div className="mt-1 text-muted">
+                  {snap?.ended
+                    ? "End of edit"
+                    : !item
+                      ? ""
+                      : item.kind === "none"
+                        ? "No picture"
+                        : pictureFailed || !item.pictureUrl
+                          ? `Source unavailable (${labels?.kindLabel ?? item.kind})`
+                          : ""}
+                </div>
+              </div>
+            )
+          ) : null}
+        </div>
+        {title ? (
+          <div
+            className="absolute inset-0 flex flex-col items-center justify-center bg-black px-6 text-center"
+            data-testid="player-title"
+            data-placement={title.placement}
+          >
             <div
-              className="flex h-full w-full flex-col items-center justify-center bg-[repeating-linear-gradient(135deg,#121215,#121215_14px,#0e0e11_14px,#0e0e11_28px)]"
-              data-testid="player-slate"
+              className={
+                title.style === "film"
+                  ? "font-serif text-[28px] leading-snug tracking-[0.04em] text-fg"
+                  : "text-[22px] font-semibold text-fg"
+              }
+              data-testid="player-title-text"
             >
-              <div className="font-mono text-2xl text-faint">
-                {labels?.shotCode ?? (snap?.ended ? "End" : "—")}
-              </div>
-              <div className="mt-1 text-muted">
-                {snap?.ended
-                  ? "End of edit"
-                  : !item
-                    ? ""
-                    : item.kind === "none"
-                      ? "No picture"
-                      : pictureFailed || !item.pictureUrl
-                        ? `Source unavailable (${labels?.kindLabel ?? item.kind})`
-                        : ""}
-              </div>
+              {title.title}
             </div>
-          )
+            {title.subtitle ? (
+              <div
+                className="mt-3 text-[13px] uppercase tracking-[0.18em] text-muted"
+                data-testid="player-title-subtitle"
+              >
+                {title.subtitle}
+              </div>
+            ) : null}
+          </div>
         ) : null}
         {item ? (
           <div className="absolute left-2 top-2 flex flex-wrap gap-1.5 font-mono text-[11px]">
@@ -224,5 +302,23 @@ export function EditPlayer({ playback }: { playback: PlaybackVM }) {
         ) : null}
       </div>
     </section>
+  );
+}
+
+/** 5B-V3: moves the player to a timeline position (an item's start); playback starts only from the player. */
+export function SeekButton({ ms, label }: { ms: number; label: string }) {
+  return (
+    <button
+      type="button"
+      className="text-[11px] text-accent hover:underline"
+      onClick={() => {
+        window.dispatchEvent(new CustomEvent(EDIT_SEEK_EVENT, { detail: ms }));
+        document.getElementById("edit-player")?.scrollIntoView({ block: "nearest" });
+      }}
+      aria-label={label}
+      data-testid="seek-item"
+    >
+      ▸ Preview from here
+    </button>
   );
 }

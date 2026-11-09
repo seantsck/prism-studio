@@ -4,9 +4,14 @@ import type { CutSettlementClock } from "@/domain/continuity/sequence-automation
 import type { EditRate } from "@/domain/edit/edit-rate";
 import type {
   AudioPlacement,
+  EditItem,
+  EditTitleCard,
   EpisodeEdit,
   PlacementBasis,
   SourceAudio,
+  TitlePlacement,
+  TitleStyle,
+  TransitionKind,
   VisualSource,
 } from "@/domain/edit/model";
 
@@ -58,6 +63,12 @@ export interface NewEditItem {
  *   set_source_audio   the clip's own audio track: muted / included
  *   set_performance    replaces the item's placements (and their basis); an empty list is explicit silence
  *   clear_performance  explicit silence: removes every placement of the item
+ *   set_transition     5B-V3: the transition INTO an item: cut, or a cross dissolve of `durationMs` (validated against
+ *                      both neighbours); bound to the predecessor the person saw (`expectedPredecessorId`)
+ *   set_title          5B-V3: creates or replaces the opening / closing title card
+ *   remove_title       5B-V3: removes a title card
+ *   restore            5B-V3: the items and titles of a saved revision become the edit's state again (a NEW revision;
+ *                      the saved one is never changed). Issued by `restoreRevision`, not by a request.
  */
 export type EditOp =
   | { op: "add"; item: NewEditItem; atPosition: number }
@@ -87,7 +98,25 @@ export type EditOp =
       scope: ContinuityCategory[];
       note: string;
     }
-  | { op: "clear_cut_intent"; itemId: string };
+  | { op: "clear_cut_intent"; itemId: string }
+  | {
+      op: "set_transition";
+      itemId: string;
+      expectedPredecessorId: string;
+      kind: TransitionKind;
+      /** dissolve only */
+      durationMs?: number;
+    }
+  | {
+      op: "set_title";
+      placement: TitlePlacement;
+      title: string;
+      subtitle: string;
+      durationMs: number;
+      style: TitleStyle;
+    }
+  | { op: "remove_title"; placement: TitlePlacement }
+  | { op: "restore"; items: EditItem[]; titles: EditTitleCard[] };
 
 export interface CreateEpisodeEditInput {
   projectId: string;
@@ -114,6 +143,55 @@ export interface DeleteEpisodeEditInput {
   expectedRevision: number;
 }
 
+/**
+ * 5B-V3: a SAVED revision of an edit: an immutable snapshot of its editorial state (items with their pinned media,
+ * trims, holds, placements, transitions, cut intents; title cards) at the edit's working revision `editRevision`.
+ * Numbered 1, 2, … per edit. Never updated; it goes only with its edit (or Project).
+ */
+export interface SavedEditRevision {
+  id: string;
+  editId: string;
+  projectId: string;
+  /** 1, 2, … per edit */
+  number: number;
+  /** the edit's working revision counter when it was saved */
+  editRevision: number;
+  label: string;
+  /** the editorial state, exactly as it was */
+  snapshot: EditSnapshot;
+  /** `editStateFingerprint(snapshot)`: equal fingerprints = the same edit */
+  fingerprint: string;
+  /** the saved revision this one restored, when it was made by a restore */
+  restoredFromId: string | null;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export interface EditSnapshot {
+  editRate: EpisodeEdit["editRate"];
+  items: EditItem[];
+  titles: EditTitleCard[];
+}
+
+export interface SaveEditRevisionInput {
+  editId: string;
+  projectId: string;
+  /** the working revision the person saw: the snapshot is exactly that state, or nothing is saved */
+  expectedRevision: number;
+  label: string;
+  userId: string | null;
+  now: string;
+}
+
+export interface RestoreEditRevisionInput {
+  editId: string;
+  projectId: string;
+  expectedRevision: number;
+  revisionId: string;
+  userId: string | null;
+  now: string;
+}
+
 export interface EpisodeEditRepository {
   get(projectId: string, editId: string): Promise<EpisodeEdit | null>;
   /** The Episode's edit (Phase 2I.1: at most one). */
@@ -133,6 +211,20 @@ export interface EpisodeEditRepository {
   getCutSettlementClock(projectId: string, editId: string): Promise<CutSettlementClock>;
   /** Whether any edit (of any project the caller owns) pins this Asset. */
   usesAsset(assetId: string): Promise<boolean>;
+  /**
+   * 5B-V3: saves the edit's CURRENT state (at `expectedRevision`) as the next numbered revision. The working edit is
+   * not changed. Refused when the edit moved on, or when the state is already the latest saved revision.
+   */
+  saveRevision(input: SaveEditRevisionInput): Promise<SavedEditRevision>;
+  /** 5B-V3: every saved revision of an edit, oldest first. */
+  listRevisions(projectId: string, editId: string): Promise<SavedEditRevision[]>;
+  /**
+   * 5B-V3: makes a saved revision's state current as ONE unit: a `restore` (the edit's revision + 1, every source
+   * re-checked) and a new saved revision recording it (`restoredFromId`). The restored revision is never changed.
+   */
+  restoreRevision(
+    input: RestoreEditRevisionInput,
+  ): Promise<{ edit: EpisodeEdit; revision: SavedEditRevision }>;
 }
 
 export const EDIT_REVISION_CONFLICT_MESSAGE = "The edit changed in the meantime. Reload and try again.";
@@ -142,3 +234,5 @@ export const SHOT_NOT_IN_EPISODE_MESSAGE = "That Shot is not part of this edit's
 export const REPLACEMENT_CHANGED_MESSAGE =
   "The replacement changed in the meantime. Reload to see the current replacement.";
 export const IN_EDIT_MESSAGE = "It is used in the Episode edit. Remove it from the edit first.";
+export const REVISION_ALREADY_SAVED_MESSAGE = "This edit is already saved as the latest revision.";
+export const REVISION_NOT_FOUND_MESSAGE = "That saved revision no longer exists.";

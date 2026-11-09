@@ -2,7 +2,26 @@ import { buildEpisodeCuts } from "@/domain/continuity/sequence";
 import { formatDuration, formatSeconds } from "@/domain/duration";
 import { editRateLabel, type EditRate } from "@/domain/edit/edit-rate";
 import { VIDEO_SOURCE_VIOLATION_TEXT, type EditMediaFacts } from "@/domain/edit/eligibility";
-import { VISUAL_KIND_LABEL, type EditItem, type EpisodeEdit, type VisualKind } from "@/domain/edit/model";
+import type { SavedEditRevision } from "@/data/episode-edit-repository";
+import {
+  DISSOLVE_DEFAULT_MS,
+  DISSOLVE_MIN_MS,
+  itemDurationMs,
+  maxDissolveMs,
+  TITLE_DEFAULT_MS,
+  TITLE_PLACEMENTS,
+  TRANSITION_LABEL,
+  VISUAL_KIND_LABEL,
+  type EditItem,
+  type EpisodeEdit,
+  type TitlePlacement,
+  type TitleStyle,
+  type TransitionKind,
+  type VisualKind,
+} from "@/domain/edit/model";
+import { buildRenderManifest, manifestFingerprint } from "@/domain/edit/render-manifest";
+import { editStateFingerprint } from "@/domain/edit/revision";
+import { editTimeline, type EditTimeline } from "@/domain/edit/timeline";
 import {
   VISUAL_PROPOSAL_TEXT,
   type EditProposal,
@@ -18,7 +37,7 @@ import {
   type LineageStep,
 } from "@/domain/edit/view";
 import { buildPlaybackPlan, type PlaybackPlan } from "@/domain/edit/playback";
-import { currentMediaChanges, isStoryOrder } from "@/domain/edit/sequence";
+import { currentMediaChanges, isStoryOrder, SEQUENCE_MEDIA_LABEL } from "@/domain/edit/sequence";
 import type { ProjectData } from "@/domain/schemas";
 import { assetUrl } from "@/lib/utils";
 import { cutMarker, type CutMarkerVM } from "./cut-marker-model";
@@ -100,6 +119,63 @@ export interface RowVM {
    * linking to its Continuity Supervisor row.
    */
   incomingCut?: CutMarkerVM;
+  /** 5B-V3: the transition INTO this item (persisted edit only, never the first item) */
+  transition?: TransitionVM;
+}
+
+/** 5B-V3: the transition control of one cut, with the longest dissolve its two items allow. */
+export interface TransitionVM {
+  predecessorId: string;
+  predecessorCode: string;
+  kind: TransitionKind;
+  label: string;
+  /** the dissolve duration (s) when one is set, else the default */
+  durationS: string;
+  /** the longest dissolve the two neighbours allow (s); below the minimum = only a cut fits */
+  maxS: string;
+  dissolveFits: boolean;
+}
+
+/** 5B-V3: one title card slot (opening / closing): its values when it exists, the defaults otherwise. */
+export interface TitleSlotVM {
+  placement: TitlePlacement;
+  exists: boolean;
+  title: string;
+  subtitle: string;
+  durationS: string;
+  style: TitleStyle;
+  start: string;
+}
+
+/** 5B-V3: one saved revision, newest last. */
+export interface SavedRevisionVM {
+  id: string;
+  number: number;
+  label: string;
+  savedAt: string;
+  fingerprint: string;
+  /** the working edit is exactly this revision */
+  current: boolean;
+  restoredFrom: number | null;
+}
+
+/** 5B-V3: the deterministic render manifest of this edit state (the V4 input), summarised plus its exact JSON. */
+export interface ManifestVM {
+  version: string;
+  fingerprint: string;
+  stateFingerprint: string;
+  totalMs: number;
+  total: string;
+  overlap: string;
+  segments: Array<{
+    order: number;
+    kind: "title" | "shot";
+    label: string;
+    start: string;
+    duration: string;
+    next: string;
+  }>;
+  json: string;
 }
 
 export interface RunVM {
@@ -146,6 +222,14 @@ export interface EditPageVM {
   inStoryOrder: boolean;
   /** 5B-V2: items whose pinned picture is not their Shot's current Shot Clip / canonical Production Frame */
   currentMediaChanges: number;
+  /** 5B-V3: the title card slots */
+  titles: TitleSlotVM[];
+  /** 5B-V3: saved revisions (oldest first) and which one the working edit is */
+  revisions: SavedRevisionVM[];
+  /** the saved revision the working edit equals, else null (= unsaved changes, or nothing saved yet) */
+  savedAs: number | null;
+  /** 5B-V3: the render manifest of exactly this state */
+  manifest: ManifestVM;
 }
 
 /** What the rough-sequence player needs: the pure plan plus display labels (no other facts). */
@@ -540,8 +624,85 @@ function itemBadges(iv: ItemView): { badges: BadgeVM[]; problems: string[] } {
   return { badges, problems };
 }
 
+const secondsText = (ms: number) => (ms / 1000).toFixed(3).replace(/\.?0+$/, "") || "0";
+
+function transitionOf(
+  edit: EpisodeEdit,
+  index: number,
+  codeOf: (shotId: string) => string,
+): TransitionVM | undefined {
+  if (index === 0) return undefined;
+  const item = edit.items[index]!;
+  const prev = edit.items[index - 1]!;
+  const t =
+    item.incomingTransition && item.incomingTransition.fromItemId === prev.id
+      ? item.incomingTransition
+      : null;
+  const max = maxDissolveMs(itemDurationMs(prev.visual), itemDurationMs(item.visual));
+  return {
+    predecessorId: prev.id,
+    predecessorCode: codeOf(prev.shotId),
+    kind: t ? "dissolve" : "cut",
+    label: t ? `${TRANSITION_LABEL.dissolve} ${secondsText(t.durationMs)} s` : TRANSITION_LABEL.cut,
+    durationS: secondsText(t ? t.durationMs : Math.min(DISSOLVE_DEFAULT_MS, Math.max(max, DISSOLVE_MIN_MS))),
+    maxS: secondsText(max),
+    dissolveFits: max >= DISSOLVE_MIN_MS,
+  };
+}
+
+function titleSlots(edit: EpisodeEdit, timeline: EditTimeline): TitleSlotVM[] {
+  return TITLE_PLACEMENTS.map((placement) => {
+    const t = (edit.titles ?? []).find((x) => x.placement === placement);
+    const seg = timeline.titles.find((x) => x.placement === placement);
+    return {
+      placement,
+      exists: Boolean(t),
+      title: t?.title ?? "",
+      subtitle: t?.subtitle ?? "",
+      durationS: secondsText(t?.durationMs ?? TITLE_DEFAULT_MS),
+      style: t?.style ?? "film",
+      start: seg ? formatDuration(seg.startMs) : "",
+    };
+  });
+}
+
+function manifestOf(data: ProjectData, edit: EpisodeEdit): ManifestVM {
+  const m = buildRenderManifest(data, edit);
+  const timeline = editTimeline(edit);
+  return {
+    version: m.version,
+    fingerprint: manifestFingerprint(m),
+    stateFingerprint: m.edit.stateFingerprint,
+    totalMs: m.totalMs,
+    total: formatDuration(m.totalMs),
+    overlap: secondsText(timeline.overlapMs),
+    segments: m.segments.map((s) => ({
+      order: s.order,
+      kind: s.kind,
+      label:
+        s.kind === "title"
+          ? `${s.placement === "opening" ? "Opening" : "Closing"} title — ${s.text.title}`
+          : `${s.shotCode ?? "?"} — ${SEQUENCE_MEDIA_LABEL[s.media.kind]}${
+              s.sourceInMs != null ? ` ${secondsText(s.sourceInMs)}–${secondsText(s.sourceOutMs!)} s` : ""
+            }`,
+      start: formatDuration(s.startMs),
+      duration: formatDuration(s.durationMs),
+      next:
+        s.transitionToNext.kind === "dissolve"
+          ? `${TRANSITION_LABEL.dissolve} ${secondsText(s.transitionToNext.durationMs)} s`
+          : TRANSITION_LABEL.cut,
+    })),
+    json: JSON.stringify(m, null, 2),
+  };
+}
+
 /** The persisted edit: authoritative editorial intent; upstream changes only as facts. */
-export function editPage(data: ProjectData, edit: EpisodeEdit, media: EditMediaFacts): EditPageVM {
+export function editPage(
+  data: ProjectData,
+  edit: EpisodeEdit,
+  media: EditMediaFacts,
+  savedRevisions: readonly SavedEditRevision[] = [],
+): EditPageVM {
   const view = buildEpisodeEditView(data, edit, media);
   const runs = runsOf(data, view);
   // 3A.4B: the same cut projection the Continuity Supervisor shows (cut i joins item i and item i + 1)
@@ -556,8 +717,29 @@ export function editPage(data: ProjectData, edit: EpisodeEdit, media: EditMediaF
       notes: [],
       editor: itemEditor(data, edit, iv, media),
       ...(incoming ? { incomingCut: cutMarker(incoming) } : {}),
+      ...(iv.index > 0
+        ? {
+            transition: transitionOf(
+              edit,
+              iv.index,
+              (shotId) => data.shots.find((s) => s.id === shotId)?.shotCode ?? "?",
+            ),
+          }
+        : {}),
     };
   });
+  const stateFingerprint = editStateFingerprint(edit);
+  const numberOf = new Map(savedRevisions.map((r) => [r.id, r.number]));
+  const revisions = savedRevisions.map<SavedRevisionVM>((r) => ({
+    id: r.id,
+    number: r.number,
+    label: r.label,
+    savedAt: r.createdAt.slice(0, 16).replace("T", " "),
+    fingerprint: r.fingerprint.slice(0, 10),
+    current: r.fingerprint === stateFingerprint,
+    restoredFrom: r.restoredFromId ? (numberOf.get(r.restoredFromId) ?? null) : null,
+  }));
+  const savedAs = [...revisions].reverse().find((r) => r.current)?.number ?? null;
   const badges: BadgeVM[] = [];
   if (view.orderDiffersFromSequence) badges.push({ label: "Order differs from Sequence", tone: "warn" });
   if (view.notInEditShotIds.length)
@@ -578,6 +760,10 @@ export function editPage(data: ProjectData, edit: EpisodeEdit, media: EditMediaF
     playback: playbackOf(data, edit, rows),
     inStoryOrder: isStoryOrder(data, edit),
     currentMediaChanges: currentMediaChanges(data, edit, media).length,
+    titles: titleSlots(edit, editTimeline(edit)),
+    revisions,
+    savedAs,
+    manifest: manifestOf(data, edit),
   };
 }
 

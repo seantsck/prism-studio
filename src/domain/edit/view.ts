@@ -6,7 +6,7 @@ import { parseGenerationPurpose, type GenerationPurpose } from "@/domain/generat
 import { PRODUCTION_FRAME_REFERENCE } from "@/domain/generated-production-frame";
 import { productionFrameFreshness, type ProductionFrameFreshness } from "@/domain/production-frame";
 import type { ProjectData } from "@/domain/schemas";
-import { frameAtMs, type EditRate } from "./edit-rate";
+import type { EditRate } from "./edit-rate";
 import {
   attemptAssetRole,
   itemSourceViolations,
@@ -15,6 +15,7 @@ import {
 } from "./eligibility";
 import { itemDurationMs, type EditItem, type EpisodeEdit, type VisualSource } from "./model";
 import { approvedClipAttempt, preferredClipAsset } from "./proposal";
+import { editTimeline } from "./timeline";
 
 /**
  * Phase 2I.1 read side: where every item sits, which Scene runs the order forms, and what is true NOW about each
@@ -34,25 +35,24 @@ export interface ItemTiming {
 }
 
 /**
- * Contiguous placement: the first item starts at 0, each next item at the previous end, all in exact integer ms.
- * Frames are derived per absolute position, so the frame of any instant is the same however the edit before it is cut:
- * there is no per-item rounding to accumulate.
+ * Where each item sits, from THE canonical timeline (timeline.ts): after the opening title when there is one, each
+ * item at the previous end minus its incoming dissolve, exact integer ms. Frames are derived per absolute position,
+ * so the frame of any instant is the same however the edit before it is cut: no per-item rounding accumulates.
  */
-export function editTiming(items: readonly Pick<EditItem, "visual">[], rate: EditRate) {
-  let cursor = 0;
-  const timings: ItemTiming[] = items.map((item) => {
-    const durationMs = itemDurationMs(item.visual);
-    const t = {
-      startMs: cursor,
-      endMs: cursor + durationMs,
-      durationMs,
-      startFrame: frameAtMs(cursor, rate),
-      endFrame: frameAtMs(cursor + durationMs, rate),
-    };
-    cursor = t.endMs;
-    return t;
-  });
-  return { timings, totalMs: cursor, totalFrames: frameAtMs(cursor, rate) };
+export function editTiming(
+  items: readonly (Pick<EditItem, "visual"> & Partial<Pick<EditItem, "id" | "incomingTransition">>)[],
+  rate: EditRate,
+  titles?: EpisodeEdit["titles"],
+) {
+  const timeline = editTimeline({ items: items as EditItem[], titles, editRate: rate });
+  const timings: ItemTiming[] = timeline.items.map((t) => ({
+    startMs: t.startMs,
+    endMs: t.endMs,
+    durationMs: t.durationMs,
+    startFrame: t.startFrame,
+    endFrame: t.endFrame,
+  }));
+  return { timings, totalMs: timeline.totalMs, totalFrames: timeline.totalFrames };
 }
 
 // ───────────────────────── Scene runs ─────────────────────────
@@ -333,7 +333,7 @@ export function buildEpisodeEditView(
   edit: EpisodeEdit,
   media: EditMediaFacts,
 ): EpisodeEditView {
-  const { timings, totalMs, totalFrames } = editTiming(edit.items, edit.editRate);
+  const { timings, totalMs, totalFrames } = editTiming(edit.items, edit.editRate, edit.titles);
   const shots = new Map(data.shots.map((s) => [s.id, s]));
   const episodeShots = data.shots.filter((s) => s.episodeId === edit.episodeId).sort(shotOrder(data));
   const inEdit = new Set(edit.items.map((i) => i.shotId));
