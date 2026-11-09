@@ -5,11 +5,14 @@ import type {
   StoryAnalysisResult,
   StoryIntelligenceProvider,
   StoryModel,
+  ShotDirectionCallResult,
+  ShotDirectionRequest,
   ShotPlanCallResult,
   ShotPlanRequest,
   WritingCallResult,
   WritingRequest,
 } from "../provider";
+import { fakeDirection } from "./fake-director";
 import { fakeShotPlan } from "./fake-planner";
 import { fakeWriting } from "./fake-writer";
 
@@ -173,6 +176,8 @@ export class FakeStoryProvider implements StoryIntelligenceProvider {
   readonly writeCalls: WritingRequest[] = [];
   /** Every Shot planning request, in full. */
   readonly planCalls: ShotPlanRequest[] = [];
+  /** Every Storyboard Direction request, in full. */
+  readonly directCalls: ShotDirectionRequest[] = [];
 
   constructor(
     private readonly opts: {
@@ -183,6 +188,8 @@ export class FakeStoryProvider implements StoryIntelligenceProvider {
       writeAnswers?: unknown[];
       /** Scripted raw SHOT PLAN answers, consumed one per call. */
       planAnswers?: unknown[];
+      /** Scripted raw DIRECTION answers, consumed one per call. */
+      directAnswers?: unknown[];
     } = {},
   ) {}
 
@@ -192,6 +199,29 @@ export class FakeStoryProvider implements StoryIntelligenceProvider {
 
   unavailable() {
     return this.opts.enabled === false ? "The free test analyser is not enabled on this server." : null;
+  }
+
+  async directShot(req: ShotDirectionRequest): Promise<ShotDirectionCallResult> {
+    let calls = 0;
+    const answer = (): unknown => {
+      calls++;
+      this.directCalls.push(req);
+      if (this.opts.directAnswers && this.opts.directAnswers.length) return this.opts.directAnswers.shift();
+      return fakeDirection(req.context, req.instruction);
+    };
+    let v = req.validate(answer());
+    if (!v.ok) v = req.validate(answer()); // one correction turn, like a real provider
+    const usage = { inputTokens: 0, outputTokens: 0 };
+    return v.ok
+      ? { ok: true, direction: v.direction, usage, providerCalls: calls }
+      : {
+          ok: false,
+          code: "invalid_output",
+          message: `The storyboard direction did not match the expected shape: ${v.errors.slice(0, 3).join("; ")}`,
+          usage,
+          providerCalls: calls,
+          retryable: false,
+        };
   }
 
   async planShots(req: ShotPlanRequest): Promise<ShotPlanCallResult> {

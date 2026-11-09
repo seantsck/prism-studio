@@ -5,6 +5,7 @@ import {
   type OpenAIInputItem,
   type OpenAITransport,
 } from "@/continuity/providers/openai/transport";
+import { SHOT_DIRECTION_JSON_SCHEMA } from "@/domain/story/shot-direction";
 import { SHOT_PLAN_JSON_SCHEMA } from "@/domain/story/shot-list";
 import { WRITING_JSON_SCHEMA } from "@/domain/story/writing";
 import { analysisInput, revisionInput, STORY_INSTRUCTIONS } from "../prompt";
@@ -13,12 +14,15 @@ import type {
   StoryAnalysisResult,
   StoryIntelligenceProvider,
   StoryModel,
+  ShotDirectionCallResult,
+  ShotDirectionRequest,
   ShotPlanCallResult,
   ShotPlanRequest,
   StoryUsage,
   WritingCallResult,
   WritingRequest,
 } from "../provider";
+import { SHOT_DIRECTOR_INSTRUCTIONS, shotDirectorInput } from "../shot-director-prompt";
 import { SHOT_PLANNER_INSTRUCTIONS, shotPlannerInput } from "../shot-planner-prompt";
 import { WRITING_INSTRUCTIONS, writingInput } from "../writing-prompt";
 
@@ -133,6 +137,28 @@ export class OpenAIStoryProvider implements StoryIntelligenceProvider {
       signal: req.signal,
     });
     return r.ok ? { ok: true, result: r.value, usage: r.usage, providerCalls: r.providerCalls } : r;
+  }
+
+  /** Phase 5B-S5: storyboard direction for one Shot. Same transport, same two-call contract, a strict schema. */
+  async directShot(req: ShotDirectionRequest): Promise<ShotDirectionCallResult> {
+    const r = await this.structured({
+      instructions: SHOT_DIRECTOR_INSTRUCTIONS,
+      text: shotDirectorInput({ context: req.context, instruction: req.instruction }),
+      jsonSchema: SHOT_DIRECTION_JSON_SCHEMA,
+      schemaName: "shot_direction",
+      modelId: req.model.modelId,
+      maxOutputTokens: Math.min(req.maxOutputTokens, req.model.maxOutputTokens),
+      timeoutMs: 180_000,
+      validate: (raw) => {
+        const v = req.validate(raw);
+        return v.ok ? { ok: true, value: v.direction } : v;
+      },
+      what: "storyboard direction request",
+      invalid: "That answer is not valid storyboard direction.",
+      schemaLabel: "the storyboard direction schema",
+      signal: req.signal,
+    });
+    return r.ok ? { ok: true, direction: r.value, usage: r.usage, providerCalls: r.providerCalls } : r;
   }
 
   /** Phase 5B-S4: a Shot List for one Scene. Same transport, same two-call contract, a strict shot-list schema. */

@@ -1,4 +1,5 @@
 import type { ProductionProposal } from "@/domain/story/proposal";
+import type { DirectionContext, ShotDirection } from "@/domain/story/shot-direction";
 import type { ShotPlan, ShotPlanScope, ShotPlanningContext } from "@/domain/story/shot-list";
 import type { ScopeKind, WritingMode, WritingResult } from "@/domain/story/writing";
 import type { ProposalSection } from "./prompt";
@@ -19,6 +20,7 @@ import type { WritingContext } from "./writing-prompt";
  *   brainstormStory     operation "brainstorm"
  *   reviseStoryProposal operation "revise"    (Revise again: a DRAFT alternative + a new instruction)
  * Phase 5B-S4 adds `planShots(ShotPlanRequest) → ShotPlan` (a whole Scene, or one Shot regenerated).
+ * Phase 5B-S5 adds `directShot(ShotDirectionRequest) → ShotDirection` (storyboard direction for one Shot).
  * The answer is always a Prism `WritingResult` (validated by `validateWriting`), never a vendor shape.
  *
  * Implementations: `FakeStoryProvider` (free, deterministic, no network) and `OpenAIStoryProvider` (the first real
@@ -103,7 +105,24 @@ export interface StoryIntelligenceProvider {
   write(req: WritingRequest): Promise<WritingCallResult>;
   /** Phase 5B-S4: a Shot List for one Scene (or one Shot of an earlier plan, regenerated). */
   planShots(req: ShotPlanRequest): Promise<ShotPlanCallResult>;
+  /** Phase 5B-S5: storyboard direction for one approved Shot (optionally a creator's variant note). */
+  directShot(req: ShotDirectionRequest): Promise<ShotDirectionCallResult>;
 }
+
+/** Phase 5B-S5: `directShot` — the frozen Shot snapshot in, a Prism ShotDirection out. */
+export interface ShotDirectionRequest {
+  model: StoryModel;
+  context: DirectionContext;
+  /** "more intimate", "make Yumeko feel isolated"… (empty for a plain proposal). */
+  instruction: string;
+  maxOutputTokens: number;
+  validate: (raw: unknown) => { ok: true; direction: ShotDirection } | { ok: false; errors: string[] };
+  signal?: AbortSignal;
+}
+
+export type ShotDirectionCallResult =
+  | { ok: true; direction: ShotDirection; usage: StoryUsage; providerCalls: number }
+  | Extract<StoryAnalysisResult, { ok: false }>;
 
 /** Phase 5B-S4: `planShots` — provider-neutral input (the frozen Scene snapshot) and output (a Prism ShotPlan). */
 export interface ShotPlanRequest {

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ShotPrepView } from "@/components/views/shot-prep-view";
 import { audioMixFingerprint } from "@/domain/previs/audio-mix";
@@ -69,6 +70,16 @@ export default async function ShotPrepPage({
   const storyChanged = sceneOfShot ? await openStoryChangeFor(data.project.id, sceneOfShot.id) : false;
   return (
     <>
+      {/* Phase 5B-S5: storyboard direction for this Shot (proposal → review → Apply Direction) */}
+      <div className="mx-6 mt-3 flex items-center justify-end gap-2 text-[12px]">
+        <Link
+          href={`/projects/${slug}/episodes/${episode.slug}/shots/${shotId}/direct`}
+          className="rounded-[3px] border border-line2 px-2 py-0.5 text-accent hover:bg-panel2"
+          data-testid="direct-with-prism"
+        >
+          Direct with Prism →
+        </Link>
+      </div>
       {storyChanged && sceneOfShot ? (
         <StoryChangedNotice
           slug={slug}
