@@ -28,7 +28,12 @@ import { RenderError } from "../src/render/repository";
 import { EpisodeRenderWorker } from "../src/render/worker";
 import { mockClipBytes, stillPng } from "../src/render/__tests__/render-fixtures";
 import { assertDevUserExists, readDevUserEnv } from "./lib/dev-user.mjs";
-import { startScript } from "./lib/safety.mjs";
+import {
+  auditRenderWorkerRole,
+  provisionRenderWorkerLogin,
+  RENDER_WORKER_ROLE,
+} from "./lib/render-worker-role";
+import { disposableLocalTarget, startScript } from "./lib/safety.mjs";
 
 const dev = readDevUserEnv();
 startScript({
@@ -430,6 +435,63 @@ try {
     "renders coexist: 1 completed, 2 cancelled, 3 completed",
     (await owner.listForEpisode(P, E)).map((r) => r.status).join() === "completed,cancelled,completed",
   );
+
+  // ── 5b. the provisioned LOGIN (disposable databases only: a hosted login is provisioned by its owner) ──
+  if (disposableLocalTarget(dev.url)) {
+    const before = (await q("select rolcanlogin from pg_roles where rolname = $1", [RENDER_WORKER_ROLE]))
+      .rows[0];
+    const pre = await auditRenderWorkerRole(pool);
+    check("the render role is least-privilege (audit)", pre.failures.length === 0, pre.failures.join("; "));
+    const short = await provisionRenderWorkerLogin(pool, "too-short").catch((e: Error) => e.message);
+    check("provisioning refuses a short secret", String(short).includes("at least 24"), String(short));
+    const secret = randomUUID() + randomUUID();
+    const outcome = await provisionRenderWorkerLogin(pool, secret, { rotate: true });
+    check(
+      "provisioning attaches LOGIN to prism_render_worker",
+      ["enabled", "rotated"].includes(outcome),
+      outcome,
+    );
+    const login = new URL(dev.url);
+    login.username = RENDER_WORKER_ROLE;
+    login.password = secret;
+    const wc = new pg.Client({ connectionString: login.toString() });
+    try {
+      await wc.connect();
+      const who = (await wc.query("select current_user as u, session_user as s")).rows[0];
+      check(
+        "a real login runs as prism_render_worker",
+        who.u === RENDER_WORKER_ROLE && who.s === RENDER_WORKER_ROLE,
+        JSON.stringify(who),
+      );
+      const own = await wc.query("select count(*) from episode_renders").then(
+        () => null,
+        (e: Error) => e.message,
+      );
+      check("…reads episode_renders", own === null, own ?? "");
+      for (const t of ["projects", "shots", "story_proposals", "generation_jobs", "episode_edits"]) {
+        const r = await wc.query(`select 1 from ${t} limit 1`).then(
+          () => "allowed",
+          (e: Error) => e.message,
+        );
+        check(`…cannot read ${t}`, /permission denied/.test(r), r);
+      }
+      const db = await wc.query("create database prism_render_probe_db").then(
+        () => "allowed",
+        (e: Error) => e.message,
+      );
+      check("…cannot create a database", /permission denied/.test(db), db);
+      if (db === "allowed") await q("drop database if exists prism_render_probe_db");
+      const esc = await wc.query("set role postgres").then(
+        () => "allowed",
+        (e: Error) => e.message,
+      );
+      check("…cannot SET ROLE to the admin", /permission denied/.test(esc), esc);
+    } finally {
+      await wc.end().catch(() => undefined);
+      // restore the migration's NOLOGIN state when this suite enabled it
+      if (!before?.rolcanlogin) await q(`alter role ${RENDER_WORKER_ROLE} nologin password null`);
+    }
+  }
 
   // ── 6. a Project delete cascades through renders and the cache ──
   const del = await as(OWNER, "delete from projects where id = $1", [P]);

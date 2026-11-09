@@ -138,6 +138,7 @@ describe("5A.2 environment-scoped Supabase target", () => {
       "db-migrate-dry-run-check.mjs",
       "db-migrate.mjs",
       "db-validate.mjs",
+      "render-db-provision.mts",
       "story-db-provision.mts",
       "worker-db-check.mts",
       "worker-db-provision.mts",

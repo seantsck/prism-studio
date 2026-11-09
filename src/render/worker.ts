@@ -168,8 +168,8 @@ export class EpisodeRenderWorker {
           const aBytes = audio ? await readFile(path.join(dir, audio)) : null;
           const videoPath = segmentObjectPath(render.projectId, piece.cacheKey, "mp4");
           const audioPath = aBytes ? segmentObjectPath(render.projectId, piece.cacheKey, "wav") : null;
-          await storage.put(videoPath, vBytes, "video/mp4");
-          if (aBytes && audioPath) await storage.put(audioPath, aBytes, "audio/wav");
+          await this.write(videoPath, vBytes, "video/mp4");
+          if (aBytes && audioPath) await this.write(audioPath, aBytes, "audio/wav");
           await store.putSegment(
             {
               projectId: render.projectId,
@@ -213,7 +213,7 @@ export class EpisodeRenderWorker {
       const checksum = sha256(bytes);
       const assetId = renderOutputAssetId(render.id);
       const objectPath = `${render.projectId}/${assetId}/${filename}`;
-      await storage.put(objectPath, bytes, "video/mp4");
+      await this.write(objectPath, bytes, "video/mp4");
       const durationMs = Math.round((plan.totalFrames * 1000 * profile.fps.den) / profile.fps.num);
       const now = this.iso();
       const asset: Asset = {
@@ -286,6 +286,23 @@ export class EpisodeRenderWorker {
   }
 
   /** A cached segment, verified byte-for-byte against its record; a bad entry is dropped (and re-rendered). */
+  /**
+   * Writes an object at a DETERMINISTIC path (a segment's cache key, a render's own output). Hosted Storage refuses to
+   * overwrite (`upsert: false`), so an object left by an interrupted attempt — uploaded, then the worker died before
+   * the database recorded it — or a corrupted cached segment would otherwise fail every retry with "already exists".
+   * The path is owned by this key / this render alone, and its record is written only after this succeeds, so
+   * replacing the leftover is safe; a second failure is a real Storage error and fails the render.
+   */
+  private async write(objectPath: string, bytes: Uint8Array, contentType: string): Promise<void> {
+    const { storage } = this.deps;
+    try {
+      await storage.put(objectPath, bytes, contentType);
+    } catch {
+      await storage.remove(objectPath);
+      await storage.put(objectPath, bytes, contentType);
+    }
+  }
+
   private async reuse(projectId: string, cacheKey: string, hasAudio: boolean, dir: string, name: string) {
     const { store, storage } = this.deps;
     const entry = await store.getSegment(projectId, cacheKey);
