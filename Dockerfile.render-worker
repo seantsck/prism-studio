@@ -12,4 +12,5 @@ COPY tsconfig.json ./
 COPY src ./src
 COPY scripts ./scripts
 USER node
-CMD ["sh","-c","export PRISM_STUDIO_RENDER_WORKER_SUPABASE_SECRET_KEY=\"$PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY\"; exec node --import tsx scripts/render-worker.mts"]
+EXPOSE 8080
+CMD ["sh","-c","node --import tsx scripts/render-health.mts && export PRISM_STUDIO_RENDER_WORKER_SUPABASE_SECRET_KEY=\"$PRISM_STUDIO_WORKER_SUPABASE_SECRET_KEY\"; exec node --import tsx scripts/render-daemon-entry.mts"]
