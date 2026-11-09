@@ -9,4 +9,5 @@ COPY tsconfig.json ./
 COPY src ./src
 COPY scripts ./scripts
 USER node
-CMD ["node", "--import", "tsx", "scripts/story-worker.mts"]
+EXPOSE 8080
+CMD ["node", "--import", "tsx", "scripts/story-daemon-entry.mts"]
