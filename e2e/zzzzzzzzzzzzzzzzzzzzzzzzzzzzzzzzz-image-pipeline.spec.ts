@@ -36,6 +36,10 @@ import { buildSeedProject } from "../src/data/seed";
  *   P  Animate: Shot 3A's canonical Production Frame → Video Inputs → free mock clip → play → Use as Shot Clip →
  *                 refresh → Generate Alternative (motion note; the Shot Clip is unchanged) → a new S5 direction marks the
  *                 clip "needs review", still playable (5B-V1)
+ *   Q  Sequence + Animatic: Episode → Edit (the Episode Sequence) → 3A / 3B Shot Clips, 3C Production Frame → reorder
+ *                 3B / 3C → Play Animatic follows the new order → pause / scrub / next → reset to story order → replace
+ *                 3A's Shot Clip → the row says "Replacement available" → Use current Shot Clips → an upstream direction
+ *                 change: 3B's clip still plays, "Needs review" (5B-V2)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -980,4 +984,260 @@ test("P — Animate: canonical Production Frame → Video Inputs → mock clip �
   await expect(current).toHaveAttribute("data-attempt", attempt!);
   await expect(current.getByTestId("shot-clip-stale")).toContainText("Needs review");
   await expect(current.getByTestId("shot-clip-video")).toHaveCount(1); // still playable history
+});
+
+test("Q — Sequence + Animatic: 3A/3B Shot Clips, 3C Production Frame; reorder, play, scrub, reset; clip replacement; Needs review", async ({
+  page,
+}) => {
+  test.setTimeout(600_000);
+  const shotUrlOf = async (code: string) => {
+    await page.goto(`${EP}/shots`);
+    await page.getByRole("link", { name: code, exact: true }).first().click();
+    await page.waitForURL(/\/shots\/[0-9a-f-]{36}/);
+    return page.url().split("?")[0]!;
+  };
+  /** The existing Production Frame flow: free mock still → production conform → Use as Production Frame. */
+  /** A Shot from the S4 plan carries Yumeko without a Look: assign her Episode Look in the existing Character section. */
+  const seed = buildSeedProject();
+  const yumeko = seed.characters.find((c) => c.name === "Yumeko")!;
+  const assignLook = async (shotUrl: string) => {
+    await page.goto(`${shotUrl}?section=character`);
+    const look = page.locator(`select[name="look:${yumeko.id}"]`);
+    if (await look.inputValue()) return;
+    const options = await look
+      .locator("option")
+      .evaluateAll((os) =>
+        os.map((o) => ({ value: (o as HTMLOptionElement).value, label: o.textContent ?? "" })),
+      );
+    await look.selectOption(options.find((o) => o.label.includes("Formal Black"))!.value);
+    await page.getByRole("button", { name: "Save characters" }).click();
+    await expect
+      .poll(async () => (await page.goto(`${shotUrl}?section=character`), look.inputValue()), {
+        timeout: 30_000,
+        intervals: [1000],
+      })
+      .not.toBe("");
+  };
+  /**
+   * A Shot from the S4 plan is a draft: complete it through its existing sections, as a creator would (Look, a 5 s
+   * manual duration, the previous Shot, weather, continuity / performance approval). The preflight is unchanged.
+   */
+  const prepareShot = async (shotUrl: string, previousCode: string) => {
+    await assignLook(shotUrl);
+    await page.goto(`${shotUrl}?section=story`);
+    await page.locator('select[name="durationMode"]').selectOption("manual");
+    await page.locator('input[name="targetDurationMs"]').fill("5");
+    await page.getByRole("button", { name: "Save story" }).click();
+    await expect
+      .poll(
+        async () => (
+          await page.goto(`${shotUrl}?section=story`),
+          page.locator('input[name="targetDurationMs"]').inputValue()
+        ),
+        { timeout: 30_000, intervals: [1000] },
+      )
+      .toBe("5");
+    await page.goto(`${shotUrl}?section=continuity`);
+    const previous = page.locator('select[name="continuity.previousShotId"]');
+    const options = await previous
+      .locator("option")
+      .evaluateAll((os) =>
+        os.map((o) => ({ value: (o as HTMLOptionElement).value, label: o.textContent ?? "" })),
+      );
+    await previous.selectOption(options.find((o) => o.label.startsWith(`${previousCode} —`))!.value);
+    if (!(await page.locator('input[name="continuity.weather"]').inputValue()))
+      await page.locator('input[name="continuity.weather"]').fill("Clear night");
+    await page.getByRole("button", { name: "Save continuity" }).click();
+    await expect
+      .poll(async () => (await page.goto(`${shotUrl}?section=continuity`), previous.inputValue()), {
+        timeout: 30_000,
+        intervals: [1000],
+      })
+      .not.toBe("");
+    for (const [section, label] of [
+      ["continuity", "Continuity approved"],
+      ["performance", "Performance approved"],
+    ] as const) {
+      await page.goto(`${shotUrl}?section=${section}`);
+      const gate = page.locator("form").filter({ hasText: label });
+      const button = gate.getByRole("button", { name: "Approve", exact: true });
+      if (await button.count()) {
+        await button.click();
+        await expect(gate.getByRole("button", { name: /Approved ✓/ })).toBeVisible({ timeout: 30_000 });
+      }
+    }
+  };
+  /** S5: Direct with Prism (the free test director) → Apply — the camera and blocking a Production Frame depicts. */
+  const direct = async (shotUrl: string, note?: string) => {
+    await page.goto(`${shotUrl}/direct`);
+    if (note) await page.getByLabel("Direction note").fill(note);
+    await page.getByTestId("dir-direct").click();
+    await page.waitForURL(/\/direct\?proposal=/, { timeout: 30_000 });
+    await expect
+      .poll(async () => (await page.reload(), page.getByTestId("dir-status").getAttribute("data-status")), {
+        timeout: 60_000,
+        intervals: [1000],
+      })
+      .toBe("ready");
+    await page.getByTestId("dir-apply").click();
+    await expect(page.getByTestId("dir-applied")).toBeVisible({ timeout: 30_000 });
+  };
+  const productionFrame = async (shotUrl: string) => {
+    await page.goto(`${shotUrl}?section=production_frame`);
+    const stills = page.getByTestId("shot-generated-still");
+    const newest = async () =>
+      (await stills.count()) ? await stills.first().getAttribute("data-attempt") : null;
+    const before = await newest();
+    await page.getByTestId("shot-generate-image").click();
+    await page.waitForURL(/\/candidates\/[0-9a-f-]{36}/, { timeout: 60_000 });
+    await expect
+      .poll(async () => (await page.goto(`${shotUrl}?section=production_frame`), newest()), {
+        timeout: 120_000,
+        intervals: [2000],
+      })
+      .not.toBe(before);
+    const attempt = await stills.first().getAttribute("data-attempt");
+    const fresh = page.locator(`[data-testid="shot-generated-still"][data-attempt="${attempt}"]`);
+    // a frame that does not match the Shot's aspect ratio goes through the existing production conform first
+    if (await fresh.getByTestId("shot-create-conform").count())
+      await fresh.getByTestId("shot-create-conform").click();
+    await expect
+      .poll(
+        async () => (
+          await page.goto(`${shotUrl}?section=production_frame`),
+          fresh.getByTestId("shot-use-as-production-frame").count()
+        ),
+        { timeout: 60_000, intervals: [1500] },
+      )
+      .toBe(1);
+    await fresh.getByTestId("shot-use-as-production-frame").click();
+    await expect
+      .poll(
+        async () => (
+          await page.goto(`${shotUrl}?section=production_frame`),
+          page.locator('[data-testid="shot-generated-still"][data-current="true"]').count()
+        ),
+        { timeout: 60_000, intervals: [1500] },
+      )
+      .toBe(1);
+  };
+  /** V1: animate the canonical frame with the free mock model and Use as Shot Clip. */
+  const shotClip = async (shotUrl: string) => {
+    await page.goto(`${shotUrl}?section=animate`);
+    const panel = page.getByTestId("animate-panel");
+    await expect(panel).toHaveAttribute("data-ready", "1", { timeout: 30_000 });
+    await panel
+      .locator('[data-testid="model-row"][data-model="mock-video-1"]')
+      .getByTestId("model-pick")
+      .check();
+    await panel.getByTestId("ack-all").check();
+    await panel.getByTestId("create-candidate-set").click();
+    await page.waitForURL(/\/candidates\/[0-9a-f-]{36}/, { timeout: 30_000 });
+    await expect(page.getByTestId("set-rollup")).toContainText("1/1 completed", { timeout: 120_000 });
+    const card = page.locator('[data-testid="candidate-card"][data-model="mock-video-1"]');
+    await card.getByTestId("use-as-shot-clip").click();
+    await expect(card.getByTestId("use-as-shot-clip")).toHaveText("Current Shot Clip", { timeout: 30_000 });
+  };
+  // ── prepare: 3A has its Shot Clip (story P); 3B gets a frame + clip; 3C a canonical Production Frame only ──
+  const url3B = await shotUrlOf("3B");
+  await prepareShot(url3B, "3A");
+  await productionFrame(url3B);
+  await shotClip(url3B);
+  const url3C = await shotUrlOf("3C");
+  await direct(url3C);
+  await prepareShot(url3C, "3B");
+  await productionFrame(url3C);
+
+  // ── the Episode Sequence (the Edit tab): created from the Episode's Shots, story order ──
+  await page.goto(`${EP}/edit`);
+  await page.getByTestId("create-episode-edit").click();
+  await expect(page.getByTestId("episode-edit-persisted")).toBeVisible({ timeout: 30_000 });
+  const item = (code: string) => page.locator(`[data-testid="edit-item"][data-shot-code="${code}"]`);
+  await expect(item("3A").getByTestId("sequence-line")).toContainText("3A — Shot Clip");
+  await expect(item("3B").getByTestId("sequence-line")).toContainText("3B — Shot Clip");
+  await expect(item("3C").getByTestId("sequence-line")).toContainText("3C — Production Frame");
+  const order = async () =>
+    (
+      await page
+        .locator('[data-testid="edit-item"]')
+        .evaluateAll((els) => els.map((e) => e.getAttribute("data-shot-code")))
+    ).filter((c) => /^3[ABC]$/.test(c ?? ""));
+  expect(await order()).toEqual(["3A", "3B", "3C"]);
+  const revision = async () => page.getByTestId("edit-revision").innerText();
+
+  // ── reorder 3B / 3C ──
+  let rev = await revision();
+  await item("3C").getByRole("button", { name: "Move 3C up" }).click();
+  await expect.poll(revision, { timeout: 30_000 }).not.toBe(rev);
+  expect(await order()).toEqual(["3A", "3C", "3B"]);
+  await expect(page.getByTestId("reset-story-order")).toHaveText("Reset to story order");
+
+  // ── Play Animatic: the player follows the NEW order; pause; scrub ──
+  const player = page.getByTestId("edit-player");
+  const seekTo = (ms: number) =>
+    page.getByTestId("player-seek").evaluate((el, v) => {
+      const input = el as HTMLInputElement;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, String(v));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }, Math.round(ms));
+  const startOf = async (code: string) => Number(await item(code).getAttribute("data-start-ms"));
+  await page.getByTestId("play-animatic").click();
+  await expect.poll(async () => player.getAttribute("data-item-id"), { timeout: 30_000 }).not.toBe("");
+  expect(await startOf("3C")).toBeLessThan(await startOf("3B"));
+  await seekTo((await startOf("3A")) + 10);
+  await expect(player).toHaveAttribute("data-kind", "video");
+  await seekTo((await startOf("3C")) + 10);
+  await expect(player).toHaveAttribute("data-kind", "production_frame");
+  await seekTo((await startOf("3B")) + 10);
+  await expect(player).toHaveAttribute("data-kind", "video");
+  await page.getByTestId("player-play").click();
+  await expect(player).toHaveAttribute("data-playing", "true");
+  await page.getByTestId("player-play").click();
+  await expect(player).toHaveAttribute("data-playing", "false");
+  await page.getByTestId("player-next").click();
+  await expect(player).not.toHaveAttribute("data-item-id", (await item("3B").getAttribute("data-item-id"))!);
+
+  // ── reset to story order ──
+  rev = await revision();
+  await page.getByTestId("reset-story-order").click();
+  await expect.poll(revision, { timeout: 30_000 }).not.toBe(rev);
+  expect(await order()).toEqual(["3A", "3B", "3C"]);
+  await expect(page.getByTestId("reset-story-order")).toHaveText("In story order");
+
+  // ── replace 3A's selected Shot Clip (V1, confirmed) → the Sequence surfaces it → one explicit re-pin ──
+  const pinned = await item("3A").locator("video").first().getAttribute("src");
+  const url3A = await shotUrlOf("3A");
+  await page.goto(`${url3A}?section=animate`);
+  const selectedBefore = await page.getByTestId("shot-clip-current").getAttribute("data-attempt");
+  // story P's alternative (same canonical frame, motion note) becomes the Shot Clip, with the replace confirmation
+  const alternative = page
+    .locator('[data-testid="shot-clip-candidate"]')
+    .filter({ has: page.getByTestId("use-as-shot-clip") })
+    .first();
+  await alternative.getByTestId("confirm-replace-clip").check();
+  await alternative.getByTestId("use-as-shot-clip").click();
+  await expect
+    .poll(
+      async () => (
+        await page.goto(`${url3A}?section=animate`),
+        page.getByTestId("shot-clip-current").getAttribute("data-attempt")
+      ),
+      { timeout: 30_000, intervals: [1000] },
+    )
+    .not.toBe(selectedBefore);
+  await page.goto(`${EP}/edit`);
+  await expect(item("3A").getByTestId("item-badges")).toContainText("Replacement available");
+  await expect(item("3A").locator("video").first()).toHaveAttribute("src", pinned!); // pinned until told otherwise
+  rev = await revision();
+  await page.getByTestId("use-current-media").click();
+  await expect.poll(revision, { timeout: 30_000 }).not.toBe(rev);
+  await expect(item("3A").locator("video").first()).not.toHaveAttribute("src", pinned!);
+  await expect(page.getByTestId("use-current-media")).toHaveText("Using current Shot Clips and frames");
+
+  // ── an upstream direction change makes 3B's selected clip Needs review: it still plays, with the warning ──
+  await direct(url3B, "more intimate");
+  await page.goto(`${EP}/edit`);
+  await expect(item("3B").getByTestId("item-badges")).toContainText("Needs review");
+  await seekTo((await startOf("3B")) + 10);
+  await expect(player).toHaveAttribute("data-kind", "video");
 });

@@ -1,5 +1,6 @@
 "use server";
 
+import { currentMediaChanges, isStoryOrder, storyOrderIds } from "@/domain/edit/sequence";
 import { revalidatePath } from "next/cache";
 import {
   EDIT_REVISION_CONFLICT_MESSAGE,
@@ -495,5 +496,53 @@ export async function clearCutIntent(form: FormData): Promise<ActionResult> {
   return runAction(
     () => mutate(form, ({ item }) => [{ op: "clear_cut_intent", itemId: item().id }], "Cut intent removed."),
     { name: "clearCutIntent" },
+  );
+}
+
+// ───────────────────────── 5B-V2 Sequence ─────────────────────────
+
+/** Reset to story order: one `reorder` into Scene order, then Shot order. Scene / Shot structure is never touched. */
+export async function resetEditToStoryOrder(form: FormData): Promise<ActionResult> {
+  return runAction(
+    () =>
+      mutate(
+        form,
+        ({ data, edit }) => {
+          if (isStoryOrder(data, edit)) throw new UserFacingError("The Sequence is already in story order.");
+          return [{ op: "reorder", itemIds: storyOrderIds(data, edit) }];
+        },
+        "Back in story order.",
+      ),
+    { name: "resetEditToStoryOrder" },
+  );
+}
+
+/**
+ * Use current Shot Clips and frames: ONE explicit revision that re-pins every item to its Shot's current selection —
+ * the selected Shot Clip (the 2I.1 `use_replacement`, re-validated by the repository), else the current canonical
+ * Production Frame for a placeholder (held for the item's duration). Older media is never edited or deleted.
+ */
+export async function useCurrentShotMedia(form: FormData): Promise<ActionResult> {
+  return runAction(
+    () =>
+      mutate(
+        form,
+        async ({ data, edit }) => {
+          const changes = currentMediaChanges(data, edit, await loadEditMediaFacts(data, edit.episodeId));
+          if (changes.length === 0)
+            throw new UserFacingError("Every item already uses its Shot's current media.");
+          return changes.map((c) =>
+            c.kind === "clip"
+              ? {
+                  op: "use_replacement" as const,
+                  itemId: c.itemId,
+                  expected: { attemptId: c.attemptId, assetId: c.assetId },
+                }
+              : { op: "set_visual" as const, itemId: c.itemId, visual: c.visual },
+          );
+        },
+        "Current Shot Clips and frames pinned.",
+      ),
+    { name: "useCurrentShotMedia" },
   );
 }

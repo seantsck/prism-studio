@@ -1,6 +1,6 @@
 "use client";
 
-import { Pause, Play, RotateCcw } from "lucide-react";
+import { Pause, Play, RotateCcw, SkipBack, SkipForward } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { playheadLabel } from "@/domain/edit/playback";
 import { RoughCutController, type PlaybackSnapshot } from "@/lib/edit-playback/controller";
@@ -65,6 +65,7 @@ export function EditPlayer({ playback }: { playback: PlaybackVM }) {
   return (
     <section
       className="border border-line bg-panel"
+      id="edit-player"
       data-testid="edit-player"
       data-playing={snap?.playing ? "true" : "false"}
       data-time-ms={Math.round(time)}
@@ -168,6 +169,33 @@ export function EditPlayer({ playback }: { playback: PlaybackVM }) {
           data-testid="player-restart"
         >
           <RotateCcw size={14} />
+        </button>
+        {/* 5B-V2: jump to the previous / next Sequence item */}
+        <button
+          type="button"
+          className="text-muted hover:text-fg"
+          onClick={() => {
+            const starts = plan.items.map((i) => i.startMs);
+            // within the first 500 ms of an item, "previous" goes to the item before it
+            const prev = [...starts].reverse().find((s) => s < time - 500) ?? 0;
+            controller.current?.seek(prev);
+          }}
+          aria-label="Previous item"
+          data-testid="player-prev"
+        >
+          <SkipBack size={14} />
+        </button>
+        <button
+          type="button"
+          className="text-muted hover:text-fg"
+          onClick={() => {
+            const next = plan.items.map((i) => i.startMs).find((s) => s > time + 1);
+            if (next != null) controller.current?.seek(next);
+          }}
+          aria-label="Next item"
+          data-testid="player-next"
+        >
+          <SkipForward size={14} />
         </button>
         <input
           type="range"

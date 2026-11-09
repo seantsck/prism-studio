@@ -18,6 +18,7 @@ import {
   type LineageStep,
 } from "@/domain/edit/view";
 import { buildPlaybackPlan, type PlaybackPlan } from "@/domain/edit/playback";
+import { currentMediaChanges, isStoryOrder } from "@/domain/edit/sequence";
 import type { ProjectData } from "@/domain/schemas";
 import { assetUrl } from "@/lib/utils";
 import { cutMarker, type CutMarkerVM } from "./cut-marker-model";
@@ -141,6 +142,10 @@ export interface EditPageVM {
   addable: AddableShotVM[];
   /** 2I.1E: the rough-sequence playback of exactly this saved edit */
   playback: PlaybackVM;
+  /** 5B-V2: the items are in story order (Scene, then Shot) */
+  inStoryOrder: boolean;
+  /** 5B-V2: items whose pinned picture is not their Shot's current Shot Clip / canonical Production Frame */
+  currentMediaChanges: number;
 }
 
 /** What the rough-sequence player needs: the pure plan plus display labels (no other facts). */
@@ -507,13 +512,15 @@ function itemBadges(iv: ItemView): { badges: BadgeVM[]; problems: string[] } {
     if (f.isBest) badges.push({ label: "Best", tone: "info" });
     if (f.bestElsewhereAttemptIds.length) badges.push({ label: "Best elsewhere", tone: "neutral" });
     if (f.newerDeliveryMasterAssetId) badges.push({ label: "Newer delivery master", tone: "warn" });
-    if (f.productionFrameChanged) badges.push({ label: "Production Frame changed", tone: "warn" });
+    // 5B-V2: the V1 Shot Clip words; the clip still plays (the creator decides whether to replace it)
+    if (f.productionFrameChanged)
+      badges.push({ label: "Generated from an earlier Production Frame", tone: "warn" });
     if (f.freshness.status === "stale")
-      badges.push({ label: "Stale", tone: "warn", title: f.freshness.messages.join(" ") });
+      badges.push({ label: "Needs review", tone: "warn", title: f.freshness.messages.join(" ") });
   } else {
-    if (f.selectionChanged) badges.push({ label: "Production Frame changed", tone: "warn" });
+    if (f.selectionChanged) badges.push({ label: "Newer Production Frame selected", tone: "warn" });
     if (f.freshness && f.freshness.status === "stale")
-      badges.push({ label: "Stale", tone: "warn", title: f.freshness.messages.join(" ") });
+      badges.push({ label: "Needs review", tone: "warn", title: f.freshness.messages.join(" ") });
   }
   if (iv.replacement)
     badges.push({
@@ -569,6 +576,8 @@ export function editPage(data: ProjectData, edit: EpisodeEdit, media: EditMediaF
     problems: rows.flatMap((r) => r.problems.map((p) => `${r.shotCode}: ${p}`)),
     addable: addableShots(data, view.notInEditShotIds, media),
     playback: playbackOf(data, edit, rows),
+    inStoryOrder: isStoryOrder(data, edit),
+    currentMediaChanges: currentMediaChanges(data, edit, media).length,
   };
 }
 
