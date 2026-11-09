@@ -49,24 +49,26 @@ try {
       and a.byte_size>0
     order by ga.created_at, go.position
   `,[projectId]);
-  console.log("STORED_IMAGE_AUDIT="+JSON.stringify(q.rows.map(r=>({
-    assetId:r.asset_id,
-    name:r.name,
-    width:r.width,
-    height:r.height,
-    attemptId:r.attempt_id,
-    shotCode:r.shot_code,
-    shotTitle:r.shot_title,
-    attemptNumber:r.attempt_number,
-    provider:r.provider,
-    model:r.model,
-    modality:r.modality,
-    status:r.status,
-    approved:r.approved,
-    promptPreview:String(r.prompt??"").slice(0,360),
-    inputAssetIds:r.input_asset_ids,
-    modelSettings:r.model_settings,
-    costKind:r.cost_kind,
-    costAmount:r.cost_amount
-  }))));
+  for (const r of q.rows) {
+    console.log("STORED_IMAGE_ROW="+JSON.stringify({
+      assetId:r.asset_id,
+      name:r.name,
+      width:r.width,
+      height:r.height,
+      attemptId:r.attempt_id,
+      shotCode:r.shot_code,
+      shotTitle:r.shot_title,
+      attemptNumber:r.attempt_number,
+      provider:r.provider,
+      model:r.model,
+      modality:r.modality,
+      status:r.status,
+      approved:r.approved,
+      promptPreview:String(r.prompt??"").slice(0,220),
+      inputAssetIds:r.input_asset_ids,
+      modelSettings:r.model_settings,
+      costKind:r.cost_kind,
+      costAmount:r.cost_amount
+    }));
+  }
 } finally { await pool.end(); }
