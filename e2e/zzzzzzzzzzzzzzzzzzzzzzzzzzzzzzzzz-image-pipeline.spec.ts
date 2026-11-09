@@ -1,5 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { buildSeedProject } from "../src/data/seed";
+import { FfmpegEpisodeRenderer } from "../src/render/ffmpeg-renderer";
+import { MediaLab } from "../src/render/__tests__/media-checks";
+import { stillPng } from "../src/render/__tests__/render-fixtures";
 
 /**
  * Phase 5B-I1 / I1b on its own memory server (memory-5b-isolated): Character, Location and Shot images through the
@@ -44,6 +47,10 @@ import { buildSeedProject } from "../src/data/seed";
  *                 3C → 3B → preview from the start (title, scrub into the dissolve, select an item) → Save revision →
  *                 refresh (same state) → the Shot Clip is still the full clip; the Production Frame unchanged → another
  *                 revision → restore the first as a new revision (5B-V3)
+ *   S  Render Episode: resolve missing media → save the revision → Render Episode → Queued … Completed (the in-process
+ *                 segmented render worker, real ffmpeg) → Play Final → download through the private route and verify
+ *                 the real MP4 (H.264 1920×804 24 fps, frame-exact duration, the title, 3A / 3C / 3B and the other
+ *                 Scene at their places) → a new revision → the old render says so → render it → both remain (5B-V4)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -1445,4 +1452,189 @@ test("R — Episode Edit: trims, still hold, opening title, cross dissolve, reor
   await expect(rowA).toHaveAttribute("data-current", "true"); // the same state as A again
   await expect(opening.getByTestId("title-duration")).toHaveValue("4");
   await expect(page.getByTestId("render-manifest")).toHaveAttribute("data-state-fingerprint", fingerprintA!);
+});
+
+test("S — Render Episode: saved revision → segmented render → Final MP4 → play / download → a newer revision renders too", async ({
+  page,
+}) => {
+  test.setTimeout(900_000);
+  page.on("dialog", (d) => void d.accept()); // "Remove … from the edit?" confirmations
+  const item = (code: string) => page.locator(`[data-testid="edit-item"][data-shot-code="${code}"]`);
+  const revision = async () => page.getByTestId("edit-revision").innerText();
+  const changed = async (action: () => Promise<void>) => {
+    const before = await revision();
+    await action();
+    await expect.poll(revision, { timeout: 30_000 }).not.toBe(before);
+  };
+  const renderRow = (n: number) => page.locator(`[data-testid="episode-render"][data-number="${n}"]`);
+
+  // ── the Episode Edit from stories Q / R; a FINAL render needs every item to have a picture ──
+  await page.goto(`${EP}/edit`);
+  await expect(page.getByTestId("render-panel")).toBeVisible();
+  // the Shot of the previous Scene (just before 3A) gets a real picture the creator's way: a Production Frame uploaded
+  // on its Shot page, then "Use current Shot Clips and frames" pins it in the edit (the seed's frames are placeholders)
+  const order = await page
+    .locator('[data-testid="edit-item"]')
+    .evaluateAll((els) => els.map((e) => e.getAttribute("data-shot-code")!));
+  const otherCode = order
+    .slice(0, order.indexOf("3A"))
+    .reverse()
+    .find((c) => !/^3/.test(c))!;
+  expect(otherCode).toBeTruthy();
+  await page.goto(`${EP}/shots`);
+  await page.getByRole("link", { name: otherCode, exact: true }).first().click();
+  await page.waitForURL(/\/shots\/[0-9a-f-]{36}/);
+  const otherUrl = page.url().split("?")[0]!;
+  await page.goto(`${otherUrl}?section=production_frame`);
+  await page.getByTestId("pf-upload-file").setInputFiles({
+    name: "other-scene-frame.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(stillPng("0xc0a030", 1912, 800)),
+  });
+  await page.getByTestId("pf-upload-submit").click();
+  await page.goto(`${EP}/edit`);
+  await expect
+    .poll(async () => (await page.reload(), page.getByTestId("use-current-media").isEnabled()), {
+      timeout: 30_000,
+    })
+    .toBe(true);
+  await changed(() => page.getByTestId("use-current-media").click());
+  await expect(item(otherCode).first().getByTestId("sequence-line")).toContainText("Production Frame");
+  for (let i = 0; i < 40; i++) {
+    const missing = (await page.getByTestId("render-fact-missing").innerText()).trim();
+    if (missing === "None") break;
+    await expect(page.getByTestId("render-blocked")).toContainText("with missing media");
+    await expect(page.getByTestId("render-episode")).toBeDisabled();
+    const code = missing.split(",")[0]!.trim();
+    await changed(() => item(code).first().getByTestId("remove-item").click());
+  }
+  await expect(page.getByTestId("render-fact-missing")).toHaveText("None");
+  for (const code of ["3A", "3B", "3C"]) await expect(item(code)).toHaveCount(1);
+
+  // ── save the current revision; the render facts ──
+  if ((await page.getByTestId("edit-saved-state").getAttribute("data-saved-as")) === "") {
+    await expect(page.getByTestId("render-blocked")).toHaveText(
+      "Save this Edit revision before rendering it.",
+    );
+    await page.getByTestId("revision-label").fill("For the final render");
+    await page.getByTestId("save-revision").click();
+    await expect(page.getByTestId("edit-saved-state")).toHaveAttribute("data-saved-as", /^\d+$/, {
+      timeout: 30_000,
+    });
+  }
+  const savedA = (await page.getByTestId("edit-saved-state").getAttribute("data-saved-as"))!;
+  await expect(page.getByTestId("render-fact-revision")).toContainText(`Saved revision #${savedA}`);
+  await expect(page.getByTestId("render-fact-target")).toContainText("1920×804");
+  await expect(page.getByTestId("render-fact-target")).toContainText("24 fps");
+  await expect(page.getByTestId("render-fact-cost")).toContainText("$0.00");
+  const totalMs = Number(await page.getByTestId("render-fact-duration").getAttribute("data-ms"));
+  expect(totalMs).toBe(Number(await page.getByTestId("edit-player").getAttribute("data-total-ms"))); // = the preview
+  const rows = await page.locator('[data-testid="edit-item"]').evaluateAll((els) =>
+    els.map((e) => ({
+      code: e.getAttribute("data-shot-code")!,
+      start: Number(e.getAttribute("data-start-ms")),
+      duration: Number(e.getAttribute("data-duration-ms")),
+      // the row's own thumbnail (a still item shows its image; a clip shows a video)
+      image: e.firstElementChild?.querySelector("img")?.getAttribute("src") ?? null,
+    })),
+  );
+
+  // ── Render Episode → Queued / Rendering / … → Completed ──
+  await page.getByTestId("render-episode").click();
+  await expect(renderRow(1)).toBeVisible({ timeout: 30_000 });
+  await expect(renderRow(1).getByTestId("render-revision")).toHaveText(
+    `Rendered from Edit revision #${savedA}`,
+  );
+  await expect(renderRow(1)).toHaveAttribute("data-status", "completed", { timeout: 600_000 });
+  const out = renderRow(1).getByTestId("render-output");
+  await expect(out.getByTestId("render-output-resolution")).toHaveText("1920×804");
+
+  // ── Play Final (when this browser decodes H.264 / AAC: Chromium builds without proprietary codecs cannot) ──
+  const video = renderRow(1).getByTestId("render-video");
+  await expect(video).toHaveAttribute("src", /^\/api\/assets\/[0-9a-f-]{36}$/);
+  if (
+    await page.evaluate(() =>
+      document.createElement("video").canPlayType('video/mp4; codecs="avc1.64002a, mp4a.40.2"'),
+    )
+  ) {
+    await video.evaluate((v: HTMLVideoElement) => v.play());
+    await expect
+      .poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime), { timeout: 30_000 })
+      .toBeGreaterThan(0);
+    await video.evaluate((v: HTMLVideoElement) => v.pause());
+    expect(
+      Math.abs((await video.evaluate((v: HTMLVideoElement) => v.duration)) * 1000 - totalMs),
+    ).toBeLessThan(100);
+  }
+
+  // ── Export / Download (the owner, through the private asset route) → verify the real file ──
+  const download = renderRow(1).getByTestId("render-download");
+  await expect(download).toHaveText("Download ojousama-episode-1-the-arrangement.mp4");
+  const res = await page.request.get((await download.getAttribute("href"))!);
+  expect(res.status()).toBe(200);
+  expect(res.headers()["content-disposition"]).toContain("attachment");
+  expect(res.headers()["content-disposition"]).toContain("ojousama-episode-1-the-arrangement.mp4");
+  const bytes = new Uint8Array(await res.body());
+  const lab = new MediaLab(1920, 804);
+  try {
+    const file = lab.write(bytes, "mp4");
+    const probe = await new FfmpegEpisodeRenderer().probe(lab.dir, file.split(/[\\/]/).pop()!);
+    expect(probe).toMatchObject({
+      videoCodec: "h264",
+      width: 1920,
+      height: 804,
+      frameRate: "24/1",
+      pixFmt: "yuv420p",
+    });
+    expect(probe.frames).toBe(Math.floor((totalMs * 24) / 1000)); // = the V3 timeline (frame-exact)
+    // the opening title is on screen first
+    const black = lab.black();
+    expect(lab.psnr(lab.frameAt(file, 1000), black)).toBeLessThan(45);
+    // scrub through 3A / 3C / 3B and the other Scene's Shot: each is a real picture at its timeline place; a still
+    // item IS its Production Frame
+    const others = rows.filter((r) => r.code === otherCode);
+    expect(others.length).toBe(1);
+    for (const r of [...rows.filter((x) => ["3A", "3B", "3C"].includes(x.code)), others[0]!]) {
+      const frame = lab.frameAt(file, r.start + Math.min(r.duration / 2, 1000));
+      expect(lab.psnr(frame, black), r.code).toBeLessThan(45);
+      if (r.image) {
+        const img = await page.request.get(r.image);
+        expect(
+          lab.psnr(frame, lab.normalizedStill(new Uint8Array(await img.body()))),
+          r.code,
+        ).toBeGreaterThan(30);
+      }
+    }
+  } finally {
+    lab.dispose();
+  }
+
+  // ── a new Edit revision: the finished render belongs to the earlier one; render the new one; both remain ──
+  const opening = page.locator('[data-testid="title-slot"][data-placement="opening"]');
+  await opening.getByTestId("title-duration").fill("3");
+  await changed(() => opening.getByTestId("save-title").click());
+  await expect(renderRow(1).getByTestId("render-newer")).toHaveText("A newer Edit revision exists.");
+  await expect(renderRow(1).getByTestId("render-revision")).toHaveText(
+    `Rendered from Edit revision #${savedA}`,
+  );
+  await expect(page.getByTestId("render-episode")).toBeDisabled(); // unsaved changes
+  await page.getByTestId("revision-label").fill("Shorter opening");
+  await page.getByTestId("save-revision").click();
+  await expect(page.getByTestId("edit-saved-state")).toHaveAttribute(
+    "data-saved-as",
+    String(Number(savedA) + 1),
+    {
+      timeout: 30_000,
+    },
+  );
+  await page.getByTestId("render-episode").click();
+  await expect(renderRow(2)).toHaveAttribute("data-status", "completed", { timeout: 600_000 });
+  await expect(renderRow(2).getByTestId("render-revision")).toHaveText(
+    `Rendered from Edit revision #${Number(savedA) + 1}`,
+  );
+  await expect(renderRow(1)).toHaveAttribute("data-status", "completed");
+  await expect(renderRow(1).getByTestId("render-download")).toBeVisible();
+  const d1 = Number(await renderRow(1).getByTestId("render-video").getAttribute("data-duration-ms"));
+  const d2 = Number(await renderRow(2).getByTestId("render-video").getAttribute("data-duration-ms"));
+  expect(d1 - d2).toBe(1000); // the opening title is 1 s shorter
 });

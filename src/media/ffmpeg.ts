@@ -68,6 +68,66 @@ interface RunOptions {
   timeoutMs: number;
 }
 
+/** Tools need PATH (and SystemRoot/TEMP on Windows). They never need credentials. */
+export function mediaToolEnv(): NodeJS.ProcessEnv {
+  const keep = ["PATH", "Path", "SystemRoot", "TEMP", "TMP", "TMPDIR", "HOME", "LANG", "LC_ALL"];
+  const env: Record<string, string> = {};
+  for (const k of keep) {
+    const v = process.env[k];
+    if (v !== undefined) env[k] = v;
+  }
+  return env as NodeJS.ProcessEnv;
+}
+
+/**
+ * Runs one media tool invocation with the safety model above: an argument ARRAY (no shell), a wall-clock timeout, a
+ * minimal environment (no credentials), and a short, path-free error tail. Shared by the processor and the Phase 5B-V4
+ * Episode renderer (src/render), so there is one way Prism runs ffmpeg.
+ */
+export function execMediaTool(
+  bin: string,
+  args: string[],
+  run: { cwd: string; timeoutMs: number },
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      bin,
+      args,
+      {
+        cwd: run.cwd,
+        timeout: run.timeoutMs,
+        maxBuffer: 16 * 1024 * 1024,
+        windowsHide: true,
+        env: mediaToolEnv(),
+        killSignal: "SIGKILL",
+      },
+      (err, stdout, stderr) => {
+        if (!err) return resolve({ stdout: String(stdout), stderr: String(stderr) });
+        const e = err as NodeJS.ErrnoException & { killed?: boolean; signal?: string | null };
+        if (e.code === "ENOENT") {
+          return reject(
+            new MediaError("unavailable", `${path.basename(bin)} is not installed or not on PATH.`),
+          );
+        }
+        if (e.killed || e.signal === "SIGKILL" || e.signal === "SIGTERM") {
+          return reject(
+            new MediaError("timeout", `Media processing exceeded ${Math.round(run.timeoutMs / 1000)}s.`),
+          );
+        }
+        // Keep a short, path-free tail of the tool's own message.
+        const tail = String(stderr || e.message)
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .slice(-3)
+          .join(" | ")
+          .replace(/[A-Za-z]:\\[^\s"']+|\/[^\s"']+/g, "<path>")
+          .slice(0, 300);
+        reject(new MediaError("process_failed", `Media tool failed: ${tail}`));
+      },
+    );
+  });
+}
+
 export interface FfmpegOptions {
   ffmpegPath?: string;
   ffprobePath?: string;
@@ -93,55 +153,8 @@ export class FfmpegMediaProcessor implements MediaProcessor {
 
   // ───────────────────────── process plumbing ─────────────────────────
 
-  private childEnv(): NodeJS.ProcessEnv {
-    // Tools need PATH (and SystemRoot/TEMP on Windows). They never need credentials.
-    const keep = ["PATH", "Path", "SystemRoot", "TEMP", "TMP", "TMPDIR", "HOME", "LANG", "LC_ALL"];
-    const env: Record<string, string> = {};
-    for (const k of keep) {
-      const v = process.env[k];
-      if (v !== undefined) env[k] = v;
-    }
-    return env as NodeJS.ProcessEnv;
-  }
-
   private exec(bin: string, args: string[], run: RunOptions): Promise<{ stdout: string; stderr: string }> {
-    return new Promise((resolve, reject) => {
-      execFile(
-        bin,
-        args,
-        {
-          cwd: run.cwd,
-          timeout: run.timeoutMs,
-          maxBuffer: 16 * 1024 * 1024,
-          windowsHide: true,
-          env: this.childEnv(),
-          killSignal: "SIGKILL",
-        },
-        (err, stdout, stderr) => {
-          if (!err) return resolve({ stdout: String(stdout), stderr: String(stderr) });
-          const e = err as NodeJS.ErrnoException & { killed?: boolean; signal?: string | null };
-          if (e.code === "ENOENT") {
-            return reject(
-              new MediaError("unavailable", `${path.basename(bin)} is not installed or not on PATH.`),
-            );
-          }
-          if (e.killed || e.signal === "SIGKILL" || e.signal === "SIGTERM") {
-            return reject(
-              new MediaError("timeout", `Media processing exceeded ${Math.round(run.timeoutMs / 1000)}s.`),
-            );
-          }
-          // Keep a short, path-free tail of the tool's own message.
-          const tail = String(stderr || e.message)
-            .split(/\r?\n/)
-            .filter(Boolean)
-            .slice(-3)
-            .join(" | ")
-            .replace(/[A-Za-z]:\\[^\s"']+|\/[^\s"']+/g, "<path>")
-            .slice(0, 300);
-          reject(new MediaError("process_failed", `Media tool failed: ${tail}`));
-        },
-      );
-    });
+    return execMediaTool(bin, args, run);
   }
 
   private async withDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {

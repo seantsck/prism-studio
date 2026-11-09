@@ -103,7 +103,9 @@ const CUT: ManifestTransition = { kind: "cut" };
 
 export function buildRenderManifest(data: ProjectData, edit: EpisodeEdit): RenderManifest {
   const timeline = editTimeline(edit);
-  const asset = (id: string | null | undefined) => (id ? data.assets.find((a) => a.id === id) : undefined);
+  // only an Asset with stored bytes can be rendered: a placeholder row (no object) is reported as no media (5B-V4)
+  const asset = (id: string | null | undefined) =>
+    id ? data.assets.find((a) => a.id === id && a.objectPath) : undefined;
   const media = (item: EpisodeEdit["items"][number]): ManifestMedia => {
     const v = item.visual;
     switch (v.kind) {
@@ -111,7 +113,7 @@ export function buildRenderManifest(data: ProjectData, edit: EpisodeEdit): Rende
         const a = asset(v.assetId);
         return {
           kind: "video",
-          assetId: v.assetId,
+          assetId: a ? v.assetId : null,
           checksum: a?.checksum ?? null,
           mimeType: a?.mime ?? null,
           attemptId: v.attemptId,
@@ -203,7 +205,7 @@ export function buildRenderManifest(data: ProjectData, edit: EpisodeEdit): Rende
         .filter((t) => t.item.visual.kind === "video" && t.item.sourceAudio === "included")
         .map((t) => ({
           itemId: t.item.id,
-          assetId: t.item.visual.kind === "video" ? t.item.visual.assetId : null,
+          assetId: t.item.visual.kind === "video" ? (asset(t.item.visual.assetId)?.id ?? null) : null,
           startMs: t.startMs,
           durationMs: t.durationMs,
         })),
@@ -212,7 +214,8 @@ export function buildRenderManifest(data: ProjectData, edit: EpisodeEdit): Rende
           itemId: t.item.id,
           dialogueLineId: p.dialogueLineId,
           takeId: p.takeId,
-          assetId: data.takes.find((x) => x.id === p.takeId)?.audioAssetId ?? null,
+          // a take without a stored audio file (timed text, a placeholder) sounds as silence
+          assetId: asset(data.takes.find((x) => x.id === p.takeId)?.audioAssetId)?.id ?? null,
           startMs: t.startMs + p.startMs,
           takeInMs: p.takeInMs,
           takeOutMs: p.takeOutMs,

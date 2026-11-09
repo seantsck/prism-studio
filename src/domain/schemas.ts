@@ -76,6 +76,8 @@ export const ASSET_PURPOSES = [
   "spatial_reconstruction",
   /** a still uploaded as a Shot's Production Frame (Phase 2G.1); promoted frames reuse their existing Asset */
   "production_frame",
+  /** a final rendered Episode MP4 (Phase 5B-V4); immutable, one per completed render */
+  "episode_render",
 ] as const;
 export const STORAGE_PROVIDERS = ["none", "local", "supabase"] as const;
 export const DURATION_SOURCES = ["server_metadata", "browser_hint", "manual", "seed"] as const;

@@ -37,7 +37,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     "x-content-type-options": "nosniff",
     "cache-control": "private, max-age=300",
     "accept-ranges": "bytes",
-    "content-disposition": `${INLINE.test(mime) ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(asset.originalFilename || asset.name)}`,
+    // `?download=1` (5B-V4 Export / Download) asks for an attachment under the asset's own sanitized file name
+    "content-disposition": `${INLINE.test(mime) && new URL(req.url).searchParams.get("download") !== "1" ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(asset.originalFilename || asset.name)}`,
   };
 
   const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.get("range") ?? "");

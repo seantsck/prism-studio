@@ -8,6 +8,7 @@ import { createEpisodeEdit, resetEditToStoryOrder, useCurrentShotMedia } from "@
 import { AddShotPanel, ItemEditor, ItemOrderControls, type EditTarget } from "./episode-edit-controls";
 import { EditPlayer, SeekButton } from "./episode-edit-player";
 import { ManifestPanel, RevisionPanel, TitlePanel, TransitionControl } from "./episode-edit-v3-controls";
+import { RenderPanel } from "./episode-render-panel";
 import type { CutMarkerVM } from "./cut-marker-model";
 import type { BadgeVM, RowVM, RunVM, SummaryVM } from "./episode-edit-model";
 import { SEQUENCE_MEDIA_LABEL } from "@/domain/edit/sequence";
@@ -173,6 +174,8 @@ export function EpisodeEditView({
         <EditPlayer key={page.revision} playback={page.playback} />
         {/* 5B-V3: saved revisions, title cards and the render manifest of exactly this state */}
         <RevisionPanel target={target} revisions={page.revisions} savedAs={page.savedAs} />
+        {/* 5B-V4: render the saved revision to a final MP4 */}
+        <RenderPanel target={target} projectSlug={data.project.slug} vm={page.render} />
         <TitlePanel target={target} titles={page.titles} />
         <Runs runs={page.runs} />
         <Rows rows={page.rows} target={target} continuity={`${base}/continuity`} />
