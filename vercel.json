@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "echo workers-only project: no web install",
+  "buildCommand": "echo workers-only project: no web build",
+  "outputDirectory": "deploy/workers-staging/static",
+  "daemons": {
+    "render": {
+      "root": "./",
+      "entrypoint": "Dockerfile.render-worker",
+      "instances": { "iad1": 1 },
+      "resources": { "requests": { "memory": "2Gi" } },
+      "terminationGracePeriodSeconds": 120
+    }
+  }
+}
