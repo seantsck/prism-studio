@@ -380,13 +380,16 @@ function chooseModality(
   return order.find((m) => supported.has(m)) ?? null;
 }
 
-function describeSupportedDurations(v: NonNullable<GenerationModel["capabilities"]["video"]>): string {
+export function describeSupportedDurations(v: NonNullable<GenerationModel["capabilities"]["video"]>): string {
   if (v.allowedDurationsMs?.length) return v.allowedDurationsMs.map(seconds).join(", ");
   const step = v.durationStepMs ? ` in ${seconds(v.durationStepMs)} steps` : "";
   return `${seconds(v.minDurationMs)}–${seconds(v.maxDurationMs)}${step}`;
 }
 
-function durationSupported(v: NonNullable<GenerationModel["capabilities"]["video"]>, ms: number): boolean {
+export function durationSupported(
+  v: NonNullable<GenerationModel["capabilities"]["video"]>,
+  ms: number,
+): boolean {
   if (v.allowedDurationsMs?.length) return v.allowedDurationsMs.includes(ms);
   if (ms < v.minDurationMs || ms > v.maxDurationMs) return false;
   return v.durationStepMs ? (ms - v.minDurationMs) % v.durationStepMs === 0 : true;

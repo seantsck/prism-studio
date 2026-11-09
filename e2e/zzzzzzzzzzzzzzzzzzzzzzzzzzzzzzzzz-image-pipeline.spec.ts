@@ -33,6 +33,9 @@ import { buildSeedProject } from "../src/data/seed";
  *   O  The integrated loop by navigation only: Import Story → Write (accept) → Scenes → Plan Shots (re-plan, apply) →
  *                 Shot 3A (story changed) → Direct with Prism (needs review → direct again → apply) → Production Frame
  *                 Inputs (Visual Bibles + View + direction + story) → mock candidate → conform → canonical (5B loop)
+ *   P  Animate: Shot 3A's canonical Production Frame → Video Inputs → free mock clip → play → Use as Shot Clip →
+ *                 refresh → Generate Alternative (motion note; the Shot Clip is unchanged) → a new S5 direction marks the
+ *                 clip "needs review", still playable (5B-V1)
  */
 test.describe.configure({ mode: "serial" });
 
@@ -895,4 +898,86 @@ test("O — the integrated loop by navigation: Import Story → Write → Scenes
     .toBe(1);
   await page.reload();
   await expect(current).toHaveAttribute("data-attempt", attempt!);
+});
+
+test("P — Animate: canonical Production Frame → Video Inputs → mock clip → Use as Shot Clip → alternative → review-needed", async ({
+  page,
+}) => {
+  test.setTimeout(360_000);
+  const seed = buildSeedProject();
+  const shot3A = seed.shots.find((s) => s.shotCode === "3A")!;
+  const animateUrl = `${EP}/shots/${shot3A.id}?section=animate`;
+  const panel = page.getByTestId("animate-panel");
+  // 1. the canonical Production Frame (story O) is the first frame: Animate is ready
+  await page.goto(animateUrl);
+  await expect(panel).toHaveAttribute("data-ready", "1", { timeout: 30_000 });
+  const inputs = page.getByTestId("video-inputs");
+  await expect(inputs.getByTestId("video-inputs-first-frame")).toContainText(
+    /Production Frame v\d+ — Shot 3A/,
+  );
+  await expect(inputs.getByTestId("video-inputs-first-frame")).toContainText("production conform");
+  await expect(inputs.getByTestId("video-inputs-camera")).toContainText("eye level");
+  await expect(inputs.getByTestId("video-inputs-continuity")).toContainText("Formal Black Look");
+  await expect(inputs.getByTestId("video-inputs-continuity")).toContainText("Grand Celeste Lobby");
+  await expect(inputs.getByTestId("video-inputs-performance")).not.toBeEmpty();
+  await inputs.locator("summary", { hasText: "Advanced" }).click();
+  await expect(inputs.getByTestId("video-inputs-prompt")).toContainText(
+    "Begin exactly from the supplied Production Frame",
+  );
+  await expect(inputs.getByTestId("video-inputs-prompt")).toContainText("Protect each Character's identity");
+  // 2. choose the free mock model → generate → the worker completes a real (mock) video
+  await panel
+    .locator('[data-testid="model-row"][data-model="mock-video-1"]')
+    .getByTestId("model-pick")
+    .check();
+  await panel.getByTestId("ack-all").check();
+  await panel.getByTestId("create-candidate-set").click();
+  await page.waitForURL(/\/candidates\/[0-9a-f-]{36}/, { timeout: 30_000 });
+  await expect(page.getByTestId("set-rollup")).toContainText("1/1 completed", { timeout: 120_000 });
+  const card = page.locator('[data-testid="candidate-card"][data-model="mock-video-1"]');
+  await expect(card.getByTestId("candidate-animation")).toHaveAttribute("data-first-frame", "match");
+  // 3. play the candidate
+  const video = card.getByTestId("candidate-video");
+  await expect(video).toHaveCount(1);
+  await expect
+    .poll(async () => video.evaluate((v: HTMLVideoElement) => v.readyState), { timeout: 30_000 })
+    .toBeGreaterThan(0);
+  // 4. Use as Shot Clip (explicit) → refresh → the same Shot Clip
+  await card.getByTestId("use-as-shot-clip").click();
+  await expect(card.getByTestId("use-as-shot-clip")).toHaveText("Current Shot Clip", { timeout: 30_000 });
+  const attempt = await card.getAttribute("data-attempt");
+  await page.goto(animateUrl);
+  const current = page.getByTestId("shot-clip-current");
+  await expect(current).toHaveAttribute("data-attempt", attempt!);
+  await page.reload();
+  await expect(current).toHaveAttribute("data-attempt", attempt!);
+  // 5. Generate Alternative with a motion note → a new candidate; the Shot Clip is unchanged
+  const entry = page.locator(`[data-testid="shot-clip-candidate"][data-attempt="${attempt}"]`);
+  await entry.getByLabel("Alternative motion").fill("Less movement. Yumeko only glances toward Sean.");
+  await entry.getByTestId("generate-alternative").click();
+  await page.waitForURL(/\/candidates\/[0-9a-f-]{36}/, { timeout: 30_000 });
+  await expect(page.getByTestId("set-rollup")).toContainText("1/1 completed", { timeout: 120_000 });
+  await page.goto(animateUrl);
+  await expect(page.getByTestId("shot-clip-candidate")).toHaveCount(2);
+  await expect(current).toHaveAttribute("data-attempt", attempt!);
+  await expect(page.getByTestId("shot-clip-candidates")).toContainText(
+    "Less movement. Yumeko only glances toward Sean.",
+  );
+  // 6. an upstream input changes (a new S5 direction is applied): the clip stays, marked for review
+  await page.goto(`${EP}/shots/${shot3A.id}/direct`);
+  await page.getByLabel("Direction note").fill("handheld");
+  await page.getByTestId("dir-direct").click();
+  await page.waitForURL(/\/direct\?proposal=/, { timeout: 30_000 });
+  await expect
+    .poll(async () => (await page.reload(), page.getByTestId("dir-status").getAttribute("data-status")), {
+      timeout: 60_000,
+      intervals: [1000],
+    })
+    .toBe("ready");
+  await page.getByTestId("dir-apply").click();
+  await expect(page.getByTestId("dir-applied")).toBeVisible({ timeout: 30_000 });
+  await page.goto(animateUrl);
+  await expect(current).toHaveAttribute("data-attempt", attempt!);
+  await expect(current.getByTestId("shot-clip-stale")).toContainText("Needs review");
+  await expect(current.getByTestId("shot-clip-video")).toHaveCount(1); // still playable history
 });

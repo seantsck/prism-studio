@@ -30,6 +30,21 @@ export const ANIMATION_BEGIN_LINE = "Begin exactly from the supplied Production 
 export const ANIMATION_PRESERVE_LINE =
   "Preserve the subjects, wardrobe, set, composition and lighting established by the first frame.";
 const ANIMATION_COMPOSITION_LINE = "As established by the first frame; do not recompose.";
+/**
+ * Phase 5B-V1: the motion layer of an animation. The Production Frame already shows what the Shot LOOKS like; these
+ * lines say what may CHANGE after it (restrained, motivated motion), what "static" means for a video (a locked camera,
+ * not a frozen picture), how the approved emotional intent becomes subtle performance, and what must be protected.
+ */
+export const ANIMATION_MOTION_LINE =
+  "Animate only what changes after the first frame: restrained, motivated by the story beat; add no new action.";
+export const ANIMATION_STATIC_CAMERA_LINE =
+  "Camera static (locked off). The picture is not frozen: allow breathing, blinking, slight hair and fabric movement, practical light flicker and subtle environmental motion.";
+export const ANIMATION_CONTINUITY_LINE =
+  "Protect each Character's identity, face, wardrobe and hairstyle, the Location, the composition, important props and the established screen direction exactly as in the first frame.";
+export const ANIMATION_MOTION_GUARD =
+  "The creator's motion direction changes only how the Shot moves: never the Characters, their Looks, the Location, the story event or the composition.";
+const PERFORMANCE_FROM_INTENT =
+  "show it through subtle actor motion (a breath, a small eye movement), not broad gestures";
 
 /**
  * Motion-first reading order for `animate_production_frame`: the first frame already shows what the Shot LOOKS like, so
@@ -80,7 +95,8 @@ const PRODUCTION_FRAME_ORDER: readonly PromptSectionKey[] = [
  * continuity: a protecting line always leads the hard constraints.
  */
 export interface CreatorDirection {
-  kind: "additional" | "alternate_composition";
+  /** `motion` (5B-V1): an animation alternative's motion note ("Less movement. Yumeko only glances toward Sean."). */
+  kind: "additional" | "alternate_composition" | "motion";
   text: string;
 }
 export const MAX_CREATOR_DIRECTION = 500;
@@ -278,7 +294,32 @@ export function buildPromptPlan(
       ...bySection.subject,
     ];
     bySection.composition = [ANIMATION_COMPOSITION_LINE, ...bySection.composition];
-    bySection.hard_constraints = [ANIMATION_PRESERVE_LINE, ...bySection.hard_constraints];
+    // 5B-V1: motion first, a static camera that is not a frozen picture, performance from the approved intent
+    bySection.action = [ANIMATION_MOTION_LINE, ...bySection.action];
+    if (!cam.movement.trim() || /^(static|locked)/i.test(cam.movement.trim()))
+      bySection.camera = [...bySection.camera, ANIMATION_STATIC_CAMERA_LINE];
+    const intent = cam.notes.match(/^Emotional intent: (.+)$/m)?.[1]?.trim();
+    if (intent)
+      bySection.performance = [
+        ...bySection.performance,
+        `emotional intent: ${intent} — ${PERFORMANCE_FROM_INTENT}`,
+      ];
+    if (pkg.lighting.mood) bySection.performance = [...bySection.performance, `mood: ${pkg.lighting.mood}`];
+    bySection.hard_constraints = [
+      ANIMATION_PRESERVE_LINE,
+      ANIMATION_CONTINUITY_LINE,
+      ...bySection.hard_constraints,
+    ];
+  }
+  // 5B-V1: an animation alternative's motion direction (never a protected line; the preserve lines stay first)
+  const motion = animate ? normalizeDirection(opts.direction) : null;
+  if (motion?.text) {
+    bySection.action = [...bySection.action, `Creator motion direction: ${motion.text}`];
+    bySection.hard_constraints = [
+      ...bySection.hard_constraints.slice(0, 2),
+      ANIMATION_MOTION_GUARD,
+      ...bySection.hard_constraints.slice(2),
+    ];
   }
   // Phase 5B-I6: the creator's direction (Production Frame stills only); it never replaces a protected line
   const direction = still ? normalizeDirection(opts.direction) : null;
