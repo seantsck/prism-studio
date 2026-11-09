@@ -167,7 +167,7 @@ try {
     if(!canonical?.assetId || !d.assets.some((a:any)=>a.id===canonical.assetId&&a.objectPath&&a.checksum)){
       const g=await generate({
         label:"Yumeko canonical identity",
-        key:"phase5b-live-yumeko-canonical-v1",
+        key:"phase5b-live-yumeko-canonical-v2",
         subject:{kind:"character",characterId:yumeko.id,intent:"character_reference",lookId:null},
         direction:"Canonical identity reference. Natural neutral expression, front-facing, full body, exact character identity and proportions, plain neutral studio background, even light, no text.",
         aspectRatio:"2:3",
