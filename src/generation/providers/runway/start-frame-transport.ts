@@ -9,6 +9,44 @@ const exec = promisify(execFile);
 
 export const RUNWAY_START_FRAME_TRANSPORT_POLICY = "contain-pad-v1" as const;
 
+export interface FrozenRunwayStartFrameTransport {
+  version: 1;
+  policy: typeof RUNWAY_START_FRAME_TRANSPORT_POLICY;
+  sourceAssetId: string;
+  targetCanvas: { width: number; height: number };
+  background: "black";
+}
+
+export function parseFrozenRunwayStartFrameTransport(raw: unknown): FrozenRunwayStartFrameTransport | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const canvas =
+    r.targetCanvas && typeof r.targetCanvas === "object"
+      ? (r.targetCanvas as Record<string, unknown>)
+      : null;
+  if (
+    r.version !== 1 ||
+    r.policy !== RUNWAY_START_FRAME_TRANSPORT_POLICY ||
+    typeof r.sourceAssetId !== "string" ||
+    !r.sourceAssetId ||
+    r.background !== "black" ||
+    !canvas ||
+    !Number.isInteger(canvas.width) ||
+    !Number.isInteger(canvas.height) ||
+    Number(canvas.width) < 2 ||
+    Number(canvas.height) < 2
+  ) {
+    return null;
+  }
+  return {
+    version: 1,
+    policy: RUNWAY_START_FRAME_TRANSPORT_POLICY,
+    sourceAssetId: r.sourceAssetId,
+    targetCanvas: { width: Number(canvas.width), height: Number(canvas.height) },
+    background: "black",
+  };
+}
+
 export interface RunwayStartFrameTransportSpec {
   targetCanvas: { width: number; height: number };
   aspectRange: { min: number; max: number };
