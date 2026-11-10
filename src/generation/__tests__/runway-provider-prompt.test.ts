@@ -179,22 +179,42 @@ describe("Runway Gen-4 Turbo sends the policy-adapted provider prompt (Phase 5B)
   });
 
   it("models and purposes without a policy behave exactly as before", () => {
-    // Gen-4.5 animation: no policy, the plan compilation is sent unchanged
-    const g45 = frozen("gen4.5");
-    expect(g45.request.providerOptions?.prismProviderPrompt).toBeUndefined();
+    // Veo 3.1 Fast animation: no policy, the plan compilation is sent unchanged
+    const veo = frozen("veo3.1_fast");
+    expect(veo.request.providerOptions?.prismProviderPrompt).toBeUndefined();
+    const cat = catalogModel("runway", "veo3.1_fast")!;
     const provider = new RunwayProvider({ env: ENV });
-    const compiled = provider.compileRequest(g45.request, g45.plan);
+    const compiled = provider.compileRequest(veo.request, veo.plan);
     expect(compiled.fields.promptText).toBe(
-      compileRunwayPrompt(g45.plan, 1000, {
-        modelName: "Runway Gen-4.5",
-        negativeSent: false,
-        audioReference: false,
+      compileRunwayPrompt(veo.plan, cat.promptMaxChars ?? 1000, {
+        modelName: cat.displayName,
+        negativeSent: cat.inputs.negativePrompt === "supported",
+        audioReference: cat.audio.referenceConditioning === "supported",
       }).text,
     );
     expect(compiled.fields.promptPolicy).toBeUndefined();
     // Gen-4 Turbo for an ordinary Shot output: no policy either
     const out = frozen("gen4_turbo", "shot_output");
     expect(out.request.providerOptions?.prismProviderPrompt).toBeUndefined();
+  });
+
+  it("Gen-4.5 animation gets the same visible-motion v1 prompt, but its 21:9 transport is refused (documented 2.0 prompt-image limit)", () => {
+    const { request, plan, pkg } = frozen("gen4.5");
+    const p = parseFrozenProviderPrompt(request.providerOptions?.prismProviderPrompt)!;
+    expect(p).toMatchObject({ policy: { id: "visible-motion", version: 1 }, modelId: "gen4.5", ok: true });
+    expect(p.sourceFingerprint).toBe(pkg.provenance.fingerprint);
+    const provider = new RunwayProvider({ env: ENV });
+    expect(provider.compileRequest(request, plan).fields).toMatchObject({
+      promptText: p.text,
+      promptPolicy: "visible-motion@v1",
+      ratio: "1584:672",
+    });
+    // Runway documents Gen-4.5 prompt images as width/height 0.5–2; a 1584×672 (2.357) start frame is not valid input,
+    // and Prism never relies on the provider's implicit centre crop: the request is refused before any spend.
+    expect(catalogModel("runway", "gen4.5")!.inputs.promptImageAspectRatio).toEqual({ min: 0.5, max: 2 });
+    const check = provider.validateRequest(request, toGenerationModel(catalogModel("runway", "gen4.5")!));
+    expect(check.ok).toBe(false);
+    expect(check.errors.join(" ")).toMatch(/outside Runway Gen-4\.5's verified prompt-image aspect range/);
   });
 
   it("the no-spend evaluation shows the provider prompt and prepareSubmission records it on the attempt", () => {

@@ -153,7 +153,13 @@ their last clause.
 
 **Policy table.** `providerPromptPolicyFor(provider, model, purpose)` is table-driven; a model opts in explicitly with
 its own target. First entry: Runway `gen4_turbo`, `animate_production_frame`, policy `visible-motion` v1, limit from the
-catalog (`promptMaxChars` 1000), target 900. Everything else keeps its existing compilation, unchanged.
+catalog (`promptMaxChars` 1000), target 900; Runway `gen4.5` uses the same policy and budget. Everything else keeps its
+existing compilation, unchanged.
+
+Gen-4.5 caveat: Runway documents Gen-4.5 prompt images as width/height 0.5–2 (Gen-4 Turbo: 0.5–2.358). A 21:9
+(1584×672, 2.357) start-frame transport is therefore not valid Gen-4.5 input, and Prism refuses it before any spend rather
+than relying on Runway's implicit centre crop. A Gen-4.5 animation of a 2.39:1 Production Frame needs a separately
+designed transport policy.
 
 **visible-motion v1** writes concise prose in these sections:
 

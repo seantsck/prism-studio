@@ -139,7 +139,7 @@ const POLICY_TABLE: ReadonlyArray<{
 }> = [
   {
     provider: "runway",
-    modelIds: ["gen4_turbo"],
+    modelIds: ["gen4_turbo", "gen4.5"],
     purposes: ["animate_production_frame"],
     policy: VISIBLE_MOTION_POLICY,
     target: 900,
