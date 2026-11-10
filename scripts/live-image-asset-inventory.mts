@@ -16,30 +16,34 @@ try {
   `,[projectId]);
 
   const attempts=await pool.query(`
-    select
-      ga.id,ga.shot_id,sh.shot_code,ga.attempt_number,ga.provider,ga.model,ga.modality,
-      ga.status,ga.prompt,ga.negative_prompt,ga.model_settings,ga.package_snapshot,
-      ga.output_asset_id,ga.created_at,ga.completed_at
+    select row_to_json(ga) as row
     from generation_attempts ga
-    left join shots sh on sh.id=ga.shot_id
     where ga.project_id=$1
-      and ga.output_asset_id is not null
     order by ga.created_at
   `,[projectId]);
 
-  console.log("IMAGE_ASSET_INVENTORY="+JSON.stringify({
-    assets:assets.rows,
-    attempts:attempts.rows.map(a=>({
-      id:a.id,shotId:a.shot_id,shotCode:a.shot_code,attemptNumber:a.attempt_number,
-      provider:a.provider,model:a.model,modality:a.modality,status:a.status,
-      outputAssetId:a.output_asset_id,createdAt:a.created_at,completedAt:a.completed_at,
-      prompt:String(a.prompt??"").slice(0,1200),
-      negativePrompt:String(a.negative_prompt??"").slice(0,500),
-      modelSettings:a.model_settings,
-      packageShot:a.package_snapshot?.shot??null,
-      packageStoryIntent:a.package_snapshot?.storyIntent??null,
-      packageSet:a.package_snapshot?.set??null,
-      packageCharacters:a.package_snapshot?.characters??null
-    }))
-  }));
+  const shots=await pool.query("select id,shot_code,title from shots where project_id=$1",[projectId]);
+  const shotMap=new Map(shots.rows.map(s=>[s.id,{code:s.shot_code,title:s.title}]));
+
+  const compact=attempts.rows.map(({row:a})=>({
+    id:a.id,
+    shotId:a.shot_id,
+    shot:shotMap.get(a.shot_id)??null,
+    attemptNumber:a.attempt_number,
+    provider:a.provider,
+    model:a.model,
+    modality:a.modality,
+    status:a.status,
+    purpose:a.purpose,
+    outputAssetId:a.output_asset_id,
+    createdAt:a.created_at,
+    prompt:String(a.prompt??"").slice(0,900),
+    negativePrompt:String(a.negative_prompt??"").slice(0,300),
+    modelSettings:a.model_settings??null,
+    packageSet:a.package_snapshot?.set??null,
+    packageCharacters:a.package_snapshot?.characters??null,
+    packageStoryIntent:a.package_snapshot?.storyIntent??null
+  })).filter(a=>a.outputAssetId || a.status==="succeeded");
+
+  console.log("IMAGE_ASSET_INVENTORY="+JSON.stringify({assets:assets.rows,attempts:compact}));
 } finally { await pool.end(); }
