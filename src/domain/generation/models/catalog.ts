@@ -40,16 +40,16 @@ import type {
  */
 export const RUNWAY_SDK_REF = "@runwayml/sdk@4.22.0";
 export const RUNWAY_API_VERSION_REF = "2024-11-06";
-export const CATALOG_VERIFIED_AT = "2026-10-14";
-export const RUNWAY_PRICING_VERSION = "runway-2026-10-13";
+export const CATALOG_VERIFIED_AT = "2026-11-09";
+export const RUNWAY_PRICING_VERSION = "runway-2026-11-09";
 export const RUNWAY_USD_PER_CREDIT = 0.01;
 
 const SOURCES = [
   "@runwayml/sdk@4.22.0 resources/image-to-video.d.ts (re-audited 2026-10-21; identical to 4.21.0)",
   "@runwayml/sdk@4.22.0 resources/text-to-video.d.ts (re-audited 2026-10-21; identical to 4.21.0)",
-  "docs.dev.runwayml.com/guides/pricing (2026-10-13)",
-  "docs.dev.runwayml.com/guides/models (2026-10-14)",
-  "docs.dev.runwayml.com/api.md image_to_video reference (2026-10-14)",
+  "docs.dev.runwayml.com/guides/pricing (2026-11-09)",
+  "docs.dev.runwayml.com/guides/models (2026-11-09)",
+  "docs.dev.runwayml.com/api.md image_to_video reference + input ratio limits (2026-11-09)",
 ];
 
 const verification = (unstated: string[]): CatalogVerification => ({
@@ -62,7 +62,7 @@ const verification = (unstated: string[]): CatalogVerification => ({
 
 const pricing = (rule: CreditRule): CatalogPricing => ({
   version: RUNWAY_PRICING_VERSION,
-  verifiedAt: "2026-10-13",
+  verifiedAt: "2026-11-09",
   source: "https://docs.dev.runwayml.com/guides/pricing/",
   usdPerCredit: RUNWAY_USD_PER_CREDIT,
   currency: "USD",
@@ -104,6 +104,7 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
       maxReferenceAudioSeconds: null,
       keyframesExcludeReferences: "unknown",
       negativePrompt: "unsupported",
+      promptImageAspectRatio: { min: 0.5, max: 2 },
     },
     audio: { nativeGeneration: "unsupported", referenceConditioning: "unsupported" },
     duration: {
@@ -159,6 +160,7 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
       maxReferenceAudioSeconds: null,
       keyframesExcludeReferences: "unknown",
       negativePrompt: "unsupported",
+      promptImageAspectRatio: { min: 0.5, max: 2.358 },
     },
     audio: { nativeGeneration: "unsupported", referenceConditioning: "unsupported" },
     duration: {
@@ -167,7 +169,7 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
       maxSeconds: 10,
       stepSeconds: 1,
       verified: true,
-      note: "Integer 2–10 seconds, optional (API reference, 2026-10-14). 2 s is a valid request.",
+      note: "Integer 2–10 seconds, optional (API reference, re-verified 2026-11-09). 2 s is a valid request.",
     },
     tiers: [
       tier("default", 1280, 720, {
@@ -188,7 +190,7 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
       perReferenceImage: 0,
       perReferenceVideoSecond: null,
       referenceVideoBilledCapSeconds: null,
-      minimumCredits: null,
+      minimumCredits: 10,
     }),
     concurrencyNote: "Account usage tier dependent.",
   },
