@@ -103,6 +103,13 @@ canvas. Model capabilities expose it as `video.providerCanvases`, and the framin
 correctly refused; the adapter invariant (frozen canvas = provider canvas, exactly) is unchanged. Providers without
 documented pixel canvases keep the previous requested/nominal planning.
 
+**Delivery removes exactly the transport padding.** The transport placement is a pure function of the frozen policy,
+the provider canvas and the canonical source size (`attemptTransportGeometry`). When the provider output is exactly the
+transport canvas, `resolveConform` crops to that content rectangle (Shot 3A: 1584×662 at y=5 inside 1584×672) and
+centre-crops inside it only if the content is not already the target ratio. FFmpeg's crop uses `exact=1` for odd
+rectangles: on yuv420p it otherwise rounds y=5 to y=4. The generic even centre crop (y=4) had left a 1 px padding
+row. Attempts without a transport, or outputs of another size, keep the generic conform (the latter with a warning).
+
 ## Keyframe mode and reference disclosure
 
 Models whose first/last frames exclude reference images (Seedance, Hailuo: `keyframesExcludeReferences`) always run in
