@@ -198,7 +198,7 @@ describe("Runway Gen-4 Turbo sends the policy-adapted provider prompt (Phase 5B)
     expect(out.request.providerOptions?.prismProviderPrompt).toBeUndefined();
   });
 
-  it("Gen-4.5 animation gets the same visible-motion v1 prompt, but its 21:9 transport is refused (documented 2.0 prompt-image limit)", () => {
+  it("Gen-4.5 animation gets the same visible-motion v1 prompt and a valid pre-pad transport", () => {
     const { request, plan, pkg } = frozen("gen4.5");
     const p = parseFrozenProviderPrompt(request.providerOptions?.prismProviderPrompt)!;
     expect(p).toMatchObject({ policy: { id: "visible-motion", version: 1 }, modelId: "gen4.5", ok: true });
@@ -209,12 +209,13 @@ describe("Runway Gen-4 Turbo sends the policy-adapted provider prompt (Phase 5B)
       promptPolicy: "visible-motion@v1",
       ratio: "1584:672",
     });
-    // Runway documents Gen-4.5 prompt images as width/height 0.5–2; a 1584×672 (2.357) start frame is not valid input,
-    // and Prism never relies on the provider's implicit centre crop: the request is refused before any spend.
+    // Gen-4.5's documented prompt-image range is 0.5–2: the 21:9 start frame is pre-padded to 2:1 (see
+    // runway-prepad-transport.test.ts), never sent out of range
     expect(catalogModel("runway", "gen4.5")!.inputs.promptImageAspectRatio).toEqual({ min: 0.5, max: 2 });
-    const check = provider.validateRequest(request, toGenerationModel(catalogModel("runway", "gen4.5")!));
-    expect(check.ok).toBe(false);
-    expect(check.errors.join(" ")).toMatch(/outside Runway Gen-4\.5's verified prompt-image aspect range/);
+    expect(provider.validateRequest(request, toGenerationModel(catalogModel("runway", "gen4.5")!))).toEqual({
+      ok: true,
+      errors: [],
+    });
   });
 
   it("the no-spend evaluation shows the provider prompt and prepareSubmission records it on the attempt", () => {

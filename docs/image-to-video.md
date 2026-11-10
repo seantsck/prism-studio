@@ -110,6 +110,36 @@ centre-crops inside it only if the content is not already the target ratio. FFmp
 rectangles: on yuv420p it otherwise rounds y=5 to y=4. The generic even centre crop (y=4) had left a 1 px padding
 row. Attempts without a transport, or outputs of another size, keep the generic conform (the latter with a warning).
 
+### Pre-pad transport for narrow prompt-image ranges (`contain-prepad-center-crop-v1`)
+
+Some models accept a narrower prompt image than the output they produce. Runway Gen-4.5 documents a prompt-image
+width/height range of 0.5–2.0 but a `1584:672` (≈2.357) output; its API "Inputs" page also documents that a prompt image
+whose aspect differs from the requested `ratio` is centre-cropped to that ratio (verified 2026-11-10; recorded as
+`inputs.promptImageCrop` in the catalog — only models with that documented fact may use this policy).
+
+When the verified output canvas is outside the model's prompt-image range, `buildGenerationRequest` freezes an explicit
+record instead of `contain-pad-v1` (`planPrepadCenterCrop`, pure):
+
+| Field              | Shot 3A (Gen-4.5)                             |
+| ------------------ | --------------------------------------------- |
+| `source`           | 1536×642 (canonical, never modified)          |
+| `content`          | 1584×662 (uniform scale, no crop)             |
+| `submittedCanvas`  | 1584×792 (exactly 2:1, inside 0.5–2.0)        |
+| `submittedOffset`  | x 0, y 65 (65 synthetic rows above and below) |
+| `providerCrop`     | centre, source URL, verifiedAt                |
+| `outputCanvas`     | 1584×672                                      |
+| `expectedCrop`     | x 0, y 60, 1584×672 (removes 60 + 60 rows)    |
+| `effectiveContent` | 1584×662 at x 0, y 5 (= the Turbo geometry)   |
+
+The planner refuses unless every invariant holds: documented centre crop; output outside the range; submitted image
+inside it; an exact integer crop (even padding total); the crop contains the whole picture (zero picture pixels lost);
+the picture's scale is identical on the submitted and output canvases. The adapter re-derives the record and refuses any
+difference, the transport refuses a source whose stored dimensions differ from the record, and delivery conform uses
+`effectiveContent` exactly as it uses the `contain-pad-v1` rectangle. A real-FFmpeg test proves the submitted image,
+centre-cropped as documented, is pixel-identical to the `contain-pad-v1` transport. The transport image is provider-only:
+it exists in memory for the request and is never stored as an Asset. Gen-4 Turbo (range 0.5–2.358) keeps
+`contain-pad-v1`.
+
 ## Keyframe mode and reference disclosure
 
 Models whose first/last frames exclude reference images (Seedance, Hailuo: `keyframesExcludeReferences`) always run in
@@ -156,10 +186,8 @@ its own target. First entry: Runway `gen4_turbo`, `animate_production_frame`, po
 catalog (`promptMaxChars` 1000), target 900; Runway `gen4.5` uses the same policy and budget. Everything else keeps its
 existing compilation, unchanged.
 
-Gen-4.5 caveat: Runway documents Gen-4.5 prompt images as width/height 0.5–2 (Gen-4 Turbo: 0.5–2.358). A 21:9
-(1584×672, 2.357) start-frame transport is therefore not valid Gen-4.5 input, and Prism refuses it before any spend rather
-than relying on Runway's implicit centre crop. A Gen-4.5 animation of a 2.39:1 Production Frame needs a separately
-designed transport policy.
+Gen-4.5's documented prompt-image range (0.5–2) is narrower than its 21:9 output; its wide start frames use the
+`contain-prepad-center-crop-v1` transport described above.
 
 **visible-motion v1** writes concise prose in these sections:
 
