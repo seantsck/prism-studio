@@ -11,6 +11,12 @@
 # NODE_ENV=production disables every development opt-in (admin DB credential, test-user storage).
 FROM node:24-bookworm-slim
 
+# Runway image-to-video may need a deterministic provider-only first-frame transport canvas.
+# FFmpeg/ffprobe perform that local adaptation; no provider or network call is involved.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PRISM_STUDIO_PERSISTENCE=supabase

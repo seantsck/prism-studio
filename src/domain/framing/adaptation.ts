@@ -78,6 +78,11 @@ export interface AdaptationInput {
     /** Resolution the package asked for (may have a different ratio than the provider canvas). */
     requestedResolution: Size | null;
     maxResolution: Size | null;
+    /**
+     * Verified provider pixel canvas per aspect label. When the chosen label has one, it IS the provider canvas:
+     * labels describe the mode, verified dimensions define the request (never nominal label arithmetic).
+     */
+    providerCanvases?: Record<string, Size> | null;
     duration: DurationLimits | null;
   };
   choice?: { framing?: FramingStrategy | null; duration?: DurationStrategy | null };
@@ -107,7 +112,7 @@ export interface FramingPlan {
   providerLabel: string | null;
   /** Provider canvas used for planning; the conform step re-resolves against the real output. */
   providerCanvas: Size | null;
-  canvasSource: "requested" | "nominal" | null;
+  canvasSource: "provider" | "requested" | "nominal" | null;
   /** Surviving region of the provider canvas, 0..1 fractions (crop strategies). */
   retained: Rect | null;
   axis: CropAxis;
@@ -396,11 +401,17 @@ export function planFraming(input: AdaptationInput): FramingPlan {
     };
   }
 
-  // Provider canvas: the requested resolution only when its ratio matches the chosen provider ratio.
+  // Provider canvas: the provider's VERIFIED pixel canvas for the chosen label wins ("21:9" is 1584×672 on Runway, not
+  // the 1584×678 that label arithmetic gives); otherwise the requested resolution only when its ratio matches the
+  // chosen provider ratio; otherwise a nominal canvas.
+  const verified = input.provider.providerCanvases?.[f.choice.providerLabel] ?? null;
   const req = input.provider.requestedResolution;
   let canvas: Size;
-  let canvasSource: "requested" | "nominal" = "nominal";
-  if (req && sameRatio(req.width / req.height, f.choice.providerRatio)) {
+  let canvasSource: "provider" | "requested" | "nominal" = "nominal";
+  if (verified) {
+    canvas = { width: verified.width, height: verified.height };
+    canvasSource = "provider";
+  } else if (req && sameRatio(req.width / req.height, f.choice.providerRatio)) {
     canvas = req;
     canvasSource = "requested";
   } else if (req) {
@@ -585,7 +596,7 @@ export const adaptationPlanSchema = z.object({
     providerRatio: z.number().nullable(),
     providerLabel: z.string().nullable(),
     providerCanvas: size.nullable(),
-    canvasSource: z.enum(["requested", "nominal"]).nullable(),
+    canvasSource: z.enum(["provider", "requested", "nominal"]).nullable(),
     retained: rect.nullable(),
     axis: z.enum(["none", "vertical", "horizontal"]),
     discardedFraction: z.number(),

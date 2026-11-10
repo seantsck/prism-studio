@@ -2,11 +2,13 @@
 
 Phase 2G made the Shot's canonical still: the **Production Frame**. Phase 2H makes it move.
 
-> The selected, current Production Frame is the exact first-frame image supplied to the video model.
+> The selected, current Production Frame is the canonical first-frame source for the video model.
 
 It is never replaced by an approved or draft Storyboard, a generic Location reference, a manual start-frame override,
-text-to-video because a provider preferred it, or a similar regenerated image. The moving Shot begins from the exact
-still the filmmaker approved.
+text-to-video because a provider preferred it, or a similar regenerated image. When a provider's prompt-image aspect
+contract cannot accept the canonical frame directly, Prism may create a deterministic **provider-only transport frame**
+that contains the same Production Frame pixels on the frozen provider canvas. That transport never becomes canonical,
+never changes the Production Frame Asset, and is disclosed before spend and in provider provenance.
 
 2H is an execution contract plus a workflow. It reuses everything that already exists: generation attempts and jobs,
 the worker, the Runway adapter, the model catalog, candidate sets, human review, cost estimates and spend gates,
@@ -18,11 +20,11 @@ the freshness parts are unchanged. No GPU, COLMAP, Brush or 3D set is required.
 A provider-independent `GenerationPurpose`, frozen on the attempt's request (`request.purpose`) and on the candidate
 set's recommendation JSON (`generationPurpose`):
 
-| Purpose                    | Meaning                                                                                      |
-| -------------------------- | -------------------------------------------------------------------------------------------- |
-| `shot_output`              | generic Shot-output generation (every request without a purpose: history is never rewritten) |
-| `production_frame`         | a still candidate for the canonical Production Frame (2G.2)                                  |
-| `animate_production_frame` | a Shot-output VIDEO whose exact first frame is the selected, current Production Frame (2H)   |
+| Purpose                    | Meaning                                                                                               |
+| -------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `shot_output`              | generic Shot-output generation (every request without a purpose: history is never rewritten)          |
+| `production_frame`         | a still candidate for the canonical Production Frame (2G.2)                                           |
+| `animate_production_frame` | a Shot-output VIDEO whose canonical first-frame source is the selected, current Production Frame (2H) |
 
 An animation **is a Shot-output attempt**, not a Production Frame candidate: `isProductionFrameAttempt()` is false, the
 pipeline includes it, human review / Best / final approval apply, and the Production Frame selection never changes.
@@ -44,7 +46,7 @@ No database CHECK constrains the purpose: it lives in JSON (request, model setti
 Generic **Generate** keeps its historical start-frame precedence (override → Production Frame → Storyboard). Only the
 dedicated workflow is stricter.
 
-## Exact start frame and image-to-video only
+## Canonical start frame and image-to-video only
 
 For `animate_production_frame` the compatibility engine:
 
@@ -72,8 +74,41 @@ and reference, and the Storyboard would win nothing the frame has not already fi
 
 `animationRequestViolations(request, packageSnapshot)` is checked when the attempt is prepared AND again by the worker
 right before `adapter.submit` (provider-independent). It refuses any animation request that is not image-to-video, has
-no start frame, starts from anything but the frozen frame, or also sends the frame as a reference. A refused job fails
+no start frame, starts from anything but the frozen frame, or also sends the frame as a reference. If a frozen
+`prismStartFrameTransport` exists, its `sourceAssetId` must be that same frozen Production Frame. A refused job fails
 with `animation_source_invalid`; the provider is never called.
+
+### Provider-only start-frame transport
+
+Some providers constrain the **prompt image** more tightly than Prism's production frame. Prism does not solve that by
+changing the Production Frame or allowing the provider to auto-crop it. The immutable request freezes
+`providerOptions.prismStartFrameTransport` with the canonical source Asset, policy, provider canvas and background.
+
+For Runway the current policy is `contain-pad-v1`:
+
+- FFmpeg reads the canonical Production Frame bytes locally;
+- the complete frame is uniformly scaled to **contain** inside the provider canvas (up or down as needed), never cropped;
+- the remaining axis is center-padded black;
+- for Shot 3A, 1536×642 becomes 1584×662 plus 5 px top/bottom; the 2.39:1 delivery crop removes that padding;
+- the transient transport image is sent to Runway and never becomes a Prism canonical Asset;
+- Runway's output still follows the already-frozen delivery conform back to the production aspect ratio.
+
+The request preview names the transport and target canvas. Provider result provenance records the same frozen transport
+metadata, so a worker restart cannot silently change how the first frame reached the provider.
+
+**Provider canvas = verified pixels, not label arithmetic.** An aspect label (`21:9`) describes the provider's mode;
+the catalog's verified pixel value for that label (`1584:672` on Runway Gen-4 Turbo) is the request and transport
+canvas. Model capabilities expose it as `video.providerCanvases`, and the framing planner uses it (`canvasSource:
+"provider"`) before any requested or nominal canvas. Re-deriving height from `21/9` gave 1584×678, which the adapter
+correctly refused; the adapter invariant (frozen canvas = provider canvas, exactly) is unchanged. Providers without
+documented pixel canvases keep the previous requested/nominal planning.
+
+**Delivery removes exactly the transport padding.** The transport placement is a pure function of the frozen policy,
+the provider canvas and the canonical source size (`attemptTransportGeometry`). When the provider output is exactly the
+transport canvas, `resolveConform` crops to that content rectangle (Shot 3A: 1584×662 at y=5 inside 1584×672) and
+centre-crops inside it only if the content is not already the target ratio. FFmpeg's crop uses `exact=1` for odd
+rectangles: on yuv420p it otherwise rounds y=5 to y=4. The generic even centre crop (y=4) had left a 1 px padding
+row. Attempts without a transport, or outputs of another size, keep the generic conform (the latter with a warning).
 
 ## Keyframe mode and reference disclosure
 
@@ -104,10 +139,9 @@ Same PromptPlan v1 sections, no new schema, no provider-specific format in the d
 Unchanged adaptation semantics. The production duration (timeline / package timing) is never rounded: a natively
 supported duration is generated natively; a shorter-than-minimum duration with an explicit **generate longer, then
 trim** plan asks the provider for the supported duration (priced on the provider seconds) and the delivery conform trims
-it back; an unsupported duration without a plan is blocked. Framing: Production Frame → provider canvas → provider
-original → delivery conform, never a silent crop. The comparison shows production / provider / delivery duration and
-"Production Frame 2.39:1 → provider 16:9 → delivery back to 2.39:1" before any spend. The canonical Production Frame
-Asset is never modified.
+it back; an unsupported duration without a plan is blocked. Framing: Production Frame → optional provider-only transport canvas → provider original → delivery conform, never a
+silent crop. The comparison shows production / provider / delivery duration and the frozen provider canvas before any
+spend. The canonical Production Frame Asset is never modified.
 
 Audio: the selected performance stays production truth. Provider-native audio is OFF unless the person turns it on.
 Performance audio a provider accepts may condition the video; it is never called the final dialogue (Phase 2I assembles
@@ -121,8 +155,9 @@ the final performance deliberately).
   summary and the start-frame override state;
 - blocked reasons when the source rules fail (no comparison is offered then);
 - **Compare animation models**: the existing model comparison for the video models with, per model, eligible or
-  incompatible and why, exact first frame, production → provider → delivery duration, provider canvas, audio
-  conditioning, native audio (off/on), estimated cost and the references omitted by keyframe mode. No model is
+  incompatible and why, canonical first-frame source plus provider-only transport when required, production → provider
+  → delivery duration, provider canvas, audio conditioning, native audio (off/on), estimated cost and the references
+  omitted by keyframe mode. No model is
   pre-selected and nothing calls a provider until the set is explicitly created; paid models still need the server
   spend gates and the confirmation of the displayed total.
 

@@ -57,7 +57,7 @@ describe("Phase 2E.1: documented duration ranges are in the catalog", () => {
   });
   it("every entry still carries verifiedAt, sources, SDK and API version", () => {
     for (const m of RUNWAY_VIDEO_MODELS) {
-      expect(m.verification.verifiedAt).toBe("2026-10-14");
+      expect(m.verification.verifiedAt).toBe("2026-11-09");
       expect(m.verification.sources.join(" ")).toMatch(/api\.md/);
       expect(m.verification.sdkVersion).toMatch(/^@runwayml\/sdk@/);
       expect(m.verification.providerApiVersion).toBe("2024-11-06");

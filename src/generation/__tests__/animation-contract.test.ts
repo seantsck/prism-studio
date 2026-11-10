@@ -266,6 +266,24 @@ describe("image-to-video only", () => {
     expect(animationRequestViolations(request, { references: {} })).toEqual([
       "The frozen package has no Production Frame to animate.",
     ]);
+    expect(
+      animationRequestViolations(
+        {
+          ...request,
+          providerOptions: {
+            ...request.providerOptions,
+            prismStartFrameTransport: {
+              version: 1,
+              policy: "contain-pad-v1",
+              sourceAssetId: "other",
+              targetCanvas: { width: 1584, height: 672 },
+              background: "black",
+            },
+          },
+        },
+        pkg,
+      ),
+    ).toContain("The provider start-frame transport does not wrap the frozen Production Frame.");
     // other purposes are not this rule's business
     expect(
       animationRequestViolations({ ...request, purpose: undefined, modality: "text_to_video" }, pkg),

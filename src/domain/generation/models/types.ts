@@ -137,6 +137,12 @@ export interface CatalogInputs {
    */
   keyframesExcludeReferences: Support;
   negativePrompt: Support;
+  /**
+   * Provider-documented aspect-ratio range for an image used as the first/prompt frame.
+   * Absent means the docs do not state one. Execution may create a provider-only transport frame
+   * (never replacing the canonical Production Frame) when the frozen production frame falls outside it.
+   */
+  promptImageAspectRatio?: { min: number; max: number };
 }
 
 export interface CatalogModel {

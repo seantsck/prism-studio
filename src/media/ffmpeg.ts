@@ -546,7 +546,11 @@ export class FfmpegMediaProcessor implements MediaProcessor {
       if (spec.crop) {
         this.validateRect(spec.crop, info);
         const c = spec.crop;
-        filters.push(`crop=${c.width}:${c.height}:${c.x}:${c.y}`);
+        // FFmpeg rounds a crop on chroma-subsampled video (yuv420p) down to even x/y unless `exact=1`: an odd
+        // provider-transport offset (y=5) would silently become y=4 and keep a padding row. Even rects keep the
+        // historical filter text (byte-identical derivations).
+        const odd = [c.x, c.y, c.width, c.height].some((n) => n % 2 !== 0);
+        filters.push(`crop=${c.width}:${c.height}:${c.x}:${c.y}${odd ? ":exact=1" : ""}`);
       }
       if (spec.pad) {
         const { frame, placement } = spec.pad;
