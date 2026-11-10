@@ -66,6 +66,25 @@ export type RunwayStartFrameTransport = (
 
 const evenFloor = (n: number) => Math.max(2, Math.floor(n / 2) * 2);
 
+export function containPadGeometry(
+  source: { width: number; height: number },
+  target: { width: number; height: number },
+): { width: number; height: number; x: number; y: number; scaled: boolean } {
+  const scale = Math.min(target.width / source.width, target.height / source.height);
+  const width = evenFloor(source.width * scale);
+  const height = evenFloor(source.height * scale);
+  const x = Math.floor((target.width - width) / 2);
+  const y = Math.floor((target.height - height) / 2);
+  if (x < 0 || y < 0) throw new Error("First frame does not fit the provider transport canvas.");
+  return {
+    width,
+    height,
+    x,
+    y,
+    scaled: width !== source.width || height !== source.height,
+  };
+}
+
 function extension(mime: string | null, filename: string): string {
   const fromName = extname(filename).toLowerCase();
   if ([".png", ".jpg", ".jpeg", ".webp"].includes(fromName)) return fromName;
@@ -93,9 +112,10 @@ async function probe(file: string): Promise<{ width: number; height: number }> {
  * Provider-only transport adaptation for an animation start frame.
  *
  * The canonical Production Frame is never changed or replaced. When its canvas differs from the Runway canvas,
- * Prism keeps every source pixel when it already fits; larger sources are scaled down only, never up. The remaining
- * canvas is center-padded black. This avoids Runway's implicit center-crop while satisfying its documented prompt-image
- * aspect bounds. The provider output is still conformed back to the production frame by the existing delivery plan.
+ * Prism uniformly scales the complete frame to CONTAIN inside the provider canvas (up or down as needed), then
+ * center-pads only the remaining axis. No source composition is cropped. This avoids Runway's implicit center-crop
+ * while satisfying its documented prompt-image aspect bounds. The provider output is still conformed back to the
+ * production frame by the existing delivery plan.
  */
 export const ffmpegRunwayStartFrameTransport: RunwayStartFrameTransport = async (asset, spec) => {
   const target = spec.targetCanvas;
@@ -131,15 +151,11 @@ export const ffmpegRunwayStartFrameTransport: RunwayStartFrameTransport = async 
       };
     }
 
-    const scale = Math.min(1, target.width / source.width, target.height / source.height);
-    const width = scale < 1 ? evenFloor(source.width * scale) : source.width;
-    const height = scale < 1 ? evenFloor(source.height * scale) : source.height;
-    const x = Math.floor((target.width - width) / 2);
-    const y = Math.floor((target.height - height) / 2);
-    if (x < 0 || y < 0) throw new Error("First frame does not fit the provider transport canvas.");
+    const geometry = containPadGeometry(source, target);
+    const { width, height, x, y, scaled } = geometry;
 
     const filters = [
-      ...(scale < 1 ? [`scale=${width}:${height}:flags=lanczos`] : []),
+      ...(scaled ? [`scale=${width}:${height}:flags=lanczos`] : []),
       `pad=${target.width}:${target.height}:${x}:${y}:color=black`,
       "setsar=1",
     ].join(",");
@@ -174,7 +190,7 @@ export const ffmpegRunwayStartFrameTransport: RunwayStartFrameTransport = async 
       applied: true,
       source: { ...source, aspect: sourceAspect },
       target: { ...target, aspect: targetAspect },
-      content: { width, height, x, y, scaled: scale < 1 },
+      content: geometry,
     };
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
