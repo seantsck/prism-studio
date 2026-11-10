@@ -7,36 +7,39 @@ try {
   const projectId=String(p.rows[0]?.id??"");
   if(!projectId) throw new Error("Ojou-sama missing");
 
-  const cols=await pool.query(`
-    select table_name,column_name
-    from information_schema.columns
-    where table_schema='public'
-      and table_name in ('assets','generation_attempts','generation_attempt_outputs')
-    order by table_name,ordinal_position
-  `);
-
   const assets=await pool.query(`
-    select row_to_json(a) as row
-    from assets a
-    where a.project_id=$1 and a.type='image' and a.object_path is not null
-    order by a.created_at,a.id
+    select
+      id,name,purpose,type,mime,width,height,byte_size,object_path,checksum,source,tags,metadata,notes,created_at
+    from assets
+    where project_id=$1 and type='image' and object_path is not null
+    order by created_at,id
   `,[projectId]);
 
   const attempts=await pool.query(`
-    select row_to_json(ga) as row
+    select
+      ga.id,ga.shot_id,sh.shot_code,ga.attempt_number,ga.provider,ga.model,ga.modality,
+      ga.status,ga.prompt,ga.negative_prompt,ga.model_settings,ga.package_snapshot,
+      ga.output_asset_id,ga.created_at,ga.completed_at
     from generation_attempts ga
+    left join shots sh on sh.id=ga.shot_id
     where ga.project_id=$1
+      and ga.output_asset_id is not null
     order by ga.created_at
   `,[projectId]);
 
-  const shotMap=await pool.query(`
-    select id,shot_code,title from shots where project_id=$1 order by shot_code
-  `,[projectId]);
-
   console.log("IMAGE_ASSET_INVENTORY="+JSON.stringify({
-    columns:cols.rows,
-    assets:assets.rows.map(x=>x.row),
-    attempts:attempts.rows.map(x=>x.row),
-    shots:shotMap.rows
+    assets:assets.rows,
+    attempts:attempts.rows.map(a=>({
+      id:a.id,shotId:a.shot_id,shotCode:a.shot_code,attemptNumber:a.attempt_number,
+      provider:a.provider,model:a.model,modality:a.modality,status:a.status,
+      outputAssetId:a.output_asset_id,createdAt:a.created_at,completedAt:a.completed_at,
+      prompt:String(a.prompt??"").slice(0,1200),
+      negativePrompt:String(a.negative_prompt??"").slice(0,500),
+      modelSettings:a.model_settings,
+      packageShot:a.package_snapshot?.shot??null,
+      packageStoryIntent:a.package_snapshot?.storyIntent??null,
+      packageSet:a.package_snapshot?.set??null,
+      packageCharacters:a.package_snapshot?.characters??null
+    }))
   }));
 } finally { await pool.end(); }
