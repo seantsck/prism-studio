@@ -107,7 +107,7 @@ async function statusPayload(pool: Pool, attemptId: string) {
     [attemptId],
   );
   const costs = await pool.query(
-    "select amount, currency, units, unit_name, pricing_version from generation_costs where attempt_id = $1 order by created_at",
+    "select kind, amount, currency, basis, units, recorded_at from generation_costs where attempt_id = $1 order by recorded_at",
     [attemptId],
   );
   return { attempt: a.rows[0] ?? null, outputs: outputs.rows, costs: costs.rows };
