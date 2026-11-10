@@ -2,6 +2,7 @@ import type { GenerationPackage } from "../generation-package";
 import type { PreflightReport } from "../preflight";
 import type { CompatibilityReport, IgnoredFeature } from "./compatibility";
 import { renderPromptPlan } from "./prompt-plan";
+import { adaptProviderPrompt } from "./provider-prompt";
 import {
   generationRequestSchema,
   type GenerationModel,
@@ -244,6 +245,15 @@ export function buildGenerationRequest(args: {
       background: "black",
     };
   }
+  // Phase 5B provider-prompt adaptation: when a policy applies to this provider/model/purpose, the provider-facing
+  // prompt is derived deterministically from the package and frozen with its provenance (policy, version, source
+  // fingerprint, budget, omissions). The adapter sends exactly this text; the story records are never changed.
+  const providerPrompt = adaptProviderPrompt(args.pkg, {
+    provider: args.model.provider,
+    modelId: args.model.modelId,
+    purpose: c.purpose,
+  });
+  if (providerPrompt) providerOptions.prismProviderPrompt = providerPrompt;
 
   return generationRequestSchema.parse({
     schemaVersion: 1,

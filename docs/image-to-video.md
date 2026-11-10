@@ -134,6 +134,79 @@ Same PromptPlan v1 sections, no new schema, no provider-specific format in the d
 - states "Preserve the subjects, wardrobe, set, composition and lighting established by the first frame." and marks the
   composition as "As established by the first frame; do not recompose."
 
+The PromptPlan is Prism's production intent. It is **not** necessarily what a provider receives (see below).
+
+## Provider-prompt adaptation (Phase 5B)
+
+`Story / Shot intent → deterministic provider-prompt policy → provider request.`
+
+The Shot's story data stays the source of truth. A provider-prompt policy derives an execution representation from the
+GenerationPackage's structured fields (never from the rendered plan, so internal labels cannot leak). It is pure and
+deterministic (no AI rewriting), versioned, and frozen in the immutable request as
+`providerOptions.prismProviderPrompt` (`src/domain/generation/provider-prompt.ts`).
+
+Why: Shot 3A's story moved from figurative "mask" wording to "composure" wording. Two Runway Gen-4 Turbo tasks whose
+prompt contained "composure restored" / "Composure slips" failed inside Runway with `INTERNAL.BAD_OUTPUT.CODE01`; the
+same image with a visible-behaviour prompt succeeded. The prompts had also leaked metadata (`Production Frame (v2)`, the
+Shot code and title, `Purpose: …`, `(55/10)`, aspect-ratio prose) and sat at 992 of 1,000 characters, silently losing
+their last clause.
+
+**Policy table.** `providerPromptPolicyFor(provider, model, purpose)` is table-driven; a model opts in explicitly with
+its own target. First entry: Runway `gen4_turbo`, `animate_production_frame`, policy `visible-motion` v1, limit from the
+catalog (`promptMaxChars` 1000), target 900; Runway `gen4.5` uses the same policy and budget. Everything else keeps its
+existing compilation, unchanged.
+
+Gen-4.5 caveat: Runway documents Gen-4.5 prompt images as width/height 0.5–2 (Gen-4 Turbo: 0.5–2.358). A 21:9
+(1584×672, 2.357) start-frame transport is therefore not valid Gen-4.5 input, and Prism refuses it before any spend rather
+than relying on Runway's implicit centre crop. A Gen-4.5 animation of a 2.39:1 Production Frame needs a separately
+designed transport policy.
+
+**visible-motion v1** writes concise prose in these sections:
+
+| Section         | Required | Priority | Content                                                                                                                                                                                                                           |
+| --------------- | -------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Continuity      | yes      | 1        | identity, apparent age, facial structure, the Look's head phrases (hair, wardrobe, jewelry), lighting, background; no new objects or people                                                                                       |
+| Visible action  | yes      | 2        | held orientation, eyeline and "never looking into the camera" (from blocking), begin → change → end as observable behaviour; a held orientation also states the motion envelope (below), otherwise natural breathing is asked for |
+| Subject, Camera | yes      | 3        | who/where/when in plain words; camera (an imperceptible move is requested as a locked camera, recorded)                                                                                                                           |
+| Composition     | no       | 4        | subject blocking (the first frame already establishes the composition)                                                                                                                                                            |
+| Performance     | no       | 5        | restraint and pace                                                                                                                                                                                                                |
+| Look detail     | no       | 6        | the complete Look fields                                                                                                                                                                                                          |
+| Setting         | no       | 7        | set lighting and mood                                                                                                                                                                                                             |
+
+**Held orientation.** A Shot that faces one side (`screenDirection` "… screen-right/left") with no blocking movement (no
+marks, entry or exit) holds the first frame's orientation. "Keeps her head turned toward screen-right" alone was not
+enough: a Gen-4.5 Shot 3A take turned through frontal to a screen-left profile. The policy therefore pins head AND torso
+("keeps the first frame's three-quarter orientation toward screen-right: head and torso stay screen-right, never
+rotating through frontal or toward screen-left", "profile" when the direction says so), and limits the motion envelope
+to the face plus only what the Shot's own action moves ("Limit motion to her face, eyelids, breathing and a small
+shoulder drop; no larger head or body movement."). Both are recorded adaptations (`held-orientation`,
+`motion-envelope-limited`).
+
+Abstract story language is translated by ordered, tested rules (`composure/mask … restored` → "ends calm and
+neutral"; `… slips/drops` → "expression briefly softens"; `exhausted` → "looks visibly exhausted";
+`tense`, `confident`, `hesitates`; `shoulders fall` → "shoulders lower subtly"). A figurative note no rule understands is
+**omitted and recorded**, never sent (a model may render "mask" literally).
+
+**Budget.** Required sections are always kept; optional sections are added in priority order only while the prompt
+stays within the target. Sections are dropped whole — a sentence or field is never cut part-way — and each omission is
+recorded and surfaces as one acknowledgeable ignored feature (`prompt.budget`). If the required content alone exceeds
+the provider limit the request is refused (`ok: false`), never truncated.
+
+**Provenance.** The frozen record holds the policy id and version, provider/model/purpose, the source package
+fingerprint, the final text and its length, the budget, every section's fate, the omitted sections, every adaptation
+(field, source text, provider text, rule) and the list of internal metadata deliberately excluded. The Runway adapter
+sends exactly that text; it refuses a malformed, foreign, over-limit or not-ok record; the adapter invariant (also
+re-checked by the worker before the provider call) requires its source fingerprint to equal the attempt's own package.
+Historical attempts keep what they recorded.
+
+**Inspectable before spend.** The Animate Production Frame panel shows, per policy-adapted model, the story intent
+(source of truth), the exact provider prompt, the policy version, length/limit/target and omitted sections. The no-spend
+evaluation (`Evaluation.providerPrompt`) and the Prompt Inspector's compiled fields (`promptPolicy`, `promptBudget`,
+`promptOmittedSections`) carry the same record.
+
+**Deployment note.** A generation worker built before this change ignores `prismProviderPrompt` and would compile the
+old prompt. The worker must run this code before a policy-adapted request is submitted.
+
 ## Duration and framing
 
 Unchanged adaptation semantics. The production duration (timeline / package timing) is never rounded: a natively
