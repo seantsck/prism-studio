@@ -123,8 +123,8 @@ export async function GET(request: NextRequest) {
     return json({ ok: false, message: "Prism Studio database URL unavailable or wrong target" }, 503);
 
   const mode = request.nextUrl.searchParams.get("mode") ?? "plan";
-  if (!["plan", "submit", "status", "promote"].includes(mode))
-    return json({ ok: false, message: "mode must be plan, submit, status or promote" }, 400);
+  if (!["plan", "submit", "status", "promote", "finalize"].includes(mode))
+    return json({ ok: false, message: "mode must be plan, submit, status, promote or finalize" }, 400);
 
   const pool = new Pool({ connectionString: dbUrl, ssl: { rejectUnauthorized: false }, max: 4 });
   try {
@@ -133,6 +133,122 @@ export async function GET(request: NextRequest) {
     if (mode === "status") {
       if (!existing) return json({ ok: true, mode, exists: false });
       return json({ ok: true, mode, exists: true, ...(await statusPayload(pool, String(existing.id))) });
+    }
+
+    if (mode === "finalize") {
+      if (!existing) return json({ ok: false, mode, message: "No Shot 3A acceptance attempt exists." }, 404);
+      if (String(existing.status) !== "succeeded")
+        return json({ ok: false, mode, message: "The Shot 3A acceptance attempt has not succeeded." }, 409);
+
+      const now = new Date().toISOString();
+      const generation = new PostgresGenerationData(pool, owner);
+      const frames = new PostgresProductionFrameData(pool, owner);
+      const qa = new PostgresMediaQaData(pool, owner);
+      const derivationKey = "5dcaff563be744fdc44fd379fdca7f7e5d1f72d9fbe497aca18c5aa25a9a9e03";
+      const originalAssetId = "e648296d-9d52-5d3f-8914-e53bead3af55";
+      const derivedAssetId = "e6ea3f97-6da1-523b-b573-b3a1c852fbb1";
+      const parameters = {
+        plan: {
+          version: 1,
+          required: true,
+          targetAspectRatio: "2.39:1",
+          framing: "crop",
+          trimToMs: null,
+          steps: ["crop"],
+        },
+        resolved: {
+          crop: { x: 0, y: 110, width: 1536, height: 642 },
+          pad: null,
+          trimMs: null,
+        },
+        input: { width: 1536, height: 864, durationMs: null },
+      };
+      const asset = {
+        id: derivedAssetId,
+        projectId,
+        createdBy: ownerId,
+        type: "image" as const,
+        purpose: "generation_output" as const,
+        source: "derived" as const,
+        name: "3A-phase5b-delivery.png",
+        originalFilename: "3A-phase5b-delivery.png",
+        storageProvider: "supabase" as const,
+        bucket: "prism-assets",
+        objectPath:
+          "aa03e5af-941f-5708-a7a3-9180f646d64d/e6ea3f97-6da1-523b-b573-b3a1c852fbb1/3A-phase5b-delivery.png",
+        mime: "image/png",
+        byteSize: 1928807,
+        checksum: "17c9f2ea652cf927e358d77a4bf758dfe39c86083676c1ee7ce6dc2d2ca7af06",
+        width: 1536,
+        height: 642,
+        durationMs: null,
+        frameRate: null,
+        sampleRate: null,
+        channels: null,
+        tags: ["delivery-master", "derived"],
+        notes: "",
+        metadata: {
+          derivedFrom: originalAssetId,
+          operation: "conform",
+          derivationKey,
+          processor: "ffmpeg/1",
+          processorToolVersion: "5.1.9-0+deb12u1",
+        },
+        createdAt: now,
+        updatedAt: now,
+      };
+      const recorded = await qa.recordDerivation({
+        asset,
+        parentAssetId: originalAssetId,
+        operation: "conform",
+        derivationKey,
+        parameters,
+        processor: "ffmpeg",
+        processorVersion: "1 (5.1.9-0+deb12u1)",
+        attemptId: String(existing.id),
+        slot: "delivery",
+        createdBy: ownerId,
+        now,
+      });
+      const conform = {
+        plan: parameters.plan,
+        resolved: parameters.resolved,
+        derivedFrom: originalAssetId,
+        derivationKey,
+        version: recorded.derivation.version,
+        notes: ["Crop 1536×864 → 1536×642 (2.39:1), removing 25.7% of the image"],
+        warnings: [],
+      };
+      const delivery = await qa.selectDelivery({
+        attemptId: String(existing.id),
+        projectId,
+        assetId: recorded.asset.id,
+        originalAssetId,
+        conform,
+        selectedBy: ownerId,
+        now,
+      });
+      const ctx = buildShotContext(data, shot.id);
+      const result = await promoteGeneratedFrame(
+        { frames, generation, qa },
+        ctx,
+        { attemptId: String(existing.id), userId: ownerId },
+      );
+      const selected = await frames.listForProject(projectId);
+      const selection = selected.selections.find((s) => s.shotId === shot.id) ?? null;
+      const persistedFrame = selected.frames.find((x) => x.id === result.frame.id) ?? result.frame;
+      return json({
+        ok: true,
+        mode,
+        derivation: recorded.derivation,
+        delivery,
+        promotion: {
+          created: result.created,
+          image: result.image,
+          frame: persistedFrame,
+          selectedProductionFrameId: selection?.productionFrameId ?? null,
+        },
+      });
     }
 
     if (mode === "promote") {
