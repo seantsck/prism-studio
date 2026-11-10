@@ -16,24 +16,27 @@ try {
   `);
 
   const assets=await pool.query(`
-    select
-      a.id,a.purpose,a.type,a.filename,a.mime,a.width,a.height,a.byte_size,
-      a.object_path,a.checksum,a.metadata,a.created_at
+    select row_to_json(a) as row
     from assets a
     where a.project_id=$1 and a.type='image' and a.object_path is not null
     order by a.created_at,a.id
   `,[projectId]);
 
   const attempts=await pool.query(`
-    select id,shot_id,provider,model,purpose,status,request,result,created_at,completed_at
-    from generation_attempts
-    where project_id=$1
-    order by created_at
+    select row_to_json(ga) as row
+    from generation_attempts ga
+    where ga.project_id=$1
+    order by ga.created_at
+  `,[projectId]);
+
+  const shotMap=await pool.query(`
+    select id,shot_code,title from shots where project_id=$1 order by shot_code
   `,[projectId]);
 
   console.log("IMAGE_ASSET_INVENTORY="+JSON.stringify({
     columns:cols.rows,
-    assets:assets.rows,
-    attempts:attempts.rows
+    assets:assets.rows.map(x=>x.row),
+    attempts:attempts.rows.map(x=>x.row),
+    shots:shotMap.rows
   }));
 } finally { await pool.end(); }
