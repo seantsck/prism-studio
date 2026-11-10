@@ -21,9 +21,7 @@ export function parseFrozenRunwayStartFrameTransport(raw: unknown): FrozenRunway
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   const canvas =
-    r.targetCanvas && typeof r.targetCanvas === "object"
-      ? (r.targetCanvas as Record<string, unknown>)
-      : null;
+    r.targetCanvas && typeof r.targetCanvas === "object" ? (r.targetCanvas as Record<string, unknown>) : null;
   if (
     r.version !== 1 ||
     r.policy !== RUNWAY_START_FRAME_TRANSPORT_POLICY ||
@@ -79,17 +77,7 @@ function extension(mime: string | null, filename: string): string {
 async function probe(file: string): Promise<{ width: number; height: number }> {
   const { stdout } = await exec(
     "ffprobe",
-    [
-      "-v",
-      "error",
-      "-select_streams",
-      "v:0",
-      "-show_entries",
-      "stream=width,height",
-      "-of",
-      "json",
-      file,
-    ],
+    ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "json", file],
     { maxBuffer: 1024 * 1024 },
   );
   const parsed = JSON.parse(stdout) as { streams?: Array<{ width?: number; height?: number }> };
