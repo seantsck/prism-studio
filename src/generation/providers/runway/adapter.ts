@@ -66,6 +66,8 @@ import { mapRunwayError, mapRunwayFailure } from "./errors";
 import {
   ffmpegRunwayStartFrameTransport,
   parseFrozenRunwayStartFrameTransport,
+  PREPAD_CENTER_CROP_POLICY,
+  prepadTransportErrors,
   type FrozenRunwayStartFrameTransport,
   type RunwayStartFrameTransport,
 } from "./start-frame-transport";
@@ -206,6 +208,26 @@ export class RunwayProvider implements GenerationProviderAdapter {
     if (!range) return [`${model.displayName} has no verified prompt-image aspect range for transport.`];
     const { ratio } = ratioFor(model, request);
     const providerCanvas = canvasOf(ratio);
+    if (transport.policy === PREPAD_CENTER_CROP_POLICY) {
+      // the provider must document the centre crop, the output must be the request's provider canvas, the submitted
+      // image must be in range, and the whole record must equal its own re-derivation (tamper-evident)
+      if (!model.inputs.promptImageCrop)
+        return [`${model.displayName} documents no centre crop; the pre-pad transport cannot be used.`];
+      if (
+        !providerCanvas ||
+        transport.outputCanvas.width !== providerCanvas.width ||
+        transport.outputCanvas.height !== providerCanvas.height
+      )
+        return [
+          `The frozen pre-pad output canvas ${transport.outputCanvas.width}×${transport.outputCanvas.height} does not match the provider canvas ${providerCanvas ? `${providerCanvas.width}×${providerCanvas.height}` : "for this request"}.`,
+        ];
+      const sub = transport.submittedCanvas.width / transport.submittedCanvas.height;
+      if (sub < range.min || sub > range.max)
+        return [
+          `The submitted prompt image is outside ${model.displayName}'s verified prompt-image aspect range.`,
+        ];
+      return prepadTransportErrors(transport, range, model.inputs.promptImageCrop);
+    }
     if (
       !providerCanvas ||
       transport.targetCanvas.width !== providerCanvas.width ||
@@ -226,6 +248,22 @@ export class RunwayProvider implements GenerationProviderAdapter {
 
   private transportSummary(request: GenerationRequest): Record<string, unknown> | null {
     const t = this.frozenStartFrameTransport(request);
+    if (t?.policy === PREPAD_CENTER_CROP_POLICY) {
+      return {
+        version: t.version,
+        policy: t.policy,
+        sourceAssetId: t.sourceAssetId,
+        source: t.source,
+        content: t.content,
+        submittedCanvas: t.submittedCanvas,
+        submittedOffset: t.submittedOffset,
+        outputCanvas: t.outputCanvas,
+        providerCrop: t.providerCrop,
+        expectedCrop: t.expectedCrop,
+        effectiveContent: t.effectiveContent,
+        background: t.background,
+      };
+    }
     return t
       ? {
           version: t.version,
@@ -334,7 +372,9 @@ export class RunwayProvider implements GenerationProviderAdapter {
     if (this.frozenStartFrameTransport(request)) {
       const t = this.frozenStartFrameTransport(request)!;
       notes.push(
-        `Provider-only first-frame transport: ${t.policy} to ${t.targetCanvas.width}×${t.targetCanvas.height}; canonical Production Frame unchanged.`,
+        t.policy === PREPAD_CENTER_CROP_POLICY
+          ? `Provider-only first-frame transport: ${t.policy}: ${t.source.width}×${t.source.height} → ${t.content.width}×${t.content.height} at ${t.submittedOffset.x},${t.submittedOffset.y} on a ${t.submittedCanvas.width}×${t.submittedCanvas.height} prompt image; the provider's documented centre crop to ${t.outputCanvas.width}×${t.outputCanvas.height} removes padding only (picture at ${t.effectiveContent.x},${t.effectiveContent.y}); canonical Production Frame unchanged.`
+          : `Provider-only first-frame transport: ${t.policy} to ${t.targetCanvas.width}×${t.targetCanvas.height}; canonical Production Frame unchanged.`,
       );
     }
     const attachments: CompiledRequestSummary["attachments"] = [];
@@ -553,10 +593,34 @@ export class RunwayProvider implements GenerationProviderAdapter {
     }
     const source = this.imageAssetOrThrow(await ctx.assets.read(id));
     const range = model.inputs.promptImageAspectRatio!;
-    const out = await this.startFrameTransport(source, {
-      targetCanvas: transport.targetCanvas,
-      aspectRange: range,
-    });
+    const out =
+      transport.policy === PREPAD_CENTER_CROP_POLICY
+        ? await this.startFrameTransport(source, {
+            targetCanvas: transport.submittedCanvas,
+            aspectRange: range,
+            placement: { ...transport.content, ...transport.submittedOffset },
+            expectedSource: transport.source,
+          })
+        : await this.startFrameTransport(source, {
+            targetCanvas: transport.targetCanvas,
+            aspectRange: range,
+          });
+    if (
+      transport.policy === PREPAD_CENTER_CROP_POLICY &&
+      (out.content.x !== transport.submittedOffset.x ||
+        out.content.y !== transport.submittedOffset.y ||
+        out.content.width !== transport.content.width ||
+        out.content.height !== transport.content.height ||
+        out.target.width !== transport.submittedCanvas.width ||
+        out.target.height !== transport.submittedCanvas.height)
+    ) {
+      throw new GenerationProviderError(
+        "invalid_request",
+        "runway_start_frame_transport",
+        "The produced pre-pad transport image does not match its frozen geometry.",
+        { retryable: false },
+      );
+    }
     return this.embeddedImageUri(out.asset);
   }
 

@@ -36,13 +36,17 @@ const withBudget = (pkg: GenerationPackage, limit: number, target: number) =>
   });
 
 describe("provider-prompt adaptation: visible-motion v1 (Phase 5B)", () => {
-  it("applies to Runway Gen-4 Turbo animation only, with a target well below the provider limit", () => {
+  it("applies to Runway Gen-4 Turbo and Gen-4.5 animation only, with a target well below the provider limit", () => {
     expect(providerPromptPolicyFor(TURBO)).toEqual({
       policy: { id: "visible-motion", version: 1 },
       budget: { limit: 1000, target: 900 },
     });
     expect(providerPromptPolicyFor({ ...TURBO, purpose: "shot_output" })).toBeNull();
-    expect(providerPromptPolicyFor({ ...TURBO, modelId: "gen4.5" })).toBeNull();
+    expect(providerPromptPolicyFor({ ...TURBO, modelId: "gen4.5" })).toEqual({
+      policy: { id: "visible-motion", version: 1 },
+      budget: { limit: 1000, target: 900 },
+    });
+    expect(providerPromptPolicyFor({ ...TURBO, modelId: "veo3.1_fast" })).toBeNull();
     expect(adaptProviderPrompt(shot3a().pkg, { ...TURBO, purpose: "production_frame" })).toBeNull();
   });
 

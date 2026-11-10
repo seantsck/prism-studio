@@ -105,6 +105,13 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
       keyframesExcludeReferences: "unknown",
       negativePrompt: "unsupported",
       promptImageAspectRatio: { min: 0.5, max: 2 },
+      // Runway API "Inputs" page: a prompt image not exactly of the requested `ratio` is auto-cropped from the centre
+      // to that ratio (first-party Runway models; third-party models may crop or resize differently).
+      promptImageCrop: {
+        behavior: "center",
+        source: "https://docs.dev.runwayml.com/assets/inputs/",
+        verifiedAt: "2026-11-10",
+      },
     },
     audio: { nativeGeneration: "unsupported", referenceConditioning: "unsupported" },
     duration: {
