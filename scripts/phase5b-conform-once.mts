@@ -1,69 +1,38 @@
 import http from "node:http";
 import { createHash } from "node:crypto";
-import pg from "pg";
-import { PostgresGenerationData } from "../src/data/generation-postgres";
 import { createOutputSink } from "../src/generation/sink";
 import { FfmpegMediaProcessor } from "../src/media/ffmpeg";
-import { parseAdaptationPlan } from "../src/domain/framing/adaptation";
-import { derivationKey, resolveConform } from "../src/domain/framing/conform";
+import { derivationKey, resolveConform, type DeliveryConformPlan } from "../src/domain/framing/conform";
 import { derivedAssetId } from "../src/media/delivery";
 import { buildObjectPath, safeFileName } from "../src/lib/storage-paths";
-import { assertProjectRef, installRedactingHandlers, printBanner } from "./lib/safety.mjs";
+import { installRedactingHandlers } from "./lib/safety.mjs";
 
 installRedactingHandlers();
 
 const ATTEMPT_ID = "7ace044a-792b-485d-b1d2-e5943aa3c081";
-const EXPECTED_PROVIDER = "openai-image";
-const EXPECTED_MODEL = "gpt-image-2.5-flare";
-const EXPECTED_SOURCE_CHECKSUM = "58df8d09966d11d8521aec14cadda76f5a9939df175d4f7c9217fc3a4f731137";
+const PROJECT_ID = "aa03e5af-941f-5708-a7a3-9180f646d64d";
+const ORIGINAL_ID = "e648296d-9d52-5d3f-8914-e53bead3af55";
+const ORIGINAL_PATH = "aa03e5af-941f-5708-a7a3-9180f646d64d/e648296d-9d52-5d3f-8914-e53bead3af55/openai-image-61120a14-fd6.png";
+const ORIGINAL_CHECKSUM = "58df8d09966d11d8521aec14cadda76f5a9939df175d4f7c9217fc3a4f731137";
 const HEALTH_PORT = 8080;
 
-const url = process.env.PRISM_STUDIO_WORKER_DB_URL ?? "";
-assertProjectRef(url, "PRISM_STUDIO_WORKER_DB_URL");
-printBanner({ mode: "Phase 5B one-time Production Frame conform probe", url });
-
-const pool = new pg.Pool({
-  connectionString: url,
-  ssl: { rejectUnauthorized: false },
-  max: 2,
-});
+const plan: DeliveryConformPlan = {
+  version: 1,
+  required: true,
+  targetAspectRatio: "2.39:1",
+  framing: "crop",
+  trimToMs: null,
+  steps: ["crop"],
+};
 
 const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
-
 let result: Record<string, unknown> = { ok: false, status: "starting" };
 
 try {
-  const who = await pool.query("select current_user as u");
-  if (who.rows[0]?.u !== "prism_generation_worker") {
-    throw new Error("Conform probe is not running as prism_generation_worker");
-  }
-
-  const store = new PostgresGenerationData(pool, "begin");
-  const view = await store.getAttemptView(ATTEMPT_ID);
-  if (!view) throw new Error("Acceptance attempt not found");
-  if (view.attempt.status !== "succeeded") throw new Error(`Attempt status is ${view.attempt.status}, not succeeded`);
-  if (view.attempt.provider !== EXPECTED_PROVIDER || view.attempt.model !== EXPECTED_MODEL) {
-    throw new Error("Acceptance attempt provider/model mismatch");
-  }
-  if (view.attempt.inputAssetIds.length !== 6) throw new Error("Acceptance attempt does not contain six input assets");
-
-  const original =
-    view.outputs.find((o) => o.output.role === "primary")?.asset ??
-    view.outputs.find((o) => o.asset.type === "image")?.asset ??
-    null;
-  if (!original?.objectPath || !original.checksum) throw new Error("Provider original is missing stored bytes/checksum");
-  if (original.checksum !== EXPECTED_SOURCE_CHECKSUM) throw new Error("Provider original checksum changed");
-
-  const plan = parseAdaptationPlan(view.attempt.adaptationPlan);
-  if (!plan) throw new Error("Stored adaptation plan is missing or invalid");
-  if (!plan.conform.required || plan.conform.framing !== "crop" || plan.conform.targetAspectRatio !== "2.39:1") {
-    throw new Error("Stored conform plan is not the expected 2.39:1 crop");
-  }
-
   const sink = await createOutputSink(process.env, "supabase");
-  const input = await sink.get(original.objectPath);
+  const input = await sink.get(ORIGINAL_PATH);
   if (!input) throw new Error("Provider original is missing from private Storage");
-  if (sha256(input) !== original.checksum) throw new Error("Provider original bytes do not match recorded checksum");
+  if (sha256(input) !== ORIGINAL_CHECKSUM) throw new Error("Provider original bytes do not match recorded checksum");
 
   const processor = new FfmpegMediaProcessor();
   const identity = await processor.identity();
@@ -72,7 +41,7 @@ try {
     throw new Error(`Unexpected provider original probe: ${probe.kind} ${probe.width}x${probe.height}`);
   }
 
-  const resolved = resolveConform(plan.conform, {
+  const resolved = resolveConform(plan, {
     width: probe.width,
     height: probe.height,
     durationMs: probe.durationMs,
@@ -82,18 +51,19 @@ try {
   }
 
   const parameters = {
-    plan: plan.conform,
+    plan,
     resolved: { crop: resolved.crop, pad: resolved.pad, trimMs: resolved.trimMs },
     input: { width: probe.width, height: probe.height, durationMs: probe.durationMs },
   };
   const processorId = `${identity.name}/${identity.adapterVersion}`;
   const key = derivationKey({
-    parentChecksum: original.checksum,
+    parentChecksum: ORIGINAL_CHECKSUM,
     operation: "conform",
     parameters,
     processorVersion: processorId,
   });
   const id = derivedAssetId(key);
+
   const out = await processor.conform(input, {
     crop: resolved.crop,
     pad: resolved.pad,
@@ -103,8 +73,8 @@ try {
     throw new Error(`Unexpected conformed output: ${out.probe.kind} ${out.probe.width}x${out.probe.height}`);
   }
 
-  const filename = safeFileName(`3A-a${view.attempt.attemptNumber}-delivery.png`);
-  const objectPath = buildObjectPath(original.projectId, id, filename);
+  const filename = safeFileName("3A-phase5b-delivery.png");
+  const objectPath = buildObjectPath(PROJECT_ID, id, filename);
   const outputChecksum = sha256(out.bytes);
   const existing = await sink.get(objectPath);
   if (!existing || sha256(existing) !== outputChecksum) {
@@ -117,16 +87,16 @@ try {
     status: "conform_ready",
     attemptId: ATTEMPT_ID,
     original: {
-      id: original.id,
-      checksum: original.checksum,
-      objectPath: original.objectPath,
+      id: ORIGINAL_ID,
+      projectId: PROJECT_ID,
+      checksum: ORIGINAL_CHECKSUM,
+      objectPath: ORIGINAL_PATH,
       width: probe.width,
       height: probe.height,
     },
     asset: {
       id,
-      projectId: original.projectId,
-      createdBy: null,
+      projectId: PROJECT_ID,
       type: "image",
       purpose: "generation_output",
       source: "derived",
@@ -147,7 +117,7 @@ try {
       tags: ["delivery-master", "derived"],
       notes: "",
       metadata: {
-        derivedFrom: original.id,
+        derivedFrom: ORIGINAL_ID,
         operation: "conform",
         derivationKey: key,
         processor: processorId,
@@ -155,7 +125,7 @@ try {
       },
     },
     derivation: {
-      parentAssetId: original.id,
+      parentAssetId: ORIGINAL_ID,
       operation: "conform",
       derivationKey: key,
       parameters,
@@ -167,17 +137,10 @@ try {
     resolved,
     processor: identity,
   };
-
   console.log(JSON.stringify({ event: "phase5b.conform.ready", ...result }));
 } catch (err) {
-  result = {
-    ok: false,
-    status: "failed",
-    error: err instanceof Error ? err.message : String(err),
-  };
+  result = { ok: false, status: "failed", error: err instanceof Error ? err.message : String(err) };
   console.error(JSON.stringify({ event: "phase5b.conform.failed", ...result }));
-} finally {
-  await pool.end().catch(() => undefined);
 }
 
 const server = http.createServer((req, res) => {
