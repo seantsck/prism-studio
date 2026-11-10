@@ -170,6 +170,12 @@ export const modelCapabilitiesSchema = z.object({
       motionPrompting: z.boolean(),
       maxResolution: resolutionSchema.nullable(),
       aspectRatios: z.array(z.string()),
+      /**
+       * Verified provider pixel canvas per aspect label ("21:9" → 1584×672), when the provider documents exact
+       * dimensions. Labels describe the MODE; these dimensions define the actual request/transport canvas, so the
+       * framing planner never re-derives pixels from nominal label arithmetic. Absent = not documented (older records).
+       */
+      providerCanvases: z.record(z.string(), resolutionSchema).optional(),
       fps: z.array(z.number().positive()),
     })
     .nullable(),
