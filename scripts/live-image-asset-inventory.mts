@@ -7,43 +7,65 @@ try {
   const projectId=String(p.rows[0]?.id??"");
   if(!projectId) throw new Error("Ojou-sama missing");
 
-  const assets=await pool.query(`
+  const rows=await pool.query(`
     select
-      id,name,purpose,type,mime,width,height,byte_size,object_path,checksum,source,tags,metadata,notes,created_at
-    from assets
-    where project_id=$1 and type='image' and object_path is not null
-    order by created_at,id
+      a.id as asset_id,
+      a.name,
+      a.width,
+      a.height,
+      a.byte_size,
+      a.object_path,
+      a.metadata #>> '{generation,attemptId}' as attempt_id,
+      a.metadata #>> '{generation,provider}' as asset_provider,
+      a.metadata #>> '{generation,model}' as asset_model,
+      ga.shot_id,
+      sh.shot_code,
+      sh.title as shot_title,
+      ga.provider,
+      ga.model,
+      ga.modality,
+      ga.status,
+      ga.prompt,
+      ga.package_snapshot
+    from assets a
+    left join generation_attempts ga
+      on ga.id::text = a.metadata #>> '{generation,attemptId}'
+    left join shots sh on sh.id=ga.shot_id
+    where a.project_id=$1
+      and a.type='image'
+      and a.object_path is not null
+    order by a.created_at,a.id
   `,[projectId]);
 
-  const attempts=await pool.query(`
-    select row_to_json(ga) as row
-    from generation_attempts ga
-    where ga.project_id=$1
-    order by ga.created_at
-  `,[projectId]);
-
-  const shots=await pool.query("select id,shot_code,title from shots where project_id=$1",[projectId]);
-  const shotMap=new Map(shots.rows.map(s=>[s.id,{code:s.shot_code,title:s.title}]));
-
-  const compact=attempts.rows.map(({row:a})=>({
-    id:a.id,
-    shotId:a.shot_id,
-    shot:shotMap.get(a.shot_id)??null,
-    attemptNumber:a.attempt_number,
-    provider:a.provider,
-    model:a.model,
-    modality:a.modality,
-    status:a.status,
-    purpose:a.purpose,
-    outputAssetId:a.output_asset_id,
-    createdAt:a.created_at,
-    prompt:String(a.prompt??"").slice(0,900),
-    negativePrompt:String(a.negative_prompt??"").slice(0,300),
-    modelSettings:a.model_settings??null,
-    packageSet:a.package_snapshot?.set??null,
-    packageCharacters:a.package_snapshot?.characters??null,
-    packageStoryIntent:a.package_snapshot?.storyIntent??null
-  })).filter(a=>a.outputAssetId || a.status==="succeeded");
-
-  console.log("IMAGE_ASSET_INVENTORY="+JSON.stringify({assets:assets.rows,attempts:compact}));
+  for (const r of rows.rows) {
+    console.log("IMAGE_ASSET_ROW="+JSON.stringify({
+      assetId:r.asset_id,
+      name:r.name,
+      size:[r.width,r.height],
+      bytes:r.byte_size,
+      attemptId:r.attempt_id,
+      shotId:r.shot_id,
+      shotCode:r.shot_code,
+      shotTitle:r.shot_title,
+      provider:r.provider??r.asset_provider,
+      model:r.model??r.asset_model,
+      modality:r.modality,
+      status:r.status,
+      prompt:String(r.prompt??"").slice(0,700),
+      set:r.package_snapshot?.set?{
+        id:r.package_snapshot.set.id,
+        name:r.package_snapshot.set.name,
+        description:r.package_snapshot.set.description,
+        zone:r.package_snapshot.set.zone
+      }:null,
+      characters:Array.isArray(r.package_snapshot?.characters)
+        ? r.package_snapshot.characters.map((c:any)=>({name:c.name,look:c.look?.name??null}))
+        : [],
+      story:r.package_snapshot?.storyIntent?{
+        beat:r.package_snapshot.storyIntent.storyBeat,
+        purpose:r.package_snapshot.storyIntent.dramaticPurpose,
+        scene:r.package_snapshot.storyIntent.scene
+      }:null
+    }));
+  }
 } finally { await pool.end(); }
