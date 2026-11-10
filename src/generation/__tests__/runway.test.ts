@@ -2,6 +2,14 @@ import { createHash } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { seedWithFrame } from "@/domain/__tests__/production-frame-fixtures";
+import { shotByCode } from "@/domain/__tests__/helpers";
+import { planFraming } from "@/domain/framing/adaptation";
+import { assembleGenerationPackage } from "@/domain/generation-package";
+import { evaluateCompatibility } from "@/domain/generation/compatibility";
+import { buildGenerationRequest } from "@/domain/generation/gate";
+import { catalogModel, estimateCredits, toGenerationModel } from "@/domain/generation/models/catalog";
+import { buildPromptPlan } from "@/domain/generation/prompt-plan";
 import { buildShotContext } from "@/domain/context";
 import { approvalSnapshot } from "@/domain/fingerprint";
 import { GenerationProviderError } from "@/domain/generation/errors";
@@ -931,5 +939,185 @@ describe("Runway through the generic worker (fake provider, loopback output serv
     const waiting = (await h.repo.generation.getJob(second.jobId!))!;
     expect(waiting.status).toBe("queued");
     expect(waiting.attemptCount).toBe(0); // waiting does not consume the retry budget
+  });
+});
+
+/**
+ * Phase 5B hosted acceptance regression: a provider's aspect LABEL describes the mode; its VERIFIED pixel dimensions
+ * define the request. Generic "21:9" arithmetic gave Gen-4 Turbo a 1584×678 transport canvas that the adapter
+ * (correctly) refused against Runway's real 1584×672. The planner must freeze the provider's canvas end to end.
+ */
+describe("Runway verified provider canvas (Shot 3A, Gen-4 Turbo)", () => {
+  const turboCatalog = catalogModel("runway", "gen4_turbo")!;
+  const turbo = toGenerationModel(turboCatalog);
+  const adapted = { framing: "overscan_for_crop", duration: "generate_longer_then_trim" } as const;
+
+  function frozen() {
+    const { data, frame } = seedWithFrame("3A");
+    const pkg = assembleGenerationPackage(buildShotContext(data, shotByCode(data, "3A").id));
+    const compatibility = evaluateCompatibility(pkg, turbo, {
+      purpose: "animate_production_frame",
+      adaptation: adapted,
+    });
+    const promptPlan = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation, {
+      purpose: "animate_production_frame",
+    });
+    const request = buildGenerationRequest({
+      pkg,
+      model: turbo,
+      compatibility,
+      plan: promptPlan,
+      idempotencyKey: "k-0000000001",
+    });
+    return { frame, compatibility, request };
+  }
+
+  it("the catalog exposes Runway's documented pixel canvas per label", () => {
+    expect(turbo.capabilities.video?.providerCanvases?.["21:9"]).toEqual({ width: 1584, height: 672 });
+  });
+
+  it("plans and freezes 1584×672 (not 1584×678) for the 2.39:1 Shot 3A on 21:9", () => {
+    const { frame, compatibility, request } = frozen();
+    expect(compatibility.compatible).toBe(true);
+    expect(compatibility.adaptation?.framing).toMatchObject({
+      strategy: "overscan_for_crop",
+      status: "adapted",
+      providerLabel: "21:9",
+      providerCanvas: { width: 1584, height: 672 },
+      canvasSource: "provider",
+    });
+    expect(compatibility.adaptation?.duration).toMatchObject({ productionMs: 4500, providerMs: 5000 });
+    expect(compatibility.adaptation?.conform.trimToMs).toBe(4500);
+    expect(compatibility.used.durationMs).toBe(5000);
+    expect(request.providerOptions?.prismStartFrameTransport).toEqual({
+      version: 1,
+      policy: "contain-pad-v1",
+      sourceAssetId: frame.assetId,
+      targetCanvas: { width: 1584, height: 672 },
+      background: "black",
+    });
+    expect(request.startFrameAssetId).toBe(frame.assetId);
+    expect(
+      estimateCredits(turboCatalog, {
+        seconds: 5,
+        tierId: "default",
+        nativeAudio: false,
+        referenceImages: 0,
+        referenceVideoSeconds: 0,
+        startFrame: true,
+        endFrame: false,
+      }).amountUsd,
+    ).toBe(0.25);
+  });
+
+  it("the adapter accepts the frozen canvas and contains the canonical 1536×642 frame at 1584×662, x0 y5", async () => {
+    const { frame, request } = frozen();
+    const transport = request.providerOptions!.prismStartFrameTransport as {
+      targetCanvas: { width: number; height: number };
+    };
+    expect(containPadGeometry({ width: 1536, height: 642 }, transport.targetCanvas)).toEqual({
+      width: 1584,
+      height: 662,
+      x: 0,
+      y: 5,
+      scaled: true,
+    });
+    const fake = new FakeRunway();
+    const canonical = encodeMockPng(32, 18, 3);
+    const canonicalCopy = Uint8Array.from(canonical);
+    const reads: string[] = [];
+    const seen: Array<{ width: number; height: number }> = [];
+    const provider = new RunwayProvider({
+      env: ENV,
+      clientFactory: () => fake.client(),
+      startFrameTransport: async (asset, spec) => {
+        seen.push(spec.targetCanvas);
+        expect(Uint8Array.from(asset.bytes)).toEqual(canonicalCopy); // the canonical bytes, untouched
+        return {
+          asset: { bytes: encodeMockPng(44, 18, 7), mime: "image/png", filename: "transport.png" },
+          policy: "contain-pad-v1",
+          applied: true,
+          source: { width: 1536, height: 642, aspect: 1536 / 642 },
+          target: { width: 1584, height: 672, aspect: 1584 / 672 },
+          content: { width: 1584, height: 662, x: 0, y: 5, scaled: true },
+        };
+      },
+    });
+    const m = provider.listModels().find((x) => x.modelId === "gen4_turbo")!;
+    expect(provider.validateRequest(request, m).errors).toEqual([]);
+    await provider.submit(
+      request,
+      plan(),
+      ctx({
+        assets: {
+          read: async (id) => {
+            reads.push(id);
+            return id === frame.assetId ? { bytes: canonical, mime: "image/png", filename: "c.png" } : null;
+          },
+        },
+      }),
+    );
+    expect(reads).toEqual([frame.assetId]);
+    expect(seen).toEqual([{ width: 1584, height: 672 }]);
+    expect(Uint8Array.from(canonical)).toEqual(canonicalCopy); // the canonical Asset bytes were never mutated
+    expect(fake.created).toHaveLength(1);
+    expect(fake.created[0]!.body).toMatchObject({ model: "gen4_turbo", ratio: "1584:672", duration: 5 });
+  });
+
+  it("a forged transport source is refused before any provider call", async () => {
+    const { request } = frozen();
+    const forged = {
+      ...request,
+      providerOptions: {
+        ...request.providerOptions,
+        prismStartFrameTransport: {
+          ...(request.providerOptions!.prismStartFrameTransport as object),
+          sourceAssetId: "forged-asset",
+        },
+      },
+    } as GenerationRequest;
+    const fake = new FakeRunway();
+    const provider = new RunwayProvider({
+      env: ENV,
+      clientFactory: () => fake.client(),
+      startFrameTransport: async () => {
+        throw new Error("transport must not run");
+      },
+    });
+    await expect(provider.submit(forged, plan(), ctx())).rejects.toMatchObject({
+      code: "runway_invalid_request",
+    });
+    expect(fake.created).toHaveLength(0);
+  });
+
+  it("generic framing without verified provider dimensions is unchanged (label arithmetic)", () => {
+    const base = {
+      video: true,
+      production: { aspectRatio: "2.39:1", durationMs: null, fps: null },
+      provider: {
+        provider: "mock",
+        modelId: "m",
+        aspectRatios: ["16:9", "21:9"],
+        requestedResolution: { width: 1584, height: 662 },
+        maxResolution: { width: 1584, height: 1104 },
+        duration: null,
+      },
+      choice: { framing: "overscan_for_crop" as const },
+    };
+    expect(planFraming(base)).toMatchObject({
+      providerCanvas: { width: 1584, height: 678 },
+      canvasSource: "nominal",
+    });
+    // a verified canvas applies only to the label it was verified for
+    const other = { ...base.provider, providerCanvases: { "16:9": { width: 1280, height: 720 } } };
+    expect(planFraming({ ...base, provider: other })).toMatchObject({
+      providerCanvas: { width: 1584, height: 678 },
+      canvasSource: "nominal",
+    });
+    const verified = { ...base.provider, providerCanvases: { "21:9": { width: 1584, height: 672 } } };
+    expect(planFraming({ ...base, provider: verified })).toMatchObject({
+      providerCanvas: { width: 1584, height: 672 },
+      canvasSource: "provider",
+    });
   });
 });

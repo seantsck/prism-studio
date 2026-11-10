@@ -520,6 +520,19 @@ export function providerRatioFor(model: CatalogModel, aspect: string, tierId?: s
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+/**
+ * The tier's verified provider pixel canvas per aspect label ("21:9" → 1584×672). Only pixel-valued ratios
+ * ("1584:672") count; a label whose provider value is itself a ratio ("21:9") has no verified canvas.
+ */
+export function pixelCanvases(tier: CatalogTier): Record<string, { width: number; height: number }> {
+  const out: Record<string, { width: number; height: number }> = {};
+  for (const [label, v] of Object.entries(tier.ratios)) {
+    const m = /^(\d{3,5}):(\d{3,5})$/.exec(v);
+    if (m) out[label] = { width: Number(m[1]), height: Number(m[2]) };
+  }
+  return out;
+}
+
 /** Largest width and height across every pixel-valued ratio and tier canvas the model offers. */
 export function maxCanvas(model: CatalogModel): { width: number; height: number } | null {
   let width = 0;
@@ -634,6 +647,7 @@ export function toGenerationModel(m: CatalogModel, opts: { maxConcurrency?: numb
       // largest pixel dimensions across the offered ratios (planning canvas; conform re-resolves the real output)
       maxResolution: largest,
       aspectRatios: m.aspectRatios,
+      providerCanvases: pixelCanvases(first),
       fps: [],
     },
     image: null,

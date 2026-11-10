@@ -96,6 +96,13 @@ For Runway the current policy is `contain-pad-v1`:
 The request preview names the transport and target canvas. Provider result provenance records the same frozen transport
 metadata, so a worker restart cannot silently change how the first frame reached the provider.
 
+**Provider canvas = verified pixels, not label arithmetic.** An aspect label (`21:9`) describes the provider's mode;
+the catalog's verified pixel value for that label (`1584:672` on Runway Gen-4 Turbo) is the request and transport
+canvas. Model capabilities expose it as `video.providerCanvases`, and the framing planner uses it (`canvasSource:
+"provider"`) before any requested or nominal canvas. Re-deriving height from `21/9` gave 1584×678, which the adapter
+correctly refused; the adapter invariant (frozen canvas = provider canvas, exactly) is unchanged. Providers without
+documented pixel canvases keep the previous requested/nominal planning.
+
 ## Keyframe mode and reference disclosure
 
 Models whose first/last frames exclude reference images (Seedance, Hailuo: `keyframesExcludeReferences`) always run in

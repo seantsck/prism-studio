@@ -493,6 +493,7 @@ export function evaluateCompatibility(
       aspectRatios: ratios,
       requestedResolution: resolution,
       maxResolution: max ?? null,
+      providerCanvases: video ? (caps.video?.providerCanvases ?? null) : null,
       duration:
         video && caps.video
           ? {
