@@ -14,10 +14,12 @@ import { isAnimationAttempt, parseGenerationPurpose, type GenerationRequest } fr
  *
  * `animate_production_frame` is a Shot-OUTPUT generation with one non-negotiable source rule:
  *
- *   THE SELECTED, CURRENT PRODUCTION FRAME IS THE EXACT FIRST-FRAME IMAGE SUPPLIED TO THE VIDEO MODEL.
+ *   THE SELECTED, CURRENT PRODUCTION FRAME IS THE CANONICAL FIRST-FRAME SOURCE.
  *
  * Never an approved or draft Storyboard, never a manual start-frame override that differs from it, never text-to-video,
- * never a stale frame, never the frame sent a second time as a reference. Everything here reads the frozen
+ * never a stale frame, never the frame sent a second time as a reference. A provider-only deterministic transport
+ * canvas may pad that SAME frozen Asset when a provider's prompt-image aspect contract requires it; the canonical
+ * frame is never replaced or silently cropped. Everything here reads the frozen
  * GenerationPackage (v5 already freezes the selected frame by value) and the frozen request: no new state, no new
  * package version. Generic "Generate" keeps its historical start-frame precedence; only this workflow is stricter.
  */
@@ -101,12 +103,15 @@ export function animationSource(pkg: GenerationPackage): AnimationSource {
 
 /**
  * THE ADAPTER INVARIANT (§50). Checked before an attempt is created AND again by the worker right before the provider
- * call: for an `animate_production_frame` request the provider may only ever receive image-to-video whose start frame
- * is exactly the Production Frame frozen in the attempt's package. Returns the violations (empty = holds). Requests of
+ * call: for an `animate_production_frame` request the canonical start-frame source must be exactly the Production Frame
+ * frozen in the attempt's package. A frozen provider-transport wrapper, when present, must name that same Asset.
+ * Returns the violations (empty = holds). Requests of
  * any other purpose are not this rule's business (empty).
  */
 export function animationRequestViolations(
-  request: Pick<GenerationRequest, "modality" | "startFrameAssetId" | "references"> & { purpose?: unknown },
+  request: Pick<GenerationRequest, "modality" | "startFrameAssetId" | "references" | "providerOptions"> & {
+    purpose?: unknown;
+  },
   packageSnapshot: unknown,
 ): string[] {
   if (parseGenerationPurpose(request.purpose) !== "animate_production_frame") return [];
@@ -128,6 +133,17 @@ export function animationRequestViolations(
     )
   )
     out.push("The Production Frame is the start frame only; it must not also be sent as a reference.");
+
+  const transport = request.providerOptions?.prismStartFrameTransport;
+  if (transport != null) {
+    if (!transport || typeof transport !== "object") {
+      out.push("The provider start-frame transport metadata is invalid.");
+    } else {
+      const t = transport as Record<string, unknown>;
+      if (t.sourceAssetId !== frozen || t.sourceAssetId !== request.startFrameAssetId)
+        out.push("The provider start-frame transport does not wrap the frozen Production Frame.");
+    }
+  }
   return out;
 }
 
