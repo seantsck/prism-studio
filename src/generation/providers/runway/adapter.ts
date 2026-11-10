@@ -216,7 +216,9 @@ export class RunwayProvider implements GenerationProviderAdapter {
     }
     const aspect = transport.targetCanvas.width / transport.targetCanvas.height;
     if (aspect < range.min || aspect > range.max) {
-      return [`The provider transport canvas is outside ${model.displayName}'s verified prompt-image aspect range.`];
+      return [
+        `The provider transport canvas is outside ${model.displayName}'s verified prompt-image aspect range.`,
+      ];
     }
     return [];
   }
