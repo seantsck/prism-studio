@@ -304,6 +304,110 @@ describe("Runway adapter I/O (fake SDK boundary, no network, no credits)", () =>
     expect(body.promptImage[0]!.uri.startsWith("data:image/png;base64,")).toBe(true);
   });
 
+  it("animation transport pads the canonical start-frame bytes without changing the canonical Asset id", async () => {
+    const fake = new FakeRunway();
+    const canonical = encodeMockPng(32, 18, 3);
+    const transported = encodeMockPng(44, 18, 7);
+    const calls: Array<{ bytes: number; target: { width: number; height: number }; range: { min: number; max: number } }> = [];
+    const provider = new RunwayProvider({
+      env: ENV,
+      clientFactory: () => fake.client(),
+      startFrameTransport: async (asset, spec) => {
+        calls.push({
+          bytes: asset.bytes.length,
+          target: spec.targetCanvas,
+          range: spec.aspectRange,
+        });
+        return {
+          asset: { bytes: transported, mime: "image/png", filename: "transport.png" },
+          policy: "contain-pad-v1",
+          applied: true,
+          source: { width: 1536, height: 642, aspect: 1536 / 642 },
+          target: { width: 1584, height: 672, aspect: 1584 / 672 },
+          content: { width: 1536, height: 642, x: 24, y: 15, scaled: false },
+        };
+      },
+    });
+    const animation = request({
+      purpose: "animate_production_frame",
+      modality: "image_to_video",
+      modelId: "gen4_turbo",
+      aspectRatio: "21:9",
+      startFrameAssetId: "asset-1",
+      providerOptions: {
+        prismStartFrameTransport: {
+          version: 1,
+          policy: "contain-pad-v1",
+          sourceAssetId: "asset-1",
+          targetCanvas: { width: 1584, height: 672 },
+          background: "black",
+        },
+      },
+    });
+    const summary = provider.compileRequest(animation, plan());
+    expect(summary.fields.startFrameTransport).toMatchObject({
+      policy: "contain-pad-v1",
+      sourceAssetId: "asset-1",
+      targetCanvas: { width: 1584, height: 672 },
+    });
+    expect(summary.notes.join(" ")).toContain("canonical Production Frame unchanged");
+
+    await provider.submit(
+      animation,
+      plan(),
+      ctx({
+        assets: {
+          read: async (id) =>
+            id === "asset-1" ? { bytes: canonical, mime: "image/png", filename: "canonical.png" } : null,
+        },
+      }),
+    );
+    expect(calls).toEqual([
+      {
+        bytes: canonical.length,
+        target: { width: 1584, height: 672 },
+        range: { min: 0.5, max: 2.358 },
+      },
+    ]);
+    const body = fake.created[0]!.body as { promptImage: Array<{ position: string; uri: string }> };
+    expect(body.promptImage[0]!.position).toBe("first");
+    expect(Buffer.from(body.promptImage[0]!.uri.split(",")[1]!, "base64")).toEqual(Buffer.from(transported));
+    expect(Buffer.from(body.promptImage[0]!.uri.split(",")[1]!, "base64")).not.toEqual(Buffer.from(canonical));
+  });
+
+  it("refuses a Runway start-frame transport that does not wrap the canonical request start frame", async () => {
+    const fake = new FakeRunway();
+    const provider = new RunwayProvider({
+      env: ENV,
+      clientFactory: () => fake.client(),
+      startFrameTransport: async () => {
+        throw new Error("transport must not run");
+      },
+    });
+    const animation = request({
+      purpose: "animate_production_frame",
+      modality: "image_to_video",
+      modelId: "gen4_turbo",
+      aspectRatio: "21:9",
+      startFrameAssetId: "asset-1",
+      providerOptions: {
+        prismStartFrameTransport: {
+          version: 1,
+          policy: "contain-pad-v1",
+          sourceAssetId: "different-asset",
+          targetCanvas: { width: 1584, height: 672 },
+          background: "black",
+        },
+      },
+    });
+    expect(provider.validateRequest(animation, provider.listModels().find((m) => m.modelId === "gen4_turbo")!).errors.join(" "))
+      .toContain("canonical start frame");
+    await expect(provider.submit(animation, plan(), ctx())).rejects.toMatchObject({
+      code: "runway_invalid_request",
+    });
+    expect(fake.created).toHaveLength(0);
+  });
+
   it("large first frames use a short-lived signed URL; with none available the request is refused", async () => {
     const big = new Uint8Array(4_000_000);
     const read = async () => ({ bytes: big, mime: "image/png", filename: "f.png" });
