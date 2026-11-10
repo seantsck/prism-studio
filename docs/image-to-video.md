@@ -2,11 +2,13 @@
 
 Phase 2G made the Shot's canonical still: the **Production Frame**. Phase 2H makes it move.
 
-> The selected, current Production Frame is the exact first-frame image supplied to the video model.
+> The selected, current Production Frame is the canonical first-frame source for the video model.
 
 It is never replaced by an approved or draft Storyboard, a generic Location reference, a manual start-frame override,
-text-to-video because a provider preferred it, or a similar regenerated image. The moving Shot begins from the exact
-still the filmmaker approved.
+text-to-video because a provider preferred it, or a similar regenerated image. When a provider's prompt-image aspect
+contract cannot accept the canonical frame directly, Prism may create a deterministic **provider-only transport frame**
+that contains the same Production Frame pixels on the frozen provider canvas. That transport never becomes canonical,
+never changes the Production Frame Asset, and is disclosed before spend and in provider provenance.
 
 2H is an execution contract plus a workflow. It reuses everything that already exists: generation attempts and jobs,
 the worker, the Runway adapter, the model catalog, candidate sets, human review, cost estimates and spend gates,
@@ -22,7 +24,7 @@ set's recommendation JSON (`generationPurpose`):
 | -------------------------- | -------------------------------------------------------------------------------------------- |
 | `shot_output`              | generic Shot-output generation (every request without a purpose: history is never rewritten) |
 | `production_frame`         | a still candidate for the canonical Production Frame (2G.2)                                  |
-| `animate_production_frame` | a Shot-output VIDEO whose exact first frame is the selected, current Production Frame (2H)   |
+| `animate_production_frame` | a Shot-output VIDEO whose canonical first-frame source is the selected, current Production Frame (2H) |
 
 An animation **is a Shot-output attempt**, not a Production Frame candidate: `isProductionFrameAttempt()` is false, the
 pipeline includes it, human review / Best / final approval apply, and the Production Frame selection never changes.
@@ -44,7 +46,7 @@ No database CHECK constrains the purpose: it lives in JSON (request, model setti
 Generic **Generate** keeps its historical start-frame precedence (override → Production Frame → Storyboard). Only the
 dedicated workflow is stricter.
 
-## Exact start frame and image-to-video only
+## Canonical start frame and image-to-video only
 
 For `animate_production_frame` the compatibility engine:
 
@@ -72,8 +74,27 @@ and reference, and the Storyboard would win nothing the frame has not already fi
 
 `animationRequestViolations(request, packageSnapshot)` is checked when the attempt is prepared AND again by the worker
 right before `adapter.submit` (provider-independent). It refuses any animation request that is not image-to-video, has
-no start frame, starts from anything but the frozen frame, or also sends the frame as a reference. A refused job fails
+no start frame, starts from anything but the frozen frame, or also sends the frame as a reference. If a frozen
+`prismStartFrameTransport` exists, its `sourceAssetId` must be that same frozen Production Frame. A refused job fails
 with `animation_source_invalid`; the provider is never called.
+
+### Provider-only start-frame transport
+
+Some providers constrain the **prompt image** more tightly than Prism's production frame. Prism does not solve that by
+changing the Production Frame or allowing the provider to auto-crop it. The immutable request freezes
+`providerOptions.prismStartFrameTransport` with the canonical source Asset, policy, provider canvas and background.
+
+For Runway the current policy is `contain-pad-v1`:
+
+- FFmpeg reads the canonical Production Frame bytes locally;
+- if the image already fits the provider canvas, every source pixel is preserved at its original size;
+- only an over-large image is scaled down, never up;
+- the remaining provider canvas is center-padded black;
+- the transient transport image is sent to Runway and never becomes a Prism canonical Asset;
+- Runway's output still follows the already-frozen delivery conform back to the production aspect ratio.
+
+The request preview names the transport and target canvas. Provider result provenance records the same frozen transport
+metadata, so a worker restart cannot silently change how the first frame reached the provider.
 
 ## Keyframe mode and reference disclosure
 
@@ -104,10 +125,9 @@ Same PromptPlan v1 sections, no new schema, no provider-specific format in the d
 Unchanged adaptation semantics. The production duration (timeline / package timing) is never rounded: a natively
 supported duration is generated natively; a shorter-than-minimum duration with an explicit **generate longer, then
 trim** plan asks the provider for the supported duration (priced on the provider seconds) and the delivery conform trims
-it back; an unsupported duration without a plan is blocked. Framing: Production Frame → provider canvas → provider
-original → delivery conform, never a silent crop. The comparison shows production / provider / delivery duration and
-"Production Frame 2.39:1 → provider 16:9 → delivery back to 2.39:1" before any spend. The canonical Production Frame
-Asset is never modified.
+it back; an unsupported duration without a plan is blocked. Framing: Production Frame → optional provider-only transport canvas → provider original → delivery conform, never a
+silent crop. The comparison shows production / provider / delivery duration and the frozen provider canvas before any
+spend. The canonical Production Frame Asset is never modified.
 
 Audio: the selected performance stays production truth. Provider-native audio is OFF unless the person turns it on.
 Performance audio a provider accepts may condition the video; it is never called the final dialogue (Phase 2I assembles
