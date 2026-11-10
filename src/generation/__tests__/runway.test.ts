@@ -308,7 +308,11 @@ describe("Runway adapter I/O (fake SDK boundary, no network, no credits)", () =>
     const fake = new FakeRunway();
     const canonical = encodeMockPng(32, 18, 3);
     const transported = encodeMockPng(44, 18, 7);
-    const calls: Array<{ bytes: number; target: { width: number; height: number }; range: { min: number; max: number } }> = [];
+    const calls: Array<{
+      bytes: number;
+      target: { width: number; height: number };
+      range: { min: number; max: number };
+    }> = [];
     const provider = new RunwayProvider({
       env: ENV,
       clientFactory: () => fake.client(),
@@ -372,7 +376,9 @@ describe("Runway adapter I/O (fake SDK boundary, no network, no credits)", () =>
     const body = fake.created[0]!.body as { promptImage: Array<{ position: string; uri: string }> };
     expect(body.promptImage[0]!.position).toBe("first");
     expect(Buffer.from(body.promptImage[0]!.uri.split(",")[1]!, "base64")).toEqual(Buffer.from(transported));
-    expect(Buffer.from(body.promptImage[0]!.uri.split(",")[1]!, "base64")).not.toEqual(Buffer.from(canonical));
+    expect(Buffer.from(body.promptImage[0]!.uri.split(",")[1]!, "base64")).not.toEqual(
+      Buffer.from(canonical),
+    );
   });
 
   it("refuses a Runway start-frame transport that does not wrap the canonical request start frame", async () => {
@@ -400,8 +406,14 @@ describe("Runway adapter I/O (fake SDK boundary, no network, no credits)", () =>
         },
       },
     });
-    expect(provider.validateRequest(animation, provider.listModels().find((m) => m.modelId === "gen4_turbo")!).errors.join(" "))
-      .toContain("canonical start frame");
+    expect(
+      provider
+        .validateRequest(
+          animation,
+          provider.listModels().find((m) => m.modelId === "gen4_turbo")!,
+        )
+        .errors.join(" "),
+    ).toContain("canonical start frame");
     await expect(provider.submit(animation, plan(), ctx())).rejects.toMatchObject({
       code: "runway_invalid_request",
     });
