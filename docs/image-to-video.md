@@ -141,8 +141,9 @@ the final performance deliberately).
   summary and the start-frame override state;
 - blocked reasons when the source rules fail (no comparison is offered then);
 - **Compare animation models**: the existing model comparison for the video models with, per model, eligible or
-  incompatible and why, exact first frame, production → provider → delivery duration, provider canvas, audio
-  conditioning, native audio (off/on), estimated cost and the references omitted by keyframe mode. No model is
+  incompatible and why, canonical first-frame source plus provider-only transport when required, production → provider
+  → delivery duration, provider canvas, audio conditioning, native audio (off/on), estimated cost and the references
+  omitted by keyframe mode. No model is
   pre-selected and nothing calls a provider until the set is explicitly created; paid models still need the server
   spend gates and the confirmation of the displayed total.
 
