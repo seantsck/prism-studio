@@ -225,6 +225,26 @@ export function buildGenerationRequest(args: {
 }): GenerationRequest {
   const { compatibility: c } = args;
   if (!c.modality) throw new Error("Cannot build a request without a compatible modality");
+  const providerOptions = { ...(args.providerOptions ?? {}) };
+  // Phase 5B hosted acceptance: some providers constrain the PROMPT image more tightly than the production frame.
+  // Freeze the provider-only transport policy in the immutable request. It never replaces the canonical start-frame
+  // Asset: the adapter may only center-pad that Asset onto the already-acknowledged provider canvas.
+  if (
+    c.purpose === "animate_production_frame" &&
+    args.model.provider === "runway" &&
+    c.used.startFrameAssetId &&
+    c.adaptation?.framing.status === "adapted" &&
+    c.adaptation.framing.providerCanvas
+  ) {
+    providerOptions.prismStartFrameTransport = {
+      version: 1,
+      policy: "contain-pad-v1",
+      sourceAssetId: c.used.startFrameAssetId,
+      targetCanvas: c.adaptation.framing.providerCanvas,
+      background: "black",
+    };
+  }
+
   return generationRequestSchema.parse({
     schemaVersion: 1,
     modality: c.modality,
@@ -245,7 +265,7 @@ export function buildGenerationRequest(args: {
     startFrameAssetId: c.used.startFrameAssetId,
     endFrameAssetId: c.used.endFrameAssetId,
     audioAssetIds: c.used.audioAssetIds,
-    providerOptions: args.providerOptions ?? {},
+    providerOptions,
     idempotencyKey: args.idempotencyKey,
   });
 }
