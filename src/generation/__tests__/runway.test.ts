@@ -16,6 +16,7 @@ import {
 import { compileRunwayPrompt } from "../providers/runway/compile";
 import { mapRunwayError } from "../providers/runway/errors";
 import { RUNWAY_PRICING } from "../providers/runway/config";
+import { containPadGeometry } from "../providers/runway/start-frame-transport";
 import { ModelRegistry } from "../registry";
 import { silentLogger } from "../log";
 import { evaluateShotForModel } from "../submission";
@@ -304,6 +305,16 @@ describe("Runway adapter I/O (fake SDK boundary, no network, no credits)", () =>
     expect(body.promptImage[0]!.uri.startsWith("data:image/png;base64,")).toBe(true);
   });
 
+  it("contains Shot 3A across the 21:9 provider canvas so delivery crop removes only the padding", () => {
+    expect(containPadGeometry({ width: 1536, height: 642 }, { width: 1584, height: 672 })).toEqual({
+      width: 1584,
+      height: 662,
+      x: 0,
+      y: 5,
+      scaled: true,
+    });
+  });
+
   it("animation transport pads the canonical start-frame bytes without changing the canonical Asset id", async () => {
     const fake = new FakeRunway();
     const canonical = encodeMockPng(32, 18, 3);
@@ -328,7 +339,7 @@ describe("Runway adapter I/O (fake SDK boundary, no network, no credits)", () =>
           applied: true,
           source: { width: 1536, height: 642, aspect: 1536 / 642 },
           target: { width: 1584, height: 672, aspect: 1584 / 672 },
-          content: { width: 1536, height: 642, x: 24, y: 15, scaled: false },
+          content: { width: 1584, height: 662, x: 0, y: 5, scaled: true },
         };
       },
     });
