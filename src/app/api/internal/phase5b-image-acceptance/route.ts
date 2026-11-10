@@ -5,6 +5,9 @@ import { PostgresGenerationData } from "@/data/generation-postgres";
 import { PostgresCandidateData } from "@/data/candidates-postgres";
 import { PostgresLocationViewData } from "@/data/location-view-postgres";
 import { PostgresProductionFrameData } from "@/data/production-frame-postgres";
+import { PostgresMediaQaData } from "@/data/media-qa-postgres";
+import { buildShotContext } from "@/domain/context";
+import { GeneratedFrameRefused, promoteGeneratedFrame } from "@/server/production-frame-generated";
 import type { ProjectData } from "@/domain/schemas";
 import { planCandidateSet, submitCandidateSet, type CandidateSelection } from "@/generation/candidate-set";
 import { readGenerationConfig } from "@/generation/config";
@@ -120,8 +123,8 @@ export async function GET(request: NextRequest) {
     return json({ ok: false, message: "Prism Studio database URL unavailable or wrong target" }, 503);
 
   const mode = request.nextUrl.searchParams.get("mode") ?? "plan";
-  if (!["plan", "submit", "status"].includes(mode))
-    return json({ ok: false, message: "mode must be plan, submit or status" }, 400);
+  if (!["plan", "submit", "status", "promote"].includes(mode))
+    return json({ ok: false, message: "mode must be plan, submit, status or promote" }, 400);
 
   const pool = new Pool({ connectionString: dbUrl, ssl: { rejectUnauthorized: false }, max: 4 });
   try {
@@ -130,6 +133,37 @@ export async function GET(request: NextRequest) {
     if (mode === "status") {
       if (!existing) return json({ ok: true, mode, exists: false });
       return json({ ok: true, mode, exists: true, ...(await statusPayload(pool, String(existing.id))) });
+    }
+
+    if (mode === "promote") {
+      if (!existing) return json({ ok: false, mode, message: "No Shot 3A acceptance attempt exists." }, 404);
+      if (String(existing.status) !== "succeeded")
+        return json({ ok: false, mode, message: "The Shot 3A acceptance attempt has not succeeded." }, 409);
+      const generation = new PostgresGenerationData(pool, owner);
+      const frames = new PostgresProductionFrameData(pool, owner);
+      const qa = new PostgresMediaQaData(pool, owner);
+      const ctx = buildShotContext(data, shot.id);
+      try {
+        const result = await promoteGeneratedFrame(
+          { frames, generation, qa },
+          ctx,
+          { attemptId: String(existing.id), userId: ownerId },
+        );
+        const selected = await frames.listForProject(projectId);
+        const selection = selected.selections.find((s) => s.shotId === shot.id) ?? null;
+        return json({
+          ok: true,
+          mode,
+          frame: result.frame,
+          created: result.created,
+          image: result.image,
+          selectedProductionFrameId: selection?.productionFrameId ?? null,
+        });
+      } catch (err) {
+        if (err instanceof GeneratedFrameRefused)
+          return json({ ok: false, mode, code: err.code, message: err.message }, 409);
+        throw err;
+      }
     }
 
     const env = acceptanceEnv();
