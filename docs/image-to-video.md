@@ -163,17 +163,27 @@ designed transport policy.
 
 **visible-motion v1** writes concise prose in these sections:
 
-| Section                      | Required | Priority | Content                                                                                                                                                              |
-| ---------------------------- | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Continuity                   | yes      | 1        | starting composition, identity, apparent age, facial structure, hairstyle/wardrobe/jewelry (the Look's head phrases), lighting, background; no new objects or people |
-| Visible action               | yes      | 2        | held head/eyeline orientation and "never looks into the camera" (from blocking), begin → change → end as observable behaviour, natural breathing                     |
-| Subject, Camera, Composition | yes      | 3        | who/where/when in plain words; camera (an imperceptible move is requested as a locked camera, recorded); subject blocking                                            |
-| Performance                  | no       | 4        | restraint and pace                                                                                                                                                   |
-| Look detail                  | no       | 5        | the complete Look fields                                                                                                                                             |
-| Setting                      | no       | 6        | set lighting and mood                                                                                                                                                |
+| Section         | Required | Priority | Content                                                                                                                                                                                                                           |
+| --------------- | -------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Continuity      | yes      | 1        | identity, apparent age, facial structure, the Look's head phrases (hair, wardrobe, jewelry), lighting, background; no new objects or people                                                                                       |
+| Visible action  | yes      | 2        | held orientation, eyeline and "never looking into the camera" (from blocking), begin → change → end as observable behaviour; a held orientation also states the motion envelope (below), otherwise natural breathing is asked for |
+| Subject, Camera | yes      | 3        | who/where/when in plain words; camera (an imperceptible move is requested as a locked camera, recorded)                                                                                                                           |
+| Composition     | no       | 4        | subject blocking (the first frame already establishes the composition)                                                                                                                                                            |
+| Performance     | no       | 5        | restraint and pace                                                                                                                                                                                                                |
+| Look detail     | no       | 6        | the complete Look fields                                                                                                                                                                                                          |
+| Setting         | no       | 7        | set lighting and mood                                                                                                                                                                                                             |
 
-Abstract story language is translated by ordered, tested rules (`composure/mask … restored` → "returns to a calm,
-controlled neutral expression"; `… slips/drops` → "expression briefly softens"; `exhausted` → "looks visibly exhausted";
+**Held orientation.** A Shot that faces one side (`screenDirection` "… screen-right/left") with no blocking movement (no
+marks, entry or exit) holds the first frame's orientation. "Keeps her head turned toward screen-right" alone was not
+enough: a Gen-4.5 Shot 3A take turned through frontal to a screen-left profile. The policy therefore pins head AND torso
+("keeps the first frame's three-quarter orientation toward screen-right: head and torso stay screen-right, never
+rotating through frontal or toward screen-left", "profile" when the direction says so), and limits the motion envelope
+to the face plus only what the Shot's own action moves ("Limit motion to her face, eyelids, breathing and a small
+shoulder drop; no larger head or body movement."). Both are recorded adaptations (`held-orientation`,
+`motion-envelope-limited`).
+
+Abstract story language is translated by ordered, tested rules (`composure/mask … restored` → "ends calm and
+neutral"; `… slips/drops` → "expression briefly softens"; `exhausted` → "looks visibly exhausted";
 `tense`, `confident`, `hesitates`; `shoulders fall` → "shoulders lower subtly"). A figurative note no rule understands is
 **omitted and recorded**, never sent (a model may render "mask" literally).
 
