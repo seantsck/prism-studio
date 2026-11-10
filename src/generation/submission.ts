@@ -18,6 +18,7 @@ import {
   type SpendGateInput,
 } from "@/domain/generation/gate";
 import { animationRequestViolations } from "@/domain/generation/animation";
+import { parseFrozenProviderPrompt, type AdaptedProviderPrompt } from "@/domain/generation/provider-prompt";
 import { buildPromptPlan, normalizeDirection, type CreatorDirection } from "@/domain/generation/prompt-plan";
 import {
   applyImageEdit,
@@ -50,6 +51,11 @@ export interface Evaluation {
   compatibility: CompatibilityReport | null;
   estimate: CostEstimate | null;
   gate: GenerationGate;
+  /**
+   * Phase 5B: the provider-facing prompt a provider-prompt policy derived for this model (null = the provider's own
+   * plan compilation applies). Shown before submission; frozen unchanged into the request when submitted.
+   */
+  providerPrompt: AdaptedProviderPrompt | null;
 }
 
 export interface SharedShotEvaluation {
@@ -105,6 +111,7 @@ export function evaluateShotForModel(args: {
     : null;
   const adapter = model ? args.registry.adapter(model.provider) : null;
   let estimate: CostEstimate | null = null;
+  let providerPrompt: AdaptedProviderPrompt | null = null;
   const adapterBlockers: GateBlocker[] = [];
   if (model && adapter && compatibility?.compatible && compatibility.modality) {
     try {
@@ -125,6 +132,7 @@ export function evaluateShotForModel(args: {
         args.edit && editBlocked.length === 0
           ? applyImageEdit(base, built, args.edit, model)
           : { request: base, plan: built };
+      providerPrompt = parseFrozenProviderPrompt(req.providerOptions?.prismProviderPrompt);
       [...editBlocked, ...transparencyBlockers(model, req)].forEach((message, i) =>
         adapterBlockers.push({ code: `image.option.${i}`, source: "model", message }),
       );
@@ -172,7 +180,7 @@ export function evaluateShotForModel(args: {
     adapterBlockers.length > 0
       ? { ...baseGate, allowed: false, blockers: [...baseGate.blockers, ...adapterBlockers] }
       : baseGate;
-  return { ctx, pkg, report, model, availability, compatibility, estimate, gate };
+  return { ctx, pkg, report, model, availability, compatibility, estimate, gate, providerPrompt };
 }
 
 /** Deterministic per (shot, attempt number, package, model): a double click replays instead of duplicating. */

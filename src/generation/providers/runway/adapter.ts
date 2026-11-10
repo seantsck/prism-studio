@@ -1,6 +1,7 @@
 import RunwayML from "@runwayml/sdk";
 import type { IgnoredFeature } from "@/domain/generation/compatibility";
 import { GenerationProviderError } from "@/domain/generation/errors";
+import { parseFrozenProviderPrompt, type AdaptedProviderPrompt } from "@/domain/generation/provider-prompt";
 import type {
   CostEstimate,
   GenerationModel,
@@ -236,6 +237,37 @@ export class RunwayProvider implements GenerationProviderAdapter {
       : null;
   }
 
+  /** Phase 5B: the provider prompt frozen in the request by a provider-prompt policy (null = none / malformed). */
+  private frozenProviderPrompt(request: GenerationRequest): AdaptedProviderPrompt | null {
+    return parseFrozenProviderPrompt(request.providerOptions?.prismProviderPrompt);
+  }
+
+  private providerPromptErrors(model: CatalogModel, request: GenerationRequest): string[] {
+    const raw = request.providerOptions?.prismProviderPrompt;
+    if (raw == null) return [];
+    const p = this.frozenProviderPrompt(request);
+    if (!p) return ["The frozen provider prompt metadata is invalid."];
+    if (p.provider !== RUNWAY_PROVIDER_ID || p.modelId !== request.modelId)
+      return [
+        `The frozen provider prompt was derived for ${p.provider}/${p.modelId}, not ${request.modelId}.`,
+      ];
+    if (!p.ok) return [p.problem ?? "The required provider prompt does not fit the provider limit."];
+    if (!p.text.trim()) return ["The frozen provider prompt is empty."];
+    if (p.text.length !== p.length) return ["The frozen provider prompt length does not match its text."];
+    if (p.text.length > promptLimit(model))
+      return [
+        `The frozen provider prompt is ${p.text.length} characters; ${model.displayName} accepts at most ${promptLimit(model)}.`,
+      ];
+    return [];
+  }
+
+  /** The video prompt that is sent: the frozen provider prompt when a policy produced one, else the plan compilation. */
+  private videoPrompt(model: CatalogModel, request: GenerationRequest, plan: PromptPlan) {
+    const p = this.frozenProviderPrompt(request);
+    if (p && this.providerPromptErrors(model, request).length === 0) return { frozen: p, compiled: null };
+    return { frozen: null, compiled: this.compilePrompt(model, plan) };
+  }
+
   // ───────────────────────── compile / validate / estimate (pure, no network) ─────────────────────────
 
   private cat(modelId: string): CatalogModel | null {
@@ -274,10 +306,22 @@ export class RunwayProvider implements GenerationProviderAdapter {
       };
     }
     if (isImageCatalogModel(model)) return this.compileImageRequest(model, request, plan);
-    const compiled = this.compilePrompt(model, plan);
+    const { frozen: providerPrompt, compiled: planCompiled } = this.videoPrompt(model, request, plan);
+    const compiled = providerPrompt
+      ? { text: providerPrompt.text, omissions: [], notes: [] as string[] }
+      : planCompiled!;
     const { ratio, tier, defaulted, aspect } = ratioFor(model, request);
     const endpoint = endpointFor(request);
     const notes = [...compiled.notes];
+    if (providerPrompt) {
+      notes.push(
+        `Provider prompt adapted by ${providerPrompt.policy.id} v${providerPrompt.policy.version}: ${providerPrompt.length}/${providerPrompt.budget.limit} characters (target ${providerPrompt.budget.target}); the Shot's story data is unchanged.`,
+      );
+      for (const o of providerPrompt.omitted)
+        notes.push(
+          `Prompt budget: optional "${o.label}" section not sent (whole section; nothing is cut part-way).`,
+        );
+    }
     if (defaulted) notes.push(`No aspect ratio on the shot: Prism asks for ${aspect}.`);
     for (const o of compiled.omissions) {
       notes.push(
@@ -318,6 +362,15 @@ export class RunwayProvider implements GenerationProviderAdapter {
         estimatedCredits: credits.credits,
         startFrameTransport: this.transportSummary(request),
         apiVersion: RUNWAY_API_VERSION,
+        ...(providerPrompt
+          ? {
+              promptPolicy: `${providerPrompt.policy.id}@v${providerPrompt.policy.version}`,
+              promptSourceFingerprint: providerPrompt.sourceFingerprint,
+              promptBudget: providerPrompt.budget,
+              promptOmittedSections: providerPrompt.omitted.map((o) => o.label),
+              promptAdaptations: providerPrompt.adaptations.length,
+            }
+          : {}),
       },
       attachments,
       notes,
@@ -383,6 +436,18 @@ export class RunwayProvider implements GenerationProviderAdapter {
         promptLimit(model),
       );
     }
+    const { frozen } = this.videoPrompt(model, request, plan);
+    if (frozen) {
+      if (frozen.omitted.length === 0) return [];
+      return [
+        {
+          id: "prompt.budget",
+          feature: "prompt",
+          label: `Optional prompt detail beyond the ${frozen.budget.target}-character provider prompt target`,
+          impact: `Not sent to the model: ${frozen.omitted.map((o) => o.label.toLowerCase()).join(", ")} (whole sections). Every required section is sent; nothing is cut part-way.`,
+        },
+      ];
+    }
     return omissionsAsIgnoredFeatures(this.compilePrompt(model, plan).omissions, promptLimit(model));
   }
 
@@ -391,7 +456,11 @@ export class RunwayProvider implements GenerationProviderAdapter {
     if (!cat) return { ok: false, errors: [`Unsupported Runway model ${model.modelId}.`] };
     const errors = isImageCatalogModel(cat)
       ? validateImageRequest(cat, request)
-      : [...validateForModel(cat, request), ...this.startFrameTransportErrors(cat, request)];
+      : [
+          ...validateForModel(cat, request),
+          ...this.startFrameTransportErrors(cat, request),
+          ...this.providerPromptErrors(cat, request),
+        ];
     return { ok: errors.length === 0, errors };
   }
 
@@ -544,7 +613,8 @@ export class RunwayProvider implements GenerationProviderAdapter {
       if (request.endFrameAssetId) uris.last = await this.inputUri(request.endFrameAssetId, "image", ctx);
       for (const r of request.references) uris.references.push(await this.inputUri(r.assetId, "image", ctx));
       for (const a of request.audioAssetIds) uris.audio.push(await this.inputUri(a, "audio", ctx));
-      const { endpoint, body } = buildCall(model, request, this.compilePrompt(model, plan).text, uris);
+      const sent = this.videoPrompt(model, request, plan);
+      const { endpoint, body } = buildCall(model, request, sent.frozen?.text ?? sent.compiled!.text, uris);
       const created: { id: string } =
         endpoint === "image_to_video"
           ? await client.imageToVideo.create(body, { signal: ctx.signal })

@@ -7,6 +7,7 @@ import {
 } from "../generated-production-frame";
 import type { GenerationPackage } from "../generation-package";
 import type { GenerationAttempt } from "../schemas";
+import { parseFrozenProviderPrompt } from "./provider-prompt";
 import { isAnimationAttempt, parseGenerationPurpose, type GenerationRequest } from "./schemas";
 
 /**
@@ -104,13 +105,16 @@ export function animationSource(pkg: GenerationPackage): AnimationSource {
 /**
  * THE ADAPTER INVARIANT (§50). Checked before an attempt is created AND again by the worker right before the provider
  * call: for an `animate_production_frame` request the canonical start-frame source must be exactly the Production Frame
- * frozen in the attempt's package. A frozen provider-transport wrapper, when present, must name that same Asset.
+ * frozen in the attempt's package. A frozen provider-transport wrapper, when present, must name that same Asset, and a
+ * frozen provider prompt (Phase 5B) must have been derived from that same package for that same provider/model.
  * Returns the violations (empty = holds). Requests of
  * any other purpose are not this rule's business (empty).
  */
 export function animationRequestViolations(
   request: Pick<GenerationRequest, "modality" | "startFrameAssetId" | "references" | "providerOptions"> & {
     purpose?: unknown;
+    provider?: string;
+    modelId?: string;
   },
   packageSnapshot: unknown,
 ): string[] {
@@ -143,6 +147,18 @@ export function animationRequestViolations(
       if (t.sourceAssetId !== frozen || t.sourceAssetId !== request.startFrameAssetId)
         out.push("The provider start-frame transport does not wrap the frozen Production Frame.");
     }
+  }
+  const providerPrompt = request.providerOptions?.prismProviderPrompt;
+  if (providerPrompt != null) {
+    const p = parseFrozenProviderPrompt(providerPrompt);
+    if (!p) out.push("The frozen provider prompt is invalid.");
+    else if (
+      p.sourceFingerprint !==
+      (packageSnapshot as { provenance?: { fingerprint?: unknown } } | null)?.provenance?.fingerprint
+    )
+      out.push("The frozen provider prompt was derived from a different package.");
+    else if (p.provider !== request.provider || p.modelId !== request.modelId)
+      out.push("The frozen provider prompt was derived for a different model.");
   }
   return out;
 }
