@@ -6,6 +6,7 @@ import {
   type DeliveryConformPlan,
   type ResolvedConform,
 } from "@/domain/framing/conform";
+import type { ProviderTransportGeometry } from "@/domain/framing/transport";
 import type { Asset } from "@/domain/schemas";
 import { buildObjectPath, safeFileName } from "@/lib/storage-paths";
 import type { MediaOutput, MediaProbe, MediaProcessor } from "./types";
@@ -202,15 +203,21 @@ export async function conformAttemptOutput(args: {
   original: Asset;
   plan: DeliveryConformPlan;
   deps: DeliveryDeps;
+  /** The provider-only start-frame transport the attempt's frozen request used (null/absent = none). */
+  transport?: ProviderTransportGeometry | null;
 }): Promise<ConformResult> {
   const { deps, original, plan } = args;
   const bytes = await readVerified(original, deps.storage);
   const probe = await deps.processor.probe(bytes);
-  const resolved = resolveConform(plan, {
-    width: probe.width ?? 0,
-    height: probe.height ?? 0,
-    durationMs: probe.durationMs,
-  });
+  const resolved = resolveConform(
+    plan,
+    {
+      width: probe.width ?? 0,
+      height: probe.height ?? 0,
+      durationMs: probe.durationMs,
+    },
+    { transport: args.transport ?? null },
+  );
   const needed = resolved.crop !== null || resolved.pad !== null || resolved.trimMs !== null;
   const now = (deps.now?.() ?? new Date()).toISOString();
 
