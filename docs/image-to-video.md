@@ -20,10 +20,10 @@ the freshness parts are unchanged. No GPU, COLMAP, Brush or 3D set is required.
 A provider-independent `GenerationPurpose`, frozen on the attempt's request (`request.purpose`) and on the candidate
 set's recommendation JSON (`generationPurpose`):
 
-| Purpose                    | Meaning                                                                                      |
-| -------------------------- | -------------------------------------------------------------------------------------------- |
-| `shot_output`              | generic Shot-output generation (every request without a purpose: history is never rewritten) |
-| `production_frame`         | a still candidate for the canonical Production Frame (2G.2)                                  |
+| Purpose                    | Meaning                                                                                               |
+| -------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `shot_output`              | generic Shot-output generation (every request without a purpose: history is never rewritten)          |
+| `production_frame`         | a still candidate for the canonical Production Frame (2G.2)                                           |
 | `animate_production_frame` | a Shot-output VIDEO whose canonical first-frame source is the selected, current Production Frame (2H) |
 
 An animation **is a Shot-output attempt**, not a Production Frame candidate: `isProductionFrameAttempt()` is false, the
