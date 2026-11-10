@@ -12,6 +12,7 @@ import type {
   PromptPlan,
 } from "@/domain/generation/schemas";
 import type {
+  AssetBytes,
   CompiledRequestSummary,
   GenerationProviderAdapter,
   ProviderContext,
@@ -61,6 +62,12 @@ import {
   RUNWAY_SECRET_ENV,
 } from "./config";
 import { mapRunwayError, mapRunwayFailure } from "./errors";
+import {
+  ffmpegRunwayStartFrameTransport,
+  parseFrozenRunwayStartFrameTransport,
+  type FrozenRunwayStartFrameTransport,
+  type RunwayStartFrameTransport,
+} from "./start-frame-transport";
 
 /** Typed against the SDK's own request union: no cast, no hand-written body. */
 type CreateImage = (
@@ -117,6 +124,8 @@ export interface RunwayProviderOptions {
   clientFactory?: (apiKey: string) => RunwayClientLike;
   /** Provider-side concurrency Prism respects (account tier dependent). Default 1. */
   maxConcurrency?: number;
+  /** Tests may inject the deterministic provider-only start-frame transport; production uses FFmpeg. */
+  startFrameTransport?: RunwayStartFrameTransport;
 }
 
 const round4 = (n: number) => Math.round(n * 10_000) / 10_000;
@@ -135,12 +144,14 @@ export class RunwayProvider implements GenerationProviderAdapter {
   private readonly env: Record<string, string | undefined>;
   private readonly clientFactory: (apiKey: string) => RunwayClientLike;
   private readonly maxConcurrency: number;
+  private readonly startFrameTransport: RunwayStartFrameTransport;
 
   constructor(opts: RunwayProviderOptions = {}) {
     this.env = opts.env ?? process.env;
     this.maxConcurrency =
       opts.maxConcurrency ??
       Math.min(20, Math.max(1, Number.parseInt(this.env.PRISM_STUDIO_RUNWAY_MAX_CONCURRENCY ?? "", 10) || 1));
+    this.startFrameTransport = opts.startFrameTransport ?? ffmpegRunwayStartFrameTransport;
     this.clientFactory =
       opts.clientFactory ??
       ((apiKey) =>
@@ -176,6 +187,51 @@ export class RunwayProvider implements GenerationProviderAdapter {
       .map((s) => s.trim().toLowerCase())
       .filter((s) => /^(\*\.)?[a-z0-9.-]+\.[a-z]{2,}$/.test(s));
     return [...RUNWAY_DEFAULT_OUTPUT_HOSTS, ...extra];
+  }
+
+  private frozenStartFrameTransport(request: GenerationRequest): FrozenRunwayStartFrameTransport | null {
+    return parseFrozenRunwayStartFrameTransport(request.providerOptions?.prismStartFrameTransport);
+  }
+
+  private startFrameTransportErrors(model: CatalogModel, request: GenerationRequest): string[] {
+    const raw = request.providerOptions?.prismStartFrameTransport;
+    if (raw == null) return [];
+    const transport = this.frozenStartFrameTransport(request);
+    if (!transport) return ["The frozen Runway start-frame transport metadata is invalid."];
+    if (!request.startFrameAssetId || transport.sourceAssetId !== request.startFrameAssetId) {
+      return ["The Runway start-frame transport must wrap the request's canonical start frame."];
+    }
+    const range = model.inputs.promptImageAspectRatio;
+    if (!range) return [`${model.displayName} has no verified prompt-image aspect range for transport.`];
+    const { ratio } = ratioFor(model, request);
+    const providerCanvas = canvasOf(ratio);
+    if (
+      !providerCanvas ||
+      transport.targetCanvas.width !== providerCanvas.width ||
+      transport.targetCanvas.height !== providerCanvas.height
+    ) {
+      return [
+        `The frozen start-frame transport canvas ${transport.targetCanvas.width}×${transport.targetCanvas.height} does not match the provider canvas ${providerCanvas ? `${providerCanvas.width}×${providerCanvas.height}` : "for this request"}.`,
+      ];
+    }
+    const aspect = transport.targetCanvas.width / transport.targetCanvas.height;
+    if (aspect < range.min || aspect > range.max) {
+      return [`The provider transport canvas is outside ${model.displayName}'s verified prompt-image aspect range.`];
+    }
+    return [];
+  }
+
+  private transportSummary(request: GenerationRequest): Record<string, unknown> | null {
+    const t = this.frozenStartFrameTransport(request);
+    return t
+      ? {
+          version: t.version,
+          policy: t.policy,
+          sourceAssetId: t.sourceAssetId,
+          targetCanvas: t.targetCanvas,
+          background: t.background,
+        }
+      : null;
   }
 
   // ───────────────────────── compile / validate / estimate (pure, no network) ─────────────────────────
@@ -229,6 +285,12 @@ export class RunwayProvider implements GenerationProviderAdapter {
     if (!model.duration.verified) {
       notes.push(`Duration bounds are not documented for ${model.displayName}; the provider validates them.`);
     }
+    if (this.frozenStartFrameTransport(request)) {
+      const t = this.frozenStartFrameTransport(request)!;
+      notes.push(
+        `Provider-only first-frame transport: ${t.policy} to ${t.targetCanvas.width}×${t.targetCanvas.height}; canonical Production Frame unchanged.`,
+      );
+    }
     const attachments: CompiledRequestSummary["attachments"] = [];
     if (request.startFrameAssetId)
       attachments.push({ role: "first_frame", assetId: request.startFrameAssetId });
@@ -252,6 +314,7 @@ export class RunwayProvider implements GenerationProviderAdapter {
         negativePromptSent:
           model.inputs.negativePrompt === "supported" && Boolean(request.prompt.negative.trim()),
         estimatedCredits: credits.credits,
+        startFrameTransport: this.transportSummary(request),
         apiVersion: RUNWAY_API_VERSION,
       },
       attachments,
@@ -326,7 +389,7 @@ export class RunwayProvider implements GenerationProviderAdapter {
     if (!cat) return { ok: false, errors: [`Unsupported Runway model ${model.modelId}.`] };
     const errors = isImageCatalogModel(cat)
       ? validateImageRequest(cat, request)
-      : validateForModel(cat, request);
+      : [...validateForModel(cat, request), ...this.startFrameTransportErrors(cat, request)];
     return { ok: errors.length === 0, errors };
   }
 
@@ -380,6 +443,52 @@ export class RunwayProvider implements GenerationProviderAdapter {
     return this.clientFactory(key);
   }
 
+  private imageAssetOrThrow(asset: AssetBytes | null): AssetBytes {
+    const bad = (code: string, message: string) =>
+      new GenerationProviderError("invalid_request", code, message, { retryable: false });
+    if (!asset) throw bad("runway_input_unavailable", "The image could not be read from Prism storage.");
+    const mime = (asset.mime ?? "").toLowerCase().replace("image/jpg", "image/jpeg");
+    if (!(RUNWAY_IMAGE_MIMES as readonly string[]).includes(mime)) {
+      throw bad("runway_input_type", "Runway accepts JPEG, PNG or WebP images.");
+    }
+    return { ...asset, mime };
+  }
+
+  private embeddedImageUri(asset: AssetBytes): string {
+    if (asset.bytes.length > RUNWAY_MAX_DATA_URI_BYTES) {
+      throw new GenerationProviderError(
+        "invalid_request",
+        "runway_transport_too_large",
+        "The provider-only first-frame transport is too large to embed safely.",
+        { retryable: false },
+      );
+    }
+    return `data:${asset.mime};base64,${Buffer.from(asset.bytes).toString("base64")}`;
+  }
+
+  private async startFrameUri(
+    model: CatalogModel,
+    request: GenerationRequest,
+    ctx: ProviderContext,
+  ): Promise<string> {
+    const id = request.startFrameAssetId!;
+    const transport = this.frozenStartFrameTransport(request);
+    if (!transport) return this.inputUri(id, "image", ctx);
+    const errors = this.startFrameTransportErrors(model, request);
+    if (errors.length) {
+      throw new GenerationProviderError("invalid_request", "runway_start_frame_transport", errors[0]!, {
+        retryable: false,
+      });
+    }
+    const source = this.imageAssetOrThrow(await ctx.assets.read(id));
+    const range = model.inputs.promptImageAspectRatio!;
+    const out = await this.startFrameTransport(source, {
+      targetCanvas: transport.targetCanvas,
+      aspectRange: range,
+    });
+    return this.embeddedImageUri(out.asset);
+  }
+
   /** An input asset as a data URI (up to 3.5 MB) or a short-lived signed URL for larger ones. */
   private async inputUri(assetId: string, kind: "image" | "audio", ctx: ProviderContext): Promise<string> {
     const bad = (code: string, message: string) =>
@@ -418,7 +527,7 @@ export class RunwayProvider implements GenerationProviderAdapter {
     const errors = model
       ? isImageCatalogModel(model)
         ? validateImageRequest(model, request)
-        : validateForModel(model, request)
+        : [...validateForModel(model, request), ...this.startFrameTransportErrors(model, request)]
       : [`Unsupported Runway model ${request.modelId}.`];
     if (!model || errors.length > 0) {
       throw new GenerationProviderError("invalid_request", "runway_invalid_request", errors[0]!, {
@@ -429,8 +538,7 @@ export class RunwayProvider implements GenerationProviderAdapter {
     if (isImageCatalogModel(model)) return this.submitImage(client, model, request, plan, ctx);
     try {
       const uris: ResolvedInputs = { first: null, last: null, references: [], audio: [] };
-      if (request.startFrameAssetId)
-        uris.first = await this.inputUri(request.startFrameAssetId, "image", ctx);
+      if (request.startFrameAssetId) uris.first = await this.startFrameUri(model, request, ctx);
       if (request.endFrameAssetId) uris.last = await this.inputUri(request.endFrameAssetId, "image", ctx);
       for (const r of request.references) uris.references.push(await this.inputUri(r.assetId, "image", ctx));
       for (const a of request.audioAssetIds) uris.audio.push(await this.inputUri(a, "audio", ctx));
@@ -704,6 +812,7 @@ export class RunwayProvider implements GenerationProviderAdapter {
           durationSeconds: seconds,
           outputFormat: "mp4",
           seedRequested: request.seed,
+          startFrameTransport: this.transportSummary(request),
         },
         metadata: {
           runwayApiVersion: RUNWAY_API_VERSION,
