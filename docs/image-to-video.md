@@ -87,9 +87,9 @@ changing the Production Frame or allowing the provider to auto-crop it. The immu
 For Runway the current policy is `contain-pad-v1`:
 
 - FFmpeg reads the canonical Production Frame bytes locally;
-- if the image already fits the provider canvas, every source pixel is preserved at its original size;
-- only an over-large image is scaled down, never up;
-- the remaining provider canvas is center-padded black;
+- the complete frame is uniformly scaled to **contain** inside the provider canvas (up or down as needed), never cropped;
+- the remaining axis is center-padded black;
+- for Shot 3A, 1536×642 becomes 1584×662 plus 5 px top/bottom; the 2.39:1 delivery crop removes that padding;
 - the transient transport image is sent to Runway and never becomes a Prism canonical Asset;
 - Runway's output still follows the already-frozen delivery conform back to the production aspect ratio.
 
