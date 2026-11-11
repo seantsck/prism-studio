@@ -64,6 +64,62 @@ export interface PlacementBasis {
   timing: string;
 }
 
+/**
+ * Phase 5B-V3: the transition INTO an item, bound to the predecessor it was chosen against (`fromItemId`), like a cut
+ * intent. Absent / null = a straight cut (the default). A cross dissolve overlaps the two pictures for `durationMs`
+ * (the incoming item starts that much before the outgoing one ends), so it SHORTENS the timeline by its duration. It is
+ * editorial metadata: neither source is rendered into, trimmed or changed.
+ */
+export interface EditTransition {
+  kind: "dissolve";
+  durationMs: number;
+  fromItemId: string;
+}
+
+/** The transition kinds a creator chooses from (V3 keeps this intentionally small). */
+export const TRANSITION_KINDS = ["cut", "dissolve"] as const;
+export type TransitionKind = (typeof TRANSITION_KINDS)[number];
+export const TRANSITION_LABEL: Record<TransitionKind, string> = { cut: "Cut", dissolve: "Cross dissolve" };
+
+/** A dissolve is at least this long (shorter reads as a soft cut). */
+export const DISSOLVE_MIN_MS = 100;
+/** And never longer than this, whatever the neighbours (V3 dissolves are editorial softening, not effects). */
+export const DISSOLVE_MAX_MS = 2000;
+export const DISSOLVE_DEFAULT_MS = 500;
+
+/**
+ * The longest dissolve two neighbours allow: half of the SHORTER of the two, so an item that dissolves on both sides
+ * is never more than consumed by its two overlaps, capped at `DISSOLVE_MAX_MS`. A 3 s dissolve between two 1 s clips
+ * is refused (the maximum there is 500 ms).
+ */
+export const maxDissolveMs = (outgoingMs: number, incomingMs: number): number =>
+  Math.min(DISSOLVE_MAX_MS, Math.floor(Math.min(outgoingMs, incomingMs) / 2));
+
+/**
+ * Phase 5B-V3: a title card of the edit. Not a Shot and not media: text the timeline shows full frame for
+ * `durationMs` before the first item (`opening`) or after the last (`closing`). At most one per placement.
+ */
+export const TITLE_PLACEMENTS = ["opening", "closing"] as const;
+export type TitlePlacement = (typeof TITLE_PLACEMENTS)[number];
+export const TITLE_STYLES = ["film", "plain"] as const;
+export type TitleStyle = (typeof TITLE_STYLES)[number];
+export const TITLE_MIN_MS = 500;
+export const TITLE_MAX_MS = 20_000;
+export const TITLE_DEFAULT_MS = 4000;
+export const TITLE_TEXT_MAX = 200;
+
+export interface EditTitleCard {
+  id: string;
+  placement: TitlePlacement;
+  /** the main line (required) */
+  title: string;
+  /** an optional second line (e.g. "Episode 1 — The Arrangement") */
+  subtitle: string;
+  durationMs: number;
+  /** film = large serif-like title typography on black; plain = the UI face */
+  style: TitleStyle;
+}
+
 export interface EditItem {
   id: string;
   shotId: string;
@@ -76,6 +132,8 @@ export interface EditItem {
    * it names (`fromItemId`). Absent / null = none. Never on the first item; cleared when the predecessor changes.
    */
   incomingCutIntent?: CutIntent | null;
+  /** 5B-V3: the transition INTO this item (absent / null = cut). Never on the first item. */
+  incomingTransition?: EditTransition | null;
 }
 
 export interface EpisodeEdit {
@@ -85,8 +143,13 @@ export interface EpisodeEdit {
   editRate: EditRate;
   /** Bumped by every mutation (optimistic concurrency, 2I.1B). */
   revision: number;
-  /** In editorial order: items are contiguous, the first starts at 0. */
+  /**
+   * In editorial order. Items are back to back except where a dissolve overlaps two of them; where each item sits is
+   * the canonical timeline (timeline.ts), never re-derived elsewhere.
+   */
   items: EditItem[];
+  /** 5B-V3: opening / closing title cards (absent = none). */
+  titles?: EditTitleCard[];
 }
 
 /** Phase 2I.1 invariants that a later phase may relax (each names exactly one check below). */

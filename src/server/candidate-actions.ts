@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { shotEditableAssetIds } from "@/domain/generation/image-edit";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { CandidateError } from "@/data/candidates-repository";
@@ -14,6 +15,8 @@ import {
 } from "@/domain/generation/reviews";
 import { PREFERENCES, type RecommendationPreference } from "@/domain/generation/recommendation";
 import { candidateSetPurpose } from "@/domain/generation/candidates";
+import { isAnimationAttempt } from "@/domain/generation/schemas";
+import { SHOT_CLIP_REPLACE_CONFIRM } from "@/domain/generation/video-inputs";
 import {
   isProductionFrameAttempt,
   parseGenerationPurpose,
@@ -40,6 +43,21 @@ const selectionsSchema = z
       nativeAudio: z.boolean().optional(),
       /** Still-image quality (Production Frame candidates); validated against the model by the planner. */
       quality: z.string().max(16).nullable().optional(),
+      /** Phase 5B-I2: explicit transparent background; refused by the planner for a model without it. */
+      background: z.enum(["transparent", "opaque"]).nullable().optional(),
+      /** Phase 5B-I2: edit one source still; verified to belong to the Shot by the caller and the planner. */
+      edit: z
+        .object({ sourceAssetId: z.string().min(1).max(64), instruction: z.string().min(1).max(2000) })
+        .nullable()
+        .optional(),
+      /** Phase 5B-I6: the creator's direction (Production Frame candidates); bounded, never a protected line. */
+      direction: z
+        .object({
+          kind: z.enum(["additional", "alternate_composition", "motion"]),
+          text: z.string().max(500),
+        })
+        .nullable()
+        .optional(),
     }),
   )
   .min(1)
@@ -73,6 +91,12 @@ async function createCandidateSet_impl(form: FormData) {
     selections = selectionsSchema.parse(JSON.parse(str(form, "selections") || "[]"));
   } catch {
     throw new UserFacingError("Select between 1 and 8 models.");
+  }
+  // Phase 5B-I2: an edit may only start from one of THIS Shot's own stills (checked server-side, never trusted)
+  if (selections.some((s) => s.edit)) {
+    const editable = shotEditableAssetIds(data, shotId);
+    if (selections.some((s) => s.edit && !editable.has(s.edit.sourceAssetId)))
+      throw new UserFacingError("That image is not one of this Shot's stills.");
   }
   const prefRaw = str(form, "preference");
   const preference = (PREFERENCES as readonly string[]).includes(prefRaw)
@@ -109,6 +133,9 @@ async function createCandidateSet_impl(form: FormData) {
         tierId: s.tierId ?? null,
         nativeAudio: s.nativeAudio ?? false,
         quality: s.quality ?? null,
+        background: s.background ?? null,
+        edit: s.edit ?? null,
+        direction: s.direction ?? null,
       })),
       acknowledgeAll: str(form, "ackAll") === "1",
       confirmedTotalUsd:
@@ -271,6 +298,12 @@ async function promoteCandidate_impl(form: FormData) {
     );
   if (view.attempt.status !== "succeeded")
     throw new UserFacingError("Only a completed generation can be promoted.");
+  // 5B-V1 Use as Shot Clip: replacing the Shot's current clip is explicit (the previous clip stays in history)
+  const current = data.attempts.find(
+    (a) => a.shotId === view.attempt.shotId && a.approved && a.id !== view.attempt.id,
+  );
+  if (current && isAnimationAttempt(view.attempt) && str(form, "confirmReplace") !== "1")
+    throw new UserFacingError(SHOT_CLIP_REPLACE_CONFIRM);
   const now = new Date().toISOString();
   await generation.reviewAttempt(view.attempt.id, {
     status: "approved",

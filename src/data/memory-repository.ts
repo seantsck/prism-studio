@@ -4,11 +4,16 @@ import { LOCAL_USER_ID, buildSeedProject } from "./seed";
 import { MemoryCandidateService } from "./candidates-memory";
 import { MemoryCharacterContinuityService } from "./character-continuity-memory";
 import { MemoryEpisodeEditService } from "./episode-edit-memory";
+import { MemoryRenderService } from "@/render/memory";
 import { MemoryGenerationService } from "./generation-memory";
 import { MemoryLocationViewService } from "./location-view-memory";
 import { MemoryMediaQaService } from "./media-qa-memory";
 import { MemoryPrevisService } from "./previs-memory";
 import { MemoryProductionFrameService } from "./production-frame-memory";
+import { MemoryStoryService } from "./story-memory";
+import { MemoryWritingService } from "./writing-memory";
+import { MemoryShotListService } from "./shot-list-memory";
+import { MemoryShotDirectionService } from "./shot-direction-memory";
 import type { Repository } from "./repository";
 import type {
   Asset,
@@ -44,6 +49,7 @@ export class MemoryRepository implements Repository {
   private locationViewService: MemoryLocationViewService | undefined;
   private characterContinuityService: MemoryCharacterContinuityService | undefined;
   private episodeEditService: MemoryEpisodeEditService | undefined;
+  private renderService: MemoryRenderService | undefined;
   /** The memory twin of `updated_at` on the rows a cut's fingerprints depend on (`getCutSettlementClock`). */
   private stamps = new Map<string, string>();
   private readonly createdAt = new Date().toISOString();
@@ -98,6 +104,44 @@ export class MemoryRepository implements Repository {
     return this.productionFrameService;
   }
 
+  /** Production Proposals (Phase 5B-S1; same semantics as Postgres). */
+  private storyService?: MemoryStoryService;
+  get story(): MemoryStoryService {
+    this.storyService ??= new MemoryStoryService((projectId) => this.projects.has(projectId));
+    return this.storyService;
+  }
+
+  /** The AI writing assistant: sessions, revision proposals, script revisions (Phase 5B-S2; same semantics as Postgres). */
+  private writingService?: MemoryWritingService;
+  get writing(): MemoryWritingService {
+    this.writingService ??= new MemoryWritingService({
+      ownsProject: (projectId) => this.projects.has(projectId),
+      episodeInProject: (projectId, episodeId) =>
+        Boolean(this.projects.get(projectId)?.episodes.some((e) => e.id === episodeId)),
+    });
+    return this.writingService;
+  }
+
+  /** Scene → Shot List Proposals (Phase 5B-S4; same semantics as Postgres). */
+  private shotListService?: MemoryShotListService;
+  get shotLists(): MemoryShotListService {
+    this.shotListService ??= new MemoryShotListService((projectId, episodeId, sceneId) =>
+      Boolean(
+        this.projects.get(projectId)?.scenes.some((s) => s.id === sceneId && s.episodeId === episodeId),
+      ),
+    );
+    return this.shotListService;
+  }
+
+  /** Shot → Storyboard Direction Proposals (Phase 5B-S5; same semantics as Postgres). */
+  private shotDirectionService?: MemoryShotDirectionService;
+  get shotDirections(): MemoryShotDirectionService {
+    this.shotDirectionService ??= new MemoryShotDirectionService((projectId, sceneId, shotId) =>
+      Boolean(this.projects.get(projectId)?.shots.some((s) => s.id === shotId && s.sceneId === sceneId)),
+    );
+    return this.shotDirectionService;
+  }
+
   /** Location Views and the Shots' view selections (Phase 2G.3; same semantics as Postgres). Independent of 3D. */
   get locationViews(): MemoryLocationViewService {
     this.locationViewService ??= new MemoryLocationViewService({
@@ -116,6 +160,17 @@ export class MemoryRepository implements Repository {
       touchShot: (projectId, shotId) => this.touchShot(projectId, shotId),
     });
     return this.characterContinuityService;
+  }
+
+  /** Episode renders (Phase 5B-V4; same semantics as Postgres and migration 0059). */
+  get renders(): MemoryRenderService {
+    this.renderService ??= new MemoryRenderService({
+      all: () => [...this.projects.values()],
+      insertAsset: async (projectId, asset) => {
+        await this.upsert(projectId, "assets", asset);
+      },
+    });
+    return this.renderService;
   }
 
   /** Episode edits (Phase 2I.1; same semantics as Postgres and migration 0043). */
@@ -266,6 +321,7 @@ export class MemoryRepository implements Repository {
         shot.propIds = shot.propIds.filter((x) => x !== id);
         this.touchShot(projectId, shot.id);
       }
+    if (name === "assets") this.generationService?.releaseSubjectOutputs(projectId, id);
     if (name === "assets")
       for (const ref of p.identityRefs.filter((r) => r.assetId === id)) {
         ref.assetId = null;

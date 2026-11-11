@@ -217,7 +217,8 @@ abstract class PostgresRepositoryBase implements Repository {
       byProject("performance_directions"),
       byProject("performance_takes"),
       byProject("storyboard_frames"),
-      byProject("generation_attempts"),
+      // Shot history only: Character / Location image attempts (0051) are read through their own methods
+      ["select * from generation_attempts where project_id = $1 and shot_id is not null", P],
       byProject("continuity_checks"),
       viaParent("scene_characters", "scenes"),
       viaParent("scene_props", "scenes"),

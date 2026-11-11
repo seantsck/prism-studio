@@ -440,10 +440,58 @@ describe("registry and configuration", () => {
     expect(missingConfig(["PRISM_STUDIO_PROVIDER_ACME_API_KEY"], {})).toHaveLength(1);
   });
 
+  it("worker-backed providers can be queued by the web without copying execution secrets", () => {
+    const fake: GenerationProviderAdapter = {
+      ...new MockProvider(),
+      info: () => ({
+        provider: "acme",
+        displayName: "Acme",
+        kind: "real",
+        description: "",
+        requiredConfig: [providerEnvName("acme", "api_key")],
+        webhooks: false,
+      }),
+      listModels: () => [
+        { ...new MockProvider().listModels()[0]!, provider: "acme", modelId: "acme-1", kind: "real" },
+      ],
+    } as unknown as GenerationProviderAdapter;
+
+    const web = new ModelRegistry(
+      [fake],
+      readGenerationConfig({
+        PRISM_STUDIO_GENERATION_PROVIDERS: "acme",
+        PRISM_STUDIO_WORKER_BACKED_PROVIDERS: "acme",
+        PRISM_STUDIO_ALLOW_PAID_GENERATION: "true",
+        PRISM_STUDIO_MAX_GENERATION_USD: "1",
+      }),
+      {},
+    );
+    const webAvailability = web.availability()[0]!;
+    expect(webAvailability.configured).toBe(true);
+    expect(webAvailability.available).toBe(true);
+    expect(webAvailability.missingConfig).toEqual([]);
+
+    const worker = new ModelRegistry(
+      [fake],
+      readGenerationConfig({
+        PRISM_STUDIO_GENERATION_PROVIDERS: "acme",
+        PRISM_STUDIO_ALLOW_PAID_GENERATION: "true",
+        PRISM_STUDIO_MAX_GENERATION_USD: "1",
+      }),
+      {},
+    );
+    const workerAvailability = worker.availability()[0]!;
+    expect(workerAvailability.configured).toBe(false);
+    expect(workerAvailability.available).toBe(false);
+    expect(workerAvailability.missingConfig).toEqual(["PRISM_STUDIO_PROVIDER_ACME_API_KEY"]);
+  });
+
   it("default registry lists real models but only the free mock models are usable", () => {
     const r = createRegistry({ NODE_ENV: "development" });
     expect(r.models().map((m) => m.provider)).toContain("runway");
-    expect(r.usable().every((m) => m.kind === "mock")).toBe(true);
+    // nothing billable is usable by default: only the free mock models and the free local matting engine (5B-I3)
+    expect(r.usable().every((m) => !r.billsMoney(m))).toBe(true);
+    expect(r.usable().every((m) => m.kind === "mock" || m.provider === "prism-matting")).toBe(true);
     expect(r.usable().map((m) => m.modelId)).toContain("mock-video-1");
     // credentials alone are not enough: provider enabled + configured + paid generation switched on
     const configured = createRegistry({

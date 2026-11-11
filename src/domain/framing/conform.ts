@@ -1,6 +1,7 @@
 import { fingerprint } from "../hash";
 import { centerCrop, padToFrame, type Rect } from "./crop";
-import { parseAspectRatio, type Size } from "./ratio";
+import { RATIO_TOLERANCE, parseAspectRatio, sameRatio, type Size } from "./ratio";
+import type { ProviderTransportGeometry } from "./transport";
 
 /**
  * DeliveryConformPlan: the deterministic post-generation transforms that turn a provider's original output
@@ -61,8 +62,19 @@ export interface ResolvedConform {
   warnings: string[];
 }
 
-/** Resolves the plan against a real probe. Pure and integer-safe. */
-export function resolveConform(plan: DeliveryConformPlan, probe: ProbedGeometry): ResolvedConform {
+/**
+ * Resolves the plan against a real probe. Pure and integer-safe.
+ *
+ * `transport`: the provider-only start-frame transport the request used (see `attemptTransportGeometry`). When the
+ * provider output is exactly the transport canvas, a crop removes EXACTLY the transport padding (the recorded content
+ * rectangle), then centre-crops inside it only if the content itself is not already the target ratio. Without a
+ * transport (or when the output size differs from the transport canvas) the generic centre crop applies unchanged.
+ */
+export function resolveConform(
+  plan: DeliveryConformPlan,
+  probe: ProbedGeometry,
+  opts: { transport?: ProviderTransportGeometry | null } = {},
+): ResolvedConform {
   const size: Size = { width: probe.width, height: probe.height };
   let working = size;
   let crop: Rect | null = null;
@@ -71,7 +83,29 @@ export function resolveConform(plan: DeliveryConformPlan, probe: ProbedGeometry)
   const warnings: string[] = [];
   const target = parseAspectRatio(plan.targetAspectRatio)?.value ?? null;
 
-  if (plan.framing === "crop" && target) {
+  const transport = opts.transport ?? null;
+  const onTransportCanvas =
+    transport !== null && transport.canvas.width === probe.width && transport.canvas.height === probe.height;
+  if (transport && !onTransportCanvas) {
+    warnings.push(
+      `Provider output is ${probe.width}×${probe.height}, not the ${transport.canvas.width}×${transport.canvas.height} transport canvas; the transport padding could not be aligned exactly, so a centre crop was used.`,
+    );
+  }
+
+  if (plan.framing === "crop" && target && transport && onTransportCanvas) {
+    const region = transport.content;
+    const inner = sameRatio(region.width / region.height, target, RATIO_TOLERANCE)
+      ? { x: 0, y: 0, width: region.width, height: region.height }
+      : centerCrop({ width: region.width, height: region.height }, target).rect;
+    const rect = { x: region.x + inner.x, y: region.y + inner.y, width: inner.width, height: inner.height };
+    if (rect.x !== 0 || rect.y !== 0 || rect.width !== probe.width || rect.height !== probe.height) {
+      crop = rect;
+      working = { width: rect.width, height: rect.height };
+      notes.push(
+        `Crop ${probe.width}×${probe.height} → ${working.width}×${working.height} at ${rect.x},${rect.y} (${plan.targetAspectRatio}), removing exactly the provider-only ${transport.policy} transport padding`,
+      );
+    }
+  } else if (plan.framing === "crop" && target) {
     const c = centerCrop(size, target);
     if (c.axis !== "none") {
       crop = c.rect;

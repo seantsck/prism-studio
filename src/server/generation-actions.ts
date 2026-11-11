@@ -1,5 +1,7 @@
 "use server";
 
+import { isAnimationAttempt } from "@/domain/generation/schemas";
+import { SHOT_CLIP_REPLACE_CONFIRM } from "@/domain/generation/video-inputs";
 import { revalidatePath } from "next/cache";
 import { GenerationSubmitError, NOT_SHOT_OUTPUT_APPROVAL_MESSAGE } from "@/data/generation-repository";
 import {
@@ -155,6 +157,14 @@ async function reviewGeneration_impl(form: FormData) {
   if (decision === "approve" && !isShotOutputAttempt(view.attempt)) {
     throw new UserFacingError(NOT_SHOT_OUTPUT_APPROVAL_MESSAGE);
   }
+  // 5B-V1: replacing the Shot's current clip with another animation is explicit (the previous one stays in history)
+  if (
+    decision === "approve" &&
+    isAnimationAttempt(view.attempt) &&
+    data.attempts.some((a) => a.shotId === view.attempt.shotId && a.approved && a.id !== view.attempt.id) &&
+    str(form, "confirmReplace") !== "1"
+  )
+    throw new UserFacingError(SHOT_CLIP_REPLACE_CONFIRM);
 
   const categories = form
     .getAll("category")

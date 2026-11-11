@@ -66,7 +66,10 @@ export const COLLECTIONS: Record<CollectionName, CollectionSpec> = {
   identityRefs: spec("character_identity_refs", identityRefSchema, { json: ["metadata"] }),
   looks: spec("character_looks", lookSchema),
   voiceProfiles: spec("voice_profiles", voiceProfileSchema),
-  locations: spec("locations", locationSchema, { json: ["zones", "entrances"], virtual: ["set3d"] }),
+  locations: spec("locations", locationSchema, {
+    json: ["zones", "entrances", "visualBible"],
+    virtual: ["set3d"],
+  }),
   props: spec("props", propSchema),
   episodes: spec("episodes", episodeSchema),
   scenes: spec("scenes", sceneSchema, { virtual: ["scriptRange", "characterIds", "propIds"] }),
@@ -119,6 +122,8 @@ export function flatFromRow(row: Row, s: CollectionSpec): Record<string, unknown
 
 export function locationToRow(location: Collections["locations"][number]): Row {
   const row = flatToRow(location, COLLECTIONS.locations);
+  // Phase 5B-I5: an absent Visual Bible is not written (the stored value, or the column default, stands)
+  if (row.visual_bible === undefined) delete row.visual_bible;
   row.set3d_model_asset_id = location.set3d?.modelAssetId ?? null;
   row.set3d = location.set3d
     ? JSON.stringify({

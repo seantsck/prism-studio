@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { emptySettlementClock, type SettlementTable } from "@/domain/continuity/sequence-automation";
 import type { AttemptMediaFacts } from "@/domain/edit/eligibility";
 import type { EpisodeEdit } from "@/domain/edit/model";
+import { editState, editStateFingerprint } from "@/domain/edit/revision";
 import type { ProductionFrame } from "@/domain/production-frame";
 import type { Asset, CollectionName, GenerationAttempt, ProjectData } from "@/domain/schemas";
 import {
@@ -18,10 +19,15 @@ import {
   EDIT_REVISION_CONFLICT_MESSAGE,
   EpisodeEditError,
   IN_EDIT_MESSAGE,
+  REVISION_ALREADY_SAVED_MESSAGE,
+  REVISION_NOT_FOUND_MESSAGE,
   type ApplyEpisodeEditInput,
   type CreateEpisodeEditInput,
   type DeleteEpisodeEditInput,
   type EpisodeEditRepository,
+  type RestoreEditRevisionInput,
+  type SavedEditRevision,
+  type SaveEditRevisionInput,
 } from "./episode-edit-repository";
 import type { MemoryGenerationService } from "./generation-memory";
 import type { MemoryMediaQaService } from "./media-qa-memory";
@@ -63,6 +69,8 @@ const REFERENCED_NAME: Partial<Record<CollectionName, string>> = {
  */
 export class MemoryEpisodeEditService implements EpisodeEditRepository {
   private edits = new Map<string, EpisodeEdit>();
+  /** 5B-V3: saved revisions per edit id, oldest first (never changed; they go with their edit). */
+  private revisions = new Map<string, SavedEditRevision[]>();
   /** The memory twin of `episode_edit_items.updated_at` (see `stampItems`). */
   private itemStamps = new Map<string, string>();
 
@@ -189,6 +197,10 @@ export class MemoryEpisodeEditService implements EpisodeEditRepository {
   }
 
   async apply(input: ApplyEpisodeEditInput): Promise<EpisodeEdit> {
+    return this.applyOps(input);
+  }
+
+  private async applyOps(input: ApplyEpisodeEditInput): Promise<EpisodeEdit> {
     const before = this.requireEdit(input.projectId, input.editId);
     if (before.revision !== input.expectedRevision)
       throw new EpisodeEditError("conflict", EDIT_REVISION_CONFLICT_MESSAGE);
@@ -224,7 +236,8 @@ export class MemoryEpisodeEditService implements EpisodeEditRepository {
         !same(p.item.visual, item.visual) ||
         p.item.sourceAudio !== item.sourceAudio ||
         !same(p.item.performanceBasis, item.performanceBasis) ||
-        !same(p.item.incomingCutIntent ?? null, item.incomingCutIntent ?? null)
+        !same(p.item.incomingCutIntent ?? null, item.incomingCutIntent ?? null) ||
+        !same(p.item.incomingTransition ?? null, item.incomingTransition ?? null)
       )
         this.itemStamps.set(item.id, now);
     });
@@ -254,6 +267,71 @@ export class MemoryEpisodeEditService implements EpisodeEditRepository {
     if (edit.revision !== input.expectedRevision)
       throw new EpisodeEditError("conflict", EDIT_REVISION_CONFLICT_MESSAGE);
     this.edits.delete(edit.id);
+    this.revisions.delete(edit.id);
+  }
+
+  /** The next saved revision of `edit` (synchronous: the caller has compared the revision). */
+  private recordRevision(
+    edit: EpisodeEdit,
+    label: string,
+    restoredFromId: string | null,
+    userId: string | null,
+    now: string,
+  ): SavedEditRevision {
+    const list = this.revisions.get(edit.id) ?? [];
+    const fingerprint = editStateFingerprint(edit);
+    if (!restoredFromId && list.at(-1)?.fingerprint === fingerprint)
+      throw new EpisodeEditError("conflict", REVISION_ALREADY_SAVED_MESSAGE);
+    const revision: SavedEditRevision = {
+      id: randomUUID(),
+      editId: edit.id,
+      projectId: edit.projectId,
+      number: list.length + 1,
+      editRevision: edit.revision,
+      label: label.trim().slice(0, 120),
+      snapshot: editState(edit),
+      fingerprint,
+      restoredFromId,
+      createdBy: userId,
+      createdAt: now,
+    };
+    this.revisions.set(edit.id, [...list, revision]);
+    return clone(revision);
+  }
+
+  async saveRevision(input: SaveEditRevisionInput): Promise<SavedEditRevision> {
+    const edit = this.requireEdit(input.projectId, input.editId);
+    if (edit.revision !== input.expectedRevision)
+      throw new EpisodeEditError("conflict", EDIT_REVISION_CONFLICT_MESSAGE);
+    return this.recordRevision(edit, input.label, null, input.userId, input.now);
+  }
+
+  async listRevisions(projectId: string, editId: string): Promise<SavedEditRevision[]> {
+    const edit = this.live(projectId).find((e) => e.id === editId);
+    return edit ? clone(this.revisions.get(edit.id) ?? []) : [];
+  }
+
+  async restoreRevision(input: RestoreEditRevisionInput) {
+    this.requireEdit(input.projectId, input.editId);
+    const saved = (this.revisions.get(input.editId) ?? []).find((r) => r.id === input.revisionId);
+    if (!saved) throw new EpisodeEditError("not_found", REVISION_NOT_FOUND_MESSAGE);
+    const edit = await this.applyOps({
+      editId: input.editId,
+      projectId: input.projectId,
+      expectedRevision: input.expectedRevision,
+      ops: [{ op: "restore", items: clone(saved.snapshot.items), titles: clone(saved.snapshot.titles) }],
+      userId: input.userId,
+      now: input.now,
+    });
+    // synchronous after the write: nothing interleaves between the restore and its record
+    const revision = this.recordRevision(
+      edit,
+      `Restored revision ${saved.number}`,
+      saved.id,
+      input.userId,
+      input.now,
+    );
+    return { edit, revision };
   }
 
   async usesAsset(assetId: string): Promise<boolean> {

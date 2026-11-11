@@ -1,3 +1,4 @@
+import { locationBibleOf } from "./location-visual-bible";
 import type { Asset, ProjectData } from "./schemas";
 
 /**
@@ -11,6 +12,7 @@ export type AssetUsageKind =
   | "identity_ref"
   | "look_ref"
   | "location_ref"
+  | "location_visual_bible"
   | "prop_ref"
   | "voice_sample"
   | "shot_reference"
@@ -74,6 +76,20 @@ export function findAssetUsage(data: ProjectData, assetId: string): AssetUsageRe
   for (const loc of data.locations) {
     if (loc.referenceAssetIds.includes(assetId)) {
       direct.push({ kind: "location_ref", label: `Location "${loc.name}" reference`, entityId: loc.id });
+      for (const s of data.shots) if (s.spatial.locationId === loc.id) affected.add(s.id);
+    }
+    // Phase 5B-I5: a Visual Bible designation (canonical, establishing, plate, variant) pins its Asset
+    const bible = locationBibleOf(loc);
+    const designation =
+      bible.canonicalAssetId === assetId
+        ? "canonical location"
+        : bible.entries.find((e) => e.assetId === assetId)?.role;
+    if (designation) {
+      direct.push({
+        kind: "location_visual_bible",
+        label: `Location "${loc.name}" ${designation === "plate" ? "background plate" : designation}`,
+        entityId: loc.id,
+      });
       for (const s of data.shots) if (s.spatial.locationId === loc.id) affected.add(s.id);
     }
     if (loc.set3d?.modelAssetId === assetId) {

@@ -4,6 +4,7 @@ import { requireProject } from "@/server/repo";
 
 const TABS = [
   ["script", "Script"],
+  ["write", "Write"],
   ["scenes", "Scenes"],
   ["shots", "Shots"],
   ["perform", "Perform"],

@@ -4,12 +4,14 @@ import { ModelComparePanel } from "@/components/candidates/model-compare-panel";
 import { Badge } from "@/components/ui";
 import { animationFreshness, animationSource } from "@/domain/generation/animation";
 import { candidateSetPurpose } from "@/domain/generation/candidates";
+import { adaptProviderPrompt } from "@/domain/generation/provider-prompt";
 import type { ProjectData } from "@/domain/schemas";
 import { buildModelComparison } from "@/generation/model-comparison";
 import { buildSharedEvaluation } from "@/generation/submission";
 import { assetUrl } from "@/lib/utils";
 import { getCandidateRepo } from "@/server/candidates";
 import { getGenerationConfig, getRegistry } from "@/server/generation";
+import { ShotClipPanel } from "./shot-clip-panel";
 
 const secs = (ms: number) => `${Number((ms / 1000).toFixed(2))} s`;
 
@@ -47,6 +49,37 @@ export async function AnimateProductionFrame({ data, shotId }: { data: ProjectDa
       })
     : null;
   const cfg = getGenerationConfig();
+  // Phase 5B: the exact provider-facing prompt each policy-adapted model would receive (no spend; nothing is sent)
+  const providerPrompts = getRegistry()
+    .usable()
+    .flatMap((m) => {
+      const p = adaptProviderPrompt(pkg, {
+        provider: m.provider,
+        modelId: m.modelId,
+        purpose: "animate_production_frame",
+      });
+      return p ? [{ model: m, prompt: p }] : [];
+    });
+  const storyIntent = [
+    pkg.timing.beginningPose && `begins: ${pkg.timing.beginningPose}`,
+    ...pkg.characters.flatMap((c) =>
+      [
+        c.expression && `${c.name} expression: ${c.expression}`,
+        c.posture && `posture: ${c.posture}`,
+        c.gestures && `gestures: ${c.gestures}`,
+      ].filter(Boolean),
+    ),
+    pkg.timing.endingPose && `ends: ${pkg.timing.endingPose}`,
+    pkg.blocking.eyelines && `eyelines: ${pkg.blocking.eyelines}`,
+    pkg.blocking.screenDirection && `screen direction: ${pkg.blocking.screenDirection}`,
+  ].filter(Boolean) as string[];
+  // 5B-V1: every animation clip of the Shot belongs to one 2H animation candidate set
+  const allSets = (await candidateRepo.listSets(data.project.id, { shotId, limit: 200 })).filter(
+    (s) => candidateSetPurpose(s.set) === "animate_production_frame",
+  );
+  const candidateSetOf = new Map(
+    allSets.flatMap((s) => s.members.flatMap((m) => (m.attemptId ? [[m.attemptId, s.set.id] as const] : []))),
+  );
 
   return (
     <div className="space-y-3" data-testid="animate-panel" data-ready={source.ok ? "1" : "0"}>
@@ -120,6 +153,71 @@ export async function AnimateProductionFrame({ data, shotId }: { data: ProjectDa
           </dd>
         </dl>
       </div>
+
+      {source.ok && providerPrompts.length > 0 ? (
+        <div className="space-y-2" data-testid="animate-provider-prompts">
+          {providerPrompts.map(({ model, prompt }) => (
+            <details
+              key={`${model.provider}/${model.modelId}`}
+              className="border border-line p-2 text-[12px]"
+              data-testid="animate-provider-prompt"
+              data-model={`${model.provider}/${model.modelId}`}
+            >
+              <summary className="cursor-pointer">
+                <span className="font-semibold">Provider prompt</span> · {model.displayName} ·{" "}
+                <span className="font-mono" data-testid="animate-provider-prompt-length">
+                  {prompt.length}/{prompt.budget.limit}
+                </span>{" "}
+                characters · {prompt.policy.id} v{prompt.policy.version}
+                {!prompt.ok ? (
+                  <>
+                    {" "}
+                    <Badge tone="fail">over limit</Badge>
+                  </>
+                ) : null}
+              </summary>
+              <div className="mt-2 space-y-2">
+                <div>
+                  <div className="text-[11px] uppercase tracking-wide text-muted">
+                    Story intent (source of truth)
+                  </div>
+                  <ul className="list-disc pl-4" data-testid="animate-provider-prompt-source">
+                    {storyIntent.map((l) => (
+                      <li key={l}>{l}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <div className="text-[11px] uppercase tracking-wide text-muted">
+                    Sent to {model.displayName} (target {prompt.budget.target} characters)
+                  </div>
+                  <p
+                    className="whitespace-pre-wrap font-mono text-[11px]"
+                    data-testid="animate-provider-prompt-text"
+                  >
+                    {prompt.text}
+                  </p>
+                </div>
+                {prompt.omitted.length > 0 ? (
+                  <p className="text-muted" data-testid="animate-provider-prompt-omitted">
+                    Optional sections not sent (whole sections, never cut part-way):{" "}
+                    {prompt.omitted.map((o) => o.label).join(", ")}
+                  </p>
+                ) : null}
+                {prompt.problem ? <p className="text-fail">{prompt.problem}</p> : null}
+              </div>
+            </details>
+          ))}
+        </div>
+      ) : null}
+
+      <ShotClipPanel
+        data={data}
+        ctx={ctx}
+        pkg={pkg}
+        models={getRegistry().usable()}
+        candidateSetOf={candidateSetOf}
+      />
 
       {!source.ok ? (
         <ul className="space-y-1" data-testid="animate-blocked">

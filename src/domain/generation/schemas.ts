@@ -45,8 +45,30 @@ export const VIDEO_MODALITIES: readonly GenerationModality[] = [
  *                             Frame (Phase 2H): image-to-video only, never a Storyboard, override or text-to-video
  * Frozen on the attempt's request; it never changes `shot.generation.modality`.
  */
-export const GENERATION_PURPOSES = ["shot_output", "production_frame", "animate_production_frame"] as const;
+export const GENERATION_PURPOSES = [
+  "shot_output",
+  "production_frame",
+  "animate_production_frame",
+  /** Phase 5B-I1: an image whose SUBJECT is a Character (portrait, identity / Look reference); never a Shot output. */
+  "character_image",
+  /** Phase 5B-I1: an image whose SUBJECT is a Location (concept, establishing view, angle, plate); never a Shot output. */
+  "location_image",
+  /**
+   * Phase 5B-I3: a transparent cutout of an EXISTING image of a Character (segmentation / matting, never a generative
+   * redraw). Executed by a local matting engine; the source pixels are kept, only an alpha channel is added.
+   */
+  "background_removal",
+] as const;
 export type GenerationPurpose = (typeof GENERATION_PURPOSES)[number];
+
+/** The purposes whose subject is a Shot (candidate sets, the Shot's history and approval are Shot-only). */
+export type ShotGenerationPurpose = Extract<
+  GenerationPurpose,
+  "shot_output" | "production_frame" | "animate_production_frame"
+>;
+/** Narrows to a Shot purpose; a subject purpose (Character / Location image) is never a Shot purpose. */
+export const shotPurposeOf = (p: GenerationPurpose): ShotGenerationPurpose =>
+  p === "character_image" || p === "location_image" || p === "background_removal" ? "shot_output" : p;
 
 /** The purpose of a frozen request; requests frozen before Phase 2G.2 carry none and are `shot_output`. */
 export const purposeOfRequest = (r: { purpose?: GenerationPurpose | null }): GenerationPurpose =>
@@ -148,6 +170,12 @@ export const modelCapabilitiesSchema = z.object({
       motionPrompting: z.boolean(),
       maxResolution: resolutionSchema.nullable(),
       aspectRatios: z.array(z.string()),
+      /**
+       * Verified provider pixel canvas per aspect label ("21:9" → 1584×672), when the provider documents exact
+       * dimensions. Labels describe the MODE; these dimensions define the actual request/transport canvas, so the
+       * framing planner never re-derives pixels from nominal label arithmetic. Absent = not documented (older records).
+       */
+      providerCanvases: z.record(z.string(), resolutionSchema).optional(),
       fps: z.array(z.number().positive()),
     })
     .nullable(),
@@ -214,6 +242,11 @@ export const generationProviderInfoSchema = z.object({
   /** Environment variable NAMES the adapter needs (never values). */
   requiredConfig: z.array(z.string()),
   webhooks: z.boolean(),
+  /**
+   * Phase 5B-I3: the adapter runs entirely inside Prism's own worker (no external call, no upload) and costs nothing.
+   * Absent = billable like any real provider (fail-safe): only an explicit `true` exempts it from the spend gate.
+   */
+  localNoCost: z.boolean().optional(),
 });
 export type GenerationProviderInfo = z.infer<typeof generationProviderInfoSchema>;
 

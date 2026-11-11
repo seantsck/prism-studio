@@ -2,6 +2,9 @@ import type { GenerationPackage } from "../generation-package";
 import type { PreflightReport } from "../preflight";
 import type { CompatibilityReport, IgnoredFeature } from "./compatibility";
 import { renderPromptPlan } from "./prompt-plan";
+import { adaptProviderPrompt } from "./provider-prompt";
+import { catalogModel } from "./models/catalog";
+import { PREPAD_CENTER_CROP_POLICY, planPrepadCenterCrop } from "../framing/transport";
 import {
   generationRequestSchema,
   type GenerationModel,
@@ -225,6 +228,60 @@ export function buildGenerationRequest(args: {
 }): GenerationRequest {
   const { compatibility: c } = args;
   if (!c.modality) throw new Error("Cannot build a request without a compatible modality");
+  const providerOptions = { ...(args.providerOptions ?? {}) };
+  // Phase 5B hosted acceptance: some providers constrain the PROMPT image more tightly than the production frame.
+  // Freeze the provider-only transport policy in the immutable request. It never replaces the canonical start-frame
+  // Asset: the adapter may only center-pad that Asset onto the already-acknowledged provider canvas.
+  if (
+    c.purpose === "animate_production_frame" &&
+    args.model.provider === "runway" &&
+    c.used.startFrameAssetId &&
+    c.adaptation?.framing.status === "adapted" &&
+    c.adaptation.framing.providerCanvas
+  ) {
+    const canvas = c.adaptation.framing.providerCanvas;
+    const cat = catalogModel(args.model.provider, args.model.modelId);
+    const range = cat?.inputs.promptImageAspectRatio;
+    const aspect = canvas.width / canvas.height;
+    const src = args.pkg.assets[c.used.startFrameAssetId];
+    // Gen-4.5 (5B): the output canvas itself is outside the documented prompt-image range. Pre-pad on an in-range
+    // canvas ONLY when the provider documents a centre crop and every invariant is proven; otherwise the plain
+    // contain-pad record is frozen and the adapter refuses it (out of range) before any spend.
+    const prepad =
+      range && (aspect > range.max || aspect < range.min) && src?.width && src.height
+        ? planPrepadCenterCrop({
+            source: { width: src.width, height: src.height },
+            outputCanvas: canvas,
+            aspectRange: range,
+            providerCrop: cat?.inputs.promptImageCrop,
+          })
+        : null;
+    providerOptions.prismStartFrameTransport = prepad?.ok
+      ? {
+          version: 1,
+          policy: PREPAD_CENTER_CROP_POLICY,
+          sourceAssetId: c.used.startFrameAssetId,
+          background: "black",
+          ...prepad.geometry,
+        }
+      : {
+          version: 1,
+          policy: "contain-pad-v1",
+          sourceAssetId: c.used.startFrameAssetId,
+          targetCanvas: canvas,
+          background: "black",
+        };
+  }
+  // Phase 5B provider-prompt adaptation: when a policy applies to this provider/model/purpose, the provider-facing
+  // prompt is derived deterministically from the package and frozen with its provenance (policy, version, source
+  // fingerprint, budget, omissions). The adapter sends exactly this text; the story records are never changed.
+  const providerPrompt = adaptProviderPrompt(args.pkg, {
+    provider: args.model.provider,
+    modelId: args.model.modelId,
+    purpose: c.purpose,
+  });
+  if (providerPrompt) providerOptions.prismProviderPrompt = providerPrompt;
+
   return generationRequestSchema.parse({
     schemaVersion: 1,
     modality: c.modality,
@@ -245,7 +302,7 @@ export function buildGenerationRequest(args: {
     startFrameAssetId: c.used.startFrameAssetId,
     endFrameAssetId: c.used.endFrameAssetId,
     audioAssetIds: c.used.audioAssetIds,
-    providerOptions: args.providerOptions ?? {},
+    providerOptions,
     idempotencyKey: args.idempotencyKey,
   });
 }

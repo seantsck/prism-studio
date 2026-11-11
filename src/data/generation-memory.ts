@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { fingerprint } from "@/domain/hash";
-import { assetSchema, type GenerationAttempt, type ProjectData } from "@/domain/schemas";
+import {
+  assetSchema,
+  subjectImageAttemptSchema,
+  type GenerationAttempt,
+  type ProjectData,
+  type SubjectImageAttempt,
+} from "@/domain/schemas";
 import {
   assertTransition,
   ACTIVE_STATUSES,
@@ -30,6 +36,9 @@ import {
   type JobPatch,
   type ProjectGenerationRow,
   type ReviewInput,
+  type CreateSubjectImageAttemptInput,
+  type ImageSubjectRef,
+  type SubjectAttemptView,
 } from "./generation-repository";
 
 /** Live access to the memory repository's projects (references, not clones). */
@@ -57,16 +66,30 @@ export class MemoryGenerationService implements GenerationRepository, Generation
   private outputs: GenerationOutput[] = [];
   private costs: GenerationCost[] = [];
   private events: GenerationEvent[] = [];
+  /** Phase 5B-I1: Character / Location image attempts (never part of ProjectData.attempts, the Shot history). */
+  private subjectAttempts: SubjectImageAttempt[] = [];
 
   constructor(private readonly access: MemoryProjectsAccess) {}
 
   // ── lookup helpers ──
-  private findAttempt(attemptId: string): { project: ProjectData; attempt: GenerationAttempt } | null {
+  /** Shot attempts only (Shot views, review, the Shot submission replay): a subject id is "not found". */
+  private findShotAttempt(attemptId: string): { project: ProjectData; attempt: GenerationAttempt } | null {
     for (const project of this.access.all()) {
       const attempt = project.attempts.find((a) => a.id === attemptId);
       if (attempt) return { project, attempt };
     }
     return null;
+  }
+
+  private findAttempt(attemptId: string): { project: ProjectData; attempt: GenerationAttempt } | null {
+    for (const project of this.access.all()) {
+      const attempt = project.attempts.find((a) => a.id === attemptId);
+      if (attempt) return { project, attempt };
+    }
+    // a subject attempt is executed by the same worker paths, which never read the subject (Phase 5B-I1)
+    const subject = this.subjectAttempts.find((a) => a.id === attemptId);
+    const project = subject ? this.projectOf(subject.projectId) : undefined;
+    return subject && project ? { project, attempt: subject as unknown as GenerationAttempt } : null;
   }
 
   private projectOf(projectId: string): ProjectData | undefined {
@@ -114,7 +137,10 @@ export class MemoryGenerationService implements GenerationRepository, Generation
       (j) => j.projectId === found.project.id && j.idempotencyKey === input.job.idempotencyKey,
     );
     if (replay) {
-      const attempt = this.findAttempt(replay.attemptId)!.attempt;
+      const prior = this.findShotAttempt(replay.attemptId);
+      if (!prior)
+        throw new GenerationSubmitError("not_found", "That submission belongs to another generation.");
+      const attempt = prior.attempt;
       return { attempt: clone(attempt), job: clone(replay), duplicate: true };
     }
 
@@ -174,9 +200,130 @@ export class MemoryGenerationService implements GenerationRepository, Generation
     const attempt: GenerationAttempt = { ...clone(input.attempt), attemptNumber, status: "queued" };
     found.attempts.push(attempt);
 
+    const job = this.enqueue(found, attempt, input);
+    return { attempt: clone(attempt), job: clone(job), duplicate: false };
+  }
+
+  // ───────────────────────── Phase 5B-I1: Character / Location image attempts ─────────────────────────
+
+  async createSubjectImageAttempt(input: CreateSubjectImageAttemptInput) {
+    const found = this.projectOf(input.attempt.projectId);
+    if (!found) throw new GenerationSubmitError("not_found", "That project no longer exists.");
+    const replay = [...this.jobs.values()].find(
+      (j) => j.projectId === found.project.id && j.idempotencyKey === input.job.idempotencyKey,
+    );
+    if (replay) {
+      const prior = this.subjectAttempts.find((a) => a.id === replay.attemptId);
+      if (!prior)
+        throw new GenerationSubmitError("not_found", "That submission belongs to another generation.");
+      return { attempt: clone(prior), job: clone(replay), duplicate: true };
+    }
+    const a = input.attempt;
+    const exists = a.characterId
+      ? found.characters.some((ch) => ch.id === a.characterId)
+      : found.locations.some((l) => l.id === a.locationId);
+    if (!exists)
+      throw new GenerationSubmitError(
+        "not_found",
+        a.characterId ? "That character no longer exists." : "That location no longer exists.",
+      );
+    const active = [...this.jobs.values()].filter(
+      (j) => j.projectId === found.project.id && ACTIVE_STATUSES.includes(j.status),
+    );
+    if (active.length >= input.limits.maxActivePerProject) {
+      throw new GenerationSubmitError(
+        "project_busy",
+        `This project already has ${active.length} active generations (limit ${input.limits.maxActivePerProject}).`,
+      );
+    }
+    const since = ms(input.now) - 60_000;
+    const recent = [
+      ...found.attempts,
+      ...this.subjectAttempts.filter((x) => x.projectId === found.project.id),
+    ].filter((x) => x.createdBy === a.createdBy && ms(x.createdAt) >= since).length;
+    if (recent >= input.limits.maxSubmitsPerMinutePerUser) {
+      throw new GenerationSubmitError(
+        "throttled",
+        "You are submitting generations too quickly. Wait a moment and try again.",
+      );
+    }
+    const sameSubject = this.subjectAttempts.filter((x) =>
+      a.characterId ? x.characterId === a.characterId : x.locationId === a.locationId,
+    );
+    const attemptNumber = sameSubject.reduce((m, x) => Math.max(m, x.attemptNumber), 0) + 1;
+    const attempt: SubjectImageAttempt = subjectImageAttemptSchema.parse({
+      ...clone(a),
+      attemptNumber,
+      status: "queued",
+      approved: false,
+    });
+    this.subjectAttempts.push(attempt);
+    const job = this.enqueue(found, attempt, input);
+    return { attempt: clone(attempt), job: clone(job), duplicate: false };
+  }
+
+  private subjectView(attempt: SubjectImageAttempt): SubjectAttemptView | null {
+    const project = this.projectOf(attempt.projectId);
+    if (!project) return null;
+    const v = this.view(project, attempt as unknown as GenerationAttempt);
+    return { ...v, attempt: clone(attempt) };
+  }
+
+  async listSubjectImageAttempts(subject: ImageSubjectRef) {
+    return this.subjectAttempts
+      .filter((a) =>
+        subject.kind === "character"
+          ? a.characterId === subject.characterId
+          : a.locationId === subject.locationId,
+      )
+      .sort((x, y) => y.attemptNumber - x.attemptNumber)
+      .flatMap((a) => {
+        const v = this.subjectView(a);
+        return v ? [v] : [];
+      });
+  }
+
+  async getSubjectImageAttempt(attemptId: string) {
+    const a = this.subjectAttempts.find((x) => x.id === attemptId);
+    return a ? this.subjectView(a) : null;
+  }
+
+  async subjectImageAssetPins(projectId: string, assetId: string) {
+    const project = this.projectOf(projectId);
+    return this.subjectAttempts
+      .filter((a) => a.projectId === projectId && a.inputAssetIds.includes(assetId))
+      .sort((x, y) => x.attemptNumber - y.attemptNumber)
+      .map((a) => {
+        const subject = a.characterId
+          ? `Character "${project?.characters.find((c) => c.id === a.characterId)?.name ?? "Unknown"}"`
+          : `Location "${project?.locations.find((l) => l.id === a.locationId)?.name ?? "Unknown"}"`;
+        return `${subject} · image attempt ${a.attemptNumber} input`;
+      });
+  }
+
+  /**
+   * The memory twin of 0051's `release_subject_image_outputs` trigger plus `output_asset_id ... on delete set null`:
+   * an Asset delete drops a subject attempt's output link and nulls its output; the attempt itself is kept.
+   * Shot attempt outputs are never released (asset-usage refuses that delete first, as Postgres's key would).
+   */
+  releaseSubjectOutputs(projectId: string, assetId: string): void {
+    const subjectIds = new Set(
+      this.subjectAttempts.filter((a) => a.projectId === projectId).map((a) => a.id),
+    );
+    this.outputs = this.outputs.filter((o) => !(o.assetId === assetId && subjectIds.has(o.attemptId)));
+    for (const a of this.subjectAttempts)
+      if (a.projectId === projectId && a.outputAssetId === assetId) a.outputAssetId = null;
+  }
+
+  /** The job, its estimated cost and the first event, shared by Shot and subject attempts. */
+  private enqueue(
+    project: ProjectData,
+    attempt: { id: string; provider: string; model: string; createdBy: string | null },
+    input: Pick<CreateAttemptInput, "job" | "estimate" | "now">,
+  ): GenerationJob {
     const job: GenerationJob = {
       id: input.job.id,
-      projectId: found.project.id,
+      projectId: project.project.id,
       attemptId: attempt.id,
       provider: attempt.provider,
       model: attempt.model,
@@ -214,7 +361,7 @@ export class MemoryGenerationService implements GenerationRepository, Generation
     this.jobs.set(job.id, job);
     this.costs.push({
       id: randomUUID(),
-      projectId: found.project.id,
+      projectId: project.project.id,
       attemptId: attempt.id,
       jobId: job.id,
       provider: attempt.provider,
@@ -227,7 +374,7 @@ export class MemoryGenerationService implements GenerationRepository, Generation
       recordedAt: input.now,
     });
     this.addEvent(job, null, "queued", "Submitted by user", input.now);
-    return { attempt: clone(attempt), job: clone(job), duplicate: false };
+    return job;
   }
 
   async getJob(jobId: string) {
@@ -255,7 +402,7 @@ export class MemoryGenerationService implements GenerationRepository, Generation
   }
 
   async getAttemptView(attemptId: string) {
-    const f = this.findAttempt(attemptId);
+    const f = this.findShotAttempt(attemptId);
     return f ? this.view(f.project, f.attempt) : null;
   }
 
@@ -338,7 +485,7 @@ export class MemoryGenerationService implements GenerationRepository, Generation
   }
 
   async reviewAttempt(attemptId: string, review: ReviewInput) {
-    const f = this.findAttempt(attemptId);
+    const f = this.findShotAttempt(attemptId);
     if (!f) return null;
     if (review.status === "approved") {
       if (f.attempt.status !== "succeeded") {

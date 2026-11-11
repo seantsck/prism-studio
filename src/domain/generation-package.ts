@@ -25,6 +25,14 @@ import {
   type LocationViewPackageRef,
 } from "./location-view";
 import type { Asset, Shot } from "./schemas";
+import {
+  effectiveLocationReferenceIds,
+  isEmptyLocationBible,
+  locationBibleOf,
+  locationBibleReferences,
+  shotTimeText,
+  type LocationReference,
+} from "./location-visual-bible";
 import { timelineFromContext, type TimelineSegment } from "./timeline";
 import type { SpatialReference } from "./previs/spatial";
 
@@ -121,6 +129,8 @@ export interface GenerationPackage {
       referenceAssetIds: string[];
     } | null;
     identityReferenceAssetIds: string[];
+    /** Phase 5B-I4: the Character's canonical identity image (present only when one is designated, live only). */
+    canonicalIdentityAssetId?: string;
     expression: string;
     posture: string;
     gestures: string;
@@ -141,6 +151,13 @@ export interface GenerationPackage {
     zone: string;
     lighting: string;
     referenceAssetIds: string[];
+    /**
+     * Phase 5B-I5: the Location Visual Bible references for this Shot, in priority order (canonical identity,
+     * establishing views, background plates, the variants relevant to the Shot). Present only when the Location has
+     * designations, so packages of every other Location are byte-identical. Designated variants that are NOT
+     * relevant to the Shot are also left out of `referenceAssetIds`.
+     */
+    visualReferences?: Array<{ assetId: string; label: string; kind: LocationReference["kind"] }>;
   } | null;
   props: Array<{ id: string; name: string; description: string }>;
   camera: Shot["composition"];
@@ -300,6 +317,7 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
           }
         : null,
       identityReferenceAssetIds: a.identityReferenceAssetIds,
+      ...(a.canonicalIdentityAssetId ? { canonicalIdentityAssetId: a.canonicalIdentityAssetId } : {}),
       // shot-specific performance stays live on the assignment, locked or not
       expression: c.assignment.expression,
       posture: c.assignment.posture,
@@ -440,7 +458,7 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
           geography: location.geography,
           zone: shot.spatial.setZone,
           lighting: location.lighting,
-          referenceAssetIds: location.referenceAssetIds,
+          ...locationSetReferences(location, shotTimeText(ctx)),
         }
       : null,
     props: ctx.props.map((p) => ({ id: p.id, name: p.name, description: p.description })),
@@ -544,6 +562,7 @@ export function assembleGenerationPackage(ctx: ShotContext, now: Date = new Date
   // every image a selected Continuity Lock froze (v5), described by value like every other reference
   for (const l of base.references.characterContinuity ?? []) addIds(l.references.map((r) => r.assetId));
   addIds(base.set?.referenceAssetIds ?? []);
+  addIds((base.set?.visualReferences ?? []).map((r) => r.assetId));
   addIds([
     base.references.startFrameAssetId,
     base.references.endFrameAssetId,
@@ -849,4 +868,21 @@ export function renderGenerationBrief(pkg: GenerationPackage): BriefSection[] {
 
 export function briefToText(sections: BriefSection[]): string {
   return sections.map((s) => `## ${s.title}\n${s.lines.join("\n")}`).join("\n\n");
+}
+
+/** Phase 5B-I5: the set's reference fields; exactly the pre-I5 `referenceAssetIds` when nothing is designated. */
+function locationSetReferences(
+  location: import("./schemas").Location,
+  shotText: string,
+): {
+  referenceAssetIds: string[];
+  visualReferences?: NonNullable<GenerationPackage["set"]>["visualReferences"];
+} {
+  if (isEmptyLocationBible(locationBibleOf(location)))
+    return { referenceAssetIds: location.referenceAssetIds };
+  const visualReferences = locationBibleReferences(location, shotText);
+  return {
+    referenceAssetIds: effectiveLocationReferenceIds(location, shotText),
+    ...(visualReferences.length ? { visualReferences } : {}),
+  };
 }

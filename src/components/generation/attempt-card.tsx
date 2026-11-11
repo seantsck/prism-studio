@@ -1,3 +1,4 @@
+import { isAnimationAttempt } from "@/domain/generation/schemas";
 import Link from "next/link";
 import { ActionForm } from "@/components/action-form";
 import { AutoQaReconciler } from "@/components/continuity/auto-qa-reconciler";
@@ -299,6 +300,12 @@ export function AttemptCard({
               <ActionForm action={reviewGeneration} successMessage="Approved" quiet>
                 {hidden}
                 <input type="hidden" name="decision" value="approve" />
+                {isAnimationAttempt(attempt) ? (
+                  // 5B-V1: replacing the Shot's current Shot Clip is an explicit decision (the old one stays)
+                  <label className="mr-2 inline-flex items-center gap-1 text-[11px] text-muted">
+                    <input type="checkbox" name="confirmReplace" value="1" /> replace the current Shot Clip
+                  </label>
+                ) : null}
                 <Button size="sm" variant="primary" type="submit" data-testid="approve-button">
                   Approve as final output
                 </Button>

@@ -1,11 +1,19 @@
 import { frameAtMs, frameTimecode, type EditRate } from "./edit-rate";
-import { itemDurationMs, placementDurationMs, type EpisodeEdit, type VisualKind } from "./model";
+import {
+  placementDurationMs,
+  type EpisodeEdit,
+  type TitlePlacement,
+  type TitleStyle,
+  type VisualKind,
+} from "./model";
+import { editTimeline } from "./timeline";
 
 /**
  * Phase 2I.1E rough-sequence playback: the PURE timeline of a persisted edit. Everything here is derived from the
- * edit's own pinned decisions (order, picture, trims, holds, placements, clip-audio policy) and nothing else: no Best,
- * approval, delivery master, Production Frame or take selection is consulted. Integer milliseconds; frames only as a
- * derived display of absolute positions. Playback never writes anything.
+ * edit's own pinned decisions (order, picture, trims, holds, placements, clip-audio policy; 5B-V3 dissolves and title
+ * cards) and nothing else: no Best, approval, delivery master, Production Frame or take selection is consulted.
+ * Positions come from THE canonical timeline (timeline.ts), the same one the render manifest uses. Integer
+ * milliseconds; frames only as a derived display of absolute positions. Playback never writes anything.
  */
 
 /** Media addresses resolved by the caller (the private `/api/assets/<id>` route); null = no playable media. */
@@ -31,6 +39,21 @@ export interface PlaybackItem {
   clipAudio: boolean;
   /** the pinned picture is known to be unusable (from the read view); the interval still plays */
   unavailable: boolean;
+  /** 5B-V3: the dissolve into / out of this item (0 = cut) */
+  transitionInMs: number;
+  transitionOutMs: number;
+}
+
+/** 5B-V3: a title card on the timeline (full frame, joined by cuts). */
+export interface PlaybackTitle {
+  titleId: string;
+  placement: TitlePlacement;
+  title: string;
+  subtitle: string;
+  style: TitleStyle;
+  startMs: number;
+  endMs: number;
+  durationMs: number;
 }
 
 export interface PlaybackPlacement {
@@ -53,38 +76,41 @@ export interface PlaybackPlan {
   editRate: EditRate;
   totalMs: number;
   items: PlaybackItem[];
+  titles: PlaybackTitle[];
   placements: PlaybackPlacement[];
 }
 
 /**
- * The playable timeline of a persisted edit: items back to back from 0 (`start = Σ previous durations`, exact integer
- * ms, so no rounding accumulates), each placement at `item start + placement start` for `take out − take in`.
+ * The playable timeline of a persisted edit, from the canonical timeline: each item at its timeline start (after the
+ * opening title, overlapping its predecessor by its incoming dissolve), each placement at `item start + placement
+ * start` for `take out − take in`.
  */
 export function buildPlaybackPlan(
   edit: EpisodeEdit,
   media: PlaybackMedia,
   unavailableItemIds: ReadonlySet<string> = new Set(),
 ): PlaybackPlan {
-  let cursor = 0;
+  const timeline = editTimeline(edit);
   const items: PlaybackItem[] = [];
   const placements: PlaybackPlacement[] = [];
-  edit.items.forEach((item, index) => {
-    const durationMs = itemDurationMs(item.visual);
-    const startMs = cursor;
+  for (const t of timeline.items) {
+    const item = t.item;
     const v = item.visual;
     items.push({
       itemId: item.id,
       shotId: item.shotId,
-      index,
+      index: t.index,
       kind: v.kind,
-      startMs,
-      endMs: startMs + durationMs,
-      durationMs,
+      startMs: t.startMs,
+      endMs: t.endMs,
+      durationMs: t.durationMs,
       pictureUrl: v.kind === "none" ? null : media.pictureUrl(item),
       sourceInMs: v.kind === "video" ? v.sourceInMs : null,
       sourceOutMs: v.kind === "video" ? v.sourceOutMs : null,
       clipAudio: v.kind === "video" && item.sourceAudio === "included",
       unavailable: unavailableItemIds.has(item.id),
+      transitionInMs: t.transitionInMs,
+      transitionOutMs: t.transitionOutMs,
     });
     for (const p of item.performance)
       placements.push({
@@ -92,20 +118,29 @@ export function buildPlaybackPlan(
         itemId: item.id,
         dialogueLineId: p.dialogueLineId,
         takeId: p.takeId,
-        startMs: startMs + p.startMs,
-        endMs: startMs + p.startMs + placementDurationMs(p),
+        startMs: t.startMs + p.startMs,
+        endMs: t.startMs + p.startMs + placementDurationMs(p),
         takeInMs: p.takeInMs,
         takeOutMs: p.takeOutMs,
         audioUrl: media.takeUrl(p.takeId),
       });
-    cursor += durationMs;
-  });
+  }
   return {
     editId: edit.id,
     revision: edit.revision,
     editRate: edit.editRate,
-    totalMs: cursor,
+    totalMs: timeline.totalMs,
     items,
+    titles: timeline.titles.map((t) => ({
+      titleId: t.title.id,
+      placement: t.placement,
+      title: t.title.title,
+      subtitle: t.title.subtitle,
+      style: t.title.style,
+      startMs: t.startMs,
+      endMs: t.endMs,
+      durationMs: t.durationMs,
+    })),
     placements,
   };
 }
@@ -115,22 +150,50 @@ export const clampTimeline = (plan: Pick<PlaybackPlan, "totalMs">, ms: number): 
   Math.max(0, Math.min(plan.totalMs, Math.round(ms)));
 
 /**
- * The item playing at `ms`: `start ≤ ms < end` (a boundary belongs to the NEXT item). At or after the end of the edit,
- * nothing plays (null).
+ * The item playing at `ms`: `start ≤ ms < end` (a boundary belongs to the NEXT item). Inside a dissolve two items
+ * overlap; the INCOMING one (the later start) is the item playing, the outgoing one is `outgoingAt`. During a title
+ * card, or at / after the end of the edit, no item plays (null).
  */
 export function itemAt(plan: Pick<PlaybackPlan, "items" | "totalMs">, ms: number): PlaybackItem | null {
   if (ms < 0 || ms >= plan.totalMs) return null;
+  // items are in start order; binary-search the last item starting at or before ms, then step back over overlaps
   let lo = 0;
   let hi = plan.items.length - 1;
+  let last = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    const it = plan.items[mid]!;
-    if (ms < it.startMs) hi = mid - 1;
-    else if (ms >= it.endMs) lo = mid + 1;
-    else return it;
+    if (plan.items[mid]!.startMs <= ms) {
+      last = mid;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  for (let i = last; i >= 0 && i >= last - 1; i--) {
+    const it = plan.items[i]!;
+    if (ms >= it.startMs && ms < it.endMs) return it;
   }
   return null;
 }
+
+/** Inside a dissolve: the OUTGOING item still visible under the incoming one at `ms`; else null. */
+export function outgoingAt(plan: Pick<PlaybackPlan, "items" | "totalMs">, ms: number): PlaybackItem | null {
+  const item = itemAt(plan, ms);
+  if (!item || item.transitionInMs === 0 || item.index === 0) return null;
+  const prev = plan.items[item.index - 1];
+  return prev && ms < prev.endMs ? prev : null;
+}
+
+/**
+ * How much of the incoming picture shows at `ms` (0 … 1, linear across the dissolve); 1 outside a dissolve. The
+ * preview and the render manifest describe the same linear cross dissolve.
+ */
+export function dissolveMix(item: PlaybackItem, ms: number): number {
+  if (item.transitionInMs <= 0) return 1;
+  return Math.max(0, Math.min(1, (ms - item.startMs) / item.transitionInMs));
+}
+
+/** The title card on screen at `ms`, if any. */
+export const titleAt = (plan: Pick<PlaybackPlan, "titles">, ms: number): PlaybackTitle | null =>
+  plan.titles.find((t) => ms >= t.startMs && ms < t.endMs) ?? null;
 
 /** Where in its source file a video item is at timeline `ms`: `source in + (ms − item start)`, never outside the trim. */
 export function videoSourceMs(item: PlaybackItem, ms: number): number | null {

@@ -116,6 +116,15 @@ export default async function CandidateSetPage({
                 v?.attempt.status === "succeeded" &&
                 plan?.conform.required === true &&
                 !(media?.delivery && !media.delivery.isOriginal),
+              shotClip: {
+                selected: Boolean(v?.attempt.approved),
+                otherSelected: data.attempts.some(
+                  (a) => a.shotId === v!.attempt.shotId && a.approved && a.id !== v!.attempt.id,
+                ),
+                fromEarlierFrame:
+                  provenance.frameId !== (shotCtx?.selectedProductionFrame?.id ?? null) ||
+                  fresh.messages.includes("The selected Production Frame changed"),
+              },
             }
           : null,
       imageUrl: still && shown && shown.type === "image" ? assetUrl(shown) : null,

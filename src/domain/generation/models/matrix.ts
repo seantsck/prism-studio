@@ -201,7 +201,7 @@ export function evaluateModelFit(args: {
           ? asReference
             ? "Supplied as a reference image (reference mode), not as the exact frame."
             : purpose === "animate_production_frame" && i.kind === "start_frame"
-              ? "Exact first frame: the selected Production Frame (image-to-video)."
+              ? "Canonical first-frame source: the selected Production Frame (image-to-video; provider-only transport is disclosed when required)."
               : "Conditions the generation."
           : supported
             ? "The model supports it but this evaluation does not use it."

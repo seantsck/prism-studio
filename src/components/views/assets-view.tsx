@@ -8,6 +8,7 @@ import { formatSeconds } from "@/domain/duration";
 import { ASSET_PURPOSES, type Asset, type ProjectData } from "@/domain/schemas";
 import { assetUrl, cn } from "@/lib/utils";
 import { deleteAsset, updateAsset, uploadAsset } from "@/server/actions";
+import { getGenerationRepo } from "@/server/generation";
 import { getMediaQaRepo } from "@/server/media-qa";
 
 const bytesLabel = (n: number | null) =>
@@ -234,10 +235,12 @@ export async function AssetLibraryView({
   const lineage: Lineage = { derivedFrom: null, derivatives: [], pins: [] };
   if (selected) {
     const qa = await getMediaQaRepo();
-    const [own, children, pins] = await Promise.all([
+    const generation = await getGenerationRepo();
+    const [own, children, pins, subjectPins] = await Promise.all([
       qa.getDerivationOfAsset(selected.id),
       qa.listDerivationsByParent(selected.id),
       qa.assetPins(selected.id),
+      generation.subjectImageAssetPins(data.project.id, selected.id),
     ]);
     if (own) {
       const parent = data.assets.find((a) => a.id === own.parentAssetId);
@@ -255,7 +258,7 @@ export async function AssetLibraryView({
       operation: c.derivation.operation,
       slot: c.derivation.slot,
     }));
-    lineage.pins = pins;
+    lineage.pins = [...pins, ...subjectPins];
   }
   const href = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();

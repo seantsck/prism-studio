@@ -18,7 +18,14 @@ import {
   type SpendGateInput,
 } from "@/domain/generation/gate";
 import { animationRequestViolations } from "@/domain/generation/animation";
-import { buildPromptPlan } from "@/domain/generation/prompt-plan";
+import { parseFrozenProviderPrompt, type AdaptedProviderPrompt } from "@/domain/generation/provider-prompt";
+import { buildPromptPlan, normalizeDirection, type CreatorDirection } from "@/domain/generation/prompt-plan";
+import {
+  applyImageEdit,
+  imageEditBlockers,
+  transparencyBlockers,
+  type ImageEditSpec,
+} from "@/domain/generation/image-edit";
 import type {
   CostEstimate,
   GenerationModel,
@@ -44,6 +51,11 @@ export interface Evaluation {
   compatibility: CompatibilityReport | null;
   estimate: CostEstimate | null;
   gate: GenerationGate;
+  /**
+   * Phase 5B: the provider-facing prompt a provider-prompt policy derived for this model (null = the provider's own
+   * plan compilation applies). Shown before submission; frozen unchanged into the request when submitted.
+   */
+  providerPrompt: AdaptedProviderPrompt | null;
 }
 
 export interface SharedShotEvaluation {
@@ -78,6 +90,10 @@ export function evaluateShotForModel(args: {
   now?: Date;
   /** Reuse an already built context/package when evaluating several models for one shot. */
   shared?: SharedShotEvaluation;
+  /** Phase 5B-I2: edit this source still (Production Frame candidates only); the source is sent first. */
+  edit?: ImageEditSpec;
+  /** Phase 5B-I6: the creator's direction (Production Frame candidates only); never replaces a protected line. */
+  direction?: CreatorDirection | null;
 }): Evaluation {
   const shared = args.shared ?? buildSharedEvaluation(args.data, args.shotId, args.now);
   const { ctx, pkg } = shared;
@@ -95,18 +111,31 @@ export function evaluateShotForModel(args: {
     : null;
   const adapter = model ? args.registry.adapter(model.provider) : null;
   let estimate: CostEstimate | null = null;
+  let providerPrompt: AdaptedProviderPrompt | null = null;
   const adapterBlockers: GateBlocker[] = [];
   if (model && adapter && compatibility?.compatible && compatibility.modality) {
     try {
-      const plan = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation, { purpose });
-      const req = buildGenerationRequest({
+      const built = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation, {
+        purpose,
+        direction: args.direction,
+      });
+      const base = buildGenerationRequest({
         pkg,
         model,
         compatibility,
-        plan,
+        plan: built,
         idempotencyKey: "estimate-only-key",
         providerOptions: args.providerOptions,
       });
+      const editBlocked = args.edit ? imageEditBlockers(model, base) : [];
+      const { request: req, plan } =
+        args.edit && editBlocked.length === 0
+          ? applyImageEdit(base, built, args.edit, model)
+          : { request: base, plan: built };
+      providerPrompt = parseFrozenProviderPrompt(req.providerOptions?.prismProviderPrompt);
+      [...editBlocked, ...transparencyBlockers(model, req)].forEach((message, i) =>
+        adapterBlockers.push({ code: `image.option.${i}`, source: "model", message }),
+      );
       // Provider-specific limits the generic engine cannot know (e.g. prompt length) surface as explicit
       // ignored features: acknowledged by the user, recorded in the attempt, never silently dropped.
       const extra = adapter.additionalIgnoredFeatures?.(req, plan, model) ?? [];
@@ -151,7 +180,7 @@ export function evaluateShotForModel(args: {
     adapterBlockers.length > 0
       ? { ...baseGate, allowed: false, blockers: [...baseGate.blockers, ...adapterBlockers] }
       : baseGate;
-  return { ctx, pkg, report, model, availability, compatibility, estimate, gate };
+  return { ctx, pkg, report, model, availability, compatibility, estimate, gate, providerPrompt };
 }
 
 /** Deterministic per (shot, attempt number, package, model): a double click replays instead of duplicating. */
@@ -190,6 +219,10 @@ export function prepareSubmission(args: {
   seed?: number | null;
   /** `GenerationRepository.projectRevision()` captured before `data` was loaded (null = unchecked). */
   projectRevision?: string | null;
+  /** Phase 5B-I2: edit this source still; the result is a NEW Asset, the source is never modified. */
+  edit?: ImageEditSpec;
+  /** Phase 5B-I6: the creator's direction (Production Frame candidates only); recorded on the attempt. */
+  direction?: CreatorDirection | null;
 }): PreparedSubmission {
   const now = args.now ?? new Date();
   const evaluation = evaluateShotForModel({ ...args, now });
@@ -198,16 +231,28 @@ export function prepareSubmission(args: {
     return { evaluation, input: null };
 
   const adapter = args.registry.adapter(model.provider)!;
-  const plan = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation, { purpose: args.purpose });
-  const request = buildGenerationRequest({
+  const builtPlan = buildPromptPlan(pkg, compatibility.adaptation?.promptAdaptation, {
+    purpose: args.purpose,
+    direction: args.direction,
+  });
+  // 5B-I6 still direction, or 5B-V1 an animation alternative's motion direction (both recorded on the attempt)
+  const direction =
+    args.purpose === "production_frame" || args.purpose === "animate_production_frame"
+      ? normalizeDirection(args.direction)
+      : null;
+  const baseRequest = buildGenerationRequest({
     pkg,
     model,
     compatibility,
-    plan,
+    plan: builtPlan,
     idempotencyKey: args.idempotencyKey,
     seed: args.seed ?? null,
     providerOptions: args.providerOptions,
   });
+  // the gate above already refused an impossible edit or transparency (evaluateShotForModel saw the same edit)
+  const { request, plan } = args.edit
+    ? applyImageEdit(baseRequest, builtPlan, args.edit, model)
+    : { request: baseRequest, plan: builtPlan };
   // Phase 2H: an animation is created only when its request starts from exactly the frozen Production Frame
   const violations = animationRequestViolations(request, pkg);
   if (violations.length > 0) {
@@ -272,6 +317,10 @@ export function prepareSubmission(args: {
       fps: request.fps,
       seed: request.seed,
       providerOptions: request.providerOptions,
+      // lineage (Phase 5B-I2): the edited source; the new image is always a new Asset
+      ...(args.edit ? { editSourceAssetId: args.edit.sourceAssetId } : {}),
+      // Phase 5B-I6: the creator's direction for this still (Additional direction / Alternate Composition)
+      ...(direction ? { creatorDirection: direction } : {}),
     },
     inputAssetIds: [...used].sort(),
     outputAssetId: null,

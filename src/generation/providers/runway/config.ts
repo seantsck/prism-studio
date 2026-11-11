@@ -1,7 +1,7 @@
 /**
  * Runway: every provider-specific constant lives here, in one place, so API/pricing changes are a one-file edit.
- * Verified against @runwayml/sdk types and docs.dev.runwayml.com: video 2026-10-13 (4.21.0; the video request types are
- * byte-identical in 4.22.0, re-audited 2026-10-21), still images 2026-10-21 (4.22.0).
+ * Verified against @runwayml/sdk types and docs.dev.runwayml.com: video/pricing re-verified 2026-11-09
+ * (4.22.0); still images 2026-10-21 (4.22.0).
  */
 export const RUNWAY_PROVIDER_ID = "runway";
 
@@ -16,7 +16,7 @@ export const RUNWAY_API_VERSION = "2024-11-06";
 
 /** Pricing is versioned configuration, never scraped at runtime. */
 export const RUNWAY_PRICING = {
-  version: "2026-10-13",
+  version: "2026-11-09",
   source: "https://docs.dev.runwayml.com/guides/pricing/",
   currency: "USD",
   usdPerCredit: 0.01,

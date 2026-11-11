@@ -1,0 +1,39 @@
+# Prism Studio generation worker: a long-running container (Phase 5A.1; designed for Vercel Daemons).
+#
+# Build context is the repository root (a Vercel daemon builds in the Dockerfile's directory, and the worker needs
+# src/ and scripts/). Nothing secret is ever part of the image:
+#   - .dockerignore keeps every .env* file, .git, node_modules and build output out of the context;
+#   - no ARG is declared, so the platform's build arguments (Vercel passes deployment env vars that way) are unused;
+#   - credentials arrive only as runtime environment variables of the worker's own environment.
+#
+# Runtime: one Node process (`node --import tsx`), so SIGTERM reaches the worker's own handler, which finishes the
+# in-flight tick and exits (jobs are lease-protected: an interrupted step is resumed by the next instance).
+# NODE_ENV=production disables every development opt-in (admin DB credential, test-user storage).
+FROM node:24-bookworm-slim
+
+# Runway image-to-video may need a deterministic provider-only first-frame transport canvas.
+# FFmpeg/ffprobe perform that local adaptation; no provider or network call is involved.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PRISM_STUDIO_PERSISTENCE=supabase
+
+WORKDIR /app
+
+# tsx and typescript are devDependencies; the worker runs TypeScript directly, so they are installed here.
+COPY package.json package-lock.json ./
+RUN npm ci --include=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force
+
+COPY tsconfig.json ./
+COPY src ./src
+COPY scripts ./scripts
+
+USER node
+
+# The liveness endpoint is opt-in (PRISM_STUDIO_WORKER_HEALTH_PORT); 8080 is the documented default for daemons.
+EXPOSE 8080
+
+CMD ["node", "--import", "tsx", "scripts/generation-worker.mts"]

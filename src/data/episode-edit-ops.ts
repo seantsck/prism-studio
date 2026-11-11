@@ -10,15 +10,23 @@ import {
   type VideoSourceViolation,
 } from "@/domain/edit/eligibility";
 import {
+  DISSOLVE_DEFAULT_MS,
   editShapeViolations,
   itemDurationMs,
+  TITLE_MAX_MS,
+  TITLE_MIN_MS,
+  TITLE_PLACEMENTS,
+  TITLE_STYLES,
+  TITLE_TEXT_MAX,
   type AudioPlacement,
   type EditItem,
   type EditShapeViolation,
+  type EditTitleCard,
   type EpisodeEdit,
   type PlacementBasis,
   type VisualSource,
 } from "@/domain/edit/model";
+import { transitionViolations, type TransitionViolation } from "@/domain/edit/timeline";
 import { approvedClipAttempt, preferredClipAsset } from "@/domain/edit/proposal";
 import type { ProductionFrame } from "@/domain/production-frame";
 import type { PerformanceTake, StoryboardFrame } from "@/domain/schemas";
@@ -79,6 +87,8 @@ export interface PlannedEdit {
   performanceChanged: Set<string>;
   /** 3A.4C: items whose incoming cut intent was cleared because their predecessor changed (never retargeted). */
   intentCleared: Set<string>;
+  /** 5B-V3: items whose dissolve was reset to a cut because their predecessor changed (never retargeted). */
+  transitionCleared?: Set<string>;
 }
 
 /** Who declares a cut intent, and when: the authenticated user and the server's clock, never the request. */
@@ -86,6 +96,9 @@ export interface OpContext {
   userId: string | null;
   now: string;
 }
+
+export const TRANSITION_PREDECESSOR_CHANGED_MESSAGE =
+  "This cut changed since you opened it (another item is now before it). Nothing was saved; reload and choose the transition again.";
 
 export const CUT_INTENT_PREDECESSOR_CHANGED_MESSAGE =
   "This cut changed since you opened it (another item is now before it). Nothing was saved; reload and review the cut again.";
@@ -131,6 +144,13 @@ export function editRefs(current: Pick<EpisodeEdit, "items">, ops: readonly Edit
       shots.push(op.item.shotId);
       visual(op.item.visual);
       takes.push(...op.item.performance.map((p) => p.takeId));
+    } else if (op.op === "restore") {
+      // a restore re-checks every item it brings back against the rows it pins
+      for (const item of op.items) {
+        shots.push(item.shotId);
+        visual(item.visual);
+        takes.push(...item.performance.map((p) => p.takeId));
+      }
     } else if (op.op === "set_visual") visual(op.visual);
     else if (op.op === "set_performance") takes.push(...op.placements.map((p) => p.takeId));
     else if (op.op === "use_replacement") {
@@ -203,6 +223,7 @@ export function applyEditOps(
   ctx: OpContext = { userId: null, now: new Date().toISOString() },
 ): PlannedEdit {
   let items: EditItem[] = structuredClone(current.items);
+  let titles: EditTitleCard[] = structuredClone(current.titles ?? []);
   const visualChanged = new Set<string>();
   const performanceChanged = new Set<string>();
   const replace = (next: EditItem) => {
@@ -222,6 +243,7 @@ export function applyEditOps(
           performance: ordered(op.item.performance),
           performanceBasis: basisOf(op.item.performanceBasis),
           incomingCutIntent: null,
+          incomingTransition: null,
         };
         items.splice(op.atPosition, 0, item);
         visualChanged.add(item.id);
@@ -356,6 +378,67 @@ export function applyEditOps(
         replace({ ...item, incomingCutIntent: null });
         break;
       }
+      case "set_transition": {
+        const item = itemOf(items, op.itemId);
+        const index = items.indexOf(item);
+        if (index === 0)
+          throw new EpisodeEditError("invalid", "The first item of the edit has no incoming transition.");
+        if (items[index - 1]!.id !== op.expectedPredecessorId)
+          throw new EpisodeEditError("conflict", TRANSITION_PREDECESSOR_CHANGED_MESSAGE);
+        if (op.kind === "cut") {
+          replace({ ...item, incomingTransition: null });
+          break;
+        }
+        if (op.kind !== "dissolve") throw new EpisodeEditError("invalid", "Unknown transition.");
+        const durationMs = op.durationMs ?? DISSOLVE_DEFAULT_MS;
+        if (!Number.isSafeInteger(durationMs))
+          throw new EpisodeEditError("invalid", "A dissolve lasts a whole number of milliseconds.");
+        replace({
+          ...item,
+          incomingTransition: { kind: "dissolve", durationMs, fromItemId: op.expectedPredecessorId },
+        });
+        break;
+      }
+      case "set_title": {
+        const card: EditTitleCard = {
+          id: titles.find((t) => t.placement === op.placement)?.id ?? newId(),
+          placement: op.placement,
+          title: op.title.trim(),
+          subtitle: op.subtitle.trim(),
+          durationMs: op.durationMs,
+          style: op.style,
+        };
+        titles = [...titles.filter((t) => t.placement !== op.placement), card];
+        break;
+      }
+      case "remove_title":
+        if (!titles.some((t) => t.placement === op.placement))
+          throw new EpisodeEditError("invalid", "There is no such title card.");
+        titles = titles.filter((t) => t.placement !== op.placement);
+        break;
+      case "restore": {
+        // every item comes back exactly as saved (its own id, picture, trim / hold, audio, transition, cut intent);
+        // items whose picture or performance differs from now are re-checked against the rows they pin
+        const now = new Map(items.map((i) => [i.id, i]));
+        items = op.items.map((saved) => {
+          const restored: EditItem = {
+            ...structuredClone(saved),
+            visual: canonicalVisual(saved.visual),
+            performance: ordered(saved.performance),
+            performanceBasis: basisOf(saved.performanceBasis),
+            incomingCutIntent: saved.incomingCutIntent ?? null,
+            incomingTransition: saved.incomingTransition ?? null,
+          };
+          const before = now.get(saved.id);
+          if (!before || JSON.stringify(before.visual) !== JSON.stringify(restored.visual))
+            visualChanged.add(saved.id);
+          if (!before || JSON.stringify(before.performance) !== JSON.stringify(restored.performance))
+            performanceChanged.add(saved.id);
+          return restored;
+        });
+        titles = structuredClone(op.titles);
+        break;
+      }
     }
   }
   // 3A.4C: an intent is bound to the cut it was declared against. When an item's predecessor changed (reorder, add,
@@ -367,7 +450,53 @@ export function applyEditOps(
     intentCleared.add(item.id);
     return { ...item, incomingCutIntent: null };
   });
-  return { next: { ...current, items }, visualChanged, performanceChanged, intentCleared };
+  // 5B-V3: the same for a dissolve: it was chosen for one cut; when the cut changed it becomes a straight cut again
+  const transitionCleared = new Set<string>();
+  items = items.map((item, index) => {
+    const t = item.incomingTransition;
+    if (!t || (index > 0 && items[index - 1]!.id === t.fromItemId)) return item;
+    transitionCleared.add(item.id);
+    return { ...item, incomingTransition: null };
+  });
+  const next: EpisodeEdit = { ...current, items, titles };
+  return { next, visualChanged, performanceChanged, intentCleared, transitionCleared };
+}
+
+function transitionText(v: TransitionViolation): string {
+  switch (v.code) {
+    case "transition_on_first":
+      return "The first item of the edit has no incoming transition.";
+    case "transition_stale":
+      return TRANSITION_PREDECESSOR_CHANGED_MESSAGE;
+    case "transition_too_short":
+      return `A cross dissolve lasts at least ${(v.minMs / 1000).toFixed(1)} s.`;
+    case "transition_too_long":
+      return v.maxMs < 100
+        ? "These two items are too short for a cross dissolve; keep a cut."
+        : `This cross dissolve can be at most ${(v.maxMs / 1000).toFixed(2)} s: half of the shorter of the two items it joins. Shorten the dissolve first.`;
+  }
+}
+
+/** 5B-V3: the title cards: one per placement, real text, a sensible length. */
+function assertTitlesValid(titles: readonly EditTitleCard[]): void {
+  const placements = new Set<string>();
+  for (const t of titles) {
+    if (!(TITLE_PLACEMENTS as readonly string[]).includes(t.placement))
+      throw new EpisodeEditError("invalid", "A title card is an opening or a closing title.");
+    if (placements.has(t.placement))
+      throw new EpisodeEditError("invalid", "The edit already has that title card.");
+    placements.add(t.placement);
+    if (!t.title.trim()) throw new EpisodeEditError("invalid", "A title card needs its title text.");
+    if (t.title.length > TITLE_TEXT_MAX || t.subtitle.length > TITLE_TEXT_MAX)
+      throw new EpisodeEditError("invalid", `Title text is at most ${TITLE_TEXT_MAX} characters per line.`);
+    if (!Number.isSafeInteger(t.durationMs) || t.durationMs < TITLE_MIN_MS || t.durationMs > TITLE_MAX_MS)
+      throw new EpisodeEditError(
+        "invalid",
+        `A title card holds between ${TITLE_MIN_MS / 1000} and ${TITLE_MAX_MS / 1000} seconds.`,
+      );
+    if (!(TITLE_STYLES as readonly string[]).includes(t.style))
+      throw new EpisodeEditError("invalid", "Unknown title style.");
+  }
 }
 
 const SHAPE_TEXT: Record<EditShapeViolation["code"], string> = {
@@ -410,6 +539,14 @@ export function assertEditValid(
     if (index === 0 || plan.next.items[index - 1]!.id !== intent.fromItemId)
       throw new EpisodeEditError("invalid", "A cut intent must name the item immediately before it.");
   }
+  // 5B-V3: every dissolve fits its two neighbours (also after a trim / hold of either), and the title cards
+  const transition = transitionViolations(plan.next.items)[0];
+  if (transition)
+    throw new EpisodeEditError(
+      transition.code === "transition_stale" ? "conflict" : "invalid",
+      transitionText(transition),
+    );
+  assertTitlesValid(plan.next.titles ?? []);
 
   const clip: ClipSourceData = { ...facts.clip, project: { id: edit.projectId } };
   for (const item of plan.next.items) {
@@ -472,6 +609,7 @@ export const emptyEdit = (
   editRate: { num: base.editRate.num, den: base.editRate.den },
   revision: 0,
   items: [],
+  titles: [],
 });
 
 export const addsOf = (items: readonly NewEditItem[]): EditOp[] =>

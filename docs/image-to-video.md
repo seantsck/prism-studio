@@ -2,11 +2,13 @@
 
 Phase 2G made the Shot's canonical still: the **Production Frame**. Phase 2H makes it move.
 
-> The selected, current Production Frame is the exact first-frame image supplied to the video model.
+> The selected, current Production Frame is the canonical first-frame source for the video model.
 
 It is never replaced by an approved or draft Storyboard, a generic Location reference, a manual start-frame override,
-text-to-video because a provider preferred it, or a similar regenerated image. The moving Shot begins from the exact
-still the filmmaker approved.
+text-to-video because a provider preferred it, or a similar regenerated image. When a provider's prompt-image aspect
+contract cannot accept the canonical frame directly, Prism may create a deterministic **provider-only transport frame**
+that contains the same Production Frame pixels on the frozen provider canvas. That transport never becomes canonical,
+never changes the Production Frame Asset, and is disclosed before spend and in provider provenance.
 
 2H is an execution contract plus a workflow. It reuses everything that already exists: generation attempts and jobs,
 the worker, the Runway adapter, the model catalog, candidate sets, human review, cost estimates and spend gates,
@@ -18,11 +20,11 @@ the freshness parts are unchanged. No GPU, COLMAP, Brush or 3D set is required.
 A provider-independent `GenerationPurpose`, frozen on the attempt's request (`request.purpose`) and on the candidate
 set's recommendation JSON (`generationPurpose`):
 
-| Purpose                    | Meaning                                                                                      |
-| -------------------------- | -------------------------------------------------------------------------------------------- |
-| `shot_output`              | generic Shot-output generation (every request without a purpose: history is never rewritten) |
-| `production_frame`         | a still candidate for the canonical Production Frame (2G.2)                                  |
-| `animate_production_frame` | a Shot-output VIDEO whose exact first frame is the selected, current Production Frame (2H)   |
+| Purpose                    | Meaning                                                                                               |
+| -------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `shot_output`              | generic Shot-output generation (every request without a purpose: history is never rewritten)          |
+| `production_frame`         | a still candidate for the canonical Production Frame (2G.2)                                           |
+| `animate_production_frame` | a Shot-output VIDEO whose canonical first-frame source is the selected, current Production Frame (2H) |
 
 An animation **is a Shot-output attempt**, not a Production Frame candidate: `isProductionFrameAttempt()` is false, the
 pipeline includes it, human review / Best / final approval apply, and the Production Frame selection never changes.
@@ -44,7 +46,7 @@ No database CHECK constrains the purpose: it lives in JSON (request, model setti
 Generic **Generate** keeps its historical start-frame precedence (override → Production Frame → Storyboard). Only the
 dedicated workflow is stricter.
 
-## Exact start frame and image-to-video only
+## Canonical start frame and image-to-video only
 
 For `animate_production_frame` the compatibility engine:
 
@@ -72,8 +74,71 @@ and reference, and the Storyboard would win nothing the frame has not already fi
 
 `animationRequestViolations(request, packageSnapshot)` is checked when the attempt is prepared AND again by the worker
 right before `adapter.submit` (provider-independent). It refuses any animation request that is not image-to-video, has
-no start frame, starts from anything but the frozen frame, or also sends the frame as a reference. A refused job fails
+no start frame, starts from anything but the frozen frame, or also sends the frame as a reference. If a frozen
+`prismStartFrameTransport` exists, its `sourceAssetId` must be that same frozen Production Frame. A refused job fails
 with `animation_source_invalid`; the provider is never called.
+
+### Provider-only start-frame transport
+
+Some providers constrain the **prompt image** more tightly than Prism's production frame. Prism does not solve that by
+changing the Production Frame or allowing the provider to auto-crop it. The immutable request freezes
+`providerOptions.prismStartFrameTransport` with the canonical source Asset, policy, provider canvas and background.
+
+For Runway the current policy is `contain-pad-v1`:
+
+- FFmpeg reads the canonical Production Frame bytes locally;
+- the complete frame is uniformly scaled to **contain** inside the provider canvas (up or down as needed), never cropped;
+- the remaining axis is center-padded black;
+- for Shot 3A, 1536×642 becomes 1584×662 plus 5 px top/bottom; the 2.39:1 delivery crop removes that padding;
+- the transient transport image is sent to Runway and never becomes a Prism canonical Asset;
+- Runway's output still follows the already-frozen delivery conform back to the production aspect ratio.
+
+The request preview names the transport and target canvas. Provider result provenance records the same frozen transport
+metadata, so a worker restart cannot silently change how the first frame reached the provider.
+
+**Provider canvas = verified pixels, not label arithmetic.** An aspect label (`21:9`) describes the provider's mode;
+the catalog's verified pixel value for that label (`1584:672` on Runway Gen-4 Turbo) is the request and transport
+canvas. Model capabilities expose it as `video.providerCanvases`, and the framing planner uses it (`canvasSource:
+"provider"`) before any requested or nominal canvas. Re-deriving height from `21/9` gave 1584×678, which the adapter
+correctly refused; the adapter invariant (frozen canvas = provider canvas, exactly) is unchanged. Providers without
+documented pixel canvases keep the previous requested/nominal planning.
+
+**Delivery removes exactly the transport padding.** The transport placement is a pure function of the frozen policy,
+the provider canvas and the canonical source size (`attemptTransportGeometry`). When the provider output is exactly the
+transport canvas, `resolveConform` crops to that content rectangle (Shot 3A: 1584×662 at y=5 inside 1584×672) and
+centre-crops inside it only if the content is not already the target ratio. FFmpeg's crop uses `exact=1` for odd
+rectangles: on yuv420p it otherwise rounds y=5 to y=4. The generic even centre crop (y=4) had left a 1 px padding
+row. Attempts without a transport, or outputs of another size, keep the generic conform (the latter with a warning).
+
+### Pre-pad transport for narrow prompt-image ranges (`contain-prepad-center-crop-v1`)
+
+Some models accept a narrower prompt image than the output they produce. Runway Gen-4.5 documents a prompt-image
+width/height range of 0.5–2.0 but a `1584:672` (≈2.357) output; its API "Inputs" page also documents that a prompt image
+whose aspect differs from the requested `ratio` is centre-cropped to that ratio (verified 2026-11-10; recorded as
+`inputs.promptImageCrop` in the catalog — only models with that documented fact may use this policy).
+
+When the verified output canvas is outside the model's prompt-image range, `buildGenerationRequest` freezes an explicit
+record instead of `contain-pad-v1` (`planPrepadCenterCrop`, pure):
+
+| Field              | Shot 3A (Gen-4.5)                             |
+| ------------------ | --------------------------------------------- |
+| `source`           | 1536×642 (canonical, never modified)          |
+| `content`          | 1584×662 (uniform scale, no crop)             |
+| `submittedCanvas`  | 1584×792 (exactly 2:1, inside 0.5–2.0)        |
+| `submittedOffset`  | x 0, y 65 (65 synthetic rows above and below) |
+| `providerCrop`     | centre, source URL, verifiedAt                |
+| `outputCanvas`     | 1584×672                                      |
+| `expectedCrop`     | x 0, y 60, 1584×672 (removes 60 + 60 rows)    |
+| `effectiveContent` | 1584×662 at x 0, y 5 (= the Turbo geometry)   |
+
+The planner refuses unless every invariant holds: documented centre crop; output outside the range; submitted image
+inside it; an exact integer crop (even padding total); the crop contains the whole picture (zero picture pixels lost);
+the picture's scale is identical on the submitted and output canvases. The adapter re-derives the record and refuses any
+difference, the transport refuses a source whose stored dimensions differ from the record, and delivery conform uses
+`effectiveContent` exactly as it uses the `contain-pad-v1` rectangle. A real-FFmpeg test proves the submitted image,
+centre-cropped as documented, is pixel-identical to the `contain-pad-v1` transport. The transport image is provider-only:
+it exists in memory for the request and is never stored as an Asset. Gen-4 Turbo (range 0.5–2.358) keeps
+`contain-pad-v1`.
 
 ## Keyframe mode and reference disclosure
 
@@ -99,15 +164,85 @@ Same PromptPlan v1 sections, no new schema, no provider-specific format in the d
 - states "Preserve the subjects, wardrobe, set, composition and lighting established by the first frame." and marks the
   composition as "As established by the first frame; do not recompose."
 
+The PromptPlan is Prism's production intent. It is **not** necessarily what a provider receives (see below).
+
+## Provider-prompt adaptation (Phase 5B)
+
+`Story / Shot intent → deterministic provider-prompt policy → provider request.`
+
+The Shot's story data stays the source of truth. A provider-prompt policy derives an execution representation from the
+GenerationPackage's structured fields (never from the rendered plan, so internal labels cannot leak). It is pure and
+deterministic (no AI rewriting), versioned, and frozen in the immutable request as
+`providerOptions.prismProviderPrompt` (`src/domain/generation/provider-prompt.ts`).
+
+Why: Shot 3A's story moved from figurative "mask" wording to "composure" wording. Two Runway Gen-4 Turbo tasks whose
+prompt contained "composure restored" / "Composure slips" failed inside Runway with `INTERNAL.BAD_OUTPUT.CODE01`; the
+same image with a visible-behaviour prompt succeeded. The prompts had also leaked metadata (`Production Frame (v2)`, the
+Shot code and title, `Purpose: …`, `(55/10)`, aspect-ratio prose) and sat at 992 of 1,000 characters, silently losing
+their last clause.
+
+**Policy table.** `providerPromptPolicyFor(provider, model, purpose)` is table-driven; a model opts in explicitly with
+its own target. First entry: Runway `gen4_turbo`, `animate_production_frame`, policy `visible-motion` v1, limit from the
+catalog (`promptMaxChars` 1000), target 900; Runway `gen4.5` uses the same policy and budget. Everything else keeps its
+existing compilation, unchanged.
+
+Gen-4.5's documented prompt-image range (0.5–2) is narrower than its 21:9 output; its wide start frames use the
+`contain-prepad-center-crop-v1` transport described above.
+
+**visible-motion v1** writes concise prose in these sections:
+
+| Section         | Required | Priority | Content                                                                                                                                                                                                                           |
+| --------------- | -------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Continuity      | yes      | 1        | identity, apparent age, facial structure, the Look's head phrases (hair, wardrobe, jewelry), lighting, background; no new objects or people                                                                                       |
+| Visible action  | yes      | 2        | held orientation, eyeline and "never looking into the camera" (from blocking), begin → change → end as observable behaviour; a held orientation also states the motion envelope (below), otherwise natural breathing is asked for |
+| Subject, Camera | yes      | 3        | who/where/when in plain words; camera (an imperceptible move is requested as a locked camera, recorded)                                                                                                                           |
+| Composition     | no       | 4        | subject blocking (the first frame already establishes the composition)                                                                                                                                                            |
+| Performance     | no       | 5        | restraint and pace                                                                                                                                                                                                                |
+| Look detail     | no       | 6        | the complete Look fields                                                                                                                                                                                                          |
+| Setting         | no       | 7        | set lighting and mood                                                                                                                                                                                                             |
+
+**Held orientation.** A Shot that faces one side (`screenDirection` "… screen-right/left") with no blocking movement (no
+marks, entry or exit) holds the first frame's orientation. "Keeps her head turned toward screen-right" alone was not
+enough: a Gen-4.5 Shot 3A take turned through frontal to a screen-left profile. The policy therefore pins head AND torso
+("keeps the first frame's three-quarter orientation toward screen-right: head and torso stay screen-right, never
+rotating through frontal or toward screen-left", "profile" when the direction says so), and limits the motion envelope
+to the face plus only what the Shot's own action moves ("Limit motion to her face, eyelids, breathing and a small
+shoulder drop; no larger head or body movement."). Both are recorded adaptations (`held-orientation`,
+`motion-envelope-limited`).
+
+Abstract story language is translated by ordered, tested rules (`composure/mask … restored` → "ends calm and
+neutral"; `… slips/drops` → "expression briefly softens"; `exhausted` → "looks visibly exhausted";
+`tense`, `confident`, `hesitates`; `shoulders fall` → "shoulders lower subtly"). A figurative note no rule understands is
+**omitted and recorded**, never sent (a model may render "mask" literally).
+
+**Budget.** Required sections are always kept; optional sections are added in priority order only while the prompt
+stays within the target. Sections are dropped whole — a sentence or field is never cut part-way — and each omission is
+recorded and surfaces as one acknowledgeable ignored feature (`prompt.budget`). If the required content alone exceeds
+the provider limit the request is refused (`ok: false`), never truncated.
+
+**Provenance.** The frozen record holds the policy id and version, provider/model/purpose, the source package
+fingerprint, the final text and its length, the budget, every section's fate, the omitted sections, every adaptation
+(field, source text, provider text, rule) and the list of internal metadata deliberately excluded. The Runway adapter
+sends exactly that text; it refuses a malformed, foreign, over-limit or not-ok record; the adapter invariant (also
+re-checked by the worker before the provider call) requires its source fingerprint to equal the attempt's own package.
+Historical attempts keep what they recorded.
+
+**Inspectable before spend.** The Animate Production Frame panel shows, per policy-adapted model, the story intent
+(source of truth), the exact provider prompt, the policy version, length/limit/target and omitted sections. The no-spend
+evaluation (`Evaluation.providerPrompt`) and the Prompt Inspector's compiled fields (`promptPolicy`, `promptBudget`,
+`promptOmittedSections`) carry the same record.
+
+**Deployment note.** A generation worker built before this change ignores `prismProviderPrompt` and would compile the
+old prompt. The worker must run this code before a policy-adapted request is submitted.
+
 ## Duration and framing
 
 Unchanged adaptation semantics. The production duration (timeline / package timing) is never rounded: a natively
 supported duration is generated natively; a shorter-than-minimum duration with an explicit **generate longer, then
 trim** plan asks the provider for the supported duration (priced on the provider seconds) and the delivery conform trims
-it back; an unsupported duration without a plan is blocked. Framing: Production Frame → provider canvas → provider
-original → delivery conform, never a silent crop. The comparison shows production / provider / delivery duration and
-"Production Frame 2.39:1 → provider 16:9 → delivery back to 2.39:1" before any spend. The canonical Production Frame
-Asset is never modified.
+it back; an unsupported duration without a plan is blocked. Framing: Production Frame → optional provider-only transport canvas → provider original → delivery conform, never a
+silent crop. The comparison shows production / provider / delivery duration and the frozen provider canvas before any
+spend. The canonical Production Frame Asset is never modified.
 
 Audio: the selected performance stays production truth. Provider-native audio is OFF unless the person turns it on.
 Performance audio a provider accepts may condition the video; it is never called the final dialogue (Phase 2I assembles
@@ -121,8 +256,9 @@ the final performance deliberately).
   summary and the start-frame override state;
 - blocked reasons when the source rules fail (no comparison is offered then);
 - **Compare animation models**: the existing model comparison for the video models with, per model, eligible or
-  incompatible and why, exact first frame, production → provider → delivery duration, provider canvas, audio
-  conditioning, native audio (off/on), estimated cost and the references omitted by keyframe mode. No model is
+  incompatible and why, canonical first-frame source plus provider-only transport when required, production → provider
+  → delivery duration, provider canvas, audio conditioning, native audio (off/on), estimated cost and the references
+  omitted by keyframe mode. No model is
   pre-selected and nothing calls a provider until the set is explicitly created; paid models still need the server
   spend gates and the confirmation of the displayed total.
 

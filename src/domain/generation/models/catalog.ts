@@ -1,5 +1,6 @@
 import type { GenerationModel, ModelCapabilities } from "../schemas";
 import { RUNWAY_IMAGE_MODELS } from "./image-catalog";
+import { OPENAI_IMAGE_MODELS } from "./openai-image-catalog";
 import type {
   CatalogModel,
   CatalogPricing,
@@ -39,16 +40,16 @@ import type {
  */
 export const RUNWAY_SDK_REF = "@runwayml/sdk@4.22.0";
 export const RUNWAY_API_VERSION_REF = "2024-11-06";
-export const CATALOG_VERIFIED_AT = "2026-10-14";
-export const RUNWAY_PRICING_VERSION = "runway-2026-10-13";
+export const CATALOG_VERIFIED_AT = "2026-11-09";
+export const RUNWAY_PRICING_VERSION = "runway-2026-11-09";
 export const RUNWAY_USD_PER_CREDIT = 0.01;
 
 const SOURCES = [
   "@runwayml/sdk@4.22.0 resources/image-to-video.d.ts (re-audited 2026-10-21; identical to 4.21.0)",
   "@runwayml/sdk@4.22.0 resources/text-to-video.d.ts (re-audited 2026-10-21; identical to 4.21.0)",
-  "docs.dev.runwayml.com/guides/pricing (2026-10-13)",
-  "docs.dev.runwayml.com/guides/models (2026-10-14)",
-  "docs.dev.runwayml.com/api.md image_to_video reference (2026-10-14)",
+  "docs.dev.runwayml.com/guides/pricing (2026-11-09)",
+  "docs.dev.runwayml.com/guides/models (2026-11-09)",
+  "docs.dev.runwayml.com/api.md image_to_video reference + input ratio limits (2026-11-09)",
 ];
 
 const verification = (unstated: string[]): CatalogVerification => ({
@@ -61,7 +62,7 @@ const verification = (unstated: string[]): CatalogVerification => ({
 
 const pricing = (rule: CreditRule): CatalogPricing => ({
   version: RUNWAY_PRICING_VERSION,
-  verifiedAt: "2026-10-13",
+  verifiedAt: "2026-11-09",
   source: "https://docs.dev.runwayml.com/guides/pricing/",
   usdPerCredit: RUNWAY_USD_PER_CREDIT,
   currency: "USD",
@@ -103,6 +104,14 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
       maxReferenceAudioSeconds: null,
       keyframesExcludeReferences: "unknown",
       negativePrompt: "unsupported",
+      promptImageAspectRatio: { min: 0.5, max: 2 },
+      // Runway API "Inputs" page: a prompt image not exactly of the requested `ratio` is auto-cropped from the centre
+      // to that ratio (first-party Runway models; third-party models may crop or resize differently).
+      promptImageCrop: {
+        behavior: "center",
+        source: "https://docs.dev.runwayml.com/assets/inputs/",
+        verifiedAt: "2026-11-10",
+      },
     },
     audio: { nativeGeneration: "unsupported", referenceConditioning: "unsupported" },
     duration: {
@@ -158,6 +167,7 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
       maxReferenceAudioSeconds: null,
       keyframesExcludeReferences: "unknown",
       negativePrompt: "unsupported",
+      promptImageAspectRatio: { min: 0.5, max: 2.358 },
     },
     audio: { nativeGeneration: "unsupported", referenceConditioning: "unsupported" },
     duration: {
@@ -166,7 +176,7 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
       maxSeconds: 10,
       stepSeconds: 1,
       verified: true,
-      note: "Integer 2–10 seconds, optional (API reference, 2026-10-14). 2 s is a valid request.",
+      note: "Integer 2–10 seconds, optional (API reference, re-verified 2026-11-09). 2 s is a valid request.",
     },
     tiers: [
       tier("default", 1280, 720, {
@@ -187,7 +197,7 @@ export const RUNWAY_VIDEO_MODELS: readonly CatalogModel[] = [
       perReferenceImage: 0,
       perReferenceVideoSecond: null,
       referenceVideoBilledCapSeconds: null,
-      minimumCredits: null,
+      minimumCredits: 10,
     }),
     concurrencyNote: "Account usage tier dependent.",
   },
@@ -448,8 +458,11 @@ export { RUNWAY_IMAGE_MODELS };
 /** Every Runway catalog model (video, then still image), in a stable order. */
 export const RUNWAY_MODELS: readonly CatalogModel[] = [...RUNWAY_VIDEO_MODELS, ...RUNWAY_IMAGE_MODELS];
 
+/** Every catalog model of every real provider (Runway, then OpenAI Images direct, Phase 5B-I2). */
+export const CATALOG_MODELS: readonly CatalogModel[] = [...RUNWAY_MODELS, ...OPENAI_IMAGE_MODELS];
+
 export function catalogModel(provider: string, modelId: string): CatalogModel | null {
-  return RUNWAY_MODELS.find((m) => m.provider === provider && m.modelId === modelId) ?? null;
+  return CATALOG_MODELS.find((m) => m.provider === provider && m.modelId === modelId) ?? null;
 }
 
 /** A still-image model (it has an image credit rule and no video modality). */
@@ -513,6 +526,19 @@ export function providerRatioFor(model: CatalogModel, aspect: string, tierId?: s
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * The tier's verified provider pixel canvas per aspect label ("21:9" → 1584×672). Only pixel-valued ratios
+ * ("1584:672") count; a label whose provider value is itself a ratio ("21:9") has no verified canvas.
+ */
+export function pixelCanvases(tier: CatalogTier): Record<string, { width: number; height: number }> {
+  const out: Record<string, { width: number; height: number }> = {};
+  for (const [label, v] of Object.entries(tier.ratios)) {
+    const m = /^(\d{3,5}):(\d{3,5})$/.exec(v);
+    if (m) out[label] = { width: Number(m[1]), height: Number(m[2]) };
+  }
+  return out;
+}
 
 /** Largest width and height across every pixel-valued ratio and tier canvas the model offers. */
 export function maxCanvas(model: CatalogModel): { width: number; height: number } | null {
@@ -628,6 +654,7 @@ export function toGenerationModel(m: CatalogModel, opts: { maxConcurrency?: numb
       // largest pixel dimensions across the offered ratios (planning canvas; conform re-resolves the real output)
       maxResolution: largest,
       aspectRatios: m.aspectRatios,
+      providerCanvases: pixelCanvases(first),
       fps: [],
     },
     image: null,

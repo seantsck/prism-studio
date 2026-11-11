@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { locationVisualBibleSchema } from "./location-visual-bible";
 import {
   GENERATION_MODALITIES,
   REJECTION_CATEGORIES,
@@ -75,6 +76,8 @@ export const ASSET_PURPOSES = [
   "spatial_reconstruction",
   /** a still uploaded as a Shot's Production Frame (Phase 2G.1); promoted frames reuse their existing Asset */
   "production_frame",
+  /** a final rendered Episode MP4 (Phase 5B-V4); immutable, one per completed render */
+  "episode_render",
 ] as const;
 export const STORAGE_PROVIDERS = ["none", "local", "supabase"] as const;
 export const DURATION_SOURCES = ["server_metadata", "browser_hint", "manual", "seed"] as const;
@@ -274,6 +277,11 @@ export const locationSchema = z.object({
   recurringProps: z.array(text),
   referenceAssetIds: z.array(id),
   locked: z.boolean(),
+  /**
+   * Phase 5B-I5: the Location Visual Bible (canonical identity + designated establishing views, plates and variants).
+   * Optional: absent (or `{}`) is an empty Visual Bible, and every package / fingerprint is then unchanged.
+   */
+  visualBible: locationVisualBibleSchema.optional(),
   /** Extension points kept from before the 3D Set existed; the 3D Set itself lives in `location_scene_documents`. */
   set3d: z
     .object({
@@ -638,6 +646,22 @@ export const generationAttemptSchema = z.object({
   createdAt: iso,
 });
 export type GenerationAttempt = z.infer<typeof generationAttemptSchema>;
+
+/**
+ * Phase 5B-I1: an attempt whose subject is a Character or a Location instead of a Shot (migration 0051). Same row,
+ * same job / worker / outputs / costs; `shotId` is null and exactly one of `characterId` / `locationId` is set. These
+ * never appear in `ProjectData.attempts` (Shot history), so every Shot view is unchanged.
+ */
+export const subjectImageAttemptSchema = generationAttemptSchema
+  .extend({ shotId: z.null(), characterId: nullableId.default(null), locationId: nullableId.default(null) })
+  .refine((a) => (a.characterId === null) !== (a.locationId === null), {
+    message: "a subject attempt names exactly one Character or Location",
+  });
+export type SubjectImageAttempt = z.infer<typeof subjectImageAttemptSchema>;
+
+/** What the generation worker reads: any attempt, whatever its subject (the worker never uses the subject). */
+export const workerAttemptSchema = generationAttemptSchema.extend({ shotId: nullableId });
+export type WorkerAttempt = z.infer<typeof workerAttemptSchema>;
 
 export const CONTINUITY_DIMENSIONS = [
   "characterIdentity",

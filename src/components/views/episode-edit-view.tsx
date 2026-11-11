@@ -4,11 +4,14 @@ import { ActionForm } from "@/components/action-form";
 import { Badge, Button, Empty, PageHeader } from "@/components/ui";
 import type { Episode, ProjectData } from "@/domain/schemas";
 import type { EpisodeEditPage } from "@/server/episode-edit-page";
-import { createEpisodeEdit } from "@/server/episode-edit-actions";
+import { createEpisodeEdit, resetEditToStoryOrder, useCurrentShotMedia } from "@/server/episode-edit-actions";
 import { AddShotPanel, ItemEditor, ItemOrderControls, type EditTarget } from "./episode-edit-controls";
-import { EditPlayer } from "./episode-edit-player";
+import { EditPlayer, SeekButton } from "./episode-edit-player";
+import { ManifestPanel, RevisionPanel, TitlePanel, TransitionControl } from "./episode-edit-v3-controls";
+import { RenderPanel } from "./episode-render-panel";
 import type { CutMarkerVM } from "./cut-marker-model";
 import type { BadgeVM, RowVM, RunVM, SummaryVM } from "./episode-edit-model";
+import { SEQUENCE_MEDIA_LABEL } from "@/domain/edit/sequence";
 
 /**
  * Phase 2I.1C Episode Edit page (2I.1D adds the editing controls, episode-edit-controls.tsx). With no persisted edit it shows the proposed initial assembly (not an edit)
@@ -138,11 +141,46 @@ export function EpisodeEditView({
             </ul>
           </div>
         ) : null}
+        {/* 5B-V2 Sequence: story order and the Shots' current media, each one explicit revision */}
+        <div className="flex flex-wrap items-center gap-2" data-testid="sequence-actions">
+          <a
+            href="#edit-player"
+            className="rounded-[3px] border border-accent px-2 py-1 text-[12px] text-accent"
+            data-testid="play-animatic"
+          >
+            Play Animatic ↓
+          </a>
+          <ActionForm action={resetEditToStoryOrder} quiet>
+            <EditTargetFields target={target} />
+            <Button size="sm" type="submit" disabled={page.inStoryOrder} data-testid="reset-story-order">
+              {page.inStoryOrder ? "In story order" : "Reset to story order"}
+            </Button>
+          </ActionForm>
+          <ActionForm action={useCurrentShotMedia} quiet>
+            <EditTargetFields target={target} />
+            <Button
+              size="sm"
+              type="submit"
+              disabled={page.currentMediaChanges === 0}
+              data-testid="use-current-media"
+            >
+              {page.currentMediaChanges === 0
+                ? "Using current Shot Clips and frames"
+                : `Use current Shot Clips and frames (${page.currentMediaChanges})`}
+            </Button>
+          </ActionForm>
+        </div>
         {/* keyed on the revision: a saved change rebuilds playback from the new edit (paused at 0) */}
         <EditPlayer key={page.revision} playback={page.playback} />
+        {/* 5B-V3: saved revisions, title cards and the render manifest of exactly this state */}
+        <RevisionPanel target={target} revisions={page.revisions} savedAs={page.savedAs} />
+        {/* 5B-V4: render the saved revision to a final MP4 */}
+        <RenderPanel target={target} projectSlug={data.project.slug} vm={page.render} />
+        <TitlePanel target={target} titles={page.titles} />
         <Runs runs={page.runs} />
         <Rows rows={page.rows} target={target} continuity={`${base}/continuity`} />
         <AddShotPanel target={target} addable={page.addable} items={page.rows.length} />
+        <ManifestPanel manifest={page.manifest} />
       </div>
     </div>
   );
@@ -245,6 +283,7 @@ function Row({ row, target }: { row: RowVM; target?: EditTarget }) {
       data-item-id={target ? row.key : undefined}
       data-start-ms={row.startMs}
       data-duration-ms={row.durationMs}
+      data-transition={row.transition?.kind ?? ""}
       className="grid grid-cols-[176px_1fr] gap-3 border border-line bg-panel p-2.5 data-[playing=true]:border-accent data-[playing=true]:bg-accent/5"
     >
       <div>
@@ -288,11 +327,25 @@ function Row({ row, target }: { row: RowVM; target?: EditTarget }) {
             </span>
           ) : null}
         </div>
+        {/* 5B-V2: the Sequence line, in creator words */}
+        <div className="text-[12px]" data-testid="sequence-line">
+          {row.shotCode} — {SEQUENCE_MEDIA_LABEL[p.kind]} — {row.duration}
+        </div>
         <div className="flex flex-wrap gap-x-3 text-[11.5px] text-muted" data-testid="item-timing">
           <span>Starts {row.start}</span>
           <span>Duration {row.duration}</span>
           {row.planned ? <span>Planned {row.planned}</span> : null}
+          {target ? <SeekButton ms={row.startMs} label={`Preview ${row.shotCode} from its start`} /> : null}
         </div>
+        {/* 5B-V3: the transition INTO this item */}
+        {target && row.transition ? (
+          <TransitionControl
+            target={target}
+            itemId={row.key}
+            shotCode={row.shotCode}
+            transition={row.transition}
+          />
+        ) : null}
         <div className="text-[11.5px]">
           <span>{p.source}</span>
           {p.details.length ? <span className="text-muted"> · {p.details.join(" · ")}</span> : null}
@@ -378,5 +431,16 @@ function Chain({ links }: { links: Array<{ label: string; url: string | null }> 
         </span>
       ))}
     </div>
+  );
+}
+
+/** The edit a whole-Sequence action applies to, at the revision this page showed (5B-V2). */
+function EditTargetFields({ target }: { target: EditTarget }) {
+  return (
+    <>
+      <input type="hidden" name="projectSlug" value={target.projectSlug} />
+      <input type="hidden" name="editId" value={target.editId} />
+      <input type="hidden" name="expectedRevision" value={target.revision} />
+    </>
   );
 }

@@ -14,6 +14,7 @@ import {
 } from "@/domain/continuity/automation";
 import { CONTINUITY_RESULTS, type ContinuityResult } from "@/domain/continuity/model";
 import { parseAdaptationPlan } from "@/domain/framing/adaptation";
+import { attemptTransportGeometry } from "@/domain/framing/transport";
 import { MediaError } from "@/media/types";
 import { conformAttemptOutput, DeliveryError } from "@/media/delivery";
 import { MediaQaError } from "@/data/media-qa-repository";
@@ -118,6 +119,15 @@ async function createDeliveryConform_impl(form: FormData): Promise<ActionResult>
       original,
       plan: plan.conform,
       deps,
+      // a provider-only start-frame transport (Phase 5B): remove exactly its padding, never a re-derived crop
+      transport: attemptTransportGeometry({
+        providerOptions: (view.attempt.request as { providerOptions?: unknown } | null)?.providerOptions,
+        inputAssetIds: view.attempt.inputAssetIds,
+        sourceSize: (id) => {
+          const a = data.assets.find((x) => x.id === id);
+          return a?.width && a.height ? { width: a.width, height: a.height } : null;
+        },
+      }),
     });
   });
   // the conform is selected as the delivery master: QA the new subject (after the media write succeeded)

@@ -10,6 +10,12 @@
 export interface GenerationConfig {
   /** Provider ids enabled in this deployment. */
   enabledProviders: string[];
+  /**
+   * Providers whose credentials live only on a separate worker deployment. The web/control plane may
+   * compile, price and queue these providers without holding their secret; execution workers must not
+   * set this flag and still require the provider's real credential.
+   */
+  workerBackedProviders: string[];
   limits: {
     maxActivePerProject: number;
     maxSubmitsPerMinutePerUser: number;
@@ -70,15 +76,22 @@ export function readGenerationConfig(env: Env = process.env): GenerationConfig {
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
   // The mock provider is on by default outside production and must be enabled explicitly there.
-  let enabledProviders = [...new Set([...listed, ...(production ? [] : ["mock"])])];
+  // Phase 5B-I3: the local matting engine (free, no upload) follows the same rule: on outside production, listed there.
+  let enabledProviders = [...new Set([...listed, ...(production ? [] : ["mock", "prism-matting"])])];
   if (production && env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER === "1") enabledProviders.push("mock");
   // Opt-out for ONE process (e.g. a live paid run that should not even list the free mock). The default is unchanged,
   // and a registered mock is never a fallback anyway: every job names its own provider.
   if (env.PRISM_STUDIO_DISABLE_MOCK_PROVIDER === "1")
     enabledProviders = enabledProviders.filter((p) => p !== "mock");
 
+  const workerBackedProviders = (env.PRISM_STUDIO_WORKER_BACKED_PROVIDERS ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
   return {
     enabledProviders: [...new Set(enabledProviders)],
+    workerBackedProviders: [...new Set(workerBackedProviders)],
     limits: {
       maxActivePerProject: intFrom(env.PRISM_STUDIO_GENERATION_MAX_ACTIVE_PER_PROJECT, 3, 1, 50),
       maxSubmitsPerMinutePerUser: intFrom(env.PRISM_STUDIO_GENERATION_MAX_SUBMITS_PER_MINUTE, 10, 1, 600),

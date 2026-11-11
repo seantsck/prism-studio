@@ -19,6 +19,9 @@ export function providerDisclosure(
   };
 }
 import { RunwayProvider } from "./providers/runway/adapter";
+import { OpenAIImageProvider } from "./providers/openai-image/adapter";
+import { PhotoroomProvider } from "./providers/photoroom/adapter";
+import { PrismMattingProvider } from "./providers/prism-matting/adapter";
 
 /**
  * Server-side model registry: which providers/models exist, what they can do, whether they are enabled and
@@ -65,16 +68,25 @@ export class ModelRegistry {
     return this.config.paid;
   }
 
-  /** Mock models are free; everything else bills and is subject to the spend gate. */
+  /**
+   * Mock models are free, and so is a provider that explicitly declares it runs locally at no cost (Phase 5B-I3, the
+   * local matting engine). Everything else bills and is subject to the spend gate.
+   */
   billsMoney(model: GenerationModel): boolean {
-    return model.kind !== "mock";
+    if (model.kind === "mock") return false;
+    return this.adapters_.get(model.provider)?.info().localNoCost !== true;
   }
 
   availabilityOf(model: GenerationModel): ModelAvailability {
     const adapter = this.adapters_.get(model.provider);
     const info = adapter?.info();
     const enabled = this.config.enabledProviders.includes(model.provider);
-    const missing = info ? missingConfig(info.requiredConfig, this.env) : [];
+    // The customer-facing web/control plane never needs provider credentials merely to compile, price and queue
+    // a request. When a provider is explicitly worker-backed, its separate execution deployment owns the secret.
+    // Workers do not set this flag, so their registry still fails closed unless the real credential is present.
+    // absent list (e.g. a hand-built config) = nothing is worker-backed: the strict credential check applies
+    const workerBacked = (this.config.workerBackedProviders ?? []).includes(model.provider);
+    const missing = info && !workerBacked ? missingConfig(info.requiredConfig, this.env) : [];
     const paidGenerationEnabled = !this.billsMoney(model) || this.config.paid.enabled;
     return {
       provider: model.provider,
@@ -108,11 +120,20 @@ export function createRegistry(
   env: Record<string, string | undefined> = process.env,
   config: GenerationConfig = readGenerationConfig(env),
 ): ModelRegistry {
+  // Phase 5A.2: customer-facing environments never offer the failure-simulation fixtures.
+  const environment = (env.NEXT_PUBLIC_PRISM_STUDIO_ENVIRONMENT ?? "").trim();
+  const customerFacing = environment === "production" || environment === "rehearsal";
   const adapters: GenerationProviderAdapter[] = [
-    new MockProvider({ stageDelayMs: config.mock.stageDelayMs }),
+    new MockProvider({ stageDelayMs: config.mock.stageDelayMs, failureSimulations: !customerFacing }),
   ];
   // Real adapters: registered always (so their availability and blockers are visible), enabled per deployment
   // through PRISM_STUDIO_GENERATION_PROVIDERS and configured through their own credentials.
   adapters.push(new RunwayProvider({ env }));
+  // Phase 5B-I2: GPT Image directly through OpenAI (the worker owns its key; the SDK loads lazily on first call)
+  adapters.push(new OpenAIImageProvider({ env }));
+  // Phase 5B-I3: background removal inside the worker (local, free, deterministic; never a generative redraw)
+  adapters.push(new PrismMattingProvider());
+  // Phase 5B-I3b: hosted, paid matting; only on an explicit High Quality Removal (the worker owns its key)
+  adapters.push(new PhotoroomProvider({ env }));
   return new ModelRegistry(adapters, config, env);
 }

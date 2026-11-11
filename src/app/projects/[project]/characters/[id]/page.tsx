@@ -20,6 +20,9 @@ import {
 import { createCharacterContinuityLock } from "@/server/character-continuity-actions";
 import { requireProject } from "@/server/repo";
 import { ActionForm } from "@/components/action-form";
+import { SubjectImagePanel } from "@/components/images/subject-image-panel";
+import { VisualBiblePanel } from "@/components/images/visual-bible-panel";
+import { subjectImageState } from "@/server/subject-images";
 
 const join = (xs: string[]) => xs.join("\n");
 
@@ -49,6 +52,8 @@ export default async function CharacterPage({
   const assetsById = new Map(data.assets.map((a) => [a.id, a]));
   const identityLocked = refs.length > 0 && refs.every((r) => r.locked);
   const hidden = <input type="hidden" name="projectSlug" value={slug} />;
+  // Phase 5B-I1: this Character's generated images (its own subject attempts; never Shot history)
+  const images = await subjectImageState({ kind: "character", characterId: c.id }, data);
 
   return (
     <div>
@@ -62,6 +67,25 @@ export default async function CharacterPage({
         }
       />
       <div className="grid gap-4 p-6 xl:grid-cols-2">
+        <div className="xl:col-span-2">
+          <VisualBiblePanel
+            data={data}
+            characterId={c.id}
+            slug={slug}
+            sources={images.sources}
+            models={images.models}
+          />
+        </div>
+        <div className="xl:col-span-2">
+          <SubjectImagePanel
+            projectSlug={slug}
+            subject={{ kind: "character", id: c.id, looks: looks.map((l) => ({ id: l.id, name: l.name })) }}
+            attempts={images.attempts}
+            models={images.models}
+            sources={images.sources}
+            hostedMatting={images.hostedMatting}
+          />
+        </div>
         <Panel title="Character">
           <ActionForm action={saveCharacter} className="space-y-3">
             {hidden}

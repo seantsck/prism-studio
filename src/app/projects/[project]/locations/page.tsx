@@ -6,6 +6,9 @@ import { requireProject } from "@/server/repo";
 import { ActionForm } from "@/components/action-form";
 import { LocationViewCard, LocationViewSpecFields } from "@/components/location-views/location-view-ui";
 import { checkLocationViewImage } from "@/domain/location-view";
+import { SubjectImagePanel } from "@/components/images/subject-image-panel";
+import { LocationVisualBiblePanel } from "@/components/images/location-visual-bible-panel";
+import { subjectImageState } from "@/server/subject-images";
 
 export default async function LocationsPage({ params }: { params: Promise<{ project: string }> }) {
   const { project: slug } = await params;
@@ -18,6 +21,14 @@ export default async function LocationsPage({ params }: { params: Promise<{ proj
     (data.locationViews ?? [])
       .filter((v) => v.locationId === locationId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // Phase 5B-I1: each Location's generated images (its own subject attempts)
+  const images = new Map(
+    await Promise.all(
+      data.locations.map(
+        async (l) => [l.id, await subjectImageState({ kind: "location", locationId: l.id }, data)] as const,
+      ),
+    ),
+  );
 
   return (
     <div>
@@ -42,6 +53,17 @@ export default async function LocationsPage({ params }: { params: Promise<{ proj
               ) : null}
             </summary>
             <div className="border-t border-line p-4">
+              {l ? (
+                <div className="mb-4">
+                  <LocationVisualBiblePanel
+                    data={data}
+                    locationId={l.id}
+                    slug={slug}
+                    sources={images.get(l.id)?.sources ?? []}
+                    models={images.get(l.id)?.models ?? []}
+                  />
+                </div>
+              ) : null}
               <ActionForm action={saveLocation} className="grid max-w-4xl grid-cols-2 gap-3">
                 {hidden}
                 {l ? <input type="hidden" name="id" value={l.id} /> : null}
@@ -194,6 +216,17 @@ export default async function LocationsPage({ params }: { params: Promise<{ proj
                     ) : null}
                   </div>
                 </Panel>
+              ) : null}
+              {l ? (
+                <div className="mt-4 max-w-4xl" data-testid={`location-images-${l.id}`}>
+                  <SubjectImagePanel
+                    projectSlug={slug}
+                    subject={{ kind: "location", id: l.id }}
+                    attempts={images.get(l.id)?.attempts ?? []}
+                    models={images.get(l.id)?.models ?? []}
+                    sources={images.get(l.id)?.sources ?? []}
+                  />
+                </div>
               ) : null}
               {l ? (
                 <Panel title="3D Set" className="mt-4 max-w-4xl">

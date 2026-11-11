@@ -11,6 +11,7 @@ import {
 } from "@/components/views/episode-edit-model";
 import { loadEditMediaFacts } from "./episode-edit-media";
 import { getEpisodeEditRepo } from "./episode-edits";
+import { getEpisodeRenderRepo } from "./episode-renders";
 
 export type EpisodeEditPage = ProposalPageVM | EditPageVM | { state: "error"; message: string };
 
@@ -22,12 +23,20 @@ export type EpisodeEditPage = ProposalPageVM | EditPageVM | { state: "error"; me
  */
 export async function loadEpisodeEditPage(data: ProjectData, episodeId: string): Promise<EpisodeEditPage> {
   try {
-    const edit = await (await getEpisodeEditRepo()).getForEpisode(data.project.id, episodeId);
+    const repo = await getEpisodeEditRepo();
+    const edit = await repo.getForEpisode(data.project.id, episodeId);
     const pinnedAttempts = (edit?.items ?? []).flatMap((i) =>
       i.visual.kind === "video" ? [i.visual.attemptId] : [],
     );
     const media = await loadEditMediaFacts(data, episodeId, pinnedAttempts);
-    if (edit) return editPage(data, edit, media);
+    if (edit)
+      return editPage(
+        data,
+        edit,
+        media,
+        await repo.listRevisions(data.project.id, edit.id),
+        await (await getEpisodeRenderRepo()).listForEpisode(data.project.id, episodeId),
+      );
     return proposalPage(data, proposeEpisodeAssembly(data, episodeId, media), media);
   } catch (err) {
     if (err instanceof EpisodeEditError) return { state: "error", message: err.message };

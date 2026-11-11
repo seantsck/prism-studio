@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ShotPrepView } from "@/components/views/shot-prep-view";
 import { audioMixFingerprint } from "@/domain/previs/audio-mix";
@@ -7,6 +8,8 @@ import { masterFramePromotionState } from "@/domain/previs/spatial-status";
 import { currentSpatialStateFor } from "@/server/master-frame-promotion";
 import { getPrevisRepo } from "@/server/previs";
 import { requireProject } from "@/server/repo";
+import { StoryChangedNotice } from "@/components/writing/story-changed-notice";
+import { openStoryChangeFor } from "@/server/story";
 
 export default async function ShotPrepPage({
   params,
@@ -62,34 +65,57 @@ export default async function ShotPrepPage({
         { locationId: sceneNow!.locationId },
       )
     : null;
+  // Phase 5B-S2: an accepted screenplay change touched this Shot's Scene (a database without 0055 has none)
+  const sceneOfShot = data.scenes.find((x) => x.id === shotNow?.sceneId) ?? null;
+  const storyChanged = sceneOfShot ? await openStoryChangeFor(data.project.id, sceneOfShot.id) : false;
   return (
-    <ShotPrepView
-      data={data}
-      episode={episode}
-      shotId={shotId}
-      openSection={section}
-      masterFrames={masterFrames}
-      previs={{
-        pathFingerprint: path?.pathFingerprint ?? null,
-        pathRevision: path?.revision ?? null,
-        keyframeCount: path?.path.keyframes.length ?? 0,
-        durationMs: path?.durationMs ?? null,
-        currentAudioMixFingerprint: plan ? audioMixFingerprint(plan) : null,
-        currentBlockingFingerprint,
-        clips: clips.map((c) => ({
-          id: c.id,
-          assetId: c.assetId,
-          pathRevision: c.pathRevision,
-          pathFingerprint: c.pathFingerprint,
-          sceneFingerprint: c.sceneFingerprint,
-          renderedAt: c.renderedAt,
-          container: c.container,
-          codec: c.codec,
-          hasAudio: c.hasAudio,
-          audioMixFingerprint: c.audioMixFingerprint,
-          blockingFingerprint: c.blockingFingerprint,
-        })),
-      }}
-    />
+    <>
+      {/* Phase 5B-S5: storyboard direction for this Shot (proposal → review → Apply Direction) */}
+      <div className="mx-6 mt-3 flex items-center justify-end gap-2 text-[12px]">
+        <Link
+          href={`/projects/${slug}/episodes/${episode.slug}/shots/${shotId}/direct`}
+          className="rounded-[3px] border border-line2 px-2 py-0.5 text-accent hover:bg-panel2"
+          data-testid="direct-with-prism"
+        >
+          Direct with Prism →
+        </Link>
+      </div>
+      {storyChanged && sceneOfShot ? (
+        <StoryChangedNotice
+          slug={slug}
+          episodeSlug={episode.slug}
+          sceneId={sceneOfShot.id}
+          sceneLabel={`Scene ${sceneOfShot.sceneNumber}`}
+        />
+      ) : null}
+      <ShotPrepView
+        data={data}
+        episode={episode}
+        shotId={shotId}
+        openSection={section}
+        masterFrames={masterFrames}
+        previs={{
+          pathFingerprint: path?.pathFingerprint ?? null,
+          pathRevision: path?.revision ?? null,
+          keyframeCount: path?.path.keyframes.length ?? 0,
+          durationMs: path?.durationMs ?? null,
+          currentAudioMixFingerprint: plan ? audioMixFingerprint(plan) : null,
+          currentBlockingFingerprint,
+          clips: clips.map((c) => ({
+            id: c.id,
+            assetId: c.assetId,
+            pathRevision: c.pathRevision,
+            pathFingerprint: c.pathFingerprint,
+            sceneFingerprint: c.sceneFingerprint,
+            renderedAt: c.renderedAt,
+            container: c.container,
+            codec: c.codec,
+            hasAudio: c.hasAudio,
+            audioMixFingerprint: c.audioMixFingerprint,
+            blockingFingerprint: c.blockingFingerprint,
+          })),
+        }}
+      />
+    </>
   );
 }

@@ -56,7 +56,24 @@ export interface CompatibilityInput {
   assetId: string | null;
   role: ReferenceRole | null;
   used: boolean;
+  /** Phase 5B-I6: a Production Frame reference's tier (see `ReferenceTier`). Absent for every other purpose. */
+  tier?: ReferenceTier;
 }
+
+/**
+ * Phase 5B-I6: how a Production Frame reference is treated at the model's reference limit.
+ *   essential  never dropped to fit: each Character's identity (its designated canonical identity, else its first
+ *              identity image; with a Continuity Lock, the Lock's first frozen identity image), each Character's
+ *              selected Look (its first image) and the Shot's selected Location View. If the essentials alone do not
+ *              fit, generation is REFUSED.
+ *   optional   everything Prism adds automatically (the Shot's current Production Frame / approved Storyboard, other
+ *              identity and Look images, the Location Visual Bible, generic Location references): left out lowest
+ *              priority first, and every omission is named.
+ *   frozen     a Character Continuity Lock's other frozen images (2G.4): never dropped and never reordered.
+ *   explicit   what the creator attached by hand (Shot references, the lighting reference): never dropped; over the
+ *              limit they keep the existing "Reduce references in Shot Prep" refusal.
+ */
+export type ReferenceTier = "essential" | "frozen" | "optional" | "explicit";
 
 export interface CompatibilityReport {
   provider: string;
@@ -123,6 +140,12 @@ interface Candidate {
   assetId: string;
   role: ReferenceRole;
   label: string;
+  /**
+   * Phase 5B-I5: an AUTOMATIC Location Visual Bible image (canonical location, establishing view, plate, variant).
+   * When the model's reference limit is exceeded these are left out first (lowest priority first) and disclosed;
+   * every other reference keeps the existing hard limit.
+   */
+  supplement?: true;
 }
 
 interface CharacterImage {
@@ -166,12 +189,17 @@ export function characterImages(
 export function deriveReferenceCandidates(pkg: GenerationPackage): Candidate[] {
   const out: Candidate[] = [];
   const seen = new Set<string>();
-  const push = (assetId: string | null | undefined, role: ReferenceRole, label: string) => {
+  const push = (
+    assetId: string | null | undefined,
+    role: ReferenceRole,
+    label: string,
+    supplement = false,
+  ) => {
     if (!assetId || seen.has(assetId)) return;
     const a = pkg.assets[assetId];
     if (!a || (a.type !== "image" && a.type !== "reference")) return;
     seen.add(assetId);
-    out.push({ assetId, role, label });
+    out.push({ assetId, role, label, ...(supplement ? { supplement: true as const } : {}) });
   };
   const { startFrameAssetId, endFrameAssetId } = pkg.references;
   if (startFrameAssetId) seen.add(startFrameAssetId);
@@ -180,11 +208,21 @@ export function deriveReferenceCandidates(pkg: GenerationPackage): Candidate[] {
   const view = pkg.references.locationView;
   for (const c of pkg.characters) {
     const images = characterImages(pkg, c);
+    // Phase 5B-I4: a designated canonical identity leads, then the selected Look, then the other identity images.
+    // Without one the order is unchanged (identity, then Look).
+    const canonical = c.continuityLock ? undefined : c.canonicalIdentityAssetId;
+    if (canonical && canonical !== view?.assetId) push(canonical, "identity", `${c.name} canonical identity`);
+    if (canonical)
+      for (const i of images.look)
+        if (i.assetId !== view?.assetId) push(i.assetId, "character_look", i.label);
     for (const i of images.identity) if (i.assetId !== view?.assetId) push(i.assetId, "identity", i.label);
     for (const i of images.look) if (i.assetId !== view?.assetId) push(i.assetId, "character_look", i.label);
   }
   // v4: the Shot's canonical Location View before the Location's generic reference photos
   if (view) push(view.assetId, "location_view", locationViewLabel(view.name));
+  // Phase 5B-I5: the Location Visual Bible (canonical location, establishing, plates, relevant variants) after the view
+  for (const r of pkg.set?.visualReferences ?? [])
+    if (r.assetId !== view?.assetId) push(r.assetId, "location", r.label, true);
   for (const id of pkg.set?.referenceAssetIds ?? [])
     push(id, "location", `${pkg.set?.name ?? "Set"} reference`);
   push(pkg.lighting.referenceAssetId, "style", "Lighting reference");
@@ -203,10 +241,60 @@ const hasStoredFile = (pkg: GenerationPackage, assetId: string): boolean => {
 export const locationViewLabel = (name: string) => `Canonical Location View "${name}"`;
 
 /**
+ * Phase 5B-I6: the essential Production Frame images, by asset (only those with a stored file count). Per Character in
+ * assignment order: its identity (designated canonical identity; else its first identity image; with a Continuity Lock
+ * the Lock's first frozen identity image) and its selected Look's first image. Then the selected Location View.
+ */
+export function productionFrameEssentialAssetIds(pkg: GenerationPackage): Set<string> {
+  const out = new Set<string>();
+  const add = (id: string | null | undefined) => {
+    if (id && hasStoredFile(pkg, id)) out.add(id);
+  };
+  for (const c of pkg.characters) {
+    const images = characterImages(pkg, c);
+    const canonical = c.continuityLock ? undefined : c.canonicalIdentityAssetId;
+    add(
+      canonical && hasStoredFile(pkg, canonical)
+        ? canonical
+        : images.identity.find((i) => hasStoredFile(pkg, i.assetId))?.assetId,
+    );
+    add(images.look.find((i) => hasStoredFile(pkg, i.assetId))?.assetId);
+  }
+  add(pkg.references.locationView?.assetId);
+  return out;
+}
+
+/** Phase 5B-I6: each Production Frame reference's tier, by asset (see ReferenceTier). */
+export function productionFrameReferenceTiers(pkg: GenerationPackage): Map<string, ReferenceTier> {
+  const essential = productionFrameEssentialAssetIds(pkg);
+  const frozen = new Set(
+    (pkg.references.characterContinuity ?? []).flatMap((l) => l.references.map((r) => r.assetId)),
+  );
+  const explicit = new Set(
+    [pkg.lighting.referenceAssetId, ...pkg.references.referenceAssetIds].filter((x): x is string => !!x),
+  );
+  return new Map(
+    deriveProductionFrameReferenceCandidates(pkg).map((c) => [
+      c.assetId,
+      essential.has(c.assetId)
+        ? "essential"
+        : frozen.has(c.assetId)
+          ? "frozen"
+          : explicit.has(c.assetId)
+            ? "explicit"
+            : "optional",
+    ]),
+  );
+}
+
+/**
  * Deterministic reference priority for `production_frame` image generation (Phase 2G.2, extended in 2G.3 and 2G.4),
  * deduplicated by asset:
  *   1 selected Production Frame · 2 approved Storyboard · 3 Character identity · 4 Character Look ·
  *   5 selected Location View · 6 generic Location references · 7 lighting · 8 explicit Shot references.
+ * 5B-I4: a Character's designated canonical identity leads its images, then its selected Look, then its other identity
+ * images (unchanged without one). 5B-I5: the Location's Visual Bible (canonical location, establishing views, plates,
+ * relevant variants) follows the selected Location View, before the generic Location references.
  * Characters in Shot assignment order; identity before Look. A Character with a selected Continuity Lock contributes
  * ONLY the Lock's frozen images (identity in slot order, then Look in frozen order); one without, its live images.
  * An image is sent ONCE, under its most specific role: the Shot's own pictures (Production Frame, Storyboard) outrank
@@ -217,20 +305,40 @@ export const locationViewLabel = (name: string) => `Canonical Location View "${n
 export function deriveProductionFrameReferenceCandidates(pkg: GenerationPackage): Candidate[] {
   const out: Candidate[] = [];
   const seen = new Set<string>();
-  const push = (assetId: string | null | undefined, role: ReferenceRole, label: string) => {
+  const push = (
+    assetId: string | null | undefined,
+    role: ReferenceRole,
+    label: string,
+    supplement = false,
+  ) => {
     if (!assetId || seen.has(assetId) || !hasStoredFile(pkg, assetId)) return;
     seen.add(assetId);
-    out.push({ assetId, role, label });
+    out.push({ assetId, role, label, ...(supplement ? { supplement: true as const } : {}) });
   };
   const view = pkg.references.locationView;
   push(pkg.references.productionFrame?.assetId, "production_frame", "Current Production Frame");
   push(pkg.references.approvedStoryboardFrame?.assetId, "storyboard", "Approved storyboard frame");
-  const images = pkg.characters.map((c) => characterImages(pkg, c));
+  const images = pkg.characters.map((c) => ({
+    c,
+    ...characterImages(pkg, c),
+    // Phase 5B-I4/I5: a designated canonical identity leads (never with a Continuity Lock: the Lock is frozen)
+    canonical: c.continuityLock ? undefined : c.canonicalIdentityAssetId,
+  }));
+  for (const c of images)
+    if (c.canonical && c.canonical !== view?.assetId)
+      push(c.canonical, "identity", `${c.c.name} canonical identity`);
+  // with a canonical identity, the selected Look comes next, then the other identity images
+  for (const c of images)
+    if (c.canonical)
+      for (const i of c.look) if (i.assetId !== view?.assetId) push(i.assetId, "character_look", i.label);
   for (const c of images)
     for (const i of c.identity) if (i.assetId !== view?.assetId) push(i.assetId, "identity", i.label);
   for (const c of images)
     for (const i of c.look) if (i.assetId !== view?.assetId) push(i.assetId, "character_look", i.label);
   if (view) push(view.assetId, "location_view", locationViewLabel(view.name));
+  // Phase 5B-I5: then the Location Visual Bible (canonical location, establishing, plates, relevant variants)
+  for (const r of pkg.set?.visualReferences ?? [])
+    if (r.assetId !== view?.assetId) push(r.assetId, "location", r.label, true);
   for (const id of pkg.set?.referenceAssetIds ?? [])
     push(id, "location", `${pkg.set?.name ?? "Set"} reference`);
   push(pkg.lighting.referenceAssetId, "style", "Lighting reference");
@@ -272,13 +380,16 @@ function chooseModality(
   return order.find((m) => supported.has(m)) ?? null;
 }
 
-function describeSupportedDurations(v: NonNullable<GenerationModel["capabilities"]["video"]>): string {
+export function describeSupportedDurations(v: NonNullable<GenerationModel["capabilities"]["video"]>): string {
   if (v.allowedDurationsMs?.length) return v.allowedDurationsMs.map(seconds).join(", ");
   const step = v.durationStepMs ? ` in ${seconds(v.durationStepMs)} steps` : "";
   return `${seconds(v.minDurationMs)}–${seconds(v.maxDurationMs)}${step}`;
 }
 
-function durationSupported(v: NonNullable<GenerationModel["capabilities"]["video"]>, ms: number): boolean {
+export function durationSupported(
+  v: NonNullable<GenerationModel["capabilities"]["video"]>,
+  ms: number,
+): boolean {
   if (v.allowedDurationsMs?.length) return v.allowedDurationsMs.includes(ms);
   if (ms < v.minDurationMs || ms > v.maxDurationMs) return false;
   return v.durationStepMs ? (ms - v.minDurationMs) % v.durationStepMs === 0 : true;
@@ -382,6 +493,7 @@ export function evaluateCompatibility(
       aspectRatios: ratios,
       requestedResolution: resolution,
       maxResolution: max ?? null,
+      providerCanvases: video ? (caps.video?.providerCanvases ?? null) : null,
       duration:
         video && caps.video
           ? {
@@ -593,6 +705,8 @@ export function evaluateCompatibility(
     return true;
   };
   const droppedByRole = new Map<string, Candidate[]>();
+  const supplements = new Set(candidates.filter((c) => c.supplement).map((c) => c.assetId));
+  const pfTiers = pfPurpose ? productionFrameReferenceTiers(pkg) : null;
   for (const c of candidates) {
     if (roleSupported(c.role))
       accepted.push({ assetId: c.assetId, role: c.role, order: accepted.length, label: c.label });
@@ -603,6 +717,7 @@ export function evaluateCompatibility(
       assetId: c.assetId,
       role: c.role,
       used: roleSupported(c.role),
+      ...(pfTiers?.has(c.assetId) ? { tier: pfTiers.get(c.assetId)! } : {}),
     });
   }
   if (exclusive && !referenceMode && (startUsed || endUsed) && accepted.length > 0) {
@@ -652,7 +767,66 @@ export function evaluateCompatibility(
         : "This model does not accept reference images; none of the references will influence the result.",
     });
   }
-  if (accepted.length > caps.references.maxReferences) {
+  // Phase 5B-I5: automatic Location Visual Bible images never push a Shot over the model's limit. The lowest-priority
+  // ones are left out first and disclosed (an ignored feature the creator acknowledges); nothing is dropped silently,
+  // and every other reference keeps the hard limit below.
+  const refLimit = caps.references.maxReferences;
+  const tierOf = pfTiers ?? new Map<string, ReferenceTier>();
+  const over = accepted.length - refLimit;
+  if (pfPurpose && over > 0) {
+    // Phase 5B-I6: Production Frames. Optional automatic references are left out lowest priority first (the reverse of
+    // the send order) and named; essential and explicit references are never dropped to fit.
+    const drop = new Set(
+      accepted
+        .filter((r) => tierOf.get(r.assetId) === "optional")
+        .slice(-over)
+        .map((r) => r.assetId),
+    );
+    if (drop.size > 0) {
+      const kept = accepted.filter((r) => !drop.has(r.assetId)).map((r, order) => ({ ...r, order }));
+      accepted.length = 0;
+      accepted.push(...kept);
+      for (const i of inputs) if (i.kind === "reference" && i.assetId && drop.has(i.assetId)) i.used = false;
+      const labels = candidates.filter((c) => drop.has(c.assetId)).map((c) => c.label);
+      ignored.push({
+        id: "references.optional_trimmed",
+        feature: "references",
+        label: `${drop.size} optional reference${drop.size === 1 ? "" : "s"} not sent`,
+        impact: `${model.displayName} accepts at most ${refLimit} references, so these lower-priority images are NOT sent: ${labels.join("; ")}.`,
+      });
+    }
+    const essentials = accepted.filter((r) => tierOf.get(r.assetId) === "essential").length;
+    if (essentials > refLimit)
+      errors.push({
+        id: "references.too_many",
+        feature: "references",
+        message: essentialOverflowMessage(refLimit, essentials),
+      });
+  } else if (over > 0 && supplements.size > 0) {
+    const drop = accepted
+      .filter((r) => supplements.has(r.assetId))
+      .slice(-over)
+      .map((r) => r.assetId);
+    if (drop.length > 0) {
+      const dropped = new Set(drop);
+      const kept = accepted.filter((r) => !dropped.has(r.assetId)).map((r, order) => ({ ...r, order }));
+      accepted.length = 0;
+      accepted.push(...kept);
+      for (const i of inputs)
+        if (i.kind === "reference" && i.assetId && dropped.has(i.assetId)) i.used = false;
+      const labels = candidates.filter((c) => dropped.has(c.assetId)).map((c) => c.label);
+      ignored.push({
+        id: "references.location_visual_bible_limit",
+        feature: "references",
+        label: `${drop.length} Location Visual Bible reference${drop.length === 1 ? "" : "s"}`,
+        impact: `${model.displayName} accepts at most ${caps.references.maxReferences} references, so these lower-priority Location images are NOT sent: ${labels.join("; ")}.`,
+      });
+    }
+  }
+  if (
+    accepted.length > caps.references.maxReferences &&
+    !errors.some((e) => e.id === "references.too_many")
+  ) {
     errors.push({
       id: "references.too_many",
       feature: "references",
@@ -753,3 +927,7 @@ export function evaluateCompatibility(
 
 /** Ids of every modality, exposed for UI selects. */
 export const ALL_MODALITIES = GENERATION_MODALITIES;
+
+/** Phase 5B-I6: the refusal when a Shot's essential references alone exceed the model's limit. */
+export const essentialOverflowMessage = (max: number, essentials: number) =>
+  `This model supports ${max} reference${max === 1 ? "" : "s"}, but this Shot requires ${essentials} essential reference${essentials === 1 ? "" : "s"}.`;

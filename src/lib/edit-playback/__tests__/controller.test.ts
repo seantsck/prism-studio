@@ -377,3 +377,64 @@ describe("rough-cut controller (one master clock)", () => {
     expect(c.snapshot()).toMatchObject({ playing: false, timeMs: 0, ended: true });
   });
 });
+
+describe("5B-V3: cross dissolve and title cards in the controller", () => {
+  it("under a dissolve the outgoing clip plays (muted) on the under element while the incoming one mixes in", () => {
+    const v3: EpisodeEdit = {
+      ...edit,
+      titles: [
+        {
+          id: "00000000-0000-4000-8000-000000000001",
+          placement: "opening",
+          title: "お嬢様、僕と結婚してください。",
+          subtitle: "Episode 1 — The Arrangement",
+          durationMs: 1000,
+          style: "film",
+        },
+      ],
+      items: [
+        { ...edit.items[0]! },
+        {
+          ...edit.items[3]!,
+          incomingTransition: { kind: "dissolve", durationMs: 500, fromItemId: "A" },
+        },
+      ],
+    };
+    const p = buildPlaybackPlan(v3, media);
+    // title 0–1000, A 1000–3000, D 2500–3500 (dissolve 500 ms overlaps A's last 500 ms)
+    expect(p.totalMs).toBe(3500);
+    const under = new FakePort();
+    const main = new FakePort();
+    let snap: PlaybackSnapshot | null = null;
+    const c = new RoughCutController(
+      p,
+      {
+        now: () => 0,
+        requestFrame: () => 0,
+        cancelFrame: () => undefined,
+        video: main,
+        under,
+        createAudio: () => new FakePort(),
+      },
+      (s) => {
+        snap = s;
+      },
+    );
+    c.seek(500);
+    expect(snap!.title?.title).toBe("お嬢様、僕と結婚してください。");
+    expect(snap!.item).toBeNull();
+    c.seek(2750); // halfway through the dissolve
+    expect(snap!.item?.itemId).toBe("D");
+    expect(snap!.outgoing?.itemId).toBe("A");
+    expect(snap!.mix).toBeCloseTo(0.5);
+    expect(main.url).toBe("/api/assets/vD");
+    expect(under.url).toBe("/api/assets/vA");
+    expect(under.muted).toBe(true);
+    expect(under.t).toBe(500 + 1750); // A's source at its timeline position
+    c.seek(3200); // after the dissolve: the under element is released
+    expect(snap!.outgoing).toBeNull();
+    expect(snap!.mix).toBe(1);
+    expect(under.playing).toBe(false);
+    c.dispose();
+  });
+});

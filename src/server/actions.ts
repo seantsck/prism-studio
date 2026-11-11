@@ -14,7 +14,6 @@ import {
   VOLUMES,
   TAKE_SOURCES,
   ASSET_PURPOSES,
-  actionBlockSchema,
   assetSchema,
   bibleSchema,
   characterSchema,
@@ -35,15 +34,17 @@ import {
   type IDENTITY_SLOTS,
   type Shot,
 } from "@/domain/schemas";
-import { parseScreenplay, syncScript } from "@/domain/script";
 import { emptyShot } from "@/domain/shot-defaults";
 import { SHOT_SECTION_SPECS, applySection } from "@/domain/shot-fields";
 import { validateLookLink } from "@/domain/looks";
 import { nextTakeNumber, selectTake as selectTakeDomain } from "@/domain/takes";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
+import { getGenerationRepo } from "./generation";
 import { getMediaQaRepo } from "./media-qa";
 import { getPrevisRepo } from "./previs";
 import { getRepo, requireProjectFresh } from "./repo";
+import { recordCreatorEdit, syncEpisodeScript } from "./script-sync";
+import { getStoryRepo } from "./story";
 import { discardUpload, hasFile, ingestUpload } from "./ingest-upload";
 
 // ───────────────────────── helpers ─────────────────────────
@@ -376,6 +377,7 @@ async function saveLocation_impl(form: FormData) {
     referenceAssetIds: existing?.referenceAssetIds ?? [],
     locked: false,
     set3d: existing?.set3d ?? null,
+    ...(existing?.visualBible ? { visualBible: existing.visualBible } : {}),
   });
   await repo.upsert(data.project.id, "locations", location);
   refresh(slug);
@@ -411,120 +413,17 @@ async function createEpisode_impl(form: FormData) {
   redirect(`/projects/${slug}/episodes/${episode.slug}/script`);
 }
 
-/** Parse the script and reconcile it with stored scenes/lines, preserving IDs and locked dialogue. */
+/**
+ * Parse the script and reconcile it with stored scenes/lines, preserving IDs and locked dialogue. Phase 5B-S2: the
+ * change is first recorded as an immutable script revision ("Creator edit"), so the previous text stays recoverable.
+ */
 async function saveScript_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const episode = data.episodes.find((e) => e.id === str(form, "episodeId"));
   if (!episode) throw new UserFacingError("Episode not found");
   const text = String(form.get("scriptText") ?? "");
-  const parsed = parseScreenplay(text);
-  const epScenes = data.scenes.filter((s) => s.episodeId === episode.id);
-  const epLines = data.dialogueLines.filter((l) => l.episodeId === episode.id);
-  const nameOf = (l: (typeof epLines)[number]) =>
-    l.characterId
-      ? (data.characters.find((c) => c.id === l.characterId)?.name.toUpperCase() ?? l.speakerLabel)
-      : l.speakerLabel;
-  const epActions = data.actionBlocks.filter((a) => a.episodeId === episode.id);
-  const sync = syncScript(parsed, epScenes, epLines, nameOf, epActions);
-
-  const characterByCue = new Map(data.characters.map((c) => [c.name.toUpperCase(), c.id]));
-  const locationByName = (name: string) =>
-    data.locations.find((l) => l.name.toLowerCase() === name.toLowerCase())?.id ?? null;
-  let lineOrder = 0;
-
-  for (const [index, s] of sync.scenes.entries()) {
-    const prev = epScenes.find((x) => x.id === s.existingId);
-    const scene = sceneSchema.parse({
-      id: prev?.id ?? randomUUID(),
-      projectId: data.project.id,
-      episodeId: episode.id,
-      sceneNumber: prev?.sceneNumber ?? String(index + 1),
-      slugline: s.parsed.slugline,
-      intExt: s.parsed.intExt,
-      locationId: locationByName(s.parsed.location) ?? prev?.locationId ?? null,
-      timeOfDay: s.parsed.timeOfDay,
-      summary: prev?.summary ?? "",
-      dramaticPurpose: prev?.dramaticPurpose ?? "",
-      emotionEntering: prev?.emotionEntering ?? "",
-      emotionLeaving: prev?.emotionLeaving ?? "",
-      scriptRange: { startLine: s.parsed.startLine, endLine: s.parsed.endLine },
-      characterIds: prev?.characterIds ?? [],
-      propIds: prev?.propIds ?? [],
-      continuityNotes: prev?.continuityNotes ?? "",
-      order: index,
-    });
-    await repo.upsert(data.project.id, "scenes", scene);
-
-    for (const l of s.lines) {
-      const prevLine = epLines.find((x) => x.id === l.existingId);
-      const characterId = characterByCue.get(l.parsed.speaker.toUpperCase()) ?? null;
-      const line = dialogueLineSchema.parse({
-        id: prevLine?.id ?? randomUUID(),
-        projectId: data.project.id,
-        episodeId: episode.id,
-        sceneId: scene.id,
-        characterId,
-        speakerLabel: l.parsed.speaker.toUpperCase(),
-        // Locked dialogue is never rewritten by a script edit.
-        originalText: prevLine?.locked ? prevLine.originalText : l.parsed.text,
-        language: prevLine?.language ?? data.project.defaultLanguage,
-        translation: prevLine?.translation ?? null,
-        pronunciationNotes: prevLine?.pronunciationNotes ?? "",
-        dramaticContext: prevLine?.dramaticContext ?? "",
-        subtext: prevLine?.subtext ?? "",
-        locked: prevLine?.locked ?? false,
-        order: lineOrder++,
-        sourceStartLine: l.parsed.line,
-        sourceEndLine: l.parsed.endLine,
-      });
-      await repo.upsert(data.project.id, "dialogueLines", line);
-    }
-
-    // Action paragraphs get stable ids too, so shots can reference them and coverage can be computed.
-    for (const [order, a] of s.actions.entries()) {
-      await repo.upsert(
-        data.project.id,
-        "actionBlocks",
-        actionBlockSchema.parse({
-          id: a.existingId ?? randomUUID(),
-          projectId: data.project.id,
-          episodeId: episode.id,
-          sceneId: scene.id,
-          text: a.parsed.text,
-          order,
-          startLine: a.parsed.line,
-          endLine: a.parsed.endLine,
-        }),
-      );
-    }
-  }
-
-  // Blocks that vanished from the script: unlink them from shots first, so no shot points at nothing.
-  for (const id of sync.removedActionIds) {
-    for (const shot of data.shots.filter((x) => x.scriptSources.actionBlockIds.includes(id))) {
-      await repo.upsert(data.project.id, "shots", {
-        ...shot,
-        scriptSources: {
-          ...shot.scriptSources,
-          actionBlockIds: shot.scriptSources.actionBlockIds.filter((x) => x !== id),
-        },
-        updatedAt: now(),
-      });
-    }
-    await repo.remove(data.project.id, "actionBlocks", id);
-  }
-
-  // Remove scenes/lines no longer in the script only when nothing downstream depends on them.
-  const usedLineIds = new Set(data.shots.flatMap((s) => s.audio.dialogueLineIds));
-  for (const id of sync.removedLineIds) {
-    const hasTakes = data.takes.some((t) => t.dialogueLineId === id);
-    if (!usedLineIds.has(id) && !hasTakes) await repo.remove(data.project.id, "dialogueLines", id);
-  }
-  for (const id of sync.removedSceneIds) {
-    if (!data.shots.some((s) => s.sceneId === id)) await repo.remove(data.project.id, "scenes", id);
-  }
-
-  await repo.upsert(data.project.id, "episodes", { ...episode, scriptText: text, updatedAt: now() });
+  await recordCreatorEdit(data, episode, text);
+  await syncEpisodeScript(data, repo, episode, text);
   refresh(slug);
 }
 
@@ -1146,9 +1045,17 @@ async function deleteAsset_impl(form: FormData) {
     );
   }
   // Derived-media lineage and QA history also pin an asset: nothing is orphaned silently.
-  const pins = await (await getMediaQaRepo()).assetPins(asset.id);
+  const pins = [
+    ...(await (await getMediaQaRepo()).assetPins(asset.id)),
+    // a Character / Location image attempt that sent this Asset as a reference (0051 compatibility gate)
+    ...(await (await getGenerationRepo()).subjectImageAssetPins(data.project.id, asset.id)),
+  ];
   if (pins.length > 0) {
     throw new UserFacingError(`This asset can't be deleted: ${pins.join("; ")}.`);
+  }
+  // Phase 5B-S1: an uploaded screenplay that a Production Proposal was made from is its immutable source
+  if (await (await getStoryRepo({ startInlineWorker: false })).usesAsset(asset.id)) {
+    throw new UserFacingError("This asset can't be deleted: it is the source of a Story proposal.");
   }
   await repo.remove(data.project.id, "assets", asset.id);
   await discardUpload(asset);

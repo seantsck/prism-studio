@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ShotImageActions } from "@/components/images/shot-image-actions";
 import { ActionForm } from "@/components/action-form";
 import { AudioPlayer } from "@/components/audio-player";
 import { FramePlaceholder, PreflightList, ReadinessBadge, ScoreBar } from "@/components/shared";
@@ -1068,6 +1069,8 @@ export function ShotPrepView({
             <div className="mb-4">
               <LocationViewSection ctx={ctx} slug={slug} />
             </div>
+            {/* Phase 5B-I1b: one-click stills through the existing Production Frame candidate workflow */}
+            <ShotImageActions data={data} shotId={shotId} slug={slug} />
             <ProductionFrameSection
               ctx={ctx}
               slug={slug}

@@ -1,5 +1,6 @@
 "use server";
 
+import { currentMediaChanges, isStoryOrder, storyOrderIds } from "@/domain/edit/sequence";
 import { revalidatePath } from "next/cache";
 import {
   EDIT_REVISION_CONFLICT_MESSAGE,
@@ -13,6 +14,10 @@ import { VIDEO_SOURCE_VIOLATION_TEXT } from "@/domain/edit/eligibility";
 import { computeShotParts } from "@/domain/fingerprint";
 import {
   itemDurationMs,
+  TITLE_PLACEMENTS,
+  TITLE_STYLES,
+  type TitlePlacement,
+  type TitleStyle,
   type AudioPlacement,
   type EditItem,
   type EpisodeEdit,
@@ -495,5 +500,195 @@ export async function clearCutIntent(form: FormData): Promise<ActionResult> {
   return runAction(
     () => mutate(form, ({ item }) => [{ op: "clear_cut_intent", itemId: item().id }], "Cut intent removed."),
     { name: "clearCutIntent" },
+  );
+}
+
+// ───────────────────────── 5B-V2 Sequence ─────────────────────────
+
+/** Reset to story order: one `reorder` into Scene order, then Shot order. Scene / Shot structure is never touched. */
+export async function resetEditToStoryOrder(form: FormData): Promise<ActionResult> {
+  return runAction(
+    () =>
+      mutate(
+        form,
+        ({ data, edit }) => {
+          if (isStoryOrder(data, edit)) throw new UserFacingError("The Sequence is already in story order.");
+          return [{ op: "reorder", itemIds: storyOrderIds(data, edit) }];
+        },
+        "Back in story order.",
+      ),
+    { name: "resetEditToStoryOrder" },
+  );
+}
+
+/**
+ * Use current Shot Clips and frames: ONE explicit revision that re-pins every item to its Shot's current selection —
+ * the selected Shot Clip (the 2I.1 `use_replacement`, re-validated by the repository), else the current canonical
+ * Production Frame for a placeholder (held for the item's duration). Older media is never edited or deleted.
+ */
+export async function useCurrentShotMedia(form: FormData): Promise<ActionResult> {
+  return runAction(
+    () =>
+      mutate(
+        form,
+        async ({ data, edit }) => {
+          const changes = currentMediaChanges(data, edit, await loadEditMediaFacts(data, edit.episodeId));
+          if (changes.length === 0)
+            throw new UserFacingError("Every item already uses its Shot's current media.");
+          return changes.map((c) =>
+            c.kind === "clip"
+              ? {
+                  op: "use_replacement" as const,
+                  itemId: c.itemId,
+                  expected: { attemptId: c.attemptId, assetId: c.assetId },
+                }
+              : { op: "set_visual" as const, itemId: c.itemId, visual: c.visual },
+          );
+        },
+        "Current Shot Clips and frames pinned.",
+      ),
+    { name: "useCurrentShotMedia" },
+  );
+}
+
+// ───────────────────────── 5B-V3 Episode editing ─────────────────────────
+
+/**
+ * The transition INTO an item: `cut` or `dissolve` (+ seconds). Carries the predecessor the person saw; the repository
+ * refuses it when another item is now before this one, and refuses a dissolve longer than its neighbours allow.
+ */
+export async function setEditItemTransition(form: FormData): Promise<ActionResult> {
+  return runAction(
+    () =>
+      mutate(
+        form,
+        ({ item }) => {
+          const kind = str(form, "transition");
+          if (kind !== "cut" && kind !== "dissolve")
+            throw new UserFacingError("Choose Cut or Cross dissolve.");
+          return [
+            {
+              op: "set_transition",
+              itemId: item().id,
+              expectedPredecessorId: str(form, "predecessorId"),
+              kind,
+              durationMs: kind === "dissolve" ? msField(form, "duration", "Dissolve duration") : undefined,
+            },
+          ];
+        },
+        "Transition applied.",
+      ),
+    { name: "setEditItemTransition" },
+  );
+}
+
+const placementField = (form: FormData): TitlePlacement => {
+  const p = str(form, "placement");
+  if (!(TITLE_PLACEMENTS as readonly string[]).includes(p))
+    throw new UserFacingError("Choose an opening or a closing title.");
+  return p as TitlePlacement;
+};
+
+/** Creates or replaces the opening / closing title card (text, duration, style). */
+export async function setEditTitle(form: FormData): Promise<ActionResult> {
+  return runAction(
+    () =>
+      mutate(
+        form,
+        () => {
+          const style = str(form, "style") || "film";
+          if (!(TITLE_STYLES as readonly string[]).includes(style))
+            throw new UserFacingError("Unknown title style.");
+          return [
+            {
+              op: "set_title",
+              placement: placementField(form),
+              title: str(form, "title"),
+              subtitle: str(form, "subtitle"),
+              durationMs: msField(form, "duration", "Title duration"),
+              style: style as TitleStyle,
+            },
+          ];
+        },
+        "Title card saved.",
+      ),
+    { name: "setEditTitle" },
+  );
+}
+
+export async function removeEditTitle(form: FormData): Promise<ActionResult> {
+  return runAction(
+    () =>
+      mutate(form, () => [{ op: "remove_title", placement: placementField(form) }], "Title card removed."),
+    { name: "removeEditTitle" },
+  );
+}
+
+/** Target of a revision action: the user's project, the edit, and the working revision the page showed. */
+async function revisionTarget(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const data = await requireProjectFresh(slug);
+  const edits = await getEpisodeEditRepo();
+  const edit = await edits.get(data.project.id, str(form, "editId"));
+  if (!edit) throw new UserFacingError("That edit no longer exists.");
+  const expectedRevision = Number(str(form, "expectedRevision"));
+  if (!Number.isSafeInteger(expectedRevision)) throw new UserFacingError("The edit revision is missing.");
+  return { slug, data, edits, edit, expectedRevision };
+}
+
+const revisionError = (slug: string, err: unknown): never => {
+  if (!(err instanceof EpisodeEditError)) throw err;
+  refresh(slug);
+  throw new UserFacingError(err.message === EDIT_REVISION_CONFLICT_MESSAGE ? REVISION_CONFLICT : err.message);
+};
+
+/** Save revision: freezes the edit's current state as the next numbered revision. The working edit is unchanged. */
+export async function saveEditRevision(form: FormData): Promise<ActionResult> {
+  return runAction(
+    async () => {
+      const { slug, data, edits, edit, expectedRevision } = await revisionTarget(form);
+      try {
+        const saved = await edits.saveRevision({
+          editId: edit.id,
+          projectId: data.project.id,
+          expectedRevision,
+          label: str(form, "label"),
+          userId: (await getRepo()).currentUserId(),
+          now: now(),
+        });
+        refresh(slug);
+        return { ok: true, message: `Saved as revision ${saved.number}.` };
+      } catch (err) {
+        return revisionError(slug, err);
+      }
+    },
+    { name: "saveEditRevision" },
+  );
+}
+
+/**
+ * Restore: the saved revision's state becomes current as a NEW working revision (and a new saved revision recording
+ * the restore). The restored revision itself is never changed; every source is re-checked.
+ */
+export async function restoreEditRevision(form: FormData): Promise<ActionResult> {
+  return runAction(
+    async () => {
+      const { slug, data, edits, edit, expectedRevision } = await revisionTarget(form);
+      try {
+        const { revision } = await edits.restoreRevision({
+          editId: edit.id,
+          projectId: data.project.id,
+          expectedRevision,
+          revisionId: str(form, "revisionId"),
+          userId: (await getRepo()).currentUserId(),
+          now: now(),
+        });
+        refresh(slug);
+        return { ok: true, message: `Restored; saved as revision ${revision.number}.` };
+      } catch (err) {
+        return revisionError(slug, err);
+      }
+    },
+    { name: "restoreEditRevision" },
   );
 }

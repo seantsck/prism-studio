@@ -3,7 +3,15 @@ import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { parseCutIntent } from "@/domain/continuity/cut-intent";
 import type { AttemptMediaFacts } from "@/domain/edit/eligibility";
-import type { AudioPlacement, EditItem, EpisodeEdit, VisualSource } from "@/domain/edit/model";
+import type {
+  AudioPlacement,
+  EditItem,
+  EditTitleCard,
+  EditTransition,
+  EpisodeEdit,
+  VisualSource,
+} from "@/domain/edit/model";
+import { editState, editStateFingerprint } from "@/domain/edit/revision";
 import type { Asset, GenerationAttempt } from "@/domain/schemas";
 import {
   addsOf,
@@ -18,11 +26,17 @@ import {
   EDIT_EXISTS_MESSAGE,
   EDIT_REVISION_CONFLICT_MESSAGE,
   EpisodeEditError,
+  REVISION_ALREADY_SAVED_MESSAGE,
+  REVISION_NOT_FOUND_MESSAGE,
   SHOT_ALREADY_IN_EDIT_MESSAGE,
   type ApplyEpisodeEditInput,
   type CreateEpisodeEditInput,
   type DeleteEpisodeEditInput,
+  type EditSnapshot,
   type EpisodeEditRepository,
+  type RestoreEditRevisionInput,
+  type SavedEditRevision,
+  type SaveEditRevisionInput,
 } from "./episode-edit-repository";
 import { COLLECTIONS, flatFromRow } from "./postgres-mapping";
 
@@ -77,6 +91,44 @@ const mapItem = (r: Row, placements: Row[]): EditItem => {
     performanceBasis: basis ? { performance: basis.performance, timing: basis.timing } : null,
     // 3A.4C: validated on read; malformed database state fails loudly instead of being dropped
     incomingCutIntent: parseCutIntent(r.incoming_cut_intent),
+    // 5B-V3: the database checks the shape (episode_edit_transition_valid)
+    incomingTransition: r.incoming_transition
+      ? {
+          kind: "dissolve",
+          durationMs: num((r.incoming_transition as EditTransition).durationMs),
+          fromItemId: String((r.incoming_transition as EditTransition).fromItemId),
+        }
+      : null,
+  };
+};
+
+const mapTitles = (v: unknown): EditTitleCard[] =>
+  ((v as EditTitleCard[] | null) ?? []).map((t) => ({
+    id: String(t.id),
+    placement: t.placement,
+    title: String(t.title),
+    subtitle: String(t.subtitle ?? ""),
+    durationMs: num(t.durationMs),
+    style: t.style,
+  }));
+
+const transitionJson = (item: EditItem) =>
+  item.incomingTransition ? JSON.stringify(item.incomingTransition) : null;
+
+const mapRevision = (r: Row): SavedEditRevision => {
+  const snap = r.snapshot as EditSnapshot;
+  return {
+    id: String(r.id),
+    editId: String(r.edit_id),
+    projectId: String(r.project_id),
+    number: num(r.number),
+    editRevision: num(r.edit_revision),
+    label: String(r.label ?? ""),
+    snapshot: { editRate: snap.editRate, items: snap.items, titles: snap.titles },
+    fingerprint: String(r.fingerprint),
+    restoredFromId: str(r.restored_from),
+    createdBy: str(r.created_by),
+    createdAt: new Date(r.created_at as string | Date).toISOString(),
   };
 };
 
@@ -183,6 +235,7 @@ export class PostgresEpisodeEditData implements EpisodeEditRepository {
       items: items.rows
         .filter((i) => String(i.edit_id) === String(r.id))
         .map((i) => mapItem(i, placements.rows)),
+      titles: mapTitles(r.titles),
     }));
   }
 
@@ -207,7 +260,10 @@ export class PostgresEpisodeEditData implements EpisodeEditRepository {
   private async loadFacts(c: PoolClient, refs: EditRefs): Promise<EditSourceFacts> {
     const rows = async (sql: string, ids: string[]) => (ids.length ? (await c.query(sql, [ids])).rows : []);
     const attemptRows = [
-      ...(await rows("select * from generation_attempts where id = any($1::uuid[])", refs.attemptIds)),
+      ...(await rows(
+        "select * from generation_attempts where id = any($1::uuid[]) and shot_id is not null",
+        refs.attemptIds,
+      )),
       ...(await rows(
         "select * from generation_attempts where shot_id = any($1::uuid[]) and approved for share",
         refs.replacementShotIds,
@@ -323,8 +379,9 @@ export class PostgresEpisodeEditData implements EpisodeEditRepository {
       `insert into episode_edit_items
          (id, project_id, edit_id, episode_id, shot_id, position, visual_kind, attempt_id, asset_id, source_in_ms,
           source_out_ms, production_frame_id, storyboard_frame_id, duration_ms, performance_basis, source_audio,
-          placed_by, placed_at, incoming_cut_intent)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb)`,
+          placed_by, placed_at, incoming_cut_intent, incoming_transition)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb,
+               $20::jsonb)`,
       [
         item.id,
         edit.projectId,
@@ -345,6 +402,7 @@ export class PostgresEpisodeEditData implements EpisodeEditRepository {
         userId,
         now,
         item.incomingCutIntent ? JSON.stringify(item.incomingCutIntent) : null,
+        transitionJson(item),
       ],
     );
     await this.insertPlacements(c, edit.projectId, item);
@@ -397,11 +455,12 @@ export class PostgresEpisodeEditData implements EpisodeEditRepository {
         prev.position !== position ||
         prev.item.sourceAudio !== item.sourceAudio ||
         !same(prev.item.performanceBasis, item.performanceBasis) ||
-        !same(prev.item.incomingCutIntent ?? null, item.incomingCutIntent ?? null)
+        !same(prev.item.incomingCutIntent ?? null, item.incomingCutIntent ?? null) ||
+        !same(prev.item.incomingTransition ?? null, item.incomingTransition ?? null)
       )
         await c.query(
           `update episode_edit_items set position = $2, source_audio = $3, performance_basis = $4::jsonb,
-             incoming_cut_intent = $5::jsonb
+             incoming_cut_intent = $5::jsonb, incoming_transition = $6::jsonb
            where id = $1`,
           [
             item.id,
@@ -409,10 +468,16 @@ export class PostgresEpisodeEditData implements EpisodeEditRepository {
             item.sourceAudio,
             item.performanceBasis ? JSON.stringify(item.performanceBasis) : null,
             item.incomingCutIntent ? JSON.stringify(item.incomingCutIntent) : null,
+            transitionJson(item),
           ],
         );
       if (performanceChanged) await this.insertPlacements(c, next.projectId, item);
     }
+    if (!same(current.titles ?? [], next.titles ?? []))
+      await c.query("update episode_edits set titles = $2::jsonb where id = $1", [
+        next.id,
+        JSON.stringify(next.titles ?? []),
+      ]);
   }
 
   async create(input: CreateEpisodeEditInput): Promise<EpisodeEdit> {
@@ -466,19 +531,112 @@ export class PostgresEpisodeEditData implements EpisodeEditRepository {
       throw new EpisodeEditError("conflict", EDIT_REVISION_CONFLICT_MESSAGE);
   }
 
+  /** One mutation inside an open transaction (the edit row already locked at `expectedRevision`). */
+  private async applyLocked(c: PoolClient, input: ApplyEpisodeEditInput): Promise<EpisodeEdit> {
+    const current = (await this.editsWhere(c, "id = $1", [input.editId]))[0]!;
+    const facts = await this.loadFacts(c, editRefs(current, input.ops));
+    const plan = applyEditOps(current, input.ops, facts, randomUUID, {
+      userId: input.userId,
+      now: input.now,
+    });
+    assertEditValid(plan, facts, current);
+    await this.writeDifference(c, current, plan.next, input.userId, input.now);
+    await c.query("update episode_edits set revision = revision + 1 where id = $1", [input.editId]);
+    return (await this.editsWhere(c, "id = $1", [input.editId]))[0]!;
+  }
+
   async apply(input: ApplyEpisodeEditInput): Promise<EpisodeEdit> {
     return this.guarded(async (c) => {
       await this.lockEdit(c, input.projectId, input.editId, input.expectedRevision);
-      const current = (await this.editsWhere(c, "id = $1", [input.editId]))[0]!;
-      const facts = await this.loadFacts(c, editRefs(current, input.ops));
-      const plan = applyEditOps(current, input.ops, facts, randomUUID, {
+      return this.applyLocked(c, input);
+    });
+  }
+
+  /** Inserts the edit's current state as the next numbered saved revision (inside the caller's transaction). */
+  private async insertRevision(
+    c: PoolClient,
+    edit: EpisodeEdit,
+    label: string,
+    restoredFromId: string | null,
+    userId: string | null,
+    now: string,
+  ): Promise<SavedEditRevision> {
+    const state = editState(edit);
+    const fingerprint = editStateFingerprint(edit);
+    const latest = await c.query(
+      "select number, fingerprint from episode_edit_revisions where edit_id = $1 order by number desc limit 1",
+      [edit.id],
+    );
+    if (!restoredFromId && latest.rows[0] && String(latest.rows[0].fingerprint) === fingerprint)
+      throw new EpisodeEditError("conflict", REVISION_ALREADY_SAVED_MESSAGE);
+    const r = await c.query(
+      `insert into episode_edit_revisions
+         (id, project_id, edit_id, number, edit_revision, label, snapshot, fingerprint, restored_from, created_by,
+          created_at)
+       values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11)
+       returning *`,
+      [
+        randomUUID(),
+        edit.projectId,
+        edit.id,
+        (latest.rows[0] ? num(latest.rows[0].number) : 0) + 1,
+        edit.revision,
+        label.trim().slice(0, 120),
+        JSON.stringify(state),
+        fingerprint,
+        restoredFromId,
+        userId,
+        now,
+      ],
+    );
+    return mapRevision(r.rows[0]);
+  }
+
+  async saveRevision(input: SaveEditRevisionInput): Promise<SavedEditRevision> {
+    return this.guarded(async (c) => {
+      await this.lockEdit(c, input.projectId, input.editId, input.expectedRevision);
+      const edit = (await this.editsWhere(c, "id = $1", [input.editId]))[0]!;
+      return this.insertRevision(c, edit, input.label, null, input.userId, input.now);
+    });
+  }
+
+  async listRevisions(projectId: string, editId: string): Promise<SavedEditRevision[]> {
+    return this.tx(async (c) =>
+      (
+        await c.query(
+          "select * from episode_edit_revisions where project_id = $1 and edit_id = $2 order by number",
+          [projectId, editId],
+        )
+      ).rows.map(mapRevision),
+    );
+  }
+
+  async restoreRevision(input: RestoreEditRevisionInput) {
+    return this.guarded(async (c) => {
+      await this.lockEdit(c, input.projectId, input.editId, input.expectedRevision);
+      const r = await c.query(
+        "select * from episode_edit_revisions where id = $1 and edit_id = $2 and project_id = $3",
+        [input.revisionId, input.editId, input.projectId],
+      );
+      if (!r.rows[0]) throw new EpisodeEditError("not_found", REVISION_NOT_FOUND_MESSAGE);
+      const saved = mapRevision(r.rows[0]);
+      const edit = await this.applyLocked(c, {
+        editId: input.editId,
+        projectId: input.projectId,
+        expectedRevision: input.expectedRevision,
+        ops: [{ op: "restore", items: saved.snapshot.items, titles: saved.snapshot.titles }],
         userId: input.userId,
         now: input.now,
       });
-      assertEditValid(plan, facts, current);
-      await this.writeDifference(c, current, plan.next, input.userId, input.now);
-      await c.query("update episode_edits set revision = revision + 1 where id = $1", [input.editId]);
-      return (await this.editsWhere(c, "id = $1", [input.editId]))[0]!;
+      const revision = await this.insertRevision(
+        c,
+        edit,
+        `Restored revision ${saved.number}`,
+        saved.id,
+        input.userId,
+        input.now,
+      );
+      return { edit, revision };
     });
   }
 
