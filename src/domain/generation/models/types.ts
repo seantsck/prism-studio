@@ -143,6 +143,11 @@ export interface CatalogInputs {
    * (never replacing the canonical Production Frame) when the frozen production frame falls outside it.
    */
   promptImageAspectRatio?: { min: number; max: number };
+  /**
+   * Provider-documented handling of a prompt image whose aspect differs from the requested output ratio. Absent means
+   * the provider documents none, and Prism never relies on one (no `contain-prepad-center-crop-v1` transport).
+   */
+  promptImageCrop?: { behavior: "center"; source: string; verifiedAt: string };
 }
 
 export interface CatalogModel {
