@@ -52,10 +52,11 @@ const SECTION_PRIORITY: Record<ProviderPromptSectionKey, { priority: number; req
   visible_action: { priority: 2, required: true },
   subject: { priority: 3, required: true },
   camera: { priority: 3, required: true },
-  composition: { priority: 3, required: true },
-  performance: { priority: 4, required: false },
-  look_detail: { priority: 5, required: false },
-  setting: { priority: 6, required: false },
+  // image-to-video: the first frame already establishes the composition, so restating the blocking is optional
+  composition: { priority: 4, required: false },
+  performance: { priority: 5, required: false },
+  look_detail: { priority: 6, required: false },
+  setting: { priority: 7, required: false },
 };
 
 /** Internal Prism information this policy deliberately keeps out of provider prose (it stays in provenance). */
@@ -194,7 +195,7 @@ const RULES: Rule[] = [
   {
     id: "restore-to-neutral",
     test: /\b((composure|mask|poise|fa[cç]ade)\s+(restored|returns|regained|back|reset|on again)|regains\s+\w*\s*(composure|poise)|recompos\w*)\b/i,
-    render: (v) => `${v.s} returns to a calm, controlled neutral expression`,
+    render: (v) => `${v.s} ends calm and neutral`,
   },
   {
     id: "slip-softens",
@@ -407,24 +408,47 @@ export function adaptAnimationProviderPrompt(
 
   // Visible action: held orientation, then begin → change → end, all as observable behaviour
   const side = blk.screenDirection.match(/screen[- ]?(left|right)/i)?.[1]?.toLowerCase() ?? null;
+  const other = side === "right" ? "left" : "right";
   const eyelines = blk.eyelines.trim();
   const towardCamera = /\b(camera|lens)\b/i.test(eyelines);
+  // A Shot that faces one side with no blocking movement (no marks, entry or exit) is a HELD orientation. A video model
+  // given only "keeps her head turned" may still invent a full turn (Gen-4.5, Shot 3A), so both head AND torso are
+  // pinned to the first frame's orientation, the frontal pass and the opposite side are named as prohibited, and the
+  // motion envelope is limited to what the Shot's own action needs (below).
+  const held = !!side && blk.marks.length === 0 && !blk.entryPoint.trim() && !blk.exitPoint.trim();
   if (side || eyelines) {
     const eyes = eyelines
       ? /^(down|up|lowered|closed|toward|towards|away|off|left|right)/i.test(eyelines)
-        ? ` with ${v.p} eyes ${eyelines.toLowerCase()}`
-        : ` with ${v.p} eyeline ${lowerFirst(eyelines)}`
+        ? `${v.p} eyes ${eyelines.toLowerCase()}`
+        : `${v.p} eyeline ${lowerFirst(eyelines)}`
       : "";
-    const hold = side
-      ? `${v.s} keeps ${v.p} head turned toward screen-${side}${eyes} throughout`
-      : `${v.s} keeps${eyes.replace(/^ with/, "")} throughout`;
-    sections.visible_action.push(sentence(towardCamera ? hold : `${hold} and never looks into the camera`));
+    const noCamera = towardCamera ? "" : ", never looking into the camera";
+    let hold: string;
+    if (held) {
+      // "Faces screen-right" (not a profile) reads as the three-quarter view the first frame establishes
+      const view = /\bprofile\b/i.test(blk.screenDirection) ? "profile" : "three-quarter";
+      hold = `${v.s} keeps the first frame's ${view} orientation toward screen-${side}: head and torso stay screen-${side}, never rotating through frontal or toward screen-${other}${eyes ? `, ${eyes}${noCamera}` : noCamera}`;
+      adaptations.push({
+        field: "blocking.screenDirection",
+        source: blk.screenDirection,
+        provider: sentence(hold),
+        rule: "held-orientation",
+      });
+    } else {
+      const withEyes = eyes ? ` with ${eyes}` : "";
+      hold = side
+        ? `${v.s} keeps ${v.p} head turned toward screen-${side}${withEyes} throughout`
+        : `${v.s} keeps ${eyes} throughout`;
+      if (!towardCamera) hold = `${hold} and never looks into the camera`;
+    }
+    sections.visible_action.push(sentence(hold));
   }
   const begin = translate("timing.beginningPose", pkg.timing.beginningPose, v, "begin", adaptations);
-  const beginExpr = stateExpression(begin.states);
-  const beginClauses = [beginExpr && `${v.s} begins with ${beginExpr}`, ...begin.clauses].filter(
-    Boolean,
-  ) as string[];
+  const beginStates = STATE_ORDER.filter((s) => begin.states.includes(s));
+  const beginClauses = [
+    beginStates.length && `${v.s} begins ${joinClauses(beginStates)}`,
+    ...begin.clauses,
+  ].filter(Boolean) as string[];
   if (beginClauses.length) sections.visible_action.push(sentence(joinClauses(beginClauses)));
 
   const change: string[] = [];
@@ -440,9 +464,10 @@ export function adaptAnimationProviderPrompt(
         change.push(...translate(`characters.${field}`, text, v, "change", adaptations).clauses);
     }
   }
-  // a held picture is not a frozen one: natural breathing is always asked for (policy, not story)
-  change.push(`${v.s} breathes naturally`);
-  sections.visible_action.push(sentence(joinClauses(change)));
+  // a held picture is not a frozen one: natural breathing is always asked for (policy, not story); with a held
+  // orientation it is part of the explicit motion envelope instead
+  if (!held) change.push(`${v.s} breathes naturally`);
+  if (change.length) sections.visible_action.push(sentence(joinClauses(change)));
 
   const end = translate("timing.endingPose", pkg.timing.endingPose, v, "end", adaptations);
   const endExpr = stateExpression(end.states);
@@ -450,6 +475,25 @@ export function adaptAnimationProviderPrompt(
     Boolean,
   ) as string[];
   if (endClauses.length) sections.visible_action.push(sentence(`then ${joinClauses(endClauses)}`));
+
+  if (held) {
+    // the permissible motion: the face, plus only the body parts the Shot's own action moves
+    const moved = sections.visible_action.slice(1).join(" ");
+    const parts = [
+      `${v.p} face`,
+      /\beyes?\b/i.test(moved) && "eyelids",
+      "breathing",
+      /\bshoulders?\b/i.test(moved) && "a small shoulder drop",
+    ].filter(Boolean) as string[];
+    const envelope = sentence(`limit motion to ${joinClauses(parts)}; no larger head or body movement`);
+    sections.visible_action.push(envelope);
+    adaptations.push({
+      field: "blocking",
+      source: "held orientation, no blocking movement",
+      provider: envelope,
+      rule: "motion-envelope-limited",
+    });
+  }
 
   // Performance (optional): how the motion is played, not what is felt
   const pace = pkg.performance
@@ -493,7 +537,7 @@ export function adaptAnimationProviderPrompt(
   sections.continuity.push(
     sentence(
       c
-        ? `preserve the starting composition and ${v.p} identity, apparent age, facial structure, ${hair ? `hairstyle (${hair})` : "hairstyle"}, ${wardrobe ? `wardrobe (${wardrobe})` : "wardrobe"}, ${jewelry ? `jewelry (${jewelry})` : "jewelry"}, lighting and background exactly as in the first frame`
+        ? `preserve ${v.p} identity, apparent age, facial structure, ${hair ?? "hairstyle"}, ${wardrobe ?? "wardrobe"}, ${jewelry ?? "jewelry"}, lighting and background`
         : "preserve the starting composition, the subjects, lighting and background exactly as in the first frame",
     ),
     "Do not introduce new objects or people.",
