@@ -103,6 +103,13 @@ const ISOLATED_5B = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-image-pipeline.spec.ts";
 const ISOLATED_PAID_GATE = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-paid-animation-gate.spec.ts";
 
 /**
+ * The Reference Studio spec: its own memory server (it uploads photos, generates and promotes Character and Location
+ * images). GPT Image is listed there as a PAID worker-backed model with an explicitly EMPTY key, so its price can be
+ * shown and confirmed in the browser while no request can leave the process. The spec never starts a paid image.
+ */
+const ISOLATED_STUDIO = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-reference-studio.spec.ts";
+
+/**
  * TEST SERVERS ONLY. Playwright's request client reuses keep-alive sockets; at Node's default idle-close boundary
  * (5 s + 1 s buffer) the server could close a socket while `page.request` was reusing it, giving ECONNRESET before
  * the request reached the app. Longer than the longest test (20 min), so each test's request context closes first.
@@ -134,6 +141,7 @@ export default defineConfig({
         ISOLATED_4E,
         ISOLATED_5B,
         ISOLATED_PAID_GATE,
+        ISOLATED_STUDIO,
       ],
       use: { baseURL: "http://localhost:3102" },
     },
@@ -211,6 +219,11 @@ export default defineConfig({
       name: "memory-paid-gate-isolated",
       testMatch: ISOLATED_PAID_GATE,
       use: { baseURL: "http://localhost:3117" },
+    },
+    {
+      name: "memory-studio-isolated",
+      testMatch: ISOLATED_STUDIO,
+      use: { baseURL: "http://localhost:3118" },
     },
   ],
   // Started in order: the first builds; the others serve the same build from separate processes (separate stores).
@@ -359,6 +372,28 @@ export default defineConfig({
         PRISM_STUDIO_ALLOW_PAID_GENERATION: "true",
         PRISM_STUDIO_MAX_GENERATION_USD: "1",
         PRISM_STUDIO_MAX_CANDIDATE_SET_USD: "1",
+      },
+    },
+    {
+      command: `npx next start -p 3118 ${KEEP_ALIVE}`,
+      url: "http://localhost:3118",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      // The Reference Studio, with NO credential. GPT Image is worker-backed here, so the web app prices and would
+      // queue it without a key; the key is set EMPTY (it wins over anything in .env.local) and the adapter refuses to
+      // call OpenAI without one, so nothing can reach a provider even if a paid image were started. The free test
+      // models do the generating.
+      env: {
+        ...memoryEnv(3118),
+        // `next start` runs in production mode, where the local (free) cutout engine is listed explicitly
+        PRISM_STUDIO_GENERATION_PROVIDERS: "openai-image,prism-matting",
+        PRISM_STUDIO_WORKER_BACKED_PROVIDERS: "openai-image",
+        PRISM_STUDIO_PROVIDER_OPENAI_IMAGE_API_KEY: "",
+        PRISM_STUDIO_ALLOW_PAID_GENERATION: "true",
+        PRISM_STUDIO_MAX_GENERATION_USD: "1",
+        PRISM_STUDIO_MAX_CANDIDATE_SET_USD: "1",
+        // stands in for a host's small request cap (Vercel: 4.5 MB), so a photo too large for one upload can be tried
+        PRISM_STUDIO_MAX_UPLOAD_BYTES: "1000000",
       },
     },
   ],

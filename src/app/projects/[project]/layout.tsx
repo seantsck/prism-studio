@@ -16,6 +16,7 @@ const NAV = [
   ["/breakdown", "Breakdown"],
   ["/characters", "Characters"],
   ["/locations", "Locations"],
+  ["/studio", "Reference Studio"],
   ["/episodes", "Episodes"],
   ["/storyboard", "Storyboard"],
   ["/sequence", "Sequence"],
