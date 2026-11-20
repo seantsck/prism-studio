@@ -417,6 +417,86 @@ export function closestFormat(
   return best ?? offered[0] ?? null;
 }
 
+// ───────────────────────── test models ─────────────────────────
+
+/**
+ * Whether the Studio offers test models, and shows what they made. A test model draws a coloured pattern: it is there
+ * to exercise the workflow where nothing real can run. Beside a real model that can be used it is only a way to make a
+ * pattern by mistake (the owner made two on the hosted review site), so it is left out there, with its results,
+ * unless the deployment asks for it (`PRISM_STUDIO_SHOW_TEST_MODELS=1`: a test server that needs both).
+ */
+export function offersTestModels(
+  models: readonly { test: boolean; available: boolean }[],
+  askedFor: boolean,
+): boolean {
+  return askedFor || !models.some((m) => !m.test && m.available);
+}
+
+// ───────────────────────── which pictures a generation starts from ─────────────────────────
+
+/** What the Studio needs to know about a stored picture to choose starting images. */
+export interface StartCandidate {
+  assetId: string;
+  /** "uploaded": the creator's own picture. Anything else was made by Prism or a model. */
+  origin: string | null;
+  /** true: the picture only shows a Look's wardrobe. It says what is worn, not who the Character is. */
+  wardrobeOnly: boolean;
+  /** true: the picture that currently stands for the subject (canonical identity or canonical location). */
+  canonical: boolean;
+  /** When the picture was stored (ISO), where that is known. */
+  addedAt?: string | null;
+}
+
+const ownPhoto = (c: StartCandidate) => c.origin === "uploaded" && !c.wardrobeOnly;
+
+/**
+ * The starting images a freshly opened Studio offers. The creator's own photographs of the subject come first, ALL of
+ * them: they are the ground truth, and several views of one person describe that person better than one. Only when
+ * there is none does the picture that currently stands for the subject (often a generated one) take their place.
+ */
+export function defaultStartingImages(images: readonly StartCandidate[]): string[] {
+  const photos = images.filter(ownPhoto).map((i) => i.assetId);
+  if (photos.length > 0) return photos;
+  const canonical = images.find((i) => i.canonical);
+  return canonical ? [canonical.assetId] : [];
+}
+
+/**
+ * The starting images after the creator added photographs: every photograph just added is selected (they were added to
+ * be used), after whatever was selected before. A generated picture that was only selected by default gives way to the
+ * creator's own photographs; one the creator chose themselves stays.
+ */
+export function startingImagesAfterUpload(args: {
+  selected: readonly string[];
+  images: readonly StartCandidate[];
+  added: readonly string[];
+  /** true: the creator changed the selection themselves, so all of it is kept. */
+  chosenByCreator: boolean;
+}): string[] {
+  const present = new Set(args.images.map((i) => i.assetId));
+  const added = [...new Set(args.added)].filter((id) => present.has(id));
+  if (added.length === 0) return [...args.selected];
+  const own = new Set(args.images.filter(ownPhoto).map((i) => i.assetId));
+  const kept = args.selected.filter((id) => present.has(id) && (args.chosenByCreator || own.has(id)));
+  return [...new Set([...kept, ...added])];
+}
+
+/**
+ * true: the stage opens on the starting images instead of on the newest take. A photograph the creator added AFTER the
+ * newest picture was made has not been used for anything yet: it is what they are about to work from, and an older
+ * result in its place reads as if the photograph had been ignored.
+ */
+export function opensOnStartingImages(
+  images: readonly StartCandidate[],
+  newestTakeAt: string | null,
+): boolean {
+  const photos = images.filter(ownPhoto);
+  if (photos.length === 0) return false;
+  if (!newestTakeAt) return true;
+  const made = Date.parse(newestTakeAt);
+  return photos.some((p) => !!p.addedAt && Date.parse(p.addedAt) > made);
+}
+
 // ───────────────────────── what an uploaded file is good for ─────────────────────────
 
 /** What the image models here take as an INPUT image (the stored original is kept whatever its format). */
@@ -424,6 +504,8 @@ export const MODEL_INPUT_MIMES = ["image/png", "image/jpeg", "image/webp"] as co
 export const MODEL_INPUT_MAX_BYTES = 25 * 1024 * 1024;
 /** Guidance thresholds on the shorter side, in pixels. They describe detail available to a model, nothing more. */
 export const REFERENCE_SHORT_SIDE = { low: 512, good: 1024 } as const;
+/** Longer than this (long side over short side) and the subject is probably small in the frame. */
+export const ELONGATED_RATIO = 2.2;
 
 export type ReferenceVerdict = "good" | "usable" | "low" | "unknown";
 
@@ -442,6 +524,8 @@ export interface ReferenceInspection {
    * height are given as the picture is DISPLAYED; a tool that ignores the flag sees it sideways.
    */
   turned: boolean;
+  /** true: a very long shape (a full phone screenshot, a banner): the subject is probably small in the frame. */
+  elongated: boolean;
   verdict: ReferenceVerdict;
   /** One line: the verdict in words. */
   summary: string;
@@ -510,7 +594,8 @@ export function inspectReferenceImage(
     verdict = "good";
     summary = "Good size";
   }
-  if (width && height && Math.max(width / height, height / width) > 2.2)
+  const elongated = !!width && !!height && Math.max(width / height, height / width) > ELONGATED_RATIO;
+  if (elongated)
     notes.push("A very long shape: the subject may be small in the frame. A tighter crop helps.");
   const typeOk = (MODEL_INPUT_MIMES as readonly string[]).includes(mime);
   const sizeOk = bytes == null || bytes <= MODEL_INPUT_MAX_BYTES;
@@ -537,6 +622,7 @@ export function inspectReferenceImage(
     orientation,
     hasAlpha,
     turned,
+    elongated,
     verdict,
     summary,
     usableAsInput: typeOk && sizeOk,

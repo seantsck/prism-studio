@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRepository } from "@/data/memory-repository";
 import { readGenerationConfig } from "@/generation/config";
+import { defaultStartingImages, opensOnStartingImages } from "@/domain/generation/reference-studio";
 import { busyFixturePng, portraitFixturePng } from "@/generation/matting/fixture";
 import { jpegHeader } from "@/lib/__tests__/jpeg-fixture";
 import { createRegistry } from "@/generation/registry";
@@ -29,6 +30,9 @@ const world = vi.hoisted(() => ({
     PRISM_STUDIO_WORKER_BACKED_PROVIDERS: "openai-image",
     PRISM_STUDIO_ALLOW_PAID_GENERATION: "true",
     PRISM_STUDIO_MAX_GENERATION_USD: "2",
+    // this server lists a real model AND the test models (a real deployment shows the test ones only when nothing
+    // real can be used: see "where a real model can be used" below)
+    PRISM_STUDIO_SHOW_TEST_MODELS: "1",
   } as Record<string, string>,
 }));
 vi.mock("server-only", () => ({}));
@@ -484,6 +488,8 @@ describe("making, reviewing and promoting", () => {
       inspection: { width: 96, height: 128, format: "PNG", verdict: "low", usableAsInput: true },
     });
     expect(state.images[1]!.originLabel).toBe("generated reference");
+    // a picture a test model made is marked as one: a placeholder pattern, never a picture of the subject
+    expect(state.images.map((i) => i.test)).toEqual([false, true, true]);
     expect(state.takes.map((t) => [t.number, t.what, t.operation, t.status])).toEqual([
       [2, "Left profile", "reference", "succeeded"],
       [1, "3/4 view", "reference", "succeeded"],
@@ -497,6 +503,8 @@ describe("making, reviewing and promoting", () => {
     expect(state.spent).toEqual({ usd: 0, images: 0 });
     expect(state.costHistory).toEqual([]);
     expect(state.takes[0]).toMatchObject({ paid: false, actualUsd: null, estimateUsd: null });
+    // and its result is marked as what it is: a test model's placeholder pattern, never a real picture
+    expect(state.takes.map((t) => t.test)).toEqual([true, true]);
     const subjects = state.subjects.filter((s) => s.kind === "character");
     expect(subjects.find((s) => s.name === "Yumeko")).toMatchObject({
       images: 3,
@@ -581,11 +589,53 @@ describe("making, reviewing and promoting", () => {
     expect(state.subjects.find((s) => s.name === "Yumeko")!.thumbUrl).toBe(
       `/api/assets/${first.outputs[0]!.asset.id}`,
     );
+    // the read model says which picture stands for the Character, and which one is the creator's own photograph:
+    // that is what the Studio chooses its starting images from
+    const pictures = state.images.map((i) => ({
+      origin: i.origin,
+      canonical: i.canonical,
+      w: i.wardrobeOnly,
+    }));
+    expect(pictures.filter((i) => i.canonical)).toEqual([{ origin: "generated", canonical: true, w: false }]);
+    expect(pictures.filter((i) => i.origin === "uploaded")).toEqual([
+      { origin: "uploaded", canonical: false, w: false },
+    ]);
+    expect(defaultStartingImages(state.images)).toEqual([
+      state.images.find((i) => i.origin === "uploaded")!.assetId,
+    ]);
     expect(
       await reviewReferenceImage(
         form({ attemptId: first.attempt.id, decision: "reject", category: "artifact" }),
       ),
     ).toMatchObject({ ok: false, error: expect.stringMatching(/^This image is in use \(Yumeko · /) });
+  });
+
+  it("a Look's wardrobe photo is marked as such, so it is never offered as who the Character is", async () => {
+    const yumeko = await yumekoOf();
+    const d = await data();
+    const look = d.looks.find((l) => l.characterId === yumeko.id)!;
+    await repo.upsert(d.project.id, "looks", { ...look, locked: false });
+    const gown = await uploadReferencePhoto(
+      form({ subjectKind: "character", subjectId: yumeko.id, as: `look:${look.id}`, file: png("gown.png") }),
+    );
+    const face = await uploadReferencePhoto(
+      form({
+        subjectKind: "character",
+        subjectId: yumeko.id,
+        file: png("face.png", portraitFixturePng(100, 130)),
+      }),
+    );
+    const state = await referenceStudioState(await data(), `character:${yumeko.id}`);
+    const of = (r: unknown) => state.images.find((i) => i.assetId === (r as { assetId?: string }).assetId)!;
+    expect(of(gown)).toMatchObject({ origin: "uploaded", wardrobeOnly: true, canonical: false });
+    expect(of(face)).toMatchObject({ origin: "uploaded", wardrobeOnly: false, canonical: false });
+    expect(defaultStartingImages(state.images)).toEqual([of(face).assetId]);
+    // each picture carries when it was stored, which is what decides whether the stage opens on a photograph added
+    // since the newest picture was made, or on that picture
+    const stored = (await data()).assets.find((a) => a.id === of(face).assetId)!;
+    expect(of(face).addedAt).toBe(stored.createdAt);
+    expect(opensOnStartingImages(state.images, "2000-01-01T00:00:00.000Z")).toBe(true);
+    expect(opensOnStartingImages(state.images, "2999-01-01T00:00:00.000Z")).toBe(false);
   });
 
   it("refuses to review another project's image, an unfinished one and an unknown decision", async () => {
@@ -730,5 +780,105 @@ describe("the Studio's read model", () => {
     expect(gpt.qualities.map((q) => q.id)).toEqual(["low", "medium", "high"]);
     const runway = state.models.find((m) => m.provider === "runway")!;
     expect(runway).toMatchObject({ available: false, unavailable: "not switched on for this server" });
+  });
+});
+
+/**
+ * A real deployment: no PRISM_STUDIO_SHOW_TEST_MODELS. The owner made two "pictures" on the hosted review site with the
+ * test model the Studio suggested, got two gradients, and asked for the test model to go.
+ */
+describe("where a real model can be used, the Studio offers no test model and shows none of its results", () => {
+  /** Runs `body` the way a deployment without the test-server switch behaves. */
+  async function realDeployment<T>(body: () => Promise<T>, env: Record<string, string> = {}): Promise<T> {
+    const before = { ...world.env };
+    delete world.env.PRISM_STUDIO_SHOW_TEST_MODELS;
+    Object.assign(world.env, env);
+    try {
+      return await body();
+    } finally {
+      for (const key of Object.keys(world.env)) delete world.env[key];
+      Object.assign(world.env, before);
+    }
+  }
+  /** A photograph, then two test patterns made from it. */
+  async function patterns() {
+    const yumeko = await yumekoOf();
+    await uploadReferencePhoto(
+      form({ subjectKind: "character", subjectId: yumeko.id, file: png("yumeko.png") }),
+    );
+    const photo = (await data()).identityRefs.find((r) => r.label === "Reference photo")!.assetId!;
+    for (const intent of ["portrait", "three_quarter"])
+      expect(await startSubjectImage(form(make(yumeko.id, { intent, startAssetId: [photo] })))).toEqual({
+        ok: true,
+      });
+    await work();
+    const [second, first] = await attempts(yumeko.id);
+    return { yumeko, photo, first: first!, second: second! };
+  }
+
+  it("lists the real model and no test model; the test patterns are out of sight, and nothing is deleted", async () => {
+    const { yumeko, photo } = await patterns();
+    const shown = await referenceStudioState(await data(), `character:${yumeko.id}`);
+    expect(shown.takes.map((t) => [t.number, t.test])).toEqual([
+      [2, true],
+      [1, true],
+    ]);
+
+    const state = await realDeployment(async () =>
+      referenceStudioState(await data(), `character:${yumeko.id}`),
+    );
+    expect(state.models.filter((m) => m.test)).toEqual([]);
+    expect(state.models.find((m) => m.value === PAID)).toMatchObject({ available: true, paid: true });
+    // the Studio shows the photograph and nothing a test model made: no take, no picture to start from, no count
+    expect(state.takes).toEqual([]);
+    expect(state.images.map((i) => [i.assetId, i.origin, i.test])).toEqual([[photo, "uploaded", false]]);
+    expect(state.subjects.find((s) => s.name === "Yumeko")).toMatchObject({ images: 1 });
+    expect(state.spent).toEqual({ usd: 0, images: 0 });
+    // with no take in sight, the stage opens on the photograph
+    expect(defaultStartingImages(state.images)).toEqual([photo]);
+    expect(opensOnStartingImages(state.images, state.takes[0]?.createdAt ?? null)).toBe(true);
+
+    // out of sight is all it is: both attempts and their stored files are still there, and are shown again where
+    // test models are
+    expect((await attempts(yumeko.id)).map((a) => a.attempt.status)).toEqual(["succeeded", "succeeded"]);
+    const again = await referenceStudioState(await data(), `character:${yumeko.id}`);
+    expect(again.takes).toHaveLength(2);
+    expect(again.images.filter((i) => i.test)).toHaveLength(2);
+  });
+
+  it("a test pattern the Visual Bible uses stays in view, named as a test pattern, so it can be replaced", async () => {
+    const { yumeko, first, second } = await patterns();
+    expect(await setCanonicalIdentity(form({ characterId: yumeko.id, attemptId: first.attempt.id }))).toEqual(
+      { ok: true },
+    );
+    const state = await realDeployment(async () =>
+      referenceStudioState(await data(), `character:${yumeko.id}`),
+    );
+    expect(state.takes.map((t) => [t.attemptId, t.test, t.roles])).toEqual([
+      [first.attempt.id, true, ["Canonical identity"]],
+    ]);
+    expect(state.takes.some((t) => t.attemptId === second.attempt.id)).toBe(false);
+    expect(state.images.filter((i) => i.test).map((i) => i.canonical)).toEqual([true]);
+  });
+
+  it("where no real model can be used, the test models are all there is, so they are offered, with why", async () => {
+    const yumeko = await yumekoOf();
+    // the real model is listed but paid generation is switched off on this server
+    const state = await realDeployment(
+      async () => referenceStudioState(await data(), `character:${yumeko.id}`),
+      { PRISM_STUDIO_ALLOW_PAID_GENERATION: "false" },
+    );
+    expect(state.models.find((m) => m.value === FREE)).toMatchObject({ available: true, test: true });
+    expect(state.models.find((m) => m.value === PAID)).toMatchObject({
+      available: false,
+      unavailable: "paid generation is switched off",
+    });
+    // a test model that is not switched on is not listed at all (a real one is, with its reason)
+    const off = await realDeployment(
+      async () => referenceStudioState(await data(), `character:${yumeko.id}`),
+      { PRISM_STUDIO_ALLOW_PAID_GENERATION: "false", PRISM_STUDIO_DISABLE_MOCK_PROVIDER: "1" },
+    );
+    expect(off.models.filter((m) => m.test)).toEqual([]);
+    expect(off.models.find((m) => m.value === PAID)).toMatchObject({ available: false });
   });
 });
