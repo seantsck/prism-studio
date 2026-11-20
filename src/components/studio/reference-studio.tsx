@@ -6,10 +6,13 @@ import { RefreshWhileActive } from "@/components/images/refresh-while-active";
 import { Button } from "@/components/ui";
 import {
   closestFormat,
+  defaultStartingImages,
   editPresets,
   formatLabel,
+  opensOnStartingImages,
   preferredFormat,
   referencePresets,
+  startingImagesAfterUpload,
   typicalCost,
   usd,
   type EditPresetId,
@@ -20,6 +23,7 @@ import type { StudioModel, StudioState, StudioTake } from "@/server/reference-st
 import { quoteReferenceImage } from "@/server/reference-studio-actions";
 import { removeBackground, startSubjectImage } from "@/server/subject-image-actions";
 import { usePhotoUpload } from "./photo-upload";
+import { rememberModel, useRememberedModel } from "./remembered-model";
 import { SourcePicker } from "./source-picker";
 import { Stage } from "./stage";
 
@@ -53,15 +57,14 @@ export function ReferenceStudio({
   const has = (id: string | undefined) => !!id && images.some((i) => i.assetId === id);
 
   const [mode, setMode] = useState<"make" | "change">(has(initial.change) ? "change" : "make");
-  const [sourceIds, setSourceIds] = useState<string[]>(() => {
-    if (has(initial.change)) return [initial.change!];
-    if (has(initial.from)) return [initial.from!];
-    // the picture that already defines the subject, else the first photograph the creator added
-    const canonical = images.find((i) => i.roles.some((r) => r.startsWith("Canonical")));
-    const uploaded = images.find((i) => i.origin === "uploaded");
-    const first = canonical ?? uploaded;
-    return first ? [first.assetId] : [];
-  });
+  // "Make a reference" starts from EVERY selected picture, sent together; "Change an image" works on one picture.
+  // The two selections are kept apart, so switching between the two never loses the pictures chosen for the other.
+  const [makeIds, setMakeIds] = useState<string[]>(() =>
+    has(initial.from) ? [initial.from!] : defaultStartingImages(images),
+  );
+  const [changeId, setChangeId] = useState<string | null>(has(initial.change) ? initial.change! : null);
+  /** true once the creator has chosen the starting images themselves (their choice is then never replaced). */
+  const [startChosen, setStartChosen] = useState(has(initial.from));
   const [intent, setIntent] = useState<string>(
     presets.some((p) => p.intent === initial.make) ? initial.make! : presets[0]!.intent,
   );
@@ -72,17 +75,35 @@ export function ReferenceStudio({
   const [editId, setEditId] = useState<EditPresetId | "cutout">(edits[0]!.id);
   const [editValue, setEditValue] = useState("");
   const [modelChoice, setModelChoice] = useState("");
+  const remembered = useRememberedModel();
   const [quality, setQuality] = useState("");
   const [formatChoice, setFormatChoice] = useState("auto");
   const [transparent, setTransparent] = useState(false);
   /** null = the newest take */
   const [focusId, setFocusId] = useState<string | null>(null);
-  // A photograph the creator has just added becomes the starting image (they added it to use it): the first of a
-  // batch, as soon as the refreshed page carries it.
-  const [wanted, setWanted] = useState<string | null>(null);
-  if (wanted && images.some((i) => i.assetId === wanted)) {
+  // What the stage shows: a take, or the pictures the next request starts from. It follows what the creator last
+  // touched (the starting images, or a take), and opens on photographs added since the newest picture was made.
+  const [stageView, setStageView] = useState<"take" | "start">(() =>
+    has(initial.from) ||
+    has(initial.change) ||
+    opensOnStartingImages(images, state.takes[0]?.createdAt ?? null)
+      ? "start"
+      : "take",
+  );
+  const focusTake = (attemptId: string | null) => {
+    setFocusId(attemptId);
+    setStageView("take");
+  };
+  // Photographs the creator has just added become starting images (they added them to use them): ALL of a batch, as
+  // soon as the refreshed page carries them.
+  const [wanted, setWanted] = useState<string[] | null>(null);
+  if (wanted && wanted.every((id) => images.some((i) => i.assetId === id))) {
     setWanted(null);
-    setSourceIds([wanted]);
+    setMakeIds(
+      startingImagesAfterUpload({ selected: makeIds, images, added: wanted, chosenByCreator: startChosen }),
+    );
+    if (mode === "change" && wanted[0]) setChangeId(wanted[0]);
+    setStageView("start");
   }
   const upload = usePhotoUpload({ slug, subject, maxUploadBytes, onAdded: setWanted });
   // files dragged anywhere over the Studio are for the upload area (and never open in place of the page)
@@ -92,7 +113,12 @@ export function ReferenceStudio({
   const preset = presets.find((p) => p.intent === intent) ?? presets[0]!;
   const edit = edits.find((e) => e.id === editId) ?? edits[0]!;
   const editChosen = (id: string) => !cuttingOut && id === edit.id;
-  const sources = sourceIds.flatMap((id) => images.filter((i) => i.assetId === id));
+  // what this request works from: every chosen picture, or the one picture being changed (by default the first).
+  // A picture that is no longer offered (a take that was rejected since) is not selected any more.
+  const startIds = makeIds.filter((id) => has(id));
+  const selectedIds =
+    mode === "change" ? (has(changeId ?? undefined) ? [changeId!] : startIds.slice(0, 1)) : startIds;
+  const sources = selectedIds.flatMap((id) => images.filter((i) => i.assetId === id));
   const changing = mode === "change";
   const cuttingOut = changing && editId === "cutout" && kind === "character";
   // what the request needs from a model: an image to work from, or words alone
@@ -101,9 +127,17 @@ export function ReferenceStudio({
     sources.length > 0 ||
     (!!lookId && (subject.looks.find((l) => l.id === lookId)?.references ?? 0) > 0);
   const fits = (m: StudioModel) => (needsImages ? m.images : m.text);
-  // Prism suggests a free model that can do this first; the creator's own choice is never replaced
+  // Prism suggests a free model that can do this first; the creator's own choice is never replaced, and it is
+  // remembered in this browser (a paid model still shows its price on the button before every picture)
   const suggested = available.find((m) => fits(m) && !m.paid) ?? available.find(fits) ?? available[0] ?? null;
-  const model = available.find((m) => m.value === modelChoice) ?? suggested;
+  const model = available.find((m) => m.value === (modelChoice || remembered)) ?? suggested;
+  const chooseModel = (value: string) => {
+    setModelChoice(value);
+    rememberModel(value);
+  };
+  // for a creator on a test model: the real model that could make this request, or the one that cannot be used here
+  const realModel = available.find((m) => fits(m) && !m.test) ?? null;
+  const realBlocked = realModel ? null : (state.models.find((m) => !m.test && !m.available) ?? null);
   const autoFormat = model
     ? changing
       ? closestFormat(sources[0]?.inspection.width, sources[0]?.inspection.height, model.formats)
@@ -202,38 +236,51 @@ export function ReferenceStudio({
   const active = state.takes.some((t) => ACTIVE.has(t.status));
   const focused = state.takes.find((t) => t.attemptId === focusId) ?? state.takes[0] ?? null;
 
+  const chooseStart = (ids: string[]) => {
+    setMakeIds(ids);
+    setStartChosen(true);
+  };
+  /** The creator picked starting images in the brief: the stage shows them, at a size they can be checked at. */
+  const pickStart = (ids: string[]) => {
+    chooseStart(ids);
+    setStageView("start");
+  };
   const toggleSource = (assetId: string) => {
-    if (changing) setSourceIds([assetId]);
-    else
-      setSourceIds((ids) => (ids.includes(assetId) ? ids.filter((x) => x !== assetId) : [...ids, assetId]));
+    if (changing) {
+      setChangeId(assetId);
+      setStageView("start");
+    } else
+      pickStart(startIds.includes(assetId) ? startIds.filter((x) => x !== assetId) : [...startIds, assetId]);
   };
   const startFrom = (assetId: string) => {
     setMode("make");
-    setSourceIds([assetId]);
+    chooseStart([assetId]);
   };
   const change = (assetId: string) => {
     setMode("change");
-    setSourceIds([assetId]);
+    setChangeId(assetId);
   };
+  // the creator's own photographs of the subject, for "select all my photos"
+  const ownPhotos = images.filter((i) => i.origin === "uploaded" && !i.wardrobeOnly).map((i) => i.assetId);
   /** Loads a take's request back into the brief (nothing is sent until Generate is pressed). */
   const reuse = (take: StudioTake) => {
     const s = take.settings;
     const keep = (ids: string[]) => ids.filter((id) => images.some((i) => i.assetId === id));
     if (take.operation === "cutout") {
       setMode("change");
-      setSourceIds(keep(take.inputs.slice(0, 1).map((i) => i.assetId)));
+      setChangeId(keep(take.inputs.slice(0, 1).map((i) => i.assetId))[0] ?? null);
       setEditId("cutout");
       return;
     }
     if (s.editSourceAssetId) {
       setMode("change");
-      setSourceIds(keep([s.editSourceAssetId]));
+      setChangeId(keep([s.editSourceAssetId])[0] ?? null);
       const id = edits.find((e) => e.id === s.composer.editPreset)?.id ?? "custom";
       setEditId(id);
       setEditValue(s.composer.editValue ?? "");
     } else {
       setMode("make");
-      setSourceIds(keep(s.sourceAssetIds));
+      chooseStart(keep(s.sourceAssetIds));
       if (presets.some((p) => p.intent === s.intent)) setIntent(s.intent);
       setPresetValue(s.composer.presetValue ?? "");
     }
@@ -285,13 +332,20 @@ export function ReferenceStudio({
           <SourcePicker
             subject={subject}
             images={images}
-            selected={sourceIds}
+            selected={selectedIds}
             single={changing}
             maxUploadBytes={maxUploadBytes}
             upload={upload}
             dragging={dragging}
             onToggle={toggleSource}
-            onClear={() => setSourceIds([])}
+            onClear={() => pickStart([])}
+            maxImages={model?.maxImages ?? 0}
+            ownPhotos={ownPhotos}
+            onSelect={pickStart}
+            // while the stage shows a take, the selected pictures can be put on it without changing the selection
+            onShowLarge={
+              stageView === "take" && focused && sources.length > 0 ? () => setStageView("start") : undefined
+            }
           />
 
           <div>
@@ -410,7 +464,9 @@ export function ReferenceStudio({
               </span>
               <select value={lookId} onChange={(e) => setLookId(e.target.value)} data-testid="studio-look">
                 <option value="">
-                  {changing || sources.length === 0 ? "No Look" : "As in the starting image"}
+                  {changing || sources.length === 0
+                    ? "No Look"
+                    : `As in the starting image${sources.length === 1 ? "" : "s"}`}
                 </option>
                 {subject.looks.map((l) => (
                   <option key={l.id} value={l.id}>
@@ -481,7 +537,7 @@ export function ReferenceStudio({
               <span className="mb-1 block text-[11px] text-muted">Model</span>
               <select
                 value={model?.value ?? ""}
-                onChange={(e) => setModelChoice(e.target.value)}
+                onChange={(e) => chooseModel(e.target.value)}
                 data-testid="studio-model"
               >
                 {state.models.map((m) => (
@@ -536,7 +592,7 @@ export function ReferenceStudio({
               variant="primary"
               className="h-9 w-full text-[13px]"
               disabled={!!problem}
-              onClick={() => setFocusId(null)}
+              onClick={() => focusTake(null)}
               data-testid="studio-cutout"
             >
               Remove background
@@ -556,6 +612,9 @@ export function ReferenceStudio({
             model={model}
             typical={typical}
             images={state.images}
+            realModel={realModel}
+            realBlocked={realBlocked}
+            onUseModel={chooseModel}
           />
 
           <ActionForm
@@ -577,15 +636,18 @@ export function ReferenceStudio({
               variant="primary"
               className="h-9 w-full text-[13px]"
               disabled={!quote?.ok}
-              onClick={() => setFocusId(null)}
+              onClick={() => focusTake(null)}
               data-testid="studio-generate"
               data-paid={quote?.ok && quote.paid ? "true" : "false"}
             >
               {quote?.ok && quote.paid
                 ? `${changing ? "Change" : "Generate"} · up to ${usd(quote.estimateUsd)}`
-                : changing
-                  ? "Change image"
-                  : "Generate"}
+                : model?.test
+                  ? // a test model draws a pattern: the button never promises a picture
+                    "Generate test pattern"
+                  : changing
+                    ? "Change image"
+                    : "Generate"}
             </Button>
           </ActionForm>
         </div>
@@ -599,10 +661,12 @@ export function ReferenceStudio({
         images={state.images}
         focused={focused}
         starting={sources}
+        view={stageView}
+        changing={changing}
         hostedMatting={state.hostedMatting}
         locationViewKinds={locationViewKinds}
         shots={state.shots}
-        onFocus={setFocusId}
+        onFocus={focusTake}
         onStartFrom={startFrom}
         onChange={change}
         onReuse={reuse}
@@ -621,6 +685,9 @@ function Price({
   model,
   typical,
   images,
+  realModel,
+  realBlocked,
+  onUseModel,
 }: {
   problem: string | null;
   pricing: boolean;
@@ -628,6 +695,11 @@ function Price({
   model: StudioModel | null;
   typical: ReturnType<typeof typicalCost>;
   images: StudioState["images"];
+  /** A real model that can make this request (offered while a test model is chosen), or null. */
+  realModel: StudioModel | null;
+  /** A real model that exists but cannot be used on this server, with its reason; null when one can be used. */
+  realBlocked: StudioModel | null;
+  onUseModel: (value: string) => void;
 }) {
   if (problem)
     return (
@@ -668,13 +740,60 @@ function Price({
             )}
           </span>
         </p>
+      ) : model?.test ? (
+        // a test model proves the workflow and nothing else: say so where the button is, and offer the real thing
+        <div className="space-y-1" data-testid="studio-test-model">
+          <p className="text-warn" data-testid="studio-estimate">
+            No charge: a test model. It draws a coloured pattern, not a real picture.
+          </p>
+          {realModel ? (
+            <p className="text-muted">
+              For a real picture,{" "}
+              <button
+                type="button"
+                className="text-accent hover:underline"
+                onClick={() => onUseModel(realModel.value)}
+                data-testid="studio-use-real-model"
+              >
+                use {realModel.label}
+              </button>
+              {realModel.paid ? ". Its price is shown here before anything is made." : "."}
+            </p>
+          ) : (
+            <p className="text-muted" data-testid="studio-no-real-model">
+              {realBlocked
+                ? `A real picture needs ${realBlocked.label}: ${realBlocked.unavailable}.`
+                : "No real image model is set up on this server."}
+            </p>
+          )}
+        </div>
       ) : (
         <p className="text-muted" data-testid="studio-estimate">
-          {model?.test
-            ? "No charge: a test model. It draws a placeholder pattern, not a real picture."
-            : "No charge."}
+          No charge.
         </p>
       )}
+      {quote.sending.length > 0 ? (
+        // exactly the images this request sends, in order, beside the button that sends them
+        <ol
+          className="flex flex-wrap gap-1"
+          aria-label="Images this request sends"
+          data-testid="studio-sent-strip"
+          data-count={quote.sending.length}
+        >
+          {quote.sending.map((s, i) => (
+            <li
+              key={s.assetId}
+              title={`${i + 1}. ${s.label}`}
+              className="h-9 w-7 overflow-hidden rounded-[2px] border border-line2 bg-[#232326]"
+            >
+              {thumb.get(s.assetId) ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={thumb.get(s.assetId)!} alt="" className="h-full w-full object-cover" />
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      ) : null}
       <details data-testid="studio-sent">
         <summary className="text-muted hover:text-fg">
           {quote.sending.length === 0

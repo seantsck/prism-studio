@@ -6,25 +6,28 @@ of references a film needs, and lets the creator change an image, compare takes 
 It is the front door to the **existing** Character / Location image pipeline (Phase 5B-I1 … I5,
 [phase-5b-image-pipeline](phase-5b-image-pipeline.md)). It adds no second pipeline, no table and **no migration**.
 
-**Status.** Implemented and browser-tested on the free test models. **Not yet creatively accepted:** the test models
-draw a placeholder pattern, so nothing here proves how a real picture looks. That needs the bounded real-provider test
-in [First real test](#first-real-test), which spends money and therefore needs the owner's authorization.
+**Status.** Implemented and browser-tested on the free test models. On the hosted review site the owner has added
+photographs and made two test patterns with the test model (2026-11-20). **Not yet creatively accepted:** no real
+picture has been made with it, and a test pattern proves nothing about how one looks. That needs the bounded
+real-provider test in [First real test](#first-real-test), which spends money and therefore needs the owner's
+authorization.
 
 ## What the owner can do
 
-| Step           | In the Studio                                                                                                                                                                        |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Pick a subject | Every Character and Location of the project, each with the picture that currently stands for it.                                                                                     |
-| Add photos     | Drop them on the Studio or choose files: JPEG, PNG or WebP, several at once. Each is listed with what will be sent before anything is uploaded. See [Adding photos](#adding-photos). |
-| See what it is | Size, format, whether it is an uploaded original or a generated picture, what the Visual Bible uses it as, where the project uses it. See [Inspection](#inspection).                 |
-| Make           | Front portrait, 3/4 view, left profile, right profile, half body, full body, wardrobe reference, look sheet, expression, scene variation; seven Location views.                      |
-| Change         | Hair colour, clothing (typed, or one of the Character's Looks), lighting and quality, clean studio background, replace background, remove people, or the creator's own change.       |
-| Cut out        | Prism's own free background removal (original pixels, plain backgrounds). A busy background is refused; the paid tool is offered only where it is configured.                        |
-| See the price  | Before anything is made: the server's upper bound in dollars, and what images like it were really billed in this project. See [Money](#money).                                       |
-| Judge          | The starting image beside the result on a neutral surround; two to four takes side by side with what they started from.                                                              |
-| Reject         | With a reason. The take stays in history, is never deleted or remade on its own, and is no longer offered as a starting image. Restore undoes it.                                    |
-| Promote        | Canonical identity, an identity slot, a Look, the cutout; canonical Location, a Location reference, a named Location View. Each is an explicit act.                                  |
-| Go on          | Links to the Shots the subject appears in, where the existing Production Frame generator sends these references on its own.                                                          |
+| Step           | In the Studio                                                                                                                                                                                |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pick a subject | Every Character and Location of the project, each with the picture that currently stands for it.                                                                                             |
+| Add photos     | Drop them on the Studio or choose files: JPEG, PNG or WebP, several at once. Each is listed with what will be sent before anything is uploaded. See [Adding photos](#adding-photos).         |
+| Start from     | Any number of the subject's pictures at once: every photo the creator added is selected to begin with, and all selected pictures are sent together. See [Starting images](#starting-images). |
+| See what it is | Size, format, whether it is an uploaded original or a generated picture, what the Visual Bible uses it as, where the project uses it. See [Inspection](#inspection).                         |
+| Make           | Front portrait, 3/4 view, left profile, right profile, half body, full body, wardrobe reference, look sheet, expression, scene variation; seven Location views.                              |
+| Change         | Hair colour, clothing (typed, or one of the Character's Looks), lighting and quality, clean studio background, replace background, remove people, or the creator's own change.               |
+| Cut out        | Prism's own free background removal (original pixels, plain backgrounds). A busy background is refused; the paid tool is offered only where it is configured.                                |
+| See the price  | Before anything is made: the server's upper bound in dollars, and what images like it were really billed in this project. See [Money](#money).                                               |
+| Judge          | A take beside what it was made from, on a neutral surround; two to four takes side by side with what they started from.                                                                      |
+| Reject         | With a reason. The take stays in history, is never deleted or remade on its own, and is no longer offered as a starting image. Restore undoes it.                                            |
+| Promote        | Canonical identity, an identity slot, a Look, the cutout; canonical Location, a Location reference, a named Location View. Each is an explicit act.                                          |
+| Go on          | Links to the Shots the subject appears in, where the existing Production Frame generator sends these references on its own.                                                                  |
 
 Nothing is overwritten. A generated or changed picture is a new immutable Asset with its attempt's provenance; a
 promotion only points a Visual Bible slot at it; replacing a slot or a canonical image that already holds a picture needs
@@ -42,7 +45,8 @@ picture yet), and the empty stage has a "Choose photos" button. Files dropped an
 3. **The creator says what the photos show**: references of the subject (any number), one empty identity slot (front,
    3/4, profile, full body: one photo), or a Look's wardrobe reference. A Location takes references.
 4. **Upload** sends the photos one request each, in order. A failure stays in the list with the server's reason; the
-   others are not affected. The first photo added as a reference of the subject becomes the starting image.
+   others are not affected. **Every** photo added as a reference of the subject becomes a starting image (see
+   [Starting images](#starting-images)).
 
 A chosen file is stored byte for byte whenever it can be. Two things prevent that, and in both a **copy made in the
 browser** is sent instead and is said to be a copy, in the list before uploading and on the stored image afterwards:
@@ -78,6 +82,73 @@ Code: `src/domain/generation/reference-upload.ts` (the decision, pure), `src/com
 queue and the copy), `src/lib/image-size.ts` (`readJpegOrientation`), `src/lib/upload-policy.ts`
 (`singleUploadLimit`), `src/server/reference-studio-actions.ts` (`uploadReferencePhoto`).
 
+## Starting images
+
+"Make a reference" starts from **every selected picture**, sent together in one request as views of the same person or
+place. Several photographs describe a person better than one, so that is the default, and the screen says so wherever
+the choice shows.
+
+- **What is selected to begin with** (`defaultStartingImages`): all of the creator's own photographs of the subject. A
+  Look's wardrobe photo is not one of them (it shows what is worn, not who the Character is). Only when the creator has
+  added no photograph is the picture that currently stands for the subject selected instead (the canonical identity or
+  canonical location, often a generated one). A generated picture is never selected ahead of the creator's own photos.
+- **After an upload** (`startingImagesAfterUpload`): every photo of the batch is selected, after whatever was selected
+  before. A generated picture that was only selected by default gives way; a selection the creator made themselves is
+  kept whole.
+- **Choosing.** A click on a picture under "Start from" puts it in or takes it out. Selected pictures carry their number,
+  which is the order they are sent in. The line under the pictures says how many are selected and that they are sent
+  together; "Select all N of my photos" puts every photograph back; "Words only" selects nothing.
+- **The stage follows.** Choosing starting images, or adding photos, puts them on the stage, all of them, numbered, at a
+  size they can be checked at ("Back to take #N" returns to the result). A fresh visit opens on the starting images
+  when a photograph was added after the newest picture was made (`opensOnStartingImages`), otherwise on that picture.
+  "Show them large" puts the selection on the stage without changing it.
+- **A take's own inputs are named as that take's** ("Take #4 was made from 3 images"), so what an older result started
+  from is not mistaken for what the next one will start from.
+- **Beside the button.** The images the server says it will send are pictured in order next to Generate, with their
+  count ("Sends 4 images"); the same list, the prompt and the price are one click away. That list comes from the same
+  preparation as the submission, so it is what is sent.
+- **A model's limit.** A model takes a stated number of images in one request (GPT Image 16, the test model 8). Past
+  it, the Studio says which pictures will be left out, before the request and in the count ("2 more did not fit this
+  model").
+- **A very long picture** (long side more than 2.2 times the short side, such as a full phone screenshot) is flagged:
+  the person is probably small in the frame, and anything else in the picture is sent with them. The Studio has no
+  crop tool yet; crop such a picture before adding it.
+- **"Change an image" works on one picture.** Its choice is kept apart from the starting images, so switching between
+  the two never loses either.
+
+Code: `src/domain/generation/reference-studio.ts` (the three rules above, pure), `src/server/reference-studio.ts`
+(`StudioImage.wardrobeOnly`, `.canonical`, `.addedAt`, `.test`; `StudioTake.test`), `src/components/studio/`
+(`reference-studio.tsx` the selection, `source-picker.tsx` the brief, `stage.tsx` the stage).
+
+## Test models and real models
+
+A deployment can switch on free **test models** ("Mock Image 1"). A test model draws a coloured pattern, never a
+picture: it exists to prove the workflow (what is sent, what is kept, what is promoted) where nothing real can run.
+Prism suggests a free model first, so on the hosted review site, where the test models are switched on, the owner made
+two "pictures" with one on 2026-11-20, got two gradients, and asked for it to go.
+
+- **Where a real model can be used, the Studio offers no test model** (`offersTestModels`), and shows nothing a test
+  model made: no take, no picture under "Start from", no count on the subject. Nothing is deleted. The attempts and
+  their files stay, and are shown again wherever test models are offered. A test pattern the Visual Bible uses stays in
+  view, named as one, so it can be seen for what it is and replaced.
+- **So on such a deployment the first Generate is a paid one.** The real model is selected from the start; its price
+  is on the button before anything is made, and a picture starts only from that click, as for every paid picture.
+- **Where no real model can be used** (local demo mode; a server with paid generation switched off), the test models
+  are all there is, so they are offered and say what they are: "No charge: a test model. It draws a coloured pattern,
+  not a real picture.", a button that reads **Generate test pattern**, and why the real model cannot be used ("paid
+  generation is switched off", "not set up on this server"). A test model that is not switched on is not listed.
+- **A test server that needs both** sets `PRISM_STUDIO_SHOW_TEST_MODELS=1` (the browser stories do: the free models do
+  the generating while the paid one is priced). There the test model also offers the real one in one click, and its
+  results are labelled on the take ("Test pattern, not a real picture"), under "Start from" ("test pattern") and in
+  their line of facts.
+- **The creator's choice of model is remembered in the browser** (`remembered-model.ts`, local storage), from one
+  Character to the next and from one visit to the next. Only a choice the creator made is stored, never a suggestion,
+  and a remembered paid model changes nothing about spending.
+
+Not covered yet: the older panels on the Character page and the Location cards, and the video model pickers, still
+list test models wherever the deployment switches them on (`PRISM_STUDIO_ENABLE_MOCK_PROVIDER`). The older image
+panels already send a paid model to the Studio; their default is still the free test model.
+
 ## What is sent (prompt policy `subject-image` v2)
 
 Version 1 described the subject in words and attached whatever references existed without saying what they were for. It
@@ -95,8 +166,10 @@ Version 2 says what the images are **for**, and sends only what describes the pi
 | `edit`      | one image is changed                              | "Change only this in the image being edited: …" and "Keep everything else exactly as it is". No composition, no written appearance, no other image.                                                                                           |
 
 - **What is chosen is what is sent.** The Studio states its choice of starting images. One photo selected sends that
-  photo, not also a generated canonical image the creator did not pick. Nothing selected ("Words only") sends no
-  identity image. A selected Look brings its own wardrobe images and words; its hair styling replaces the reference's.
+  photo, not also a generated canonical image the creator did not pick. Four photos selected send those four, in the
+  order they are numbered, and the wording speaks of them together ("the identity reference images", "the reference
+  images win where they differ"). Nothing selected ("Words only") sends no identity image. A selected Look brings its
+  own wardrobe images and words; its hair styling replaces the reference's.
 - **Left and right are screen directions**, so the two profiles are unambiguous.
 - **A studio reference is neutral**: plain light-grey background, even light. The project's visual style is sent in full
   only where the picture is the film's world (a Location, a scene variation).
@@ -132,6 +205,11 @@ Code: `src/domain/generation/subject-image.ts` (the plan), `src/generation/subje
   $0.224 and billed $0.0095 to $0.0411. So the Studio also shows "Images like it have cost about $X here": the median
   actual of finished images with the same model, quality and number of sent images (`typicalCost`), or says that
   nothing comparable exists. It never guesses.
+- **Each starting image adds to the price.** For GPT Image at standard quality the upper bound is $0.077 from words
+  alone, $0.126 with one image, $0.271 with four, $0.465 with eight and $0.852 with sixteen (about $0.048 for each
+  further image). The amount on the button always covers exactly the images pictured beside it, and the deployment's
+  per-image ceiling still applies: where it is $0.50, a request with nine or more images is refused before anything
+  is sent.
 - **After.** Each take shows what was billed, from the provider's reported usage. A free test model reports a pretend
   cost; it is never shown as money billed.
 - The deployment's spend gate and ceilings are unchanged and still apply first.
@@ -167,16 +245,24 @@ rejected until that use ends.
   `src/generation/__tests__/reference-studio-flow.test.ts` (GPT Image on the fake transport: the exact images and prompt
   the transport is handed); `src/server/__tests__/reference-studio.test.ts` (quote, confirmation, upload, review, read
   model).
-- Browser: `e2e/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-reference-studio.spec.ts`, stories A to M, on its own memory server
+- Browser: `e2e/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-reference-studio.spec.ts`, stories A to N, on its own memory server
   with the free test models. GPT Image is listed there as a paid worker-backed model with an empty key so its price can
   be shown; no story starts a paid image. Stories L and M cover the upload area in a real browser: several photos chosen
   and dropped, a file that is not a picture, a photo too large for one upload (the server states a 1 MB limit), and a
-  photo stored turned, whose uploaded copy is checked pixel by pixel to be upright.
+  photo stored turned, whose uploaded copy is checked pixel by pixel to be upright. Stories L, M and N cover several
+  starting images: every photo of a batch selected and on the stage, the count and the prompt agreeing, the price of a
+  second image shown before anything is made (story I), and a take made from three photos whose record lists each one.
+  Stories A, C and I cover the test model on a server that asks for it: what it says it draws, the button that never
+  promises a picture, the one click to the real model, and that model remembered after a reload and for the next
+  Character.
+- Browser, a real deployment: `e2e/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-reference-studio-real.spec.ts`, on a second
+  memory server with the same real model and no `PRISM_STUDIO_SHOW_TEST_MODELS`: no test model is listed, the real one
+  is selected, and its price is on the button from words alone and with two photographs. It never presses Generate.
 
 ## Deployment
 
-- No migration. No new provider. One optional environment variable, `PRISM_STUDIO_MAX_UPLOAD_BYTES` (leave it unset
-  on Vercel).
+- No migration. No new provider. Two optional environment variables: `PRISM_STUDIO_MAX_UPLOAD_BYTES` (leave it unset
+  on Vercel) and `PRISM_STUDIO_SHOW_TEST_MODELS` (test servers only; leave it unset on any deployment a creator uses).
 - The web app must be deployed for the screen to exist. The **generation worker** compiles the provider prompt, so the
   corrected first line reaches OpenAI only after the workers project is redeployed from this code. With the old worker a
   `reference` request still runs, with the old first line in front of the new body.
@@ -193,12 +279,12 @@ rejected until that use ends.
 
 Not run. It needs the owner's authorization, because it spends money.
 
-| Item        | Proposal                                                                                                                             |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Input       | One real photograph of the person who is Yumeko, uploaded by the owner. (The hosted project has no uploaded photo of any Character.) |
-| Images      | Front portrait, 3/4 view, left profile, right profile, half body, full body: six images, each from that one photo.                   |
-| Model       | GPT Image 2.5 Flare, standard quality, portrait 2:3.                                                                                 |
-| Upper bound | About $0.13 each, about $0.76 for six. Each is under the workers' current $0.50 ceiling.                                             |
-| Expected    | About $0.02 to $0.03 each going by the one comparable hosted image ($0.0243 with one starting image), so about $0.15 in all.         |
-| Pass        | The owner looks at the six beside the photo and says whether it is the same person. Nothing is retried automatically.                |
-| Needs       | This branch deployed to the review site, and the workers project redeployed from it.                                                 |
+| Item        | Proposal                                                                                                                                                                                          |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Input       | The owner's own photographs of the person who is Yumeko. Four were added on the hosted project on 2026-11-20; two are full phone screenshots (1080 × 2400), which are better cropped or left out. |
+| Images      | Front portrait, 3/4 view, left profile, right profile, half body, full body: six images, each from the same selected photos.                                                                      |
+| Model       | GPT Image 2.5 Flare, standard quality, portrait 2:3.                                                                                                                                              |
+| Upper bound | With four photos about $0.27 each, about $1.63 for six; with one photo about $0.13 each, about $0.76 for six. Each image is under the workers' current $0.50 ceiling.                             |
+| Expected    | Unknown for several starting images: nothing comparable has been billed here. With one starting image the one comparable hosted image cost $0.0243.                                               |
+| Pass        | The owner looks at the six beside the photos and says whether it is the same person. Nothing is retried automatically.                                                                            |
+| Needs       | The workers project redeployed from `main`, so the corrected first line of the prompt is what reaches the provider.                                                                               |

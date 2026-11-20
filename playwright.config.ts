@@ -110,6 +110,13 @@ const ISOLATED_PAID_GATE = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-paid-animation-ga
 const ISOLATED_STUDIO = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-reference-studio.spec.ts";
 
 /**
+ * The Reference Studio the way a REAL deployment shows it: its own memory server with the same real model and NO
+ * PRISM_STUDIO_SHOW_TEST_MODELS, so the Studio offers no test model. The key is EMPTY here too, and the spec never
+ * presses Generate: it reads what is offered and what it would cost.
+ */
+const ISOLATED_STUDIO_REAL = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-reference-studio-real.spec.ts";
+
+/**
  * TEST SERVERS ONLY. Playwright's request client reuses keep-alive sockets; at Node's default idle-close boundary
  * (5 s + 1 s buffer) the server could close a socket while `page.request` was reusing it, giving ECONNRESET before
  * the request reached the app. Longer than the longest test (20 min), so each test's request context closes first.
@@ -142,6 +149,7 @@ export default defineConfig({
         ISOLATED_5B,
         ISOLATED_PAID_GATE,
         ISOLATED_STUDIO,
+        ISOLATED_STUDIO_REAL,
       ],
       use: { baseURL: "http://localhost:3102" },
     },
@@ -224,6 +232,11 @@ export default defineConfig({
       name: "memory-studio-isolated",
       testMatch: ISOLATED_STUDIO,
       use: { baseURL: "http://localhost:3118" },
+    },
+    {
+      name: "memory-studio-real-isolated",
+      testMatch: ISOLATED_STUDIO_REAL,
+      use: { baseURL: "http://localhost:3119" },
     },
   ],
   // Started in order: the first builds; the others serve the same build from separate processes (separate stores).
@@ -392,8 +405,29 @@ export default defineConfig({
         PRISM_STUDIO_ALLOW_PAID_GENERATION: "true",
         PRISM_STUDIO_MAX_GENERATION_USD: "1",
         PRISM_STUDIO_MAX_CANDIDATE_SET_USD: "1",
+        // a test server needs the free test models BESIDE the real one (a real deployment offers them only where
+        // nothing real can be used: see the next server)
+        PRISM_STUDIO_SHOW_TEST_MODELS: "1",
         // stands in for a host's small request cap (Vercel: 4.5 MB), so a photo too large for one upload can be tried
         PRISM_STUDIO_MAX_UPLOAD_BYTES: "1000000",
+      },
+    },
+    {
+      command: `npx next start -p 3119 ${KEEP_ALIVE}`,
+      url: "http://localhost:3119",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      // The Reference Studio as a real deployment shows it: the same real model (worker-backed, EMPTY key, so nothing
+      // can reach a provider) and no PRISM_STUDIO_SHOW_TEST_MODELS. The test models are switched on here exactly as
+      // they are on the hosted review site, and the Studio still does not offer them.
+      env: {
+        ...memoryEnv(3119),
+        PRISM_STUDIO_GENERATION_PROVIDERS: "openai-image,prism-matting",
+        PRISM_STUDIO_WORKER_BACKED_PROVIDERS: "openai-image",
+        PRISM_STUDIO_PROVIDER_OPENAI_IMAGE_API_KEY: "",
+        PRISM_STUDIO_ALLOW_PAID_GENERATION: "true",
+        PRISM_STUDIO_MAX_GENERATION_USD: "1",
+        PRISM_STUDIO_MAX_CANDIDATE_SET_USD: "1",
       },
     },
   ],
