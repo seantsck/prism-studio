@@ -445,3 +445,14 @@ smoke.
   Look edit under a Lock (fresh) vs a Lock switch (stale), a Location View change.
 - `e2e/zzzzzzzzzzzzzzzzzzzz-image-to-video.spec.ts` (memory, UI) and `e2e/supabase-image-to-video.spec.ts` (real Auth,
   RLS, Postgres, private Storage and worker; MockProvider only; fixture restored exactly).
+- `src/generation/__tests__/pre-spend-checks.test.ts` (pure and memory): reference slots, origins and every lineage
+  status (including an edit chain and a Continuity Lock), the paid-only gate, the identical-retake guard, and the
+  candidate set refusing a paid take until the check is confirmed.
+- `src/domain/generation/__tests__/provider-prompt.test.ts` and `src/generation/__tests__/runway-provider-prompt.test.ts`:
+  both policies, with Shot 3A's v2 text pinned and a frozen v1 attempt left unchanged.
+- `e2e/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-paid-animation-gate.spec.ts` (memory, UI): the only browser coverage of a
+  **paid** row. Its server lists Runway with paid generation enabled and an explicitly empty secret, so the rows are
+  selectable and priced and nothing can reach the provider; the spec never submits a paid candidate. It covers the
+  reference check for a frame generated from words only, the exact v2 prompt shown, "Check before you spend" holding
+  Generate until it is confirmed on its own, free models not being gated, and a rejection staying visible in the Shot
+  Clip panel.

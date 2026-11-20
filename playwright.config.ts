@@ -96,6 +96,13 @@ const ISOLATED_4E = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-environment-limits.spec.ts
 const ISOLATED_5B = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-image-pipeline.spec.ts";
 
 /**
+ * The paid animation gate spec: its own memory server, the ONLY one where paid generation is enabled. Runway is listed
+ * as a worker-backed provider (the web app only queues) with an explicitly EMPTY secret and no Runway worker, so the
+ * paid rows are selectable and priced while no request can leave the process. The spec never submits a paid candidate.
+ */
+const ISOLATED_PAID_GATE = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-paid-animation-gate.spec.ts";
+
+/**
  * TEST SERVERS ONLY. Playwright's request client reuses keep-alive sockets; at Node's default idle-close boundary
  * (5 s + 1 s buffer) the server could close a socket while `page.request` was reusing it, giving ECONNRESET before
  * the request reached the app. Longer than the longest test (20 min), so each test's request context closes first.
@@ -126,6 +133,7 @@ export default defineConfig({
         ISOLATED_4D,
         ISOLATED_4E,
         ISOLATED_5B,
+        ISOLATED_PAID_GATE,
       ],
       use: { baseURL: "http://localhost:3102" },
     },
@@ -198,6 +206,11 @@ export default defineConfig({
       name: "memory-5b-isolated",
       testMatch: ISOLATED_5B,
       use: { baseURL: "http://localhost:3116" },
+    },
+    {
+      name: "memory-paid-gate-isolated",
+      testMatch: ISOLATED_PAID_GATE,
+      use: { baseURL: "http://localhost:3117" },
     },
   ],
   // Started in order: the first builds; the others serve the same build from separate processes (separate stores).
@@ -327,6 +340,25 @@ export default defineConfig({
         ...memoryEnv(3116),
         PRISM_STUDIO_GENERATION_PROVIDERS: "prism-matting",
         PRISM_STUDIO_RENDER_PRESET: "ultrafast",
+      },
+    },
+    {
+      command: `npx next start -p 3117 ${KEEP_ALIVE}`,
+      url: "http://localhost:3117",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      // The paid animation gate, with NO credential. Runway is worker-backed here, so the web app needs no key to
+      // offer its models; the secret is set EMPTY (it wins over anything in .env.local) and the adapter refuses to
+      // build a client without it, so nothing can reach Runway even if a candidate were submitted. The ceilings are
+      // the same gate a real deployment needs before a paid row becomes selectable.
+      env: {
+        ...memoryEnv(3117),
+        PRISM_STUDIO_GENERATION_PROVIDERS: "runway",
+        PRISM_STUDIO_WORKER_BACKED_PROVIDERS: "runway",
+        RUNWAYML_API_SECRET: "",
+        PRISM_STUDIO_ALLOW_PAID_GENERATION: "true",
+        PRISM_STUDIO_MAX_GENERATION_USD: "1",
+        PRISM_STUDIO_MAX_CANDIDATE_SET_USD: "1",
       },
     },
   ],
