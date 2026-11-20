@@ -105,6 +105,50 @@ describe("subject-image policy v2: what the images are FOR", () => {
     ]);
   });
 
+  it("SEVERAL photographs: every one is sent, in the creator's order, and the prompt speaks of them together", () => {
+    const { data, yumeko, photo } = world();
+    // the hosted case: photographs the creator added in the Studio are extra identity references of the Character
+    const more = ["side", "smile", "full"].map((name, n) => {
+      const asset = image(data, `photo-${name}`);
+      data.identityRefs.push({
+        id: `extra-ref-${n}`,
+        characterId: yumeko.id,
+        slot: "additional",
+        assetId: asset.id,
+        label: "Reference photo",
+        metadata: {},
+        locked: false,
+      });
+      return asset;
+    });
+    const chosen = [more[1]!.id, photo.id, more[0]!.id, more[2]!.id];
+    const plan = buildSubjectImagePlan(data, {
+      subject: { kind: "character", characterId: yumeko.id, intent: "three_quarter" },
+      direction: "",
+      sourceAssetIds: chosen,
+    });
+    expect(plan.operation).toBe("reference");
+    expect(plan.references.map((r) => [r.order, r.assetId, r.role, r.label])).toEqual([
+      [0, more[1]!.id, "identity", "Yumeko reference photo"],
+      [1, photo.id, "identity", "Yumeko reference photo (front)"],
+      [2, more[0]!.id, "identity", "Yumeko reference photo"],
+      [3, more[2]!.id, "identity", "Yumeko reference photo"],
+    ]);
+    expect(plan.packageSnapshot).toMatchObject({ sourceAssetIds: chosen });
+    expect(lines(plan, "identity")[0]).toBe(
+      "The same person as in the identity reference images: keep the face, facial features, skin tone, hair, apparent age and build exactly as shown. Do not beautify, restyle or change them.",
+    );
+    expect(lines(plan, "identity")[1]).toMatch(
+      /^Written notes \(the reference images win where they differ\): /,
+    );
+    expect(lines(plan, "wardrobe")).toEqual([
+      "Clothing and hair styling as in the reference images, unless the direction says otherwise.",
+    ]);
+    expect(lines(plan, "hard_constraints")).toEqual([
+      "Keep the rendering style of the reference images: a photograph stays a photograph.",
+    ]);
+  });
+
   it("a generated picture is named as generated, never as a photograph", () => {
     const { data, yumeko, canonical } = world();
     const plan = buildSubjectImagePlan(data, {
