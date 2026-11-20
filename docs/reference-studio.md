@@ -169,7 +169,9 @@ Version 2 says what the images are **for**, and sends only what describes the pi
   photo, not also a generated canonical image the creator did not pick. Four photos selected send those four, in the
   order they are numbered, and the wording speaks of them together ("the identity reference images", "the reference
   images win where they differ"). Nothing selected ("Words only") sends no identity image. A selected Look brings its
-  own wardrobe images and words; its hair styling replaces the reference's.
+  words (its hair styling replaces the reference's). Its picture is sent only when none of the creator's own photos is
+  chosen: a Look picture shows a whole person, and beside the creator's photos a model copied that person's face
+  (hosted, 2026-11-20). The Wardrobe box says so; selecting the Look picture under "Start from" sends it anyway.
 - **Left and right are screen directions**, so the two profiles are unambiguous.
 - **A studio reference is neutral**: plain light-grey background, even light. The project's visual style is sent in full
   only where the picture is the film's world (a Location, a scene variation).

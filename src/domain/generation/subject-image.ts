@@ -341,7 +341,12 @@ export function buildSubjectImagePlan(
                   : "";
         add({ assetId: id, role: "identity", label: `${character.name} ${kind}${what}` });
       }
-      for (const r of lookRefs) add(r);
+      // With the creator's own photographs chosen, a selected Look is sent as WORDS only. A Look's picture shows a
+      // whole person, and a model copies that person's face over the photographs (hosted, 2026-11-20: four photos plus
+      // a generated Look picture came back as the generated woman). To send the Look picture anyway, the creator
+      // selects it under "Start from"; it is then one of the chosen images above.
+      const ownPhotoChosen = explicit.some((id) => referenceOrigin(assetOf(id)) === "uploaded");
+      if (!ownPhotoChosen) for (const r of lookRefs) add(r);
     } else {
       // Phase 5B-I4 priority: canonical identity → selected Look → the other identity references (deterministic; the
       // list is cut from the END, so the highest-priority images always survive)
