@@ -154,6 +154,55 @@ disclosed truthfully and acknowledged:
 Character Continuity Lock facts and Location View facts stay in the GenerationPackage and the PromptPlan (what the
 motion must preserve). A Shot with a selected Lock never reverts to the mutable library.
 
+## Reference check before spend
+
+A video model given a first frame receives that frame and text. On Runway Gen-4.5 and Gen-4 Turbo the image-to-video
+request has no reference-image input at all (`@runwayml/sdk` 4.22.0: `promptImage` with position `first`, `promptText`,
+`ratio`, `duration`, `seed`); every hosted model that has one excludes it in first-frame mode. So in this workflow the
+Character's identity, the wardrobe Look and the Location reach the clip **only through the Production Frame**. An
+animation request for Shot 3A carries one image and zero references by construction.
+
+Whether that frame was itself generated from the canonical references is therefore the reference question that matters
+before spend, and it is answerable from records Prism already keeps
+(`src/domain/generation/reference-integrity.ts`, pure, no new state):
+
+- **Slots.** Per assigned Character its identity (the designated Canonical Identity, else the first stored identity
+  image, else the selected Continuity Lock's) and its Look's first reference image; then the Shot's selected Location
+  View. Each is `ready` (a stored image Prism sends) or `missing` (words only), with its **origin**: an uploaded
+  original, a generated reference, or derived. A generated reference is always labelled as one.
+- **Lineage.** The selected frame's source attempt and its frozen `inputAssetIds`, following edits back through the
+  images they were made from:
+
+| Status         | Meaning                                                                                | Paid animation                         |
+| -------------- | -------------------------------------------------------------------------------------- | -------------------------------------- |
+| `verified`     | Generated from every ready essential reference                                         | nothing extra                          |
+| `partial`      | Generated **without** one or more of the Shot's current essential references (named)   | `references.frame_lineage` to confirm  |
+| `unreferenced` | Generated while the Shot had no reference image: every appearance came from words      | `references.essential_missing`         |
+| `unverifiable` | Uploaded, from a Storyboard or a 3D Master Frame, or its attempt record is unavailable | disclosed ("check it by eye"), no gate |
+| `none`         | No Production Frame selected                                                           | (Animate is already blocked)           |
+
+This reports facts about inputs. It never claims to have looked at pixels: a `verified` frame can still be a bad
+likeness, and human review stays authoritative. It complements freshness, which already blocks a frame whose
+references changed after it was made; lineage catches the frame that was made without them in the first place.
+
+The Animate panel shows the check for every Shot ("Reference check"). On a **paid** model the two acknowledgements
+above are confirmed on their own ("Check before you spend"), never inside the general "what each candidate will not
+use" list, and the server requires the same confirmation (`acknowledgePreSpend`). They are recorded on the attempt
+(`acknowledgedIgnored`, and in its frozen compatibility report). Free models are not gated.
+
+## Rejected takes
+
+A creatively rejected clip is evidence about a specific request. `src/domain/generation/retake.ts` gives a request a
+**take signature**: first and last frame, model, the prompt actually sent, duration and provider canvas (not the seed,
+the resolution tier or native audio). The Shot's earlier animations from the same Production Frame are its prior takes,
+each with its verdict (a candidate review, or the attempt's own rejection) and reasons.
+
+- A rejection made in the Shot Clip panel stays visible there with its reasons, and Reject is no longer offered again.
+- A paid request **identical** to a rejected take needs its own confirmation (`retake.identical_to_rejected`: "the same
+  frame, model, prompt and duration would be sent again"). Prism never regenerates a rejected Shot on its own, and
+  never re-sends the identical instruction silently.
+- Changing the Production Frame, the Shot's direction, the model, or the prompt policy changes the signature.
+
 ## Motion-first prompting
 
 Same PromptPlan v1 sections, no new schema, no provider-specific format in the domain. For this purpose
@@ -182,14 +231,65 @@ Shot code and title, `Purpose: …`, `(55/10)`, aspect-ratio prose) and sat at 9
 their last clause.
 
 **Policy table.** `providerPromptPolicyFor(provider, model, purpose)` is table-driven; a model opts in explicitly with
-its own target. First entry: Runway `gen4_turbo`, `animate_production_frame`, policy `visible-motion` v1, limit from the
-catalog (`promptMaxChars` 1000), target 900; Runway `gen4.5` uses the same policy and budget. Everything else keeps its
-existing compilation, unchanged.
+its own target. Runway `gen4_turbo` and `gen4.5`, `animate_production_frame`: policy `visible-motion` **v2** (since
+2026-11-19), limit from the catalog (`promptMaxChars` 1000), target 600. Everything else keeps its existing compilation,
+unchanged.
 
 Gen-4.5's documented prompt-image range (0.5–2) is narrower than its 21:9 output; its wide start frames use the
 `contain-prepad-center-crop-v1` transport described above.
 
-**visible-motion v1** writes concise prose in these sections:
+### visible-motion v2 (current): the provider's documented prompting contract
+
+v1 (below) was written from the failures in front of it. v2 is written from Runway's own guidance for these models,
+re-read on 2026-11-19:
+
+- [Gen-4 Video Prompting Guide](https://help.runwayml.com/hc/en-us/articles/39789879462419): describe what should
+  happen; negative phrasing is not supported and may produce the opposite result; restating what the image already
+  shows (clothing, hair) can cause unexpected results; refer to subjects in general terms; one scene's motion, simply.
+- [Image to Video Prompting Guide](https://help.runwayml.com/hc/en-us/articles/48324313115155-Image-to-Video-Prompting-Guide)
+  (written for Gen-4.5): prompts describe motion, not what is visible; stillness is asked for positively ("The
+  locked-off camera remains perfectly still.", "Minimal subject motion only."); motion cues in the image itself work
+  against a prompt for stillness.
+
+v1's Shot 3A prompt (882 characters) broke that contract in the two ways the guide warns about. It carried five
+negations ("never rotating through frontal or toward screen-left", "never looking into the camera", "no larger head or
+body movement", "no push-in, pan or reframing", "Do not introduce new objects or people") and restated the hair, gown,
+earrings, Location and time of day. The rejected Gen-4.5 take rotated through frontal to a screen-left profile. That is
+consistent with the guide's warning; it is not proof of cause, and only a new take can show the result.
+
+v2 is the same deterministic derivation from the package's structured fields, under three rules:
+
+1. **Positive phrasing only, enforced.** A Shot note phrased negatively ("never smiles", "doesn't look at the camera")
+   is not sent. The omission is recorded (`negative-phrasing-omitted`) and shown in the Animate panel as "Shot notes
+   not sent", so the filmmaker can rephrase it as what should happen. A negatively phrased camera note ("No movement")
+   becomes a still camera. If a negation still reached the final text the record is `ok: false` and the adapter
+   refuses it before any spend (defence in depth: no input reaches that state today).
+2. **Motion only.** No subject description, Look, Location, lighting or beginning pose: the first frame carries them.
+   Each is recorded as deliberately not restated (`established-by-first-frame`).
+3. **General terms.** "The subject" on first mention, then a pronoun. Never a name or a physical description.
+
+Sections, in sending order: Camera (required), Visible action (required: held orientation, the visible change, the
+ending, and for a held Shot the motion envelope), Performance (optional: the pace). Shot 3A, 443 characters:
+
+> The locked-off camera remains perfectly still. The subject holds her position, turned toward the right side of the
+> frame, and her gaze stays down and away. Her expression briefly softens, she looks visibly exhausted, her shoulders
+> lower subtly and she closes her eyes briefly. Then her eyes open and she ends calm and neutral. Minimal subject
+> motion only: her face, eyelids and breathing, with a slight drop of the shoulders. The pace is slow.
+
+**Attribution follows the cast.** One Character: the translation rules below, and a note no rule understands is
+attributed to the subject only when its own shape makes that safe (a body part, a verb plus its object, a single
+descriptive word); anything else is sent in the filmmaker's own words, never rewritten into a claim ("Door swings open"
+stays "door swings open"). Several Characters: Prism has no reliable screen position for each, so their notes are sent
+verbatim and only what is true of all of them is added ("The subjects hold their positions."). No Character: camera and
+scene notes only. Positional language for several subjects is not derived yet.
+
+**History.** An attempt keeps the prompt it froze. A v1 record still parses, validates and is shown as v1; no new
+request is built with it. Because the sent prompt is part of a take's signature, a take sent under v1 is not
+"identical" to today's request (see Rejected takes).
+
+### visible-motion v1 (historical)
+
+**visible-motion v1** wrote concise prose in these sections:
 
 | Section         | Required | Priority | Content                                                                                                                                                                                                                           |
 | --------------- | -------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -228,9 +328,9 @@ re-checked by the worker before the provider call) requires its source fingerpri
 Historical attempts keep what they recorded.
 
 **Inspectable before spend.** The Animate Production Frame panel shows, per policy-adapted model, the story intent
-(source of truth), the exact provider prompt, the policy version, length/limit/target and omitted sections. The no-spend
-evaluation (`Evaluation.providerPrompt`) and the Prompt Inspector's compiled fields (`promptPolicy`, `promptBudget`,
-`promptOmittedSections`) carry the same record.
+(source of truth), the exact provider prompt, the policy version, length/limit/target, omitted sections and the Shot
+notes that were not sent (with the reason). The no-spend evaluation (`Evaluation.providerPrompt`) and the Prompt
+Inspector's compiled fields (`promptPolicy`, `promptBudget`, `promptOmittedSections`) carry the same record.
 
 **Deployment note.** A generation worker built before this change ignores `prismProviderPrompt` and would compile the
 old prompt. The worker must run this code before a policy-adapted request is submitted.

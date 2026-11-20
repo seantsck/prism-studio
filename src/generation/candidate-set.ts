@@ -12,6 +12,7 @@ import {
   type SetSpendPlan,
 } from "@/domain/generation/candidates";
 import type { InputMode, IgnoredFeature } from "@/domain/generation/compatibility";
+import { isPreSpendAcknowledgement } from "@/domain/generation/retake";
 import { catalogModel } from "@/domain/generation/models/catalog";
 import { evaluateModelFit, type ModelFit } from "@/domain/generation/models/matrix";
 import { deriveShotFeatureProfile, deriveShotRequirements } from "@/domain/generation/models/requirements";
@@ -155,6 +156,8 @@ export function planCandidateSet(args: {
       shared,
       edit: s.edit ?? undefined,
       direction: s.direction ?? null,
+      // an OutcomeRecord carries each attempt's current human verdict
+      verdicts: args.outcomes,
     });
     const blockers = evaluation.gate.blockers.map((b) => b.message);
     return {
@@ -213,6 +216,49 @@ export function planCandidateSet(args: {
   };
 }
 
+/**
+ * The pre-spend checks of a plan: per candidate, the acknowledgements that guard money and must be confirmed on their
+ * own (see `isPreSpendAcknowledgement`). Empty for free candidates and for every purpose but a paid animation.
+ */
+export function preSpendChecks(
+  plan: Pick<CandidateSetPlan, "items">,
+): Array<{ provider: string; modelId: string; label: string; check: IgnoredFeature }> {
+  return plan.items.flatMap((it) =>
+    it.ignored
+      .filter((f) => isPreSpendAcknowledgement(f.id))
+      .map((check) => ({
+        provider: it.selection.provider,
+        modelId: it.selection.modelId,
+        label: it.fit.displayName,
+        check,
+      })),
+  );
+}
+
+/**
+ * For the Animate comparison: every paid video model's pre-spend checks, keyed by `provider/modelId`, from the SAME
+ * plan the submit path builds (so what is shown before spend is exactly what the server will require). Models that
+ * cannot take the Shot contribute nothing: their blockers are shown by the comparison itself.
+ */
+export function animationPreSpendByModel(args: {
+  data: ProjectData;
+  shotId: string;
+  registry: ModelRegistry;
+  config: GenerationConfig;
+  outcomes: readonly OutcomeRecord[];
+  now?: Date;
+}): Record<string, IgnoredFeature[]> {
+  const selections = args.registry
+    .models()
+    .filter((m) => m.capabilities.video != null && args.registry.billsMoney(m))
+    .map((m) => ({ provider: m.provider, modelId: m.modelId }));
+  if (selections.length === 0) return {};
+  const plan = planCandidateSet({ ...args, selections, purpose: "animate_production_frame" });
+  const out: Record<string, IgnoredFeature[]> = {};
+  for (const c of preSpendChecks(plan)) (out[`${c.provider}/${c.modelId}`] ??= []).push(c.check);
+  return out;
+}
+
 export interface CandidateSubmitResult {
   view: CandidateSetView;
   submitted: number;
@@ -237,6 +283,12 @@ export async function submitCandidateSet(args: {
   selections: readonly CandidateSelection[];
   /** The user saw every "will not be used" item of every candidate and accepts them. */
   acknowledgeAll: boolean;
+  /**
+   * The user separately confirmed the pre-spend checks of a paid animation (a Production Frame generated without a
+   * canonical reference; a request identical to a rejected take). Never implied by `acknowledgeAll`: these are shown
+   * and confirmed on their own. Irrelevant when no candidate has one.
+   */
+  acknowledgePreSpend?: boolean;
   /** The maximum total the user confirmed on screen; the server recomputes and refuses a mismatch. */
   confirmedTotalUsd: number | null;
   title: string;
@@ -283,6 +335,13 @@ export async function submitCandidateSet(args: {
   if (needsAck && !args.acknowledgeAll) {
     throw new CandidateSetBlockedError(
       "Acknowledge what each candidate will not use before generating.",
+      plan,
+    );
+  }
+  const preSpend = preSpendChecks(plan);
+  if (preSpend.length > 0 && !args.acknowledgePreSpend) {
+    throw new CandidateSetBlockedError(
+      `Confirm the pre-spend check before generating: ${preSpend[0]!.check.label}.`,
       plan,
     );
   }
@@ -391,6 +450,8 @@ export async function submitCandidateSet(args: {
         now,
         edit: it.selection.edit ?? undefined,
         direction: it.selection.direction ?? null,
+        // the same verdicts the plan saw, so the attempt records exactly the acknowledgements that were shown
+        verdicts: outcomes,
       });
       if (!prepared.input) {
         const why = prepared.evaluation.gate.blockers.map((b) => b.message).join(" · ") || "blocked";

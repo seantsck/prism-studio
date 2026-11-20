@@ -155,6 +155,14 @@ test("2C without a Production Frame: Animate is blocked with the exact reason; n
   await expect(panel(page).getByTestId("model-matrix")).toHaveCount(0);
   // the Storyboard is never offered as a substitute
   await expect(panel(page)).not.toContainText(/storyboard fallback/i);
+  // Reference check: shown even before a frame exists; no Location View is selected yet (words only)
+  const check = panel(page).getByTestId("reference-check");
+  await expect(check).toHaveAttribute("data-lineage", "none");
+  await expect(check.locator('[data-testid="reference-slot"][data-slot="location_view"]')).toHaveAttribute(
+    "data-status",
+    "missing",
+  );
+  await expect(check.getByTestId("reference-lineage")).toHaveText("No Production Frame is selected.");
 });
 
 test("Location View A + Production Frame v1: the Animate panel compares video models truthfully, before spend", async ({
@@ -172,6 +180,19 @@ test("Location View A + Production Frame v1: the Animate panel compares video mo
   await page.goto(`${shotUrl}?section=animate`);
   await expect(panel(page)).toHaveAttribute("data-ready", "1");
   await expect(panel(page).getByTestId("animate-pf-version")).toHaveText("v1");
+  // Reference check: the uploaded Location View is a stored, uploaded original; an UPLOADED frame's lineage is not
+  // Prism's to verify, which is disclosed and never gated (and the free mock models have no pre-spend check at all)
+  const check = panel(page).getByTestId("reference-check");
+  await expect(check).toHaveAttribute("data-lineage", "unverifiable");
+  await expect(check).toHaveAttribute("data-verified", "0");
+  const viewSlot = check.locator('[data-testid="reference-slot"][data-slot="location_view"]');
+  await expect(viewSlot).toHaveAttribute("data-status", "ready");
+  await expect(viewSlot).toContainText("Canopy Arrival");
+  await expect(viewSlot.getByTestId("reference-origin")).toHaveText("uploaded original");
+  await expect(check.getByTestId("reference-lineage")).toContainText(
+    "Production Frame v1: Uploaded, not generated from this Shot's references.",
+  );
+  await expect(panel(page).getByTestId("pre-spend-checks")).toHaveCount(0);
   await expect(panel(page).getByTestId("animate-pf-preview")).toHaveAttribute("src", /^\/api\/assets\//);
   await expect(panel(page).getByTestId("animate-duration")).toContainText("3.5 s");
   await expect(panel(page).getByTestId("animate-override")).toHaveText("none");
