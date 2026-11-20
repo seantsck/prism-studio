@@ -75,13 +75,21 @@ export type FrameLineageStatus =
   | "partial"
   /** Generated while the Shot had no reference image at all: every appearance came from words. */
   | "unreferenced"
-  /** Not generated from references (uploaded, Storyboard, 3D Master Frame), or its attempt record is unavailable. */
+  /**
+   * Not generated from references (uploaded, Storyboard, 3D Master Frame) and not a copy of a generated frame, or its
+   * attempt record is unavailable.
+   */
   | "unverifiable";
 
 export interface FrameLineage {
   status: FrameLineageStatus;
   frame: { frameId: string; version: number; assetId: string; source: ProductionFrameSource } | null;
   sourceAttemptId: string | null;
+  /**
+   * Set when the selected frame is not itself a generation output but its image is byte-identical (same checksum) to
+   * an earlier GENERATED frame of this Shot: it is that picture, so that frame's generation record answers for it.
+   */
+  identicalTo: { frameId: string; version: number } | null;
   /** Ready essential references the frame's generation consumed. */
   consumed: ReferenceSlot[];
   /** Ready essential references the frame was generated without. */
@@ -243,6 +251,7 @@ export function frameLineage(
       status: "none",
       frame: null,
       sourceAttemptId: null,
+      identicalTo: null,
       consumed: [],
       missing: [],
       message: "No Production Frame is selected.",
@@ -254,8 +263,25 @@ export function frameLineage(
     source: selected.source,
   };
   const ready = slots.filter((s) => essential(s) && s.status === "ready");
-  const attemptId = selected.source === "generation_output" ? selected.sourceGenerationAttemptId : null;
-  if (!attemptId || !attempts.some((a) => a.id === attemptId)) {
+  const recorded = (id: string | null | undefined): id is string =>
+    Boolean(id) && attempts.some((a) => a.id === id);
+  const own = selected.source === "generation_output" ? selected.sourceGenerationAttemptId : null;
+  // A frame that was uploaded (or promoted) but whose image is byte-identical to a frame this Shot GENERATED earlier
+  // is that generated picture: re-uploading it must not erase what Prism knows about how it was made.
+  const twin = recorded(own)
+    ? null
+    : (ctx.productionFrames
+        .filter(
+          (f) =>
+            f.id !== selected.id &&
+            f.assetChecksum === selected.assetChecksum &&
+            f.source === "generation_output" &&
+            recorded(f.sourceGenerationAttemptId),
+        )
+        .sort((a, b) => b.version - a.version)[0] ?? null);
+  const attemptId = recorded(own) ? own : (twin?.sourceGenerationAttemptId ?? null);
+  const identicalTo = twin ? { frameId: twin.id, version: twin.version } : null;
+  if (!attemptId) {
     const how =
       selected.source === "generation_output"
         ? "Its generation record is not available"
@@ -263,40 +289,37 @@ export function frameLineage(
     return {
       status: "unverifiable",
       frame,
-      sourceAttemptId: attemptId,
+      sourceAttemptId: own,
+      identicalTo: null,
       consumed: [],
       missing: [],
       message: `Production Frame v${selected.version}: ${how}. Prism cannot verify from its records that it shows the canonical identity, Look and Location; check it by eye.`,
     };
   }
+  // "v2 is the same image as v1 (identical checksum), which was generated …" / "v1 was generated …"
+  const subject = twin
+    ? `Production Frame v${selected.version} is the same image as v${twin.version} (identical checksum), which was generated`
+    : `Production Frame v${selected.version} was generated`;
   const consumedIds = consumedAssetIds(attemptId, attempts);
   const consumed = ready.filter((s) => consumedIds.has(s.assetId!));
   const missing = ready.filter((s) => !consumedIds.has(s.assetId!));
+  const base = { frame, sourceAttemptId: attemptId, identicalTo, consumed, missing };
   if (ready.length === 0)
     return {
+      ...base,
       status: "unreferenced",
-      frame,
-      sourceAttemptId: attemptId,
-      consumed,
-      missing,
-      message: `Production Frame v${selected.version} was generated while this Shot had no reference image: every appearance in it comes from words only.`,
+      message: `${subject} while this Shot had no reference image: every appearance in it comes from words only.`,
     };
   if (missing.length > 0)
     return {
+      ...base,
       status: "partial",
-      frame,
-      sourceAttemptId: attemptId,
-      consumed,
-      missing,
-      message: `Production Frame v${selected.version} was generated without ${list(missing.map(slotName))}. Generate a new Production Frame from the current references, or accept this frame as it is.`,
+      message: `${subject} without ${list(missing.map(slotName))}. Generate a new Production Frame from the current references, or accept this frame as it is.`,
     };
   return {
+    ...base,
     status: "verified",
-    frame,
-    sourceAttemptId: attemptId,
-    consumed,
-    missing,
-    message: `Production Frame v${selected.version} was generated from ${list(consumed.map(slotName))}.`,
+    message: `${subject} from ${list(consumed.map(slotName))}.`,
   };
 }
 
@@ -331,7 +354,9 @@ export function referenceIntegrityAcknowledgements(integrity: ShotReferenceInteg
     out.push({
       id: ACK_FRAME_LINEAGE,
       feature: "references",
-      label: `Production Frame v${lineage.frame!.version} was generated without ${list(lineage.missing.map(slotName))}`,
+      label: `Production Frame v${lineage.frame!.version}${
+        lineage.identicalTo ? ` (the same image as v${lineage.identicalTo.version})` : ""
+      } was generated without ${list(lineage.missing.map(slotName))}`,
       impact:
         "The video model receives only this frame, so animating it cannot add the missing reference. The clip will show whatever the frame shows. Generate a new Production Frame from the current references to fix it.",
     });

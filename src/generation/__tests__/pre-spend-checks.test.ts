@@ -270,6 +270,73 @@ describe("reference integrity: slots, origins and the Production Frame's lineage
     expect(referenceIntegrityAcknowledgements(r)).toEqual([]);
   });
 
+  /** Uploads the very same bytes as a generated frame again, as the next version, and selects it. */
+  function reupload(data: ProjectData, of: ReturnType<typeof generatedFrame>, label = "reupload-3A") {
+    const copy = newUploadAsset(data.project.id, { label, width: 1536, height: 642 });
+    copy.checksum = of.image.checksum;
+    data.assets.push(copy);
+    const frame: ProductionFrame = {
+      ...draftFor(data, "3A", { asset: copy }),
+      version: of.frame.version + 1,
+    };
+    attach(data, [...(data.productionFrames ?? []), frame], frame);
+    return frame;
+  }
+
+  it("an UPLOADED copy of a generated frame (identical image) keeps that frame's lineage: re-uploading erases nothing", () => {
+    // hosted Shot 3A: v1 was generated from every reference; v2 is the same image uploaded again after a Shot edit
+    const data = seed();
+    const vb = withVisualBible(data);
+    const v1 = generatedFrame(data, [vb.canonical.id, vb.lookRef.id, vb.viewImage.id]);
+    const v2 = reupload(data, v1);
+    const r = integrityOf(data);
+    expect(r.lineage).toMatchObject({
+      status: "verified",
+      frame: { frameId: v2.id, version: 2, source: "upload" },
+      identicalTo: { frameId: v1.frame.id, version: 1 },
+      sourceAttemptId: v1.attempt.id,
+      missing: [],
+    });
+    expect(r.lineage.message).toBe(
+      'Production Frame v2 is the same image as v1 (identical checksum), which was generated from Yumeko — Canonical Identity, Yumeko — Episode 1 — Formal Black Look and Grand Celeste Lobby — Location View "Entrance toward elevators".',
+    );
+    expect(r.verified).toBe(true);
+    expect(referenceIntegrityAcknowledgements(r)).toEqual([]);
+  });
+
+  it("a copy of a frame generated WITHOUT a reference is still named, and still needs the acknowledgement", () => {
+    const data = seed();
+    const vb = withVisualBible(data);
+    const v1 = generatedFrame(data, [vb.lookRef.id, vb.viewImage.id]); // no canonical identity
+    reupload(data, v1);
+    const r = integrityOf(data);
+    expect(r.lineage.status).toBe("partial");
+    expect(r.lineage.identicalTo).toEqual({ frameId: v1.frame.id, version: 1 });
+    expect(r.lineage.message).toMatch(
+      /^Production Frame v2 is the same image as v1 \(identical checksum\), which was generated without Yumeko — Canonical Identity\./,
+    );
+    expect(referenceIntegrityAcknowledgements(r)).toEqual([
+      expect.objectContaining({
+        id: ACK_FRAME_LINEAGE,
+        label: "Production Frame v2 (the same image as v1) was generated without Yumeko — Canonical Identity",
+      }),
+    ]);
+  });
+
+  it("an uploaded frame that is a DIFFERENT image stays unverifiable, whatever was generated before it", () => {
+    const data = seed();
+    const vb = withVisualBible(data);
+    const v1 = generatedFrame(data, [vb.canonical.id, vb.lookRef.id, vb.viewImage.id]);
+    const other = newUploadAsset(data.project.id, { label: "another-picture", width: 1536, height: 642 });
+    data.assets.push(other);
+    expect(other.checksum).not.toBe(v1.image.checksum);
+    const v2: ProductionFrame = { ...draftFor(data, "3A", { asset: other }), version: 2 };
+    attach(data, [...(data.productionFrames ?? []), v2], v2);
+    const r = integrityOf(data);
+    expect(r.lineage).toMatchObject({ status: "unverifiable", identicalTo: null });
+    expect(r.verified).toBe(false);
+  });
+
   it("an edit inherits what the image it was edited from consumed (lineage follows the chain)", () => {
     const data = seed();
     const vb = withVisualBible(data);

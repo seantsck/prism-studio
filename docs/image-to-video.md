@@ -181,6 +181,11 @@ before spend, and it is answerable from records Prism already keeps
 | `unverifiable` | Uploaded, from a Storyboard or a 3D Master Frame, or its attempt record is unavailable | disclosed ("check it by eye"), no gate |
 | `none`         | No Production Frame selected                                                           | (Animate is already blocked)           |
 
+A frame that was uploaded or promoted, but whose image is byte-identical (same checksum) to an earlier **generated**
+frame of the same Shot, is that picture. It takes that frame's lineage and the message says so ("v2 is the same image as
+v1"), so re-uploading a generated frame never erases what Prism knows about how it was made. An uploaded frame that is
+a different image stays `unverifiable`.
+
 This reports facts about inputs. It never claims to have looked at pixels: a `verified` frame can still be a bad
 likeness, and human review stays authoritative. It complements freshness, which already blocks a frame whose
 references changed after it was made; lineage catches the frame that was made without them in the first place.
