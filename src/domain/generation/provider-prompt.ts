@@ -21,7 +21,14 @@ import type { GenerationPurpose } from "./schemas";
  */
 
 export const PROVIDER_PROMPT_SCHEMA = "prism.provider-prompt.v1" as const;
+/**
+ * visible-motion v1: HISTORICAL. Attempts that froze it keep it (and stay parseable and auditable); no new request is
+ * built with it. It restated what the first frame already shows and held orientation with negative phrasing ("never
+ * rotating through frontal…"), both of which the provider's own prompting guide warns against (see v2 below).
+ */
 export const VISIBLE_MOTION_POLICY = { id: "visible-motion", version: 1 } as const;
+/** visible-motion v2: the provider's documented image-to-video prompting contract (motion only, positive phrasing). */
+export const VISIBLE_MOTION_V2_POLICY = { id: "visible-motion", version: 2 } as const;
 
 export const PROVIDER_PROMPT_SECTION_KEYS = [
   "subject",
@@ -142,8 +149,10 @@ const POLICY_TABLE: ReadonlyArray<{
     provider: "runway",
     modelIds: ["gen4_turbo", "gen4.5"],
     purposes: ["animate_production_frame"],
-    policy: VISIBLE_MOTION_POLICY,
-    target: 900,
+    // v2 since 2026-11-19 (v1 stays derivable for audit through `adaptAnimationProviderPrompt`)
+    policy: VISIBLE_MOTION_V2_POLICY,
+    // a motion-only prompt is short by design: one scene's motion, far below the 1,000-character field
+    target: 600,
   },
 ];
 
@@ -287,6 +296,8 @@ function translate(
   v: Voice,
   phase: Phase,
   out: ProviderPromptAdaptation[],
+  /** How a note no rule matched becomes a clause (v1's attribution by default; v2 passes its stricter one). */
+  concrete: (atom: string, v: Voice) => string = concreteClause,
 ): Translated {
   const res: Translated = { clauses: [], states: [] };
   for (const raw of atoms(text)) {
@@ -308,7 +319,7 @@ function translate(
       out.push({ field, source: raw, provider: null, rule: "figurative-omitted" });
       continue;
     }
-    const clause = concreteClause(atom, v);
+    const clause = concrete(atom, v);
     res.clauses.push(clause);
     if (phase !== "change" || clause.toLowerCase() !== lowerFirst(raw).toLowerCase())
       out.push({ field, source: raw, provider: clause, rule: "concrete-kept" });
@@ -629,6 +640,411 @@ function applyBudget(
   };
 }
 
+// ───────────────────────── visible-motion v2: the provider's documented prompting contract ─────────────────────────
+
+/**
+ * WHY v2. Runway's own guides for these models (Gen-4 Video Prompting Guide; Image to Video Prompting Guide, written
+ * for Gen-4.5; both re-read 2026-11-19, see docs/image-to-video.md) state a contract that v1 broke:
+ *   - describe what SHOULD happen: negative phrasing is unsupported and may produce the opposite result;
+ *   - describe MOTION, not what the first frame already shows (restating clothing or hair can cause unexpected results);
+ *   - refer to subjects in general terms ("the subject", then a pronoun);
+ *   - one scene's motion in simple, direct language; stillness is asked for positively ("The locked-off camera
+ *     remains perfectly still.", "Minimal subject motion only.").
+ * v1's Shot 3A prompt held orientation with "never rotating through frontal or toward screen-left" and restated the
+ * hair, gown and earrings; the rejected Gen-4.5 take rotated through frontal to screen-left.
+ *
+ * v2 is the same deterministic derivation from the package's structured fields, under three rules:
+ *   1. POSITIVE PHRASING ONLY, enforced. A Shot note phrased negatively is not sent; the omission is recorded so the
+ *      filmmaker can rephrase it as what should happen. A prompt that still contains a negation is `ok: false` and the
+ *      request is refused before any spend.
+ *   2. Motion only: no subject description, Look, Location or lighting prose. The first frame carries them.
+ *   3. "The subject" on first mention, then a pronoun.
+ */
+export const VISIBLE_MOTION_V2_EXCLUDED = [
+  ...VISIBLE_MOTION_EXCLUDED,
+  "subject description (established by the first frame)",
+  "Look details: hair, wardrobe, jewelry (established by the first frame)",
+  "Location, lighting and mood (established by the first frame)",
+  "beginning pose (the first frame is the beginning)",
+  "negative phrasing (unsupported by the provider; may produce the opposite result)",
+] as const;
+
+/** Words that make a clause negative phrasing. Deliberately narrow: true negators only. */
+const NEGATION =
+  /\b(?:no|not|never|none|nothing|nobody|neither|nor|without|cannot|avoid(?:s|ing)?|refrain(?:s|ing)?)\b|n['’]t\b/i;
+
+/** The first negator in a text ("never", "n't"...), or null when the text is positively phrased. */
+export function negativePhrasing(text: string): string | null {
+  return NEGATION.exec(text)?.[0]?.toLowerCase() ?? null;
+}
+
+/** The positively phrased notes of a field; every negatively phrased note is left out and recorded, never silently. */
+function positiveNoteList(field: string, text: string, out: ProviderPromptAdaptation[]): string[] {
+  const kept: string[] = [];
+  for (const note of text
+    .split(/[;,]|\.\s+/)
+    .map((x) => x.trim().replace(/\.$/, ""))
+    .filter(Boolean)) {
+    if (negativePhrasing(note))
+      out.push({ field, source: note, provider: null, rule: "negative-phrasing-omitted" });
+    else kept.push(note);
+  }
+  return kept;
+}
+
+/**
+ * v2: a concrete note that matched no translation rule. Attributed to the subject only when the note's own shape makes
+ * that safe (a body part, a verb plus its object, a single descriptive word); anything else is sent in the filmmaker's
+ * own words. A note is never rewritten into a claim Prism cannot justify ("Door swings open" → "she looks door…").
+ */
+const VERB_OBJECT = new RegExp(
+  `^[a-z]+s (?:the|a|an|her|his|their|its|to|at|on|in|into|onto|over|up|down|away|back|out|off|toward|towards|briefly|slowly|slightly|gently|once|twice|${BODY})\\b`,
+  "i",
+);
+function concreteClauseV2(atom: string, v: Voice): string {
+  const a = lowerFirst(atom.trim());
+  if (new RegExp(`^(${BODY})\\b`, "i").test(a)) return `${v.p} ${a}`;
+  if (VERB_OBJECT.test(a))
+    return `${v.s} ${a.replace(new RegExp(`^(\\w+) (${BODY})\\b`, "i"), `$1 ${v.p} $2`)}`;
+  if (!/\s/.test(a)) return `${v.s} looks ${a}`;
+  return a;
+}
+
+/** A plain speed word can lead the camera move ("a slow push-in"); any other speed note follows it verbatim. */
+const SPEED_WORD =
+  /^(?:(?:very|extremely|fairly) )?(?:slow|slowly|fast|quick|quickly|rapid|rapidly|gentle|gently|steady|steadily|smooth|smoothly|gradual|gradually)$/i;
+
+function cameraSentenceV2(pkg: GenerationPackage, out: ProviderPromptAdaptation[]): string {
+  const cam = pkg.camera;
+  const movement = cam.movement.trim();
+  const source = [movement, cam.movementSpeed && `(${cam.movementSpeed})`].filter(Boolean).join(" ");
+  const LOCKED = "The locked-off camera remains perfectly still.";
+  if (!movement || /^(static|locked)/i.test(movement)) return LOCKED;
+  if (/\b(imperceptible|barely|almost static|very subtle)\b/i.test(movement)) {
+    out.push({
+      field: "camera.movement",
+      source,
+      provider: LOCKED,
+      rule: "imperceptible-movement-locked",
+    });
+    return LOCKED;
+  }
+  if (negativePhrasing(movement)) {
+    // "No movement" / "does not move": the positive request is a still camera
+    out.push({ field: "camera.movement", source, provider: LOCKED, rule: "negative-phrasing-locked" });
+    return LOCKED;
+  }
+  const move = movement.toLowerCase();
+  let speed = cam.movementSpeed.trim().toLowerCase();
+  if (speed && negativePhrasing(speed)) {
+    out.push({
+      field: "camera.movementSpeed",
+      source: cam.movementSpeed.trim(),
+      provider: null,
+      rule: "negative-phrasing-omitted",
+    });
+    speed = "";
+  }
+  // a speed the movement already states is not repeated ("Slow push-in" + "Very slow")
+  if (speed && move.includes(speed.split(/\s+/).pop()!)) speed = "";
+  if (speed && SPEED_WORD.test(speed)) return `The camera makes ${article(speed)} ${speed} ${move}.`;
+  return `The camera makes ${article(move)} ${move}${speed ? `, ${speed}` : ""}.`;
+}
+
+/** An eyeline note that says there is none ("N/A (foot)", "none"). */
+const NO_EYELINE = /^(?:n\/?a|none|-+)\b/i;
+
+/**
+ * visible-motion v2 for an image-to-video animation of the selected Production Frame: camera first, then what the
+ * subject does, then (for a held Shot) the motion envelope, all positively phrased and all about motion.
+ *
+ * Attribution follows the Shot's cast. One Character: "the subject", then a pronoun, with the translation rules. Several
+ * Characters: Prism has no reliable screen position for each, so their notes are sent in the filmmaker's own words and
+ * only what is true of all of them is added ("The subjects hold their positions."). No Character: camera and scene
+ * notes only, never an invented subject.
+ */
+export function adaptAnimationProviderPromptV2(
+  pkg: GenerationPackage,
+  args: { provider: string; modelId: string; purpose: GenerationPurpose; choice: ProviderPromptPolicyChoice },
+): AdaptedProviderPrompt {
+  const adaptations: ProviderPromptAdaptation[] = [];
+  const cast = pkg.characters.length;
+  const c = cast === 1 ? pkg.characters[0]! : null;
+  const named = voiceFor(pkg).voice;
+  // general terms only: a name or a physical description tells the model nothing the first frame does not show
+  const gendered = c !== null && (named.s === "she" || named.s === "he");
+  const v: Voice = gendered ? named : { s: "the subject", p: "the subject's" };
+  const blk = pkg.blocking;
+
+  /** Scene notes sent in the filmmaker's own words (several Characters, or none): positive, never figurative. */
+  const verbatim = (field: string, text: string): string[] =>
+    positiveNoteList(field, text, adaptations).flatMap((note) => {
+      if (FIGURATIVE.test(note)) {
+        adaptations.push({ field, source: note, provider: null, rule: "figurative-omitted" });
+        return [];
+      }
+      return [lowerFirst(note)];
+    });
+  /** One Character's notes through the translation rules, with v2's attribution for what no rule matches. */
+  const translated = (field: string, text: string, phase: Phase): Translated =>
+    translate(
+      field,
+      positiveNoteList(field, text, adaptations).join("; "),
+      v,
+      phase,
+      adaptations,
+      concreteClauseV2,
+    );
+
+  // ── Camera ──
+  const camera = [cameraSentenceV2(pkg, adaptations)];
+
+  // ── What the subject does ──
+  const action: string[] = [];
+  const side = blk.screenDirection.match(/screen[- ]?(left|right)/i)?.[1]?.toLowerCase() ?? null;
+  const still = blk.marks.length === 0 && !blk.entryPoint.trim() && !blk.exitPoint.trim();
+  // one Character facing one side with no blocking movement holds the first frame's orientation
+  const held = c !== null && !!side && still;
+  const facing = side
+    ? /\bprofile\b/i.test(blk.screenDirection)
+      ? `in profile toward the ${side} side of the frame`
+      : `turned toward the ${side} side of the frame`
+    : null;
+  const rawEyeline = blk.eyelines.trim();
+  const eyeline = NO_EYELINE.test(rawEyeline)
+    ? ""
+    : lowerFirst(positiveNoteList("blocking.eyelines", rawEyeline, adaptations).join(", "));
+  const gazeOf = (owner: string, many = false): string | null =>
+    !eyeline
+      ? null
+      : /^closed/i.test(eyeline)
+        ? `${owner} eyes stay closed`
+        : /^(down|up|lowered|toward|towards|away|off|left|right)\b/i.test(eyeline)
+          ? `${owner} gaze stays ${eyeline}`
+          : `${owner} ${many ? "eyelines stay" : "eyeline stays"} ${eyeline}`;
+
+  // the first sentence about a single subject names "the subject"; pronouns follow
+  let introduced = false;
+  if (c) {
+    const gaze = gazeOf(v.p);
+    if (held) {
+      const hold = sentence(
+        `the subject holds ${gendered ? `${v.p} ` : ""}position, ${facing}${gaze ? `, and ${gaze}` : ""}`,
+      );
+      action.push(hold);
+      introduced = true;
+      adaptations.push({
+        field: "blocking.screenDirection",
+        source: blk.screenDirection,
+        provider: hold,
+        rule: "held-orientation-positive",
+      });
+    } else if (facing) {
+      action.push(sentence(`the subject stays ${facing}${gaze ? ` and ${gaze}` : ""}`));
+      introduced = true;
+    } else if (gaze) {
+      action.push(sentence(gazeOf("the subject's")!));
+      introduced = true;
+    }
+  } else if (cast > 1) {
+    const gaze = gazeOf("their", true);
+    if (still) action.push(sentence(`the subjects hold their positions${gaze ? `, and ${gaze}` : ""}`));
+    else if (gaze) action.push(sentence(gaze));
+  }
+  /** Names the subject on the first sentence about them when no orientation sentence did. */
+  const introduce = (s: string): string => {
+    if (introduced || !gendered) return s;
+    introduced = true;
+    return s
+      .replace(new RegExp(`^${v.s}\\b`, "i"), "The subject")
+      .replace(new RegExp(`^${v.p}\\b`, "i"), "The subject's");
+  };
+
+  if (pkg.timing.beginningPose.trim())
+    adaptations.push({
+      field: "timing.beginningPose",
+      source: pkg.timing.beginningPose.trim(),
+      provider: null,
+      rule: "established-by-first-frame",
+    });
+
+  const change: string[] = [];
+  for (const b of pkg.timing.beats)
+    change.push(
+      ...(c
+        ? translated("timing.beat", b.description, "change").clauses
+        : verbatim("timing.beat", b.description)),
+    );
+  if (c) {
+    for (const [field, text] of [
+      ["expression", c.expression],
+      ["posture", c.posture],
+      ["gestures", c.gestures],
+    ] as const) {
+      if (text.trim()) change.push(...translated(`characters.${field}`, text, "change").clauses);
+    }
+    // a held picture is not a frozen one: outside a held orientation natural breathing is asked for (policy, not story)
+    if (!held) change.push(`${v.s} breathes naturally`);
+  }
+  const changeSentence = change.length ? introduce(sentence(joinClauses(change))) : "";
+  if (changeSentence) action.push(changeSentence);
+
+  let endClauses: string[];
+  if (c) {
+    const end = translated("timing.endingPose", pkg.timing.endingPose, "end");
+    const endExpr = stateExpression(end.states);
+    endClauses = [...end.clauses, endExpr && `${v.s} settles into ${endExpr}`].filter(Boolean) as string[];
+  } else {
+    endClauses = verbatim("timing.endingPose", pkg.timing.endingPose);
+  }
+  // the sentence itself opens with "Then": a note's own leading "then" is not repeated
+  endClauses = endClauses.map((x) => x.replace(/^then\s+/i, ""));
+  const endSentence = endClauses.length ? sentence(`then ${joinClauses(endClauses)}`) : "";
+  if (endSentence) action.push(endSentence);
+
+  if (held) {
+    // the provider's own phrase for stillness, then exactly what the Shot's action moves
+    const moved = `${changeSentence} ${endSentence}`;
+    const envelope = sentence(
+      `minimal subject motion only: ${v.p} face${/\beyes?\b/i.test(moved) ? ", eyelids" : ""} and breathing${
+        /\bshoulders?\b/i.test(moved) ? ", with a slight drop of the shoulders" : ""
+      }`,
+    );
+    action.push(envelope);
+    adaptations.push({
+      field: "blocking",
+      source: "held orientation, no blocking movement",
+      provider: envelope,
+      rule: "motion-envelope-positive",
+    });
+  } else if (cast > 1 && still) {
+    action.push("Minimal subject motion only.");
+  }
+
+  // ── Pace (optional): how the motion is played ──
+  const pace = pkg.performance
+    .map((p) => (p.pace ?? "").trim())
+    .find(Boolean)
+    ?.toLowerCase();
+  const performance: string[] = [];
+  if (pace && cast > 0) {
+    if (negativePhrasing(pace))
+      adaptations.push({
+        field: "performance.pace",
+        source: pace,
+        provider: null,
+        rule: "negative-phrasing-omitted",
+      });
+    else performance.push(sentence(`the pace is ${pace}`));
+  }
+
+  // what the first frame establishes is recorded as deliberately not restated
+  if (pkg.camera.framing.trim() || pkg.camera.shotSize.trim())
+    adaptations.push({
+      field: "camera.framing",
+      source: [pkg.camera.shotSize, pkg.camera.framing].filter((x) => x.trim()).join(" "),
+      provider: null,
+      rule: "framing-established-by-first-frame",
+    });
+  if (blk.subjectBlocking.trim())
+    adaptations.push({
+      field: "blocking.subjectBlocking",
+      source: blk.subjectBlocking.trim(),
+      provider: null,
+      rule: "established-by-first-frame",
+    });
+
+  // figurative safety net (a rule gap must never reach the provider), exactly as in v1
+  const parts: Array<{
+    key: ProviderPromptSectionKey;
+    required: boolean;
+    priority: number;
+    lines: string[];
+  }> = [
+    { key: "camera", required: true, priority: 1, lines: camera },
+    { key: "visible_action", required: true, priority: 1, lines: action },
+    { key: "performance", required: false, priority: 2, lines: performance },
+  ];
+  for (const part of parts)
+    part.lines = part.lines.filter((s) => {
+      if (!FIGURATIVE.test(s)) return true;
+      adaptations.push({
+        field: `section.${part.key}`,
+        source: s,
+        provider: null,
+        rule: "figurative-omitted",
+      });
+      return false;
+    });
+
+  const { limit, target } = args.choice.budget;
+  const present = parts.filter((p) => p.lines.length > 0);
+  const textOf = (p: (typeof parts)[number]) => p.lines.join(" ");
+  const render = (keys: Set<ProviderPromptSectionKey>) =>
+    present
+      .filter((p) => keys.has(p.key))
+      .map(textOf)
+      .join(" ");
+  const included = new Set(present.filter((p) => p.required).map((p) => p.key));
+  const requiredLength = render(included).length;
+  const omitted: AdaptedProviderPrompt["omitted"] = [];
+  for (const p of present.filter((x) => !x.required).sort((a, b) => a.priority - b.priority)) {
+    if (render(new Set(included).add(p.key)).length <= target) included.add(p.key);
+    else omitted.push({ key: p.key, label: SECTION_LABEL[p.key], reason: "over_budget" });
+  }
+  const text = render(included);
+  // fail closed: a negation that survived the rules above is a rule gap, never something to send
+  const negation = negativePhrasing(text);
+  const ok = requiredLength <= limit && !negation && text.trim().length > 0;
+  return {
+    schema: PROVIDER_PROMPT_SCHEMA,
+    policy: { ...args.choice.policy },
+    provider: args.provider,
+    modelId: args.modelId,
+    purpose: args.purpose,
+    sourceFingerprint: pkg.provenance.fingerprint,
+    text,
+    length: text.length,
+    budget: { limit, target },
+    sections: present.map((p) => ({
+      key: p.key,
+      label: SECTION_LABEL[p.key],
+      required: p.required,
+      priority: p.priority,
+      included: included.has(p.key),
+      length: textOf(p).length,
+    })),
+    omitted,
+    adaptations,
+    excluded: [...VISIBLE_MOTION_V2_EXCLUDED],
+    ok,
+    problem: ok
+      ? null
+      : requiredLength > limit
+        ? `The required provider prompt is ${requiredLength} characters; ${args.provider}/${args.modelId} accepts at most ${limit}. Shorten the Shot's action or blocking notes (nothing is truncated).`
+        : negation
+          ? `The provider prompt contains negative phrasing ("${negation}"), which ${args.provider}/${args.modelId} does not support and may render as its opposite. Rephrase the Shot's notes as what should happen.`
+          : "The provider prompt is empty.",
+  };
+}
+
+/** Shot notes a provider-prompt policy deliberately did not send, with the reason a filmmaker can act on. */
+export function notesNotSent(
+  prompt: Pick<AdaptedProviderPrompt, "adaptations">,
+): Array<{ field: string; source: string; reason: string }> {
+  const REASON: Record<string, string> = {
+    "negative-phrasing-omitted":
+      "negative phrasing is not supported by this model and may produce the opposite; rephrase as what should happen",
+    "figurative-omitted":
+      "figurative wording a video model may render literally; describe the visible behaviour",
+  };
+  return prompt.adaptations.flatMap((a) =>
+    a.provider === null && REASON[a.rule]
+      ? [{ field: a.field, source: a.source, reason: REASON[a.rule]! }]
+      : [],
+  );
+}
+
 /** The provider prompt a request should freeze, or null when no policy applies to this provider/model/purpose. */
 export function adaptProviderPrompt(
   pkg: GenerationPackage,
@@ -636,10 +1052,10 @@ export function adaptProviderPrompt(
 ): AdaptedProviderPrompt | null {
   const choice = providerPromptPolicyFor(args);
   if (!choice || args.purpose !== "animate_production_frame") return null;
-  if (
-    choice.policy.id === VISIBLE_MOTION_POLICY.id &&
-    choice.policy.version === VISIBLE_MOTION_POLICY.version
-  )
+  if (choice.policy.id !== VISIBLE_MOTION_POLICY.id) return null;
+  if (choice.policy.version === VISIBLE_MOTION_V2_POLICY.version)
+    return adaptAnimationProviderPromptV2(pkg, { ...args, purpose: args.purpose, choice });
+  if (choice.policy.version === VISIBLE_MOTION_POLICY.version)
     return adaptAnimationProviderPrompt(pkg, { ...args, purpose: args.purpose, choice });
   return null;
 }

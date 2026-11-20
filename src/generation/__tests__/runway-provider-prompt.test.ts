@@ -8,7 +8,12 @@ import { evaluateCompatibility } from "@/domain/generation/compatibility";
 import { buildGenerationRequest } from "@/domain/generation/gate";
 import { catalogModel, toGenerationModel } from "@/domain/generation/models/catalog";
 import { buildPromptPlan } from "@/domain/generation/prompt-plan";
-import { adaptProviderPrompt, parseFrozenProviderPrompt } from "@/domain/generation/provider-prompt";
+import {
+  adaptAnimationProviderPrompt,
+  adaptProviderPrompt,
+  parseFrozenProviderPrompt,
+  VISIBLE_MOTION_POLICY,
+} from "@/domain/generation/provider-prompt";
 import type { GenerationPurpose, GenerationRequest } from "@/domain/generation/schemas";
 import { readGenerationConfig } from "../config";
 import { encodeMockPng } from "../providers/mock-image";
@@ -73,7 +78,7 @@ describe("Runway Gen-4 Turbo sends the policy-adapted provider prompt (Phase 5B)
     );
     expect(p).toMatchObject({
       schema: "prism.provider-prompt.v1",
-      policy: { id: "visible-motion", version: 1 },
+      policy: { id: "visible-motion", version: 2 },
       provider: "runway",
       modelId: "gen4_turbo",
       purpose: "animate_production_frame",
@@ -106,11 +111,11 @@ describe("Runway Gen-4 Turbo sends the policy-adapted provider prompt (Phase 5B)
     expect(compiled.fields.promptText).toBe(p.text);
     expect(compiled.fields).toMatchObject({
       promptTextLength: p.length,
-      promptPolicy: "visible-motion@v1",
+      promptPolicy: "visible-motion@v2",
       promptSourceFingerprint: p.sourceFingerprint,
-      promptBudget: { limit: 1000, target: 900 },
+      promptBudget: { limit: 1000, target: 600 },
     });
-    expect(compiled.notes.join(" ")).toContain("Provider prompt adapted by visible-motion v1");
+    expect(compiled.notes.join(" ")).toContain("Provider prompt adapted by visible-motion v2");
     expect(
       provider.validateRequest(request, toGenerationModel(catalogModel("runway", "gen4_turbo")!)),
     ).toEqual({
@@ -162,6 +167,29 @@ describe("Runway Gen-4 Turbo sends the policy-adapted provider prompt (Phase 5B)
     }
   });
 
+  it("history is immutable: an attempt that froze visible-motion v1 still parses, validates and shows v1", () => {
+    const { request, plan, pkg } = frozen();
+    const v1 = adaptAnimationProviderPrompt(pkg, {
+      provider: "runway",
+      modelId: "gen4_turbo",
+      purpose: "animate_production_frame",
+      choice: { policy: VISIBLE_MOTION_POLICY, budget: { limit: 1000, target: 900 } },
+    });
+    const historical: GenerationRequest = {
+      ...request,
+      providerOptions: { ...request.providerOptions, prismProviderPrompt: v1 },
+    };
+    const provider = new RunwayProvider({ env: ENV });
+    expect(
+      provider.validateRequest(historical, toGenerationModel(catalogModel("runway", "gen4_turbo")!)),
+    ).toEqual({ ok: true, errors: [] });
+    expect(animationRequestViolations(historical, pkg)).toEqual([]);
+    const compiled = provider.compileRequest(historical, plan);
+    expect(compiled.fields).toMatchObject({ promptText: v1.text, promptPolicy: "visible-motion@v1" });
+    // ...while every NEW request freezes v2
+    expect(parseFrozenProviderPrompt(request.providerOptions?.prismProviderPrompt)!.policy.version).toBe(2);
+  });
+
   it("the adapter invariant binds the frozen prompt to the attempt's own package (worker re-checks it)", () => {
     const { request, pkg } = frozen();
     expect(animationRequestViolations(request, pkg)).toEqual([]);
@@ -198,15 +226,15 @@ describe("Runway Gen-4 Turbo sends the policy-adapted provider prompt (Phase 5B)
     expect(out.request.providerOptions?.prismProviderPrompt).toBeUndefined();
   });
 
-  it("Gen-4.5 animation gets the same visible-motion v1 prompt and a valid pre-pad transport", () => {
+  it("Gen-4.5 animation gets the same visible-motion v2 prompt and a valid pre-pad transport", () => {
     const { request, plan, pkg } = frozen("gen4.5");
     const p = parseFrozenProviderPrompt(request.providerOptions?.prismProviderPrompt)!;
-    expect(p).toMatchObject({ policy: { id: "visible-motion", version: 1 }, modelId: "gen4.5", ok: true });
+    expect(p).toMatchObject({ policy: { id: "visible-motion", version: 2 }, modelId: "gen4.5", ok: true });
     expect(p.sourceFingerprint).toBe(pkg.provenance.fingerprint);
     const provider = new RunwayProvider({ env: ENV });
     expect(provider.compileRequest(request, plan).fields).toMatchObject({
       promptText: p.text,
-      promptPolicy: "visible-motion@v1",
+      promptPolicy: "visible-motion@v2",
       ratio: "1584:672",
     });
     // Gen-4.5's documented prompt-image range is 0.5–2: the 21:9 start frame is pre-padded to 2:1 (see
@@ -230,7 +258,7 @@ describe("Runway Gen-4 Turbo sends the policy-adapted provider prompt (Phase 5B)
       purpose: "animate_production_frame",
       adaptation: ADAPTED,
     });
-    expect(ev.providerPrompt?.policy).toEqual({ id: "visible-motion", version: 1 });
+    expect(ev.providerPrompt?.policy).toEqual({ id: "visible-motion", version: 2 });
     expect(ev.providerPrompt?.sourceFingerprint).toBe(pkg.provenance.fingerprint);
     const prepared = prepareSubmission({
       data,
