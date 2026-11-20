@@ -4,10 +4,16 @@ import Link from "next/link";
 import { useState } from "react";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button } from "@/components/ui";
-import { referencePreset, usd } from "@/domain/generation/reference-studio";
+import { referencePreset, referenceSetViewOf, usd } from "@/domain/generation/reference-studio";
 import { cn } from "@/lib/utils";
 import { setCanonicalLocation } from "@/server/location-visual-bible-actions";
-import type { StudioImage, StudioShot, StudioState, StudioTake } from "@/server/reference-studio";
+import type {
+  StudioImage,
+  StudioSetView,
+  StudioShot,
+  StudioState,
+  StudioTake,
+} from "@/server/reference-studio";
 import { reviewReferenceImage } from "@/server/reference-studio-actions";
 import {
   removeBackground,
@@ -18,6 +24,7 @@ import {
 } from "@/server/subject-image-actions";
 import type { HostedMattingOffer } from "@/server/subject-images";
 import { setCanonicalIdentity, setCharacterCutout } from "@/server/visual-bible-actions";
+import { AddToSet, ReferenceSetPanel } from "./reference-set";
 
 const SLOTS: Array<[string, string]> = [
   ["front", "Front"],
@@ -85,6 +92,9 @@ export function Stage({
   onReuse,
   onChoosePhotos,
   dragging,
+  referenceSet,
+  photos,
+  onMake,
 }: {
   slug: string;
   subject: NonNullable<StudioState["selected"]>;
@@ -109,6 +119,12 @@ export function Stage({
   onChoosePhotos: () => void;
   /** true: files are being dragged over the Studio (a drop anywhere adds them). */
   dragging: boolean;
+  /** A Character's reference set (empty for a Location). */
+  referenceSet: StudioSetView[];
+  /** How many of the creator's own photos of the subject there are. */
+  photos: number;
+  /** Fills in the brief to make a view of the reference set. */
+  onMake: (intent: string) => void;
 }) {
   // while the creator is choosing what to start from, the stage shows that, not an older result
   const focused = view === "start" && starting.length > 0 ? null : focusedTake;
@@ -391,6 +407,20 @@ export function Stage({
 
           {focused.status === "succeeded" && focused.asset && !focused.rejected ? (
             <div className="mt-3 space-y-2" data-testid="studio-use">
+              {character && referenceSet.length > 0 && !focused.asset.hasAlpha ? (
+                // the one thing most takes are for: a view of the Character's reference set
+                <AddToSet
+                  slug={slug}
+                  characterId={subject.id}
+                  set={referenceSet}
+                  attemptId={focused.attemptId}
+                  assetId={focused.asset.id}
+                  suggested={referenceSetViewOf(focused.settings.intent)}
+                />
+              ) : null}
+              {character && referenceSet.length > 0 ? (
+                <p className="text-[11px] text-faint">Other uses:</p>
+              ) : null}
               {subject.locked ? (
                 <p className="text-[12px] text-warn" data-testid="studio-locked">
                   {subject.name} is locked, so its references and Visual Bible cannot change.{" "}
@@ -765,6 +795,10 @@ export function Stage({
           ))}
           {shots.length > 12 ? <span className="text-muted">and {shots.length - 12} more</span> : null}
         </div>
+      ) : null}
+
+      {character && referenceSet.length > 0 ? (
+        <ReferenceSetPanel subject={subject} set={referenceSet} photos={photos} onMake={onMake} />
       ) : null}
 
       {takes.length > 0 ? (

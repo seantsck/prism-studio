@@ -10,6 +10,8 @@ import {
 import {
   inspectReferenceImage,
   offersTestModels,
+  REFERENCE_SET_VIEWS,
+  type ReferenceSetViewId,
   type CostSample,
   type ReferenceInspection,
 } from "@/domain/generation/reference-studio";
@@ -151,6 +153,23 @@ export interface StudioShot {
   hasFrame: boolean;
 }
 
+/** One view of a Character's reference set (see REFERENCE_SET_VIEWS). */
+export interface StudioSetView {
+  id: ReferenceSetViewId;
+  label: string;
+  /** The preset that makes this view. */
+  intent: string;
+  /** true: the front view, which is the canonical identity. */
+  canonical: boolean;
+  /** The picture in this view, or null. */
+  assetId: string | null;
+  url: string | null;
+  /** "your photo", "take #10", "generated picture" */
+  from: string | null;
+  /** true: a locked slot holding an image (it is not replaced from the Studio). */
+  locked: boolean;
+}
+
 export interface StudioState {
   subjects: StudioSubject[];
   selected:
@@ -172,6 +191,8 @@ export interface StudioState {
   spent: { usd: number; images: number };
   /** The Shots this subject appears in, in story order (the next step after references: a Production Frame). */
   shots: StudioShot[];
+  /** A Character's reference set (empty for a Location). */
+  referenceSet: StudioSetView[];
 }
 
 const stored = (a: Asset | undefined): a is Asset => hasStoredImage(a);
@@ -401,6 +422,7 @@ export async function referenceStudioState(
       costHistory,
       spent: { usd: 0, images: 0 },
       shots: [],
+      referenceSet: [],
     };
   }
 
@@ -616,5 +638,38 @@ export async function referenceStudioState(
       images: own.filter((v) => bills(v) && actualOf(v) != null).length,
     },
     shots: studioShots(data, base),
+    referenceSet:
+      base.kind === "character"
+        ? REFERENCE_SET_VIEWS.map((v) => {
+            const slotRef =
+              v.id === "half_body"
+                ? refs.find(
+                    (r) => r.slot === "additional" && (r.metadata as { view?: unknown }).view === "half_body",
+                  )
+                : refs.find((r) => r.slot === v.slot && visualRoleOf(r) === null);
+            const canonicalRef = v.canonical ? refs.find((r) => visualRoleOf(r) === "canonical") : undefined;
+            // the front view shows the canonical identity when there is one: that is the picture sent first
+            const ref = [canonicalRef, slotRef].find((r) => r?.assetId && stored(assets.get(r.assetId)));
+            const asset = ref?.assetId ? assets.get(ref.assetId) : undefined;
+            const take = asset ? takes.find((t) => t.asset?.id === asset.id) : undefined;
+            const origin = referenceOrigin(asset);
+            return {
+              id: v.id,
+              label: v.label,
+              intent: v.intent,
+              canonical: v.canonical,
+              assetId: asset?.id ?? null,
+              url: asset ? assetUrl(asset) : null,
+              from: !asset
+                ? null
+                : origin === "uploaded"
+                  ? "your photo"
+                  : take
+                    ? `take #${take.number}`
+                    : "generated picture",
+              locked: !!ref?.locked,
+            };
+          })
+        : [],
   };
 }

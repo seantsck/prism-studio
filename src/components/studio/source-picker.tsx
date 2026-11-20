@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { fileSize } from "@/domain/generation/reference-upload";
 import { cn } from "@/lib/utils";
 import type { StudioImage, StudioState } from "@/server/reference-studio";
@@ -34,6 +35,7 @@ export function SourcePicker({
   onClear,
   onSelect,
   onShowLarge,
+  setControl,
 }: {
   subject: NonNullable<StudioState["selected"]>;
   images: StudioImage[];
@@ -55,6 +57,8 @@ export function SourcePicker({
   onSelect: (assetIds: string[]) => void;
   /** Puts the selected pictures on the stage (undefined while they are already there, or nothing is selected). */
   onShowLarge?: () => void;
+  /** For a Character: the control that puts one of the creator's photos into the reference set. */
+  setControl?: (image: StudioImage) => ReactNode;
 }) {
   const chosen = selected.flatMap((id) => images.filter((i) => i.assetId === id));
   const several = !single && chosen.length > 1;
@@ -192,6 +196,7 @@ export function SourcePicker({
           image={i}
           order={several ? selected.indexOf(i.assetId) + 1 : null}
           thing={thing}
+          extra={setControl?.(i)}
         />
       ))}
     </div>
@@ -207,8 +212,11 @@ function PictureFacts({
   image: i,
   order,
   thing,
+  extra,
 }: {
   image: StudioImage;
+  /** Shown with the facts (for a photo of a Character: put it into the reference set). */
+  extra?: ReactNode;
   /** Its place among several selected pictures, or null when it is the only one. */
   order: number | null;
   thing: string;
@@ -286,6 +294,7 @@ function PictureFacts({
           </div>
           {usedAs ? <div className="mt-0.5 text-muted">{usedAs}</div> : null}
           {warnings}
+          {extra}
           <details className="mt-1">
             <summary className="text-muted hover:text-fg">Details and where it is used</summary>
             <ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted">{more}</ul>
@@ -311,6 +320,7 @@ function PictureFacts({
               {usedAs ? <li>{usedAs}</li> : null}
               {more}
             </ul>
+            {extra}
           </details>
           {warnings}
         </>
