@@ -81,6 +81,25 @@ interface HeldResult {
   at: number;
 }
 
+/**
+ * The first line of an image-to-image prompt says what the input images are FOR. OpenAI's edit endpoint is the one that
+ * accepts input images, so it also serves "make a NEW picture of the person in these references": telling the model to
+ * "edit reference image 1" there would ask it to keep the reference's pose and framing. A request states its operation
+ * in `providerOptions.prismImageOperation` (Reference Studio); a request frozen before that option existed keeps the
+ * original wording exactly.
+ */
+export const OPENAI_IMAGE_EDIT_NOTE = "Edit reference image 1; keep everything not described as changed.";
+export const OPENAI_IMAGE_REFERENCE_NOTE =
+  "Create a new image. The reference images show who or what must be reproduced faithfully; take the pose, framing and background from the description below, not from the references.";
+
+export function isReferenceGeneration(request: GenerationRequest): boolean {
+  return request.providerOptions?.prismImageOperation === "reference";
+}
+
+function imageNote(request: GenerationRequest): string {
+  return isReferenceGeneration(request) ? OPENAI_IMAGE_REFERENCE_NOTE : OPENAI_IMAGE_EDIT_NOTE;
+}
+
 export function backgroundOf(request: GenerationRequest): Background {
   return request.providerOptions?.background === "transparent" ? "transparent" : "opaque";
 }
@@ -169,9 +188,7 @@ export class OpenAIImageProvider implements GenerationProviderAdapter {
       request.references.map(() => null),
     );
     const editNote =
-      request.modality === "image_to_image" && request.references.length > 0
-        ? "Edit reference image 1; keep everything not described as changed."
-        : "";
+      request.modality === "image_to_image" && request.references.length > 0 ? imageNote(request) : "";
     const compiled = compileRunwayImagePrompt(
       plan,
       promptLimit(model) - (editNote ? editNote.length + 1 : 0),
@@ -214,8 +231,13 @@ export class OpenAIImageProvider implements GenerationProviderAdapter {
       notes.push(
         `Prompt limit: ${o.omittedLines} of ${o.totalLines} ${o.label.toLowerCase()} line(s) not sent.`,
       );
+    const reproduces = s.operation === "edit" && isReferenceGeneration(request);
     if (s.operation === "edit")
-      notes.push("Reference image 1 is the image being edited; it is never overwritten.");
+      notes.push(
+        reproduces
+          ? "The reference images are reproduced in a new picture; none of them is changed or overwritten."
+          : "Reference image 1 is the image being edited; it is never overwritten.",
+      );
     if (s.background === "transparent") notes.push("Transparent background requested (PNG with alpha).");
     const estimate = this.estimateCost(request, toGenerationModel(model));
     return {
@@ -235,7 +257,7 @@ export class OpenAIImageProvider implements GenerationProviderAdapter {
         estimatedUsd: estimate.amount,
       },
       attachments: request.references.map((r, i) => ({
-        role: `${i === 0 && s.operation === "edit" ? "edit_source" : "reference"}:${r.role}:#${i + 1}`,
+        role: `${i === 0 && s.operation === "edit" && !reproduces ? "edit_source" : "reference"}:${r.role}:#${i + 1}`,
         assetId: r.assetId,
       })),
       notes,

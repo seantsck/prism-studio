@@ -183,6 +183,18 @@ const IMAGE_PRIORITY: PromptSectionKey[] = [
   "hard_constraints",
 ];
 
+const ENDS_SENTENCE = /[.!?…]$/;
+
+/** Ends a rendered section with one full stop: a line that already ends a sentence is not given a second one. */
+const sentence = (text: string) => (ENDS_SENTENCE.test(text) ? text : `${text}.`);
+
+/** Joins a section's lines with "; ", except after a line that already ends a sentence (no ".;"). */
+const joinLines = (lines: readonly string[]) =>
+  lines.reduce(
+    (text, line, i) => (i === 0 ? line : `${text}${ENDS_SENTENCE.test(text) ? " " : "; "}${line}`),
+    "",
+  );
+
 /** Keeps the frame-defining action lines (opening pose, expressions...), drops motion-over-time lines. */
 export function stillActionLines(lines: string[]): string[] {
   return lines
@@ -248,7 +260,7 @@ export function compileRunwayImagePrompt(
   const order = plan.sections.map((s) => s.key);
   const body = [...included.entries()]
     .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
-    .map(([key, lines]) => `${LABEL[key] ?? key}: ${lines.join("; ")}.`)
+    .map(([key, lines]) => sentence(`${LABEL[key] ?? key}: ${joinLines(lines)}`))
     .join(" ")
     .slice(0, room);
   return { text: [body, legend].filter(Boolean).join(" "), omissions, notes };

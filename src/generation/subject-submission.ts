@@ -8,9 +8,10 @@ import {
 } from "@/domain/generation/schemas";
 import {
   buildSubjectImagePlan,
-  hasStoredImage,
+  SUBJECT_IMAGE_POLICY,
   SubjectImageError,
   type SubjectImageInputs,
+  type SubjectImageOperation,
 } from "@/domain/generation/subject-image";
 import type { ProjectData } from "@/domain/schemas";
 import type { GenerationConfig } from "./config";
@@ -43,6 +44,11 @@ export interface PrepareSubjectImageArgs {
    * is a NEW Asset. The source Asset is never modified, and the attempt records it (lineage: source → attempt → new).
    */
   edit?: { sourceAssetId: string; instruction: string };
+  /**
+   * Reference Studio: the creator's own inputs as they typed them (a preset's value, their direction), kept with the
+   * attempt so the same request can be loaded back into the composer. Not sent anywhere; the prompt is what is sent.
+   */
+  composer?: Record<string, string>;
 }
 
 export type PreparedSubjectImage =
@@ -52,23 +58,12 @@ export type PreparedSubjectImage =
       estimate: CostEstimate;
       referencesSent: number;
       referencesNotSent: number;
+      /** What the sent images are for (Reference Studio prompt policy). */
+      operation: SubjectImageOperation;
     }
   | { ok: false; reasons: string[] };
 
 export function prepareSubjectImage(args: PrepareSubjectImageArgs): PreparedSubjectImage {
-  let built;
-  try {
-    // an edit's instruction is the creator's direction for this image (the plan is what the provider receives)
-    const direction = args.edit
-      ? [args.input.direction.trim(), `Edit the first image: ${args.edit.instruction.trim()}`]
-          .filter(Boolean)
-          .join(" ")
-      : args.input.direction;
-    built = buildSubjectImagePlan(args.data, { ...args.input, direction });
-  } catch (e) {
-    if (e instanceof SubjectImageError) return { ok: false, reasons: [e.message] };
-    throw e;
-  }
   const model = args.registry.model(args.provider, args.modelId);
   const adapter = args.registry.adapter(args.provider);
   if (!model || !adapter) return { ok: false, reasons: ["That model is not available on this server."] };
@@ -88,39 +83,42 @@ export function prepareSubjectImage(args: PrepareSubjectImageArgs): PreparedSubj
   const canEdit = caps.modalities.includes("image_to_image") && caps.references.referenceImages;
   const canText = caps.modalities.includes("text_to_image");
   const editing = args.edit ?? null;
-  if (editing) {
-    if (!canEdit) return { ok: false, reasons: [`${model.displayName} cannot edit images.`] };
-    const source = args.data.assets.find((a) => a.id === editing.sourceAssetId);
-    if (!hasStoredImage(source))
-      return { ok: false, reasons: ["That image no longer exists in this project."] };
-    if (!editing.instruction.trim()) return { ok: false, reasons: ["Describe the edit."] };
-  }
+  const chosen = args.input.sourceAssetIds ?? [];
+  if (editing && !canEdit) return { ok: false, reasons: [`${model.displayName} cannot edit images.`] };
+  // the creator's own starting image is never dropped silently: a model that cannot take it is refused
+  if (chosen.length > 0 && !canEdit)
+    return {
+      ok: false,
+      reasons: [
+        `${model.displayName} cannot use a starting image. Choose a model that can, or remove the image.`,
+      ],
+    };
   const background = args.options?.background;
   if (background === "transparent" && !caps.image.transparency)
     return { ok: false, reasons: [`${model.displayName} cannot make transparent backgrounds.`] };
-  const useReferences = (built.references.length > 0 || editing !== null) && canEdit;
+  let built;
+  try {
+    // the plan is written for what the model will actually receive (so it never describes an image that is not sent)
+    built = buildSubjectImagePlan(args.data, args.input, {
+      maxReferences: canEdit ? caps.references.maxReferences : 0,
+      edit: editing,
+    });
+  } catch (e) {
+    if (e instanceof SubjectImageError) return { ok: false, reasons: [e.message] };
+    throw e;
+  }
+  const references = built.references;
+  const useReferences = references.length > 0;
   if (!useReferences && !canText)
     return {
       ok: false,
       reasons: [`${model.displayName} needs reference images, and this subject has none yet.`],
     };
-  const max = useReferences ? caps.references.maxReferences : 0;
-  const sourceRef = editing
-    ? [
-        {
-          assetId: editing.sourceAssetId,
-          role: (args.input.subject.kind === "character" ? "identity" : "location") as
-            "identity" | "location",
-          order: 0,
-          label: "the image to edit",
-        },
-      ]
-    : [];
-  const candidates = [...sourceRef, ...built.references.filter((r) => r.assetId !== editing?.sourceAssetId)];
-  const references = useReferences ? candidates.slice(0, max).map((r, i) => ({ ...r, order: i })) : [];
   const providerOptions: Record<string, string> = {};
   if (background) providerOptions.background = background;
   if (args.options?.quality) providerOptions.quality = args.options.quality;
+  // what the images are FOR (reproduced in a new picture, or one image changed): the adapter words its note from it
+  if (useReferences) providerOptions.prismImageOperation = built.operation;
   const aspectRatio = args.aspectRatio ?? caps.image.aspectRatios[0] ?? null;
   if (!aspectRatio || !caps.image.aspectRatios.includes(aspectRatio))
     return {
@@ -161,7 +159,8 @@ export function prepareSubjectImage(args: PrepareSubjectImageArgs): PreparedSubj
     ok: true,
     estimate,
     referencesSent: references.length,
-    referencesNotSent: built.references.length - references.length,
+    referencesNotSent: built.referencesNotSent,
+    operation: built.operation,
     input: {
       attempt: {
         id: randomUUID(),
@@ -181,8 +180,13 @@ export function prepareSubjectImage(args: PrepareSubjectImageArgs): PreparedSubj
           aspectRatio,
           intent: subject.intent,
           providerOptions,
+          promptPolicy: SUBJECT_IMAGE_POLICY,
+          operation: built.operation,
           // lineage (Phase 5B-I2): the edited source; the new image is always a new Asset
           ...(editing ? { editSourceAssetId: editing.sourceAssetId } : {}),
+          // lineage (Reference Studio): the images the creator chose to start from, in order
+          ...(chosen.length > 0 ? { sourceAssetIds: [...chosen] } : {}),
+          ...(args.composer && Object.keys(args.composer).length > 0 ? { composer: args.composer } : {}),
         },
         inputAssetIds: [...new Set(references.map((r) => r.assetId))].sort(),
         outputAssetId: null,
