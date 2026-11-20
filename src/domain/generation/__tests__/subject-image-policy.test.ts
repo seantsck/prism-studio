@@ -186,18 +186,48 @@ describe("subject-image policy v2: what the images are FOR", () => {
   });
 
   it("a Look brings its own wardrobe images and words; its hair styling replaces the reference's hair", () => {
-    const { data, yumeko, look, photo, lookRef } = world();
+    const { data, yumeko, look, canonical, lookRef } = world();
+    // starting from a generated picture (no photograph of the creator's chosen): the Look picture rides along
     const plan = buildSubjectImagePlan(data, {
       subject: { kind: "character", characterId: yumeko.id, intent: "outfit_variant", lookId: look.id },
       direction: "",
-      sourceAssetIds: [photo.id],
+      sourceAssetIds: [canonical.id],
     });
-    expect(plan.references.map((r) => r.assetId)).toEqual([photo.id, lookRef.id]);
+    expect(plan.references.map((r) => r.assetId)).toEqual([canonical.id, lookRef.id]);
     expect(lines(plan, "identity")[0]).not.toMatch(/hair/);
     expect(lines(plan, "wardrobe")[0]).toMatch(/^Outfit: /);
     expect(lines(plan, "wardrobe").at(-1)).toBe(
       "Match the Look reference image: the same garments, colours, hair styling and accessories.",
     );
+  });
+
+  it("with the creator's own photos chosen, a Look is sent as words only: its picture would replace their face", () => {
+    const { data, yumeko, look, photo, canonical, lookRef } = world();
+    const plan = buildSubjectImagePlan(data, {
+      subject: { kind: "character", characterId: yumeko.id, intent: "portrait", lookId: look.id },
+      direction: "",
+      sourceAssetIds: [photo.id],
+    });
+    expect(plan.references.map((r) => [r.assetId, r.role])).toEqual([[photo.id, "identity"]]);
+    expect(lines(plan, "wardrobe")[0]).toMatch(/^Outfit: /);
+    expect(lines(plan, "wardrobe").join(" ")).not.toMatch(/Look reference image/);
+    // a photo beside a generated picture is still a photo chosen
+    const mixed = buildSubjectImagePlan(data, {
+      subject: { kind: "character", characterId: yumeko.id, intent: "portrait", lookId: look.id },
+      direction: "",
+      sourceAssetIds: [canonical.id, photo.id],
+    });
+    expect(mixed.references.map((r) => r.assetId)).toEqual([canonical.id, photo.id]);
+    // the creator can still send the Look picture: by choosing it
+    const asked = buildSubjectImagePlan(data, {
+      subject: { kind: "character", characterId: yumeko.id, intent: "portrait", lookId: look.id },
+      direction: "",
+      sourceAssetIds: [photo.id, lookRef.id],
+    });
+    expect(asked.references.map((r) => [r.assetId, r.role])).toEqual([
+      [photo.id, "identity"],
+      [lookRef.id, "character_look"],
+    ]);
   });
 
   it("left and right profiles are screen directions, and a half body is its own framing", () => {

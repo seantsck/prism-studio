@@ -475,6 +475,14 @@ export function ReferenceStudio({
                   </option>
                 ))}
               </select>
+              {!changing &&
+              (subject.looks.find((l) => l.id === lookId)?.references ?? 0) > 0 &&
+              sources.some((src) => src.origin === "uploaded") ? (
+                <span className="mt-1 block text-[11px] text-muted" data-testid="studio-look-words-only">
+                  Sent as words only. The Look&apos;s picture shows a whole person, and your photos decide who
+                  this is. To send its picture as well, select it under Start from.
+                </span>
+              ) : null}
             </label>
           ) : null}
 
