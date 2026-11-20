@@ -55,11 +55,14 @@ const duration = async (page: Page) =>
   Number(await page.getByTestId("timeline-track").getAttribute("data-duration-ms"));
 
 async function clickTimeline(page: Page, fraction: number) {
-  const box = (await page.getByTestId("timeline-track").boundingBox())!;
-  await page.mouse.click(
-    box.x + Math.min(box.width - 2, Math.max(2, box.width * fraction)),
-    box.y + box.height - 3,
-  );
+  const track = page.getByTestId("timeline-track");
+  const box = (await track.boundingBox())!;
+  // A locator click, not raw mouse coordinates: Playwright scrolls the point into view and checks that the track
+  // receives the click there. Raw coordinates miss when the track's lower edge is off screen, which happens once
+  // earlier specs have made this panel taller (the "set has changed" notice): the playhead then never moves.
+  await track.click({
+    position: { x: Math.min(box.width - 2, Math.max(2, box.width * fraction)), y: box.height - 3 },
+  });
 }
 
 const kfTimes = async (page: Page) =>
