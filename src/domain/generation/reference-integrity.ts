@@ -47,6 +47,17 @@ export function referenceOrigin(asset: Pick<Asset, "source"> | null | undefined)
   }
 }
 
+/**
+ * The label for one stored image. An upload that is a copy the browser made when it was added (upright, or small
+ * enough for one upload) is not called an original: the file the creator chose was never uploaded.
+ */
+export function referenceOriginLabel(asset: Pick<Asset, "source" | "metadata"> | null | undefined): string {
+  const origin = referenceOrigin(asset);
+  if (!origin) return "";
+  const copy = (asset?.metadata as { uploadCopy?: unknown } | undefined)?.uploadCopy;
+  return origin === "uploaded" && copy ? "uploaded copy" : REFERENCE_ORIGIN_LABEL[origin];
+}
+
 export type ReferenceSlotKind = "identity" | "look" | "location_view" | "location";
 
 /** One essential reference a Production Frame should be made from. */

@@ -2,7 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { assetSchema, type Asset, type ProjectData } from "@/domain/schemas";
 import { analyzeAudio, AudioAnalysisError } from "@/lib/audio-analysis";
-import { readImageSize } from "@/lib/image-size";
+import { isTurned, readImageSize, readJpegOrientation } from "@/lib/image-size";
 import { buildObjectPath } from "@/lib/storage-paths";
 import { checkUpload, type UploadKind } from "@/lib/upload-policy";
 import { UserFacingError } from "./action-result";
@@ -21,6 +21,8 @@ export interface IngestOptions {
   source: Asset["source"];
   tags?: string[];
   notes?: string;
+  /** Facts the caller knows about this file (never trusted for type, size or dimensions: those are read here). */
+  metadata?: Record<string, unknown>;
 }
 
 export interface Ingested {
@@ -58,6 +60,9 @@ export async function ingestUpload(
     }
   }
   const image = check.kind === "image" ? readImageSize(bytes) : null;
+  // a camera's rotation flag: the bytes are kept exactly as uploaded, and the flag is recorded so the picture can be
+  // described the way it is displayed (width and height above are the stored layout)
+  const orientation = check.mime === "image/jpeg" ? readJpegOrientation(bytes) : null;
 
   const id = randomUUID();
   const objectPath = buildObjectPath(data.project.id, id, file.name);
@@ -90,13 +95,14 @@ export async function ingestUpload(
     notes: opts.notes ?? "",
     metadata: audio
       ? {
+          ...opts.metadata,
           codec: audio.codec,
           container: audio.container,
           bitrate: audio.bitrate,
           durationFrom: audio.durationFrom,
           waveformStatus: audio.waveformStatus,
         }
-      : {},
+      : { ...opts.metadata, ...(isTurned(orientation) ? { exifOrientation: orientation } : {}) },
     createdAt: stamp,
     updatedAt: stamp,
   });

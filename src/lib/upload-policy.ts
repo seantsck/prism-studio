@@ -12,6 +12,26 @@ export const MAX_BYTES: Record<UploadKind, number> = {
   document: 10 * 1024 * 1024,
 };
 
+/**
+ * Vercel caps a function's request body at 4.5 MB whatever the app allows, and an upload here travels in a server
+ * action. 4 MB leaves room for the form's other fields.
+ */
+export const VERCEL_SINGLE_UPLOAD_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The largest file ONE upload request can carry on this deployment. Prism accepts files up to MAX_BYTES, but the host
+ * may stop a request long before that: on Vercel (which sets `VERCEL=1`) the body cap applies. An operator whose host
+ * has another limit states it in PRISM_STUDIO_MAX_UPLOAD_BYTES. It never raises what Prism itself accepts.
+ */
+export function singleUploadLimit(
+  env: Record<string, string | undefined>,
+  kind: UploadKind = "image",
+): number {
+  const stated = Number(env.PRISM_STUDIO_MAX_UPLOAD_BYTES);
+  if (Number.isInteger(stated) && stated >= 1024) return Math.min(stated, MAX_BYTES[kind]);
+  return env.VERCEL ? Math.min(VERCEL_SINGLE_UPLOAD_BYTES, MAX_BYTES[kind]) : MAX_BYTES[kind];
+}
+
 /** Detected container → canonical MIME + kind. */
 interface Sniffed {
   mime: string;
