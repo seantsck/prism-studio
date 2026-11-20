@@ -38,6 +38,7 @@ import {
   type FinalizeSuccess,
   type GenerationFilters,
   type GenerationRepository,
+  type SubjectReviewInput,
   type GenerationStore,
   type JobPatch,
   type ProjectGenerationRow,
@@ -556,6 +557,37 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
         await c.query("select * from generation_attempts where id = $1 and shot_id is null", [attemptId])
       ).rows;
       return (await this.viewsOf(c, rows, parseSubjectAttempt))[0] ?? null;
+    });
+  }
+
+  async listProjectSubjectImageAttempts(projectId: string) {
+    return this.tx(async (c) => {
+      const rows = (
+        await c.query(
+          `select * from generation_attempts where project_id = $1 and shot_id is null
+            order by created_at desc, attempt_number desc`,
+          [projectId],
+        )
+      ).rows;
+      return this.viewsOf(c, rows, parseSubjectAttempt);
+    });
+  }
+
+  async reviewSubjectImageAttempt(attemptId: string, review: SubjectReviewInput) {
+    return this.tx(async (c) => {
+      // review fields only (the append-only guard allows nothing else); `approved` stays false (0051 check)
+      const r = await c.query(
+        `update generation_attempts set review_status = $2, rejection_categories = $3, rejection_reason = $4,
+           reviewed_at = $5 where id = $1 and shot_id is null returning *`,
+        [
+          attemptId,
+          review.status,
+          review.status === "rejected" ? review.categories : [],
+          review.status === "rejected" ? review.reason : "",
+          review.status === "unreviewed" ? null : review.now,
+        ],
+      );
+      return r.rows[0] ? parseSubjectAttempt(r.rows[0]) : null;
     });
   }
 

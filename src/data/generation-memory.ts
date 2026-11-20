@@ -32,6 +32,7 @@ import {
   type FinalizeSuccess,
   type GenerationFilters,
   type GenerationRepository,
+  type SubjectReviewInput,
   type GenerationStore,
   type JobPatch,
   type ProjectGenerationRow,
@@ -286,6 +287,26 @@ export class MemoryGenerationService implements GenerationRepository, Generation
   async getSubjectImageAttempt(attemptId: string) {
     const a = this.subjectAttempts.find((x) => x.id === attemptId);
     return a ? this.subjectView(a) : null;
+  }
+
+  async listProjectSubjectImageAttempts(projectId: string) {
+    return this.subjectAttempts
+      .filter((a) => a.projectId === projectId)
+      .sort((x, y) => y.createdAt.localeCompare(x.createdAt) || y.attemptNumber - x.attemptNumber)
+      .flatMap((a) => {
+        const v = this.subjectView(a);
+        return v ? [v] : [];
+      });
+  }
+
+  async reviewSubjectImageAttempt(attemptId: string, review: SubjectReviewInput) {
+    const a = this.subjectAttempts.find((x) => x.id === attemptId);
+    if (!a) return null;
+    a.reviewStatus = review.status;
+    a.rejectionCategories = review.status === "rejected" ? review.categories : [];
+    a.rejectionReason = review.status === "rejected" ? review.reason : "";
+    a.reviewedAt = review.status === "unreviewed" ? null : review.now;
+    return clone(a);
   }
 
   async subjectImageAssetPins(projectId: string, assetId: string) {
