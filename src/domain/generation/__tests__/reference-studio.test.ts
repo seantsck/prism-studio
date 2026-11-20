@@ -3,13 +3,18 @@ import { paidConfirmationRefusal } from "../paid-confirmation";
 import {
   CHARACTER_PRESETS,
   closestFormat,
+  defaultStartingImages,
   editInstruction,
   editPresets,
   inspectReferenceImage,
   LOCATION_PRESETS,
+  offersTestModels,
+  opensOnStartingImages,
   preferredFormat,
   presetDirection,
   referencePreset,
+  startingImagesAfterUpload,
+  type StartCandidate,
   typicalCost,
   usd,
   type CostSample,
@@ -205,6 +210,21 @@ describe("what a stored file is good for (facts only: Prism does not look at the
     ).not.toMatch(/copy made in the browser/);
   });
 
+  it("flags a very long shape, such as a full phone screenshot", () => {
+    // 1080 × 2400: a phone screen
+    const screenshot = inspectReferenceImage(file({ width: 1080, height: 2400, mime: "image/png" }));
+    expect(screenshot).toMatchObject({ elongated: true, verdict: "good" });
+    expect(screenshot.notes.join(" ")).toMatch(/very long shape/);
+    expect(inspectReferenceImage(file({ width: 2400, height: 1080 })).elongated).toBe(true);
+    for (const [width, height] of [
+      [1080, 1286],
+      [1080, 1920],
+      [1200, 1600],
+    ])
+      expect(inspectReferenceImage(file({ width, height })).elongated, `${width}x${height}`).toBe(false);
+    expect(inspectReferenceImage(file({ width: null, height: null })).elongated).toBe(false);
+  });
+
   it("never claims to have judged the picture itself", () => {
     for (const a of [file({}), file({ width: 320, height: 400 }), file({ mime: "image/gif" })])
       expect(inspectReferenceImage(a).notes.at(-1)).toBe(
@@ -214,6 +234,151 @@ describe("what a stored file is good for (facts only: Prism does not look at the
     expect(inspectReferenceImage(file({ width: 3000, height: 1000 })).notes.join(" ")).toMatch(
       /very long shape/,
     );
+  });
+});
+
+describe("which pictures a generation starts from", () => {
+  const photo = (assetId: string, over: Partial<StartCandidate> = {}): StartCandidate => ({
+    assetId,
+    origin: "uploaded",
+    wardrobeOnly: false,
+    canonical: false,
+    ...over,
+  });
+  const generated = (assetId: string, over: Partial<StartCandidate> = {}) =>
+    photo(assetId, { origin: "generated", ...over });
+
+  it("a fresh Studio starts from ALL of the creator's own photographs, not from a generated picture beside them", () => {
+    const canonical = generated("g-canonical", { canonical: true });
+    expect(defaultStartingImages([canonical, photo("p1"), photo("p2"), generated("g-take")])).toEqual([
+      "p1",
+      "p2",
+    ]);
+    // a Look's wardrobe photo shows what is worn, not who the Character is
+    expect(defaultStartingImages([photo("p1"), photo("gown", { wardrobeOnly: true })])).toEqual(["p1"]);
+    // an uploaded photo that IS the canonical identity is simply one of the creator's photographs
+    expect(defaultStartingImages([photo("p1", { canonical: true }), photo("p2")])).toEqual(["p1", "p2"]);
+  });
+
+  it("with no photograph of the creator's, it starts from the picture that stands for the subject, else from words", () => {
+    expect(
+      defaultStartingImages([generated("g-take"), generated("g-canonical", { canonical: true })]),
+    ).toEqual(["g-canonical"]);
+    expect(defaultStartingImages([generated("g-take"), photo("gown", { wardrobeOnly: true })])).toEqual([]);
+    expect(defaultStartingImages([])).toEqual([]);
+  });
+
+  it("every photograph just added is selected, and a generated picture selected only by default gives way", () => {
+    const images = [
+      generated("g-canonical", { canonical: true }),
+      photo("p1"),
+      photo("p2"),
+      photo("p3"),
+      photo("p4"),
+    ];
+    expect(
+      startingImagesAfterUpload({
+        selected: ["g-canonical"],
+        images,
+        added: ["p1", "p2", "p3", "p4"],
+        chosenByCreator: false,
+      }),
+    ).toEqual(["p1", "p2", "p3", "p4"]);
+    // photographs that were already selected stay in front, in their order
+    expect(
+      startingImagesAfterUpload({
+        selected: ["p2", "p1"],
+        images,
+        added: ["p3", "p4"],
+        chosenByCreator: false,
+      }),
+    ).toEqual(["p2", "p1", "p3", "p4"]);
+  });
+
+  it("a selection the creator made themselves is kept whole when photographs are added", () => {
+    const images = [generated("g-take"), photo("p1"), photo("p2")];
+    expect(
+      startingImagesAfterUpload({ selected: ["g-take", "p1"], images, added: ["p2"], chosenByCreator: true }),
+    ).toEqual(["g-take", "p1", "p2"]);
+    // nothing selected on purpose ("Words only"), then photographs added: they were added to be used
+    expect(
+      startingImagesAfterUpload({ selected: [], images, added: ["p1", "p2"], chosenByCreator: true }),
+    ).toEqual(["p1", "p2"]);
+  });
+
+  it("only pictures that exist are selected, each once", () => {
+    const images = [photo("p1"), photo("p2")];
+    expect(
+      startingImagesAfterUpload({
+        selected: ["gone", "p1"],
+        images,
+        added: ["p2", "p2", "not-there"],
+        chosenByCreator: true,
+      }),
+    ).toEqual(["p1", "p2"]);
+    // nothing was actually added: the selection is left alone
+    expect(
+      startingImagesAfterUpload({ selected: ["p1"], images, added: ["not-there"], chosenByCreator: false }),
+    ).toEqual(["p1"]);
+  });
+
+  it("the stage opens on photographs added since the newest picture was made, otherwise on that picture", () => {
+    const made = "2026-11-11T08:00:00.000Z";
+    // the hosted case: four photographs added nine days after the last generated picture
+    const added = (id: string, addedAt: string) => photo(id, { addedAt });
+    expect(
+      opensOnStartingImages(
+        [added("p1", "2026-11-20T19:15:02.000Z"), generated("g", { addedAt: made, canonical: true })],
+        made,
+      ),
+    ).toBe(true);
+    // Postgres writes the same instant with an offset: it is compared as a time, not as text
+    expect(opensOnStartingImages([added("p1", "2026-11-11T09:00:00+01:00")], made)).toBe(false);
+    expect(opensOnStartingImages([added("p1", "2026-11-11T10:00:01+01:00")], made)).toBe(true);
+    // every photograph is older than the newest picture: that picture is what the creator comes back to
+    expect(
+      opensOnStartingImages(
+        [added("p1", "2026-11-01T00:00:00.000Z"), added("p2", "2026-11-02T00:00:00.000Z")],
+        made,
+      ),
+    ).toBe(false);
+    // one photograph added since is enough
+    expect(
+      opensOnStartingImages(
+        [added("p1", "2026-11-01T00:00:00.000Z"), added("p2", "2026-11-12T00:00:00.000Z")],
+        made,
+      ),
+    ).toBe(true);
+    // nothing made yet: the photographs are all there is to show
+    expect(opensOnStartingImages([photo("p1")], null)).toBe(true);
+    // a generated picture or a Look's wardrobe photo added since is not a photograph of the subject to start from
+    expect(opensOnStartingImages([generated("g", { addedAt: "2026-11-20T00:00:00.000Z" })], made)).toBe(
+      false,
+    );
+    expect(
+      opensOnStartingImages(
+        [photo("gown", { wardrobeOnly: true, addedAt: "2026-11-20T00:00:00.000Z" })],
+        made,
+      ),
+    ).toBe(false);
+    // a photograph whose time is unknown or unreadable never hides a result
+    expect(opensOnStartingImages([photo("p1"), added("p2", "not a time")], made)).toBe(false);
+    expect(opensOnStartingImages([], made)).toBe(false);
+  });
+});
+
+describe("test models", () => {
+  const model = (test: boolean, available: boolean) => ({ test, available });
+
+  it("are offered only where no real model can be used, unless the deployment asks for them", () => {
+    // a deployment with a usable real model: the test model, which only draws a pattern, is left out
+    expect(offersTestModels([model(true, true), model(false, true)], false)).toBe(false);
+    // the real model is listed but cannot be used (paid generation off, not set up): the test model is all there is
+    expect(offersTestModels([model(true, true), model(false, false)], false)).toBe(true);
+    expect(offersTestModels([model(true, true)], false)).toBe(true);
+    expect(offersTestModels([], false)).toBe(true);
+    // a test server that needs both says so
+    expect(offersTestModels([model(true, true), model(false, true)], true)).toBe(true);
   });
 });
 

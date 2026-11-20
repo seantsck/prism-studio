@@ -35,6 +35,12 @@ export interface GenerationConfig {
   mock: {
     /** Simulated provider latency. 0 = completes on the first poll (used by tests). */
     stageDelayMs: number;
+    /**
+     * true: the Reference Studio lists test models even where a real model can be used (a test server that needs
+     * both: PRISM_STUDIO_SHOW_TEST_MODELS=1). Default false: beside a usable real model a test model is only a way to
+     * make a test pattern by mistake, so the Studio leaves it out, with what it made.
+     */
+    showBesideRealModels?: boolean;
   };
   /**
    * The live-spend gate. Providers that bill (Provider.billing === "paid") are refused unless `enabled` AND the
@@ -108,7 +114,10 @@ export function readGenerationConfig(env: Env = process.env): GenerationConfig {
       timeoutMs: intFrom(env.PRISM_STUDIO_GENERATION_DOWNLOAD_TIMEOUT_MS, 60_000, 1_000, 600_000),
       maxRedirects: intFrom(env.PRISM_STUDIO_GENERATION_MAX_REDIRECTS, 3, 0, 10),
     },
-    mock: { stageDelayMs: intFrom(env.PRISM_STUDIO_MOCK_STAGE_DELAY_MS, 1_500, 0, 60_000) },
+    mock: {
+      stageDelayMs: intFrom(env.PRISM_STUDIO_MOCK_STAGE_DELAY_MS, 1_500, 0, 60_000),
+      showBesideRealModels: env.PRISM_STUDIO_SHOW_TEST_MODELS === "1",
+    },
     paid: {
       enabled: ["1", "true"].includes((env.PRISM_STUDIO_ALLOW_PAID_GENERATION ?? "").trim().toLowerCase()),
       maxUsd: positiveNumber(env.PRISM_STUDIO_MAX_GENERATION_USD),

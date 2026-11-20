@@ -62,17 +62,20 @@ const cost = (t: StudioTake) =>
           : "";
 
 /**
- * The stage: the starting image beside the result at a size a picture can be judged at, on a neutral grey surround.
- * Under it, what the result is and what it cost, the acts that use it (each one explicit; nothing is promoted on its
- * own), and every take made for this subject. Two or more takes can be put side by side.
+ * The stage: a result beside what it was made from, at a size a picture can be judged at, on a neutral grey surround;
+ * or, while the creator is choosing them, the pictures the NEXT request starts from (all of them, numbered in the
+ * order they are sent). Under it, what the result is and what it cost, the acts that use it (each one explicit;
+ * nothing is promoted on its own), and every take made for this subject. Two or more takes can be put side by side.
  */
 export function Stage({
   slug,
   subject,
   takes,
   images,
-  focused,
+  focused: focusedTake,
   starting,
+  view,
+  changing,
   hostedMatting,
   locationViewKinds,
   shots,
@@ -88,8 +91,12 @@ export function Stage({
   takes: StudioTake[];
   images: StudioImage[];
   focused: StudioTake | null;
-  /** The brief's current starting images (shown before the first take exists). */
+  /** The brief's current starting images: what the next request sends, in order. */
   starting: StudioImage[];
+  /** "start": show the starting images (when there are any) instead of the focused take. */
+  view: "take" | "start";
+  /** true: the brief is changing one image (the starting image is the picture being changed). */
+  changing: boolean;
   hostedMatting: HostedMattingOffer;
   locationViewKinds: Array<{ id: string; label: string }>;
   /** The Shots this subject appears in (where its references become a Production Frame). */
@@ -103,6 +110,8 @@ export function Stage({
   /** true: files are being dragged over the Studio (a drop anywhere adds them). */
   dragging: boolean;
 }) {
+  // while the creator is choosing what to start from, the stage shows that, not an older result
+  const focused = view === "start" && starting.length > 0 ? null : focusedTake;
   const [compare, setCompare] = useState<string[]>([]);
   const [showRejected, setShowRejected] = useState(false);
   // the slot a take naturally fills comes from what the take IS (a 3/4 view suggests the 3/4 slot), until changed
@@ -125,13 +134,25 @@ export function Stage({
   const hasCanonical = images.some((i) => i.roles.includes(canonicalName));
   const hasCutout = images.some((i) => i.roles.includes("Cutout"));
   const hidden = <input type="hidden" name="projectSlug" value={slug} />;
+  // from the starting images, the way back to the take the creator was looking at
+  const back =
+    !focused && focusedTake ? (
+      <button
+        type="button"
+        className="mt-1 text-[11.5px] text-accent hover:underline"
+        onClick={() => onFocus(focusedTake.attemptId)}
+        data-testid="studio-back-to-take"
+      >
+        Back to take #{focusedTake.number}
+      </button>
+    ) : null;
 
   return (
     <section className="min-w-0 space-y-3" aria-label="Stage" data-testid="studio-stage">
       <div
         className="flex min-h-[420px] items-center justify-center rounded-[3px] border border-line bg-[#232326] p-4"
         data-testid="studio-surface"
-        data-view={comparing ? "compare" : focused ? "take" : "empty"}
+        data-view={comparing ? "compare" : focused ? "take" : starting.length > 0 ? "start" : "empty"}
       >
         {comparing ? (
           <ul
@@ -178,29 +199,43 @@ export function Stage({
         ) : focused ? (
           <div className="flex w-full items-center justify-center gap-4">
             {focused.inputs.length > 0 ? (
-              <ol
-                className="flex w-[22%] min-w-[96px] max-w-[180px] shrink-0 flex-col gap-2"
-                data-testid="studio-inputs"
-              >
-                {focused.inputs.slice(0, 3).map((i, n) => (
-                  <li key={i.assetId} className="text-[10.5px] text-muted">
-                    {i.url ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={i.url} alt="" className="w-full rounded-[2px]" />
-                    ) : null}
-                    <span className="mt-0.5 block">
-                      {focused.operation === "edit" && n === 0
-                        ? "The image changed"
-                        : focused.operation === "cutout"
-                          ? "The original"
-                          : `Started from${focused.inputs.length > 1 ? ` (${n + 1})` : ""}`}
-                    </span>
-                  </li>
-                ))}
-                {focused.inputs.length > 3 ? (
-                  <li className="text-[10.5px] text-muted">and {focused.inputs.length - 3} more</li>
-                ) : null}
-              </ol>
+              // what THIS take was made from (the next request's starting images are chosen in the brief)
+              <div className="w-[22%] min-w-[96px] max-w-[180px] shrink-0" data-testid="studio-inputs">
+                <p className="mb-1.5 text-[10.5px] font-medium text-muted">
+                  Take #{focused.number}{" "}
+                  {focused.operation === "cutout"
+                    ? "was cut out of"
+                    : focused.operation === "edit"
+                      ? "changed"
+                      : `was made from${focused.inputs.length > 1 ? ` ${focused.inputs.length} images` : ""}`}
+                </p>
+                <ol
+                  className={focused.inputs.length > 2 ? "grid grid-cols-2 gap-1.5" : "flex flex-col gap-2"}
+                >
+                  {focused.inputs.slice(0, 6).map((i, n) => (
+                    <li key={i.assetId} className="text-[10.5px] text-muted">
+                      {i.url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={i.url} alt="" className="w-full rounded-[2px]" />
+                      ) : null}
+                      <span className="mt-0.5 block">
+                        {focused.operation === "edit"
+                          ? n === 0
+                            ? "The image changed"
+                            : "Also sent"
+                          : focused.operation === "cutout"
+                            ? "The original"
+                            : `Starting image${focused.inputs.length > 1 ? ` ${n + 1}` : ""}`}
+                      </span>
+                    </li>
+                  ))}
+                  {focused.inputs.length > 6 ? (
+                    <li className="col-span-2 text-[10.5px] text-muted">
+                      and {focused.inputs.length - 6} more
+                    </li>
+                  ) : null}
+                </ol>
+              </div>
             ) : null}
             <div className="flex min-w-0 flex-1 items-center justify-center">
               {focused.asset?.url ? (
@@ -234,6 +269,40 @@ export function Stage({
               )}
             </div>
           </div>
+        ) : starting.length > 1 ? (
+          <div className="w-full text-center" data-testid="studio-starting-set" data-count={starting.length}>
+            <ul className="flex flex-wrap items-end justify-center gap-3">
+              {starting.map((i, at) => (
+                <li key={i.assetId} className="relative">
+                  {i.url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={i.url}
+                      alt={i.label}
+                      className={cn(
+                        "max-w-full rounded-[2px] object-contain",
+                        starting.length > 4
+                          ? "max-h-[200px]"
+                          : starting.length > 2
+                            ? "max-h-[300px]"
+                            : "max-h-[420px]",
+                      )}
+                      data-testid="studio-starting"
+                    />
+                  ) : null}
+                  <span className="absolute left-1 top-1 rounded-[2px] bg-accent px-1.5 text-[11px] font-semibold text-accentfg">
+                    {at + 1}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-[12px] text-muted" data-testid="studio-starting-note">
+              Your {starting.length} starting images, sent together as views of the same{" "}
+              {subject.kind === "character" ? "person" : "place"}. Choose what to make from them, then
+              Generate.
+            </p>
+            {back}
+          </div>
         ) : starting[0]?.url ? (
           <div className="text-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -243,20 +312,26 @@ export function Stage({
               className="mx-auto max-h-[520px] max-w-full rounded-[2px] object-contain"
               data-testid="studio-starting"
             />
-            <p className="mt-2 text-[12px] text-muted">
-              Your starting image. Choose what to make from it, then Generate.
+            <p className="mt-2 text-[12px] text-muted" data-testid="studio-starting-note">
+              {changing
+                ? "The picture you are changing. Choose the change, then press Change image."
+                : "Your starting image. Choose what to make from it, then Generate."}
             </p>
+            {back}
           </div>
         ) : (
           <div className="max-w-sm text-center" data-testid="studio-empty">
             <p className="text-[14px] font-medium">
               {dragging && !subject.locked
                 ? `Drop to add to ${subject.name}`
-                : `No picture of ${subject.name} yet`}
+                : images.length > 0
+                  ? "No starting image selected"
+                  : `No picture of ${subject.name} yet`}
             </p>
             <p className="mt-1 text-[12px] text-muted">
-              Add reference photos to start from, or make the first reference from the written description.
-              The result appears here.
+              {images.length > 0
+                ? "The next picture is made from the written description alone. Click a picture under Start from to use it. The result appears here."
+                : "Add reference photos to start from, or make the first reference from the written description. The result appears here."}
             </p>
             {subject.locked ? null : (
               <div className="mt-3">
@@ -285,6 +360,12 @@ export function Stage({
             {focused.asset ? (
               <span className="text-[11.5px] text-muted" data-testid="studio-kind-note">
                 {kindNote(focused)}
+              </span>
+            ) : null}
+            {focused.test && focused.asset ? (
+              // a test model draws a placeholder pattern: it proves the workflow, never the look of a picture
+              <span className="text-[11.5px] text-warn" data-testid="studio-test-take">
+                Test pattern, not a real picture
               </span>
             ) : null}
             {focused.rejected ? <Badge tone="fail">Rejected</Badge> : null}

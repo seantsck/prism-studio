@@ -413,7 +413,9 @@ export function buildSubjectImagePlan(
             ? [
                 `The same person as in the identity reference image${plural(sentIdentity)}: keep the face, facial features, skin tone, ${keepHair ? "hair, " : ""}apparent age and build exactly as shown. Do not beautify, restyle or change them.`,
                 ...line(
-                  "Written notes (the reference image wins where they differ)",
+                  sentIdentity === 1
+                    ? "Written notes (the reference image wins where they differ)"
+                    : "Written notes (the reference images win where they differ)",
                   character.physicalDescription,
                 ),
               ]
@@ -429,7 +431,7 @@ export function buildSubjectImagePlan(
           key: "wardrobe",
           title: "Wardrobe",
           lines: [
-            "Clothing and hair styling as in the reference image, unless the direction says otherwise.",
+            `Clothing and hair styling as in the reference image${plural(sentIdentity)}, unless the direction says otherwise.`,
           ],
         });
     }
@@ -527,7 +529,9 @@ export function buildSubjectImagePlan(
       input.subject.kind === "location" || input.subject.intent === "scene_variation"
         ? line("Visual style", style)
         : operation! === "reference"
-          ? ["Keep the rendering style of the reference image: a photograph stays a photograph."]
+          ? [
+              `Keep the rendering style of the reference image${plural(sent.length)}: a photograph stays a photograph.`,
+            ]
           : line("Project visual style, for the rendering medium only (the studio setup above stays)", style);
     if (rendering.length) sections.push({ key: "hard_constraints", title: "Rendering", lines: rendering });
   }

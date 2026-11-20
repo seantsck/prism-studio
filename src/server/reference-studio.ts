@@ -9,6 +9,7 @@ import {
 } from "@/domain/generation/reference-integrity";
 import {
   inspectReferenceImage,
+  offersTestModels,
   type CostSample,
   type ReferenceInspection,
 } from "@/domain/generation/reference-studio";
@@ -18,13 +19,14 @@ import {
   SUBJECT_IMAGE_INTENT_LABEL,
   type SubjectImageIntent,
 } from "@/domain/generation/subject-image";
-import { locationBibleOf } from "@/domain/location-visual-bible";
+import { locationBibleAssetIds, locationBibleOf } from "@/domain/location-visual-bible";
 import type { Asset, ProjectData } from "@/domain/schemas";
 import { expressionOf, visualRoleOf } from "@/domain/visual-bible";
+import { MOCK_PROVIDER_ID } from "@/generation/providers/mock";
 import { PHOTOROOM_PROVIDER_ID } from "@/generation/providers/photoroom/config";
 import { PRISM_MATTING_PROVIDER_ID } from "@/generation/providers/prism-matting/adapter";
 import { assetUrl } from "@/lib/utils";
-import { getGenerationRepo, getRegistry } from "./generation";
+import { getGenerationConfig, getGenerationRepo, getRegistry } from "./generation";
 import { hostedMattingOffer, type HostedMattingOffer } from "./subject-images";
 
 /**
@@ -54,6 +56,14 @@ export interface StudioImage {
   originLabel: string;
   /** What the Visual Bible uses it as: "Canonical identity", "Front reference", 'Look "Formal Black"' … */
   roles: string[];
+  /** true: it is only a Look's wardrobe picture (it shows what is worn, not who the Character is). */
+  wardrobeOnly: boolean;
+  /** true: it currently stands for the subject (canonical identity, or canonical location). */
+  canonical: boolean;
+  /** When it was stored (ISO). */
+  addedAt: string;
+  /** true: a test model made it. It is a placeholder pattern, not a picture of the subject. */
+  test: boolean;
   inspection: ReferenceInspection;
   /** Where the project uses it ("used in 3 shots"), and each direct use. */
   usage: { summary: string; lines: string[] };
@@ -75,6 +85,8 @@ export interface StudioTake {
   provider: string;
   model: string;
   modelLabel: string;
+  /** true: a test model made it. Its result is a placeholder pattern, never a real picture. */
+  test: boolean;
   createdAt: string;
   asset: {
     id: string;
@@ -164,7 +176,18 @@ export interface StudioState {
 
 const stored = (a: Asset | undefined): a is Asset => hasStoredImage(a);
 
-function studioModels(): StudioModel[] {
+/**
+ * The image models of this deployment, and whether its test models are offered at all (see `offersTestModels`). A real
+ * model is always listed, with the reason when it cannot be used; a test model only where it is offered and switched
+ * on.
+ */
+function studioModels(): { models: StudioModel[]; testModels: boolean } {
+  const listed = everyImageModel();
+  const testModels = offersTestModels(listed, getGenerationConfig().mock.showBesideRealModels === true);
+  return { models: listed.filter((m) => !m.test || (testModels && m.available)), testModels };
+}
+
+function everyImageModel(): StudioModel[] {
   const registry = getRegistry();
   return registry
     .models()
@@ -267,8 +290,24 @@ export async function referenceStudioState(
 ): Promise<StudioState> {
   const repo = await getGenerationRepo({ startInlineWorker: false });
   const registry = getRegistry();
-  const all = await repo.listProjectSubjectImageAttempts(data.project.id);
+  const { models, testModels } = studioModels();
   const assets = new Map(data.assets.map((a) => [a.id, a]));
+  /** true: a test model made it, so its result is a coloured pattern, not a picture. */
+  const madeByTestModel = (v: SubjectAttemptView) =>
+    v.attempt.provider === MOCK_PROVIDER_ID ||
+    registry.model(v.attempt.provider, v.attempt.model)?.kind === "mock";
+  // Where test models are not offered, neither is what they made: a test pattern is not a picture of anything, and
+  // the creator did not ask to see it. Nothing is deleted (the attempts and their files stay), and a pattern the
+  // Visual Bible uses stays in view, so it can be seen for what it is and replaced.
+  const inVisualBible = new Set<string>();
+  for (const r of data.identityRefs) if (r.assetId) inVisualBible.add(r.assetId);
+  for (const l of data.looks) for (const id of l.referenceAssetIds) inVisualBible.add(id);
+  for (const l of data.locations)
+    for (const id of [...l.referenceAssetIds, ...locationBibleAssetIds(l)]) inVisualBible.add(id);
+  const everyAttempt = await repo.listProjectSubjectImageAttempts(data.project.id);
+  const all = testModels
+    ? everyAttempt
+    : everyAttempt.filter((v) => !madeByTestModel(v) || v.outputs.some((o) => inVisualBible.has(o.asset.id)));
   const finished = (v: SubjectAttemptView) => v.attempt.status === "succeeded" && !!primaryOf(v);
 
   const characterImages = (id: string) => {
@@ -351,7 +390,6 @@ export async function referenceStudioState(
       },
     ];
   });
-  const models = studioModels();
   if (!base) {
     return {
       subjects,
@@ -415,6 +453,13 @@ export async function referenceStudioState(
       origin,
       originLabel: referenceOriginLabel(a),
       roles: rolesOf(a.id),
+      wardrobeOnly:
+        !refs.some((r) => r.assetId === a.id) && looks.some((l) => l.referenceAssetIds.includes(a.id)),
+      canonical:
+        refs.some((r) => r.assetId === a.id && visualRoleOf(r) === "canonical") ||
+        bible?.canonicalAssetId === a.id,
+      addedAt: a.createdAt,
+      test: view ? madeByTestModel(view) : false,
       inspection: inspectReferenceImage(a),
       usage: { summary: usage.summary, lines: usage.direct.map((u) => u.label) },
       attemptId: view?.attempt.id ?? null,
@@ -504,6 +549,7 @@ export async function referenceStudioState(
       provider: v.attempt.provider,
       model: v.attempt.model,
       modelLabel: model?.displayName ?? v.attempt.model,
+      test: madeByTestModel(v),
       createdAt: v.attempt.createdAt,
       asset: asset
         ? {

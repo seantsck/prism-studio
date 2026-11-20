@@ -218,8 +218,8 @@ export function usePhotoUpload({
   slug: string;
   subject: Subject;
   maxUploadBytes: number;
-  /** The first photo an upload added as a reference of the subject itself (it becomes the starting image). */
-  onAdded: (assetId: string) => void;
+  /** The photos an upload added as pictures of the subject itself, in order (they become starting images). */
+  onAdded: (assetIds: string[]) => void;
 }): PhotoUpload {
   const [items, setItems] = useState<UploadItem[]>([]);
   const [as, setAs] = useState("reference");
@@ -330,7 +330,7 @@ export function usePhotoUpload({
     setNotice(null);
     void (async () => {
       let count = 0;
-      let first: string | null = null;
+      const stored: string[] = [];
       for (const item of ready) {
         patch(item.id, { state: "uploading", message: null });
         const form = new FormData();
@@ -352,7 +352,7 @@ export function usePhotoUpload({
         if (!alive.current) return;
         if (result.ok) {
           count += 1;
-          first ??= result.assetId ?? null;
+          if (result.assetId) stored.push(result.assetId);
           release(item.preview);
           setItems((list) => list.filter((i) => i.id !== item.id));
         } else patch(item.id, { state: "failed", message: result.error });
@@ -361,7 +361,7 @@ export function usePhotoUpload({
       setAdded(count);
       // a slot holds one photo: the next one added is an ordinary reference again
       if (slot && count > 0) setAs("reference");
-      if (first && !forLook) onAdded(first);
+      if (stored.length > 0 && !forLook) onAdded(stored);
     })();
   };
 

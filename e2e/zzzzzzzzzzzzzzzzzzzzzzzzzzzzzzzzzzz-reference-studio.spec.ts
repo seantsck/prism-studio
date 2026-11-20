@@ -22,9 +22,12 @@ import { readImageSize, readJpegOrientation } from "../src/lib/image-size";
  *   I  A paid model: its dollar price is shown before anything is made, the button carries it, quality moves it
  *   J  The Character page opens the Studio for that Character; a small photo is flagged
  *   K  Cut the person out of the photo with Prism's own free tool (original pixels) → Use as cutout
- *   L  The upload area: choose or drop several photos → each is listed with what will be sent → Upload → the first
- *      becomes the starting image; a file that is not a picture never leaves the browser
+ *   L  The upload area: choose or drop several photos → each is listed with what will be sent → Upload → EVERY one
+ *      is a starting image, shown together on the stage and sent together; a file that is not a picture never leaves
+ *      the browser
  *   M  A photo too large for one upload, and one its camera stored turned, are added as copies that say so
+ *   N  Photos added AFTER a picture was made: the stage opens on them, all selected; a take's own inputs are named as
+ *      that take's; Generate (free) sends every selected photo, and the record lists each one
  *
  * This server states a 1 MB upload limit (PRISM_STUDIO_MAX_UPLOAD_BYTES), standing in for a host's small request cap.
  */
@@ -195,7 +198,14 @@ test("A: the Studio is in the navigation, opens on the first Character and offer
     "GPT Image 2.5 Flare (OpenAI direct) (paid)",
   );
   await priced(page);
-  await expect(page.getByTestId("studio-estimate")).toContainText("No charge: a test model");
+  // a test model says what it draws, its button never promises a picture, and the real model is one click away
+  await expect(page.getByTestId("studio-estimate")).toHaveText(
+    "No charge: a test model. It draws a coloured pattern, not a real picture.",
+  );
+  await expect(page.getByTestId("studio-generate")).toHaveText("Generate test pattern");
+  await expect(page.getByTestId("studio-use-real-model")).toHaveText(
+    "use GPT Image 2.5 Flare (OpenAI direct)",
+  );
   await expect(page.getByTestId("studio-sent").locator("summary")).toContainText(
     "Sends no image, only the written description",
   );
@@ -218,7 +228,12 @@ test("B: a photo the creator adds becomes the starting image, kept as it is, wit
   // it is selected on arrival (the creator added it to use it), and shown large on the stage
   await expect(source.first()).toHaveAttribute("aria-pressed", "true");
   await expect(source.first()).toHaveAttribute("data-origin", "uploaded");
+  await expect(page.getByTestId("studio-surface")).toHaveAttribute("data-view", "start");
   await expect(page.getByTestId("studio-starting")).toBeVisible();
+  // and the Studio says that more than one picture can be a starting image
+  await expect(page.getByTestId("studio-selection")).toHaveText(
+    "1 picture selected. Click more pictures to send them together.",
+  );
   const facts = page.getByTestId("studio-inspection");
   await expect(facts).toHaveAttribute("data-verdict", "usable");
   await expect(facts).toContainText("yumeko-front.png");
@@ -248,6 +263,12 @@ test("C: a 3/4 view FROM the photo: what will be sent is shown, then a labelled 
   await priced(page);
   const sent = page.getByTestId("studio-sent");
   await expect(sent.locator("summary")).toContainText("Sends 1 image");
+  // the image that will be sent is pictured beside the button that sends it
+  await expect(page.getByTestId("studio-sent-strip")).toHaveAttribute("data-count", "1");
+  await expect(page.getByTestId("studio-sent-strip").locator("img")).toHaveAttribute(
+    "src",
+    `/api/assets/${photoId}`,
+  );
   await sent.locator("summary").click();
   const prompt = page.getByTestId("studio-prompt");
   await expect(prompt).toContainText("The same person as in the identity reference image");
@@ -260,29 +281,34 @@ test("C: a 3/4 view FROM the photo: what will be sent is shown, then a labelled 
   await expect(prompt).not.toContainText("Cinematic night photography");
 
   const generate = page.getByTestId("studio-generate");
-  await expect(generate).toHaveText("Generate");
+  await expect(generate).toHaveText("Generate test pattern");
   await expect(generate).toHaveAttribute("data-paid", "false");
   await generate.click();
   await finished(page, 1);
   const take = page.getByTestId("studio-take");
   await expect(take.locator("h2")).toHaveText("#1 3/4 view");
-  // a generated picture is never presented as a photograph, and a free model is never shown as money spent
+  // a generated picture is never presented as a photograph, a test model's pattern is never presented as a real
+  // picture, and a free model is never shown as money spent
   await expect(page.getByTestId("studio-kind-note")).toHaveText("Generated reference, not a photograph");
+  await expect(page.getByTestId("studio-test-take")).toHaveText("Test pattern, not a real picture");
   await expect(page.getByTestId("studio-cost")).toHaveText("No charge");
   await expect(page.getByTestId("studio-spent")).toHaveText("Nothing billed for Yumeko yet");
   await expect(page.getByTestId("studio-result")).toBeVisible();
-  // the stage shows what it started from, and the record says so too
+  // the stage shows what THIS take was made from (named as the take's, not as what comes next), and the record
+  // says so too
+  await expect(page.getByTestId("studio-surface")).toHaveAttribute("data-view", "take");
+  await expect(page.getByTestId("studio-inputs")).toContainText("Take #1 was made from");
   await expect(page.getByTestId("studio-inputs").locator("img")).toHaveAttribute(
     "src",
     `/api/assets/${photoId}`,
   );
   await page.getByTestId("studio-provenance").locator("summary").click();
   await expect(page.getByTestId("studio-provenance")).toContainText("1 image: yumeko-front.png.");
-  // the result joins the starting images, marked as generated
+  // the result joins the starting images, marked as generated, and as the test pattern it is
   const tiles = page.getByTestId("studio-source");
   await expect(tiles).toHaveCount(2);
   await expect(tiles.nth(1)).toHaveAttribute("data-origin", "generated");
-  await expect(tiles.nth(1)).toContainText("generated");
+  await expect(tiles.nth(1)).toContainText("test pattern");
 });
 
 test("D: a second angle, and both compared beside what they started from", async ({ page }) => {
@@ -417,7 +443,7 @@ test("G: changing an image sends only the change; the result is new, the photo u
   await expect(page.getByTestId("studio-sent").locator("summary")).toContainText("Sends 1 image");
   // the photo is 3:4; this test model has no such shape, and the Studio says so instead of re-framing silently
   await expect(page.getByTestId("studio-reframed")).toContainText("Your image is 768 × 1024.");
-  await expect(page.getByTestId("studio-generate")).toHaveText("Change image");
+  await expect(page.getByTestId("studio-generate")).toHaveText("Generate test pattern");
   await page.getByTestId("studio-generate").click();
   await finished(page, 3);
   await expect(page.getByTestId("studio-take").locator("h2")).toHaveText("#3 Change");
@@ -490,7 +516,10 @@ test("I: a paid model shows its dollar price before anything is made, and the bu
   await page.getByTestId("studio-mode-make").click();
   await choose(page.getByTestId("studio-source").first());
   await page.getByTestId("studio-preset-half_body").click();
-  await page.getByTestId("studio-model").selectOption(PAID_MODEL);
+  // from the test model, the real one is one click away; choosing it starts nothing
+  await page.getByTestId("studio-use-real-model").click();
+  await expect(page.getByTestId("studio-model")).toHaveValue(PAID_MODEL);
+  await expect(page.getByTestId("studio-test-model")).toHaveCount(0);
   await priced(page);
   const estimate = page.getByTestId("studio-estimate");
   await expect(estimate).toHaveText(/^Up to \$0\.\d+$/);
@@ -516,6 +545,25 @@ test("I: a paid model shows its dollar price before anything is made, and the bu
   );
   await expect(page.getByTestId("studio-price")).not.toContainText(/credit/i);
   await expect(page.getByTestId("studio-sent")).not.toContainText(/credit/i);
+  // a second starting image is sent WITH the first, and the price says so before anything is made
+  const second = page.getByTestId("studio-source").nth(1);
+  await second.click();
+  await expect(page.getByTestId("studio-selection")).toHaveText(
+    "2 pictures selected. They are sent together, as views of the same person.",
+  );
+  await expect(page.getByTestId("studio-sent").locator("summary")).toContainText("Sends 2 images", {
+    timeout: 20_000,
+  });
+  await expect(page.getByTestId("studio-sent-strip")).toHaveAttribute("data-count", "2");
+  const two = Number((await estimate.innerText()).replace("Up to $", ""));
+  expect(two).toBeGreaterThan(medium);
+  await expect(generate).toHaveText(`Generate · up to $${two}`);
+  await expect(page.getByTestId("studio-basis")).toContainText("the 2 images sent with it");
+  await second.click();
+  await expect(page.getByTestId("studio-sent").locator("summary")).toContainText("Sends 1 image", {
+    timeout: 20_000,
+  });
+  await expect(generate).toHaveText(`Generate · up to $${medium}`);
   await page.getByTestId("studio-quality").selectOption("high");
   await priced(page);
   await expect
@@ -535,6 +583,19 @@ test("I: a paid model shows its dollar price before anything is made, and the bu
   await page.reload();
   await expect(page.getByTestId("studio-take-thumb")).toHaveCount(takesBefore);
   await expect(page.getByTestId("studio-spent")).toHaveText("Nothing billed for Yumeko yet");
+  // the creator's choice of model is remembered: after a reload, and for the next Character too, so the next
+  // Generate does not quietly go back to drawing a test pattern. The price is still on the button every time.
+  await expect(page.getByTestId("studio-model")).toHaveValue(PAID_MODEL);
+  await page.getByTestId("studio-subject").filter({ hasText: "Sean" }).click();
+  await expect(page.getByTestId("reference-studio")).toHaveAttribute("data-subject", /^character:/);
+  await expect(page.getByTestId("studio-subject").filter({ hasText: "Sean" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(page.getByTestId("studio-model")).toHaveValue(PAID_MODEL);
+  await priced(page);
+  await expect(page.getByTestId("studio-generate")).toHaveText(/^Generate · up to \$0\.\d+$/);
+  await expect(page.getByTestId("studio-take-thumb")).toHaveCount(0);
 });
 
 test("J: the Character page opens the Studio for that Character; a small or busy photo is accepted and flagged honestly", async ({
@@ -600,13 +661,14 @@ test("K: cutting the person out keeps the original pixels, costs nothing, and be
     "Cutout: the original pixels with the background removed",
   );
   await expect(page.getByTestId("studio-cost")).toHaveText("No charge");
+  await expect(page.getByTestId("studio-inputs")).toContainText(`Take #${takes + 1} was cut out of`);
   await expect(page.getByTestId("studio-inputs")).toContainText("The original");
   await page.getByTestId("studio-use-cutout").click();
   await expect(page.getByTestId("studio-take")).toContainText("Cutout", { timeout: 30_000 });
   await expect(page.getByTestId("studio-use-cutout")).toBeDisabled();
 });
 
-test("L: the upload area takes several photos at once, chosen or dropped, and lists what will be sent first", async ({
+test("L: the upload area takes several photos at once, chosen or dropped; every one becomes a starting image, sent together", async ({
   page,
 }) => {
   await page.goto(STUDIO);
@@ -668,14 +730,53 @@ test("L: the upload area takes several photos at once, chosen or dropped, and li
   await expect(page.getByTestId("studio-upload-status")).toHaveText(
     "2 photos added to Takumi\u2019s pictures.",
   );
-  // the first photo of the batch is the starting image; the second is there to choose
-  await expect(page.locator('[data-testid="studio-source"][aria-pressed="true"]')).toHaveCount(1);
-  await expect(page.getByTestId("studio-inspection")).toContainText("takumi-front.png");
-  await expect(page.getByTestId("studio-source-origin")).toHaveText("uploaded original");
+  // EVERY photo of the batch is a starting image (they were added to be used), numbered in the order it is sent
+  const selected = page.locator('[data-testid="studio-source"][aria-pressed="true"]');
+  await expect(selected).toHaveCount(2);
+  await expect(page.getByTestId("studio-selection")).toHaveText(
+    "2 pictures selected. They are sent together, as views of the same person.",
+  );
+  // the stage shows them all, at a size they can be checked at
+  await expect(page.getByTestId("studio-surface")).toHaveAttribute("data-view", "start");
+  await expect(page.getByTestId("studio-starting-set")).toHaveAttribute("data-count", "2");
+  await expect(page.getByTestId("studio-starting")).toHaveCount(2);
+  await expect(page.getByTestId("studio-starting-note")).toHaveText(
+    "Your 2 starting images, sent together as views of the same person. Choose what to make from them, then Generate.",
+  );
+  // each has its own line of facts
+  const facts = page.getByTestId("studio-inspection");
+  await expect(facts).toHaveCount(2);
+  await expect(facts.nth(0)).toContainText("takumi-front.png");
+  await expect(facts.nth(0).getByTestId("studio-source-origin")).toHaveText("uploaded original");
+  await expect(facts.nth(1)).toContainText("takumi-side.png");
+  await expect(facts.nth(1)).toContainText("600 × 800 px");
+  // and the request sends both: the count, the pictures beside the button and the prompt all agree
+  await priced(page);
+  const sent = page.getByTestId("studio-sent");
+  await expect(sent.locator("summary")).toContainText("Sends 2 images");
+  await expect(page.getByTestId("studio-sent-strip")).toHaveAttribute("data-count", "2");
+  await sent.locator("summary").click();
+  await expect(page.getByTestId("studio-prompt")).toContainText(
+    "The same person as in the identity reference images",
+  );
+  await expect(page.getByTestId("studio-prompt")).toContainText("the reference images win where they differ");
+  await sent.locator("summary").click();
   // stored exactly as chosen
-  const chosen = page.locator('[data-testid="studio-source"][aria-pressed="true"]');
-  const stored = await page.request.get(`/api/assets/${await chosen.getAttribute("data-asset")}`);
+  const frontTile = page.getByRole("button", { name: /^takumi-front\.png/ });
+  const stored = await page.request.get(`/api/assets/${await frontTile.getAttribute("data-asset")}`);
   expect(Buffer.from(await stored.body()).equals(front)).toBe(true);
+  // taking one out is one click, and so is putting every photo back
+  await page.getByRole("button", { name: /^takumi-side\.png/ }).click();
+  await expect(selected).toHaveCount(1);
+  await expect(page.getByTestId("studio-selection")).toContainText(
+    "1 picture selected. Click more pictures to send them together.",
+  );
+  await expect(page.getByTestId("studio-starting")).toHaveCount(1);
+  await expect(sent.locator("summary")).toContainText("Sends 1 image", { timeout: 20_000 });
+  await page.getByTestId("studio-select-photos").click();
+  await expect(selected).toHaveCount(2);
+  await expect(page.getByTestId("studio-select-photos")).toHaveCount(0);
+  await expect(sent.locator("summary")).toContainText("Sends 2 images", { timeout: 20_000 });
   // what was refused is still listed, with its reason, until the creator clears it
   await expect(page.getByTestId("studio-upload-item")).toHaveCount(1);
   await page.getByTestId("studio-upload-remove").click();
@@ -723,17 +824,25 @@ test("M: a photo too large for one upload, and one its camera stored turned, are
   await expect(tiles).toHaveCount(4, { timeout: 60_000 });
   await expect(page.getByTestId("studio-upload-item")).toHaveCount(0);
 
+  // both copies join the two photos already selected: four starting images, all on the stage
+  await expect(page.locator('[data-testid="studio-source"][aria-pressed="true"]')).toHaveCount(4);
+  await expect(page.getByTestId("studio-selection")).toHaveAttribute("data-count", "4");
+  await expect(page.getByTestId("studio-starting-set")).toHaveAttribute("data-count", "4");
+  await expect(page.getByTestId("studio-starting")).toHaveCount(4);
+  const factsOf = (assetId: string) =>
+    page.locator(`[data-testid="studio-inspection"][data-asset="${assetId}"]`);
+
   // the smaller copy: it fits, it is a JPEG of the size shown, and the Studio never calls it the original
-  const picked = page.locator('[data-testid="studio-source"][aria-pressed="true"]');
-  await expect(picked).toHaveCount(1);
-  const facts = page.getByTestId("studio-inspection");
+  const smallerTile = page.getByRole("button", { name: /^IMG_2041-copy-1536x2048\.jpg/ });
+  await expect(smallerTile).toHaveAttribute("aria-pressed", "true");
+  const smallerId = (await smallerTile.getAttribute("data-asset"))!;
+  const facts = factsOf(smallerId);
   await expect(facts).toContainText("IMG_2041-copy-1536x2048.jpg");
-  await expect(page.getByTestId("studio-source-origin")).toHaveText("uploaded copy");
+  await expect(facts.getByTestId("studio-source-origin")).toHaveText("uploaded copy");
   await facts.locator("summary").click();
   await expect(facts).toContainText(
     "A smaller copy made in the browser when it was added: one upload here could not carry it at full size. The file chosen was IMG_2041.jpg (3000 × 4000,",
   );
-  const smallerId = (await picked.getAttribute("data-asset"))!;
   const smaller = Buffer.from(await (await page.request.get(`/api/assets/${smallerId}`)).body());
   expect(smaller.length).toBeLessThanOrEqual(1_000_000);
   expect(readImageSize(smaller)).toEqual({ width: 1536, height: 2048 });
@@ -741,7 +850,7 @@ test("M: a photo too large for one upload, and one its camera stored turned, are
   // the upright copy: no rotation flag left, the pixels themselves are upright (the stored top-left corner of the
   // camera file is the top-RIGHT corner of the picture once it is turned the way the flag says)
   const uprightTile = page.getByRole("button", { name: /^IMG_0007-copy-1200x1600\.jpg/ });
-  await uprightTile.click();
+  await expect(uprightTile).toHaveAttribute("aria-pressed", "true");
   const uprightId = (await uprightTile.getAttribute("data-asset"))!;
   const upright = Buffer.from(await (await page.request.get(`/api/assets/${uprightId}`)).body());
   expect(readJpegOrientation(upright)).toBeNull();
@@ -751,6 +860,103 @@ test("M: a photo too large for one upload, and one its camera stored turned, are
   expect(corners.topRight[2]).toBeLessThan(90);
   expect(corners.topLeft[0]).toBeLessThan(90);
   expect(corners.topLeft[2]).toBeGreaterThan(100);
-  await expect(page.getByTestId("studio-inspection").last()).toContainText("uploaded copy");
+  await expect(factsOf(uprightId).getByTestId("studio-source-origin")).toHaveText("uploaded copy");
   await expect(page.getByTestId("studio-source-turned")).toHaveCount(0);
+});
+
+test("N: photos added after a picture was made open the stage, all selected; Generate sends every one of them", async ({
+  page,
+}) => {
+  await openYumeko(page);
+  const surface = page.getByTestId("studio-surface");
+  const selected = page.locator('[data-testid="studio-source"][aria-pressed="true"]');
+  const sent = page.getByTestId("studio-sent").locator("summary");
+  // her one photograph is older than her newest picture, so the Studio opens on that picture; the photograph, not a
+  // generated picture, is what the next one starts from
+  await expect(surface).toHaveAttribute("data-view", "take");
+  await expect(selected).toHaveCount(1);
+  await expect(selected).toHaveAttribute("data-origin", "uploaded");
+  const takes = await page.getByTestId("studio-take-thumb").count();
+  const tiles = await page.getByTestId("studio-source").count();
+  // what the next picture starts from can be put on the stage without changing the selection, and the picture she
+  // was looking at is one click away again
+  await expect(page.getByTestId("studio-show-start")).toHaveText("Show it large");
+  await page.getByTestId("studio-show-start").click();
+  await expect(surface).toHaveAttribute("data-view", "start");
+  await expect(page.getByTestId("studio-starting")).toHaveCount(1);
+  await expect(page.getByTestId("studio-show-start")).toHaveCount(0);
+  await expect(selected).toHaveCount(1);
+  await page.getByTestId("studio-back-to-take").click();
+  await expect(surface).toHaveAttribute("data-view", "take");
+
+  // two more photographs, dropped on the page: a side view, and one in the shape of a full phone screenshot
+  await dropFiles(page, "studio-surface", [
+    { name: "yumeko-side.png", mimeType: "image/png", buffer: Buffer.from(portraitFixturePng(600, 800)) },
+    {
+      name: "Screenshot_yumeko.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(portraitFixturePng(540, 1200)),
+    },
+  ]);
+  await listed(page, 2);
+  await page.getByTestId("studio-upload-submit").click();
+  await expect(page.getByTestId("studio-source")).toHaveCount(tiles + 2, { timeout: 30_000 });
+  // all three of her photographs are starting images now, and the stage shows them instead of the older picture
+  await expect(selected).toHaveCount(3);
+  for (const tile of await selected.all()) await expect(tile).toHaveAttribute("data-origin", "uploaded");
+  await expect(page.getByTestId("studio-selection")).toHaveText(
+    "3 pictures selected. They are sent together, as views of the same person.",
+  );
+  await expect(surface).toHaveAttribute("data-view", "start");
+  await expect(page.getByTestId("studio-starting-set")).toHaveAttribute("data-count", "3");
+  await expect(page.getByTestId("studio-starting")).toHaveCount(3);
+  await expect(page.getByTestId("studio-take")).toHaveCount(0);
+  // the very long one is flagged, in words the creator can act on
+  await expect(page.getByTestId("studio-source-elongated")).toHaveText(
+    "A very long shape (a full phone screenshot?). If the person is small in the frame, or the picture shows anything else, crop it first.",
+  );
+  await priced(page);
+  await expect(sent).toContainText("Sends 3 images");
+  await expect(page.getByTestId("studio-sent-strip")).toHaveAttribute("data-count", "3");
+
+  // a fresh visit opens on the photographs too: nothing has been made since they were added
+  await page.reload();
+  await expect(surface).toHaveAttribute("data-view", "start");
+  await expect(selected).toHaveCount(3);
+  await expect(page.getByTestId("studio-starting")).toHaveCount(3);
+  // the picture she was looking at is one click away
+  await page.getByTestId("studio-back-to-take").click();
+  await expect(surface).toHaveAttribute("data-view", "take");
+  await expect(page.getByTestId("studio-take")).toBeVisible();
+  await expect(page.getByTestId("studio-back-to-take")).toHaveCount(0);
+  // and choosing among the starting images brings them back to the stage
+  await page.getByRole("button", { name: /^yumeko-side\.png/ }).click();
+  await expect(surface).toHaveAttribute("data-view", "start");
+  await expect(page.getByTestId("studio-starting")).toHaveCount(2);
+  await page.getByTestId("studio-select-photos").click();
+  await expect(selected).toHaveCount(3);
+  await expect(page.getByTestId("studio-starting")).toHaveCount(3);
+
+  // Generate with the free test model: the take was made from all three, in the order they were numbered
+  await page.getByTestId("studio-preset-three_quarter").click();
+  await priced(page);
+  await expect(sent).toContainText("Sends 3 images");
+  await page.getByTestId("studio-generate").click();
+  await finished(page, takes + 1);
+  await expect(surface).toHaveAttribute("data-view", "take");
+  const inputs = page.getByTestId("studio-inputs");
+  await expect(inputs).toContainText(`Take #${takes + 1} was made from 3 images`);
+  await expect(inputs.locator("img")).toHaveCount(3);
+  await page.getByTestId("studio-provenance").locator("summary").click();
+  await expect(page.getByTestId("studio-provenance")).toContainText(
+    "3 images: yumeko-front.png; Screenshot_yumeko.png; yumeko-side.png.",
+  );
+  await expect(page.getByTestId("studio-cost")).toHaveText("No charge");
+  // now the newest picture is newer than every photograph: a fresh visit opens on it, with the photographs still
+  // the starting images
+  await page.reload();
+  await expect(surface).toHaveAttribute("data-view", "take");
+  await expect(page.getByTestId("studio-take").locator("h2")).toHaveText(`#${takes + 1} 3/4 view`);
+  await expect(selected).toHaveCount(3);
+  await expect(page.getByTestId("studio-spent")).toHaveText("Nothing billed for Yumeko yet");
 });
