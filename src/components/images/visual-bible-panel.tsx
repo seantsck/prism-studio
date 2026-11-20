@@ -1,5 +1,6 @@
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button, Field, Panel } from "@/components/ui";
+import { REFERENCE_ORIGIN_LABEL, referenceOrigin } from "@/domain/generation/reference-integrity";
 import type { ProjectData } from "@/domain/schemas";
 import { SUGGESTED_EXPRESSIONS, visualBibleReadiness, visualRoleOf } from "@/domain/visual-bible";
 import { assetUrl } from "@/lib/utils";
@@ -48,6 +49,7 @@ export function VisualBiblePanel(props: {
   const cutoutRef = data.identityRefs.find(
     (r) => r.characterId === characterId && visualRoleOf(r) === "cutout",
   );
+  const canonicalOrigin = referenceOrigin(vb.canonicalAssetId ? assets.get(vb.canonicalAssetId) : null);
   const transparentSources = props.sources.filter(
     (s) => (assets.get(s.assetId)?.metadata as { hasAlpha?: unknown } | undefined)?.hasAlpha === true,
   );
@@ -110,7 +112,19 @@ export function VisualBiblePanel(props: {
               No canonical identity yet
             </div>
           )}
-          <figcaption className="mt-1 text-sm font-medium">{character.name}</figcaption>
+          <figcaption className="mt-1 text-sm font-medium">
+            {character.name}
+            {canonicalOrigin ? (
+              // a generated reference is never presented as a photograph of the Character
+              <span
+                className="ml-2 text-[11px] font-normal text-muted"
+                data-testid="vb-canonical-origin"
+                data-origin={canonicalOrigin}
+              >
+                {REFERENCE_ORIGIN_LABEL[canonicalOrigin]}
+              </span>
+            ) : null}
+          </figcaption>
         </figure>
 
         <div className="space-y-3">
