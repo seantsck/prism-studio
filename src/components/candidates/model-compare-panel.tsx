@@ -78,6 +78,7 @@ export function ModelComparePanel({
   setCeilingUsd,
   paidEnabled,
   purpose = "shot_output",
+  preSpend,
 }: {
   projectSlug: string;
   shotId: string;
@@ -95,12 +96,20 @@ export function ModelComparePanel({
   maxCandidates: number;
   setCeilingUsd: number | null;
   paidEnabled: boolean;
+  /**
+   * Pre-spend checks of a paid animation, keyed by row key (`provider/modelId`): a Production Frame generated without a
+   * canonical reference, or a request identical to a rejected take. Shown and confirmed on their own, never folded
+   * into the general acknowledgement. The server recomputes and requires the same confirmation.
+   */
+  preSpend?: Record<string, Array<{ id: string; label: string; impact: string }>>;
 }) {
   const [sort, setSort] = useState<SortKey>("recommended");
   const [picked, setPicked] = useState<Record<string, boolean>>({});
   const [choice, setChoice] = useState<Record<string, Choice>>({});
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [ack, setAck] = useState(false);
+  // the confirmation is for exactly the checks that were on screen: a different selection asks again
+  const [ackedPreSpend, setAckedPreSpend] = useState<string | null>(null);
   const [confirmTotal, setConfirmTotal] = useState(false);
   const still = purpose === "production_frame";
   const animate = purpose === "animate_production_frame";
@@ -157,6 +166,22 @@ export function ModelComparePanel({
       .filter((p) => p.state === "unsupported" || p.state === "not_used_mode")
       .map((p) => `${s.row.label}: ${p.label}`),
   );
+  // one line per distinct check; a check that applies to several selected models names them all
+  const preSpendChecks = [
+    ...paid
+      .flatMap((s) => (preSpend?.[s.row.key] ?? []).map((c) => ({ ...c, model: s.row.label })))
+      .reduce(
+        (m, c) =>
+          m.set(`${c.id}|${c.label}`, {
+            ...c,
+            models: [...(m.get(`${c.id}|${c.label}`)?.models ?? []), c.model],
+          }),
+        new Map<string, { id: string; label: string; impact: string; models: string[] }>(),
+      )
+      .values(),
+  ];
+  const preSpendKey = preSpendChecks.map((c) => `${c.id}|${c.label}|${c.models.join(",")}`).join("\n");
+  const ackPreSpend = preSpendChecks.length > 0 && ackedPreSpend === preSpendKey;
   const canSubmit =
     selected.length >= 1 &&
     selected.length <= maxCandidates &&
@@ -165,6 +190,7 @@ export function ModelComparePanel({
     !overCeiling &&
     !unknownCost &&
     ack &&
+    (preSpendChecks.length === 0 || ackPreSpend) &&
     (paid.length === 0 || confirmTotal);
 
   const selections = JSON.stringify(
@@ -547,6 +573,7 @@ export function ModelComparePanel({
         <input type="hidden" name="generationPurpose" value={purpose} />
         <input type="hidden" name="preference" value={preference} />
         <input type="hidden" name="ackAll" value={ack ? "1" : "0"} />
+        <input type="hidden" name="ackPreSpend" value={ackPreSpend ? "1" : "0"} />
         <input type="hidden" name="confirmedTotalUsd" value={paid.length > 0 ? String(totalRounded) : ""} />
 
         <div className="flex flex-wrap items-center gap-3">
@@ -618,6 +645,37 @@ export function ModelComparePanel({
             />
             <span>I have reviewed what each selected model receives.</span>
           </label>
+        ) : null}
+        {preSpendChecks.length > 0 ? (
+          <div className="space-y-1.5 border border-fail/40 bg-fail/10 p-2" data-testid="pre-spend-checks">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-fail">
+              Check before you spend
+            </div>
+            <ul className="space-y-1 text-[11.5px]">
+              {preSpendChecks.map((c) => (
+                <li key={`${c.id}|${c.label}`} data-testid="pre-spend-check" data-check={c.id}>
+                  <div className="text-fg">
+                    {c.label}
+                    {selected.length > 1 ? (
+                      <span className="text-muted"> · {c.models.join(", ")}</span>
+                    ) : null}
+                  </div>
+                  <div className="text-muted">{c.impact}</div>
+                </li>
+              ))}
+            </ul>
+            <label className="flex items-start gap-1.5 text-[11.5px]">
+              <input
+                type="checkbox"
+                checked={ackPreSpend}
+                onChange={(e) => setAckedPreSpend(e.target.checked ? preSpendKey : null)}
+                data-testid="ack-pre-spend"
+              />
+              <span>
+                I have checked the Production Frame against the above and accept generating from it as it is.
+              </span>
+            </label>
+          </div>
         ) : null}
         {paid.length > 0 ? (
           <label className="flex items-start gap-1.5 text-[11.5px]">

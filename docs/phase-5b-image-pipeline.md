@@ -8,6 +8,10 @@ integration branch `phase-5b-image-pipeline`.** `main` and the deployed owner-re
 Target workflow: Character Bible → Location Bible → Production Frame candidates → edit / refine → choose the canonical
 Production Frame → animate (the existing image-to-video) → Episode Edit. 3D stays optional.
 
+**The one screen for Character and Location images is the [Reference Studio](reference-studio.md).** It drives this
+pipeline, shows the dollar price before a paid image is made, and replaces the v1 prompt described in §2 with
+`subject-image` v2 (what is sent, and why, is documented there).
+
 ## 1. Audit: what already existed (reused, not rebuilt)
 
 | Need                                                      | Already built                                                                                                                                                                | Where                                                               |

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button, Field, Panel } from "@/components/ui";
 import { LOCATION_VIEW_KIND_LABEL } from "@/domain/location-view";
@@ -76,8 +77,19 @@ export function LocationVisualBiblePanel(props: {
       ))}
     </select>
   );
+  const studio = `/projects/${slug}/studio?subject=location:${locationId}`;
   const generate = (intent: string) =>
-    preferred ? (
+    preferred?.paid ? (
+      // a paid picture is never one click here: the Reference Studio shows its price first, then asks
+      <Link
+        href={`${studio}&make=${intent}`}
+        className="inline-flex h-6 items-center rounded-[3px] border border-line2 bg-panel2 px-2 text-[12px] font-medium hover:bg-[#1f1f25]"
+        data-testid={`lvb-generate-${intent}`}
+        data-paid="true"
+      >
+        {PRESET_LABEL[intent] ?? "Generate"}
+      </Link>
+    ) : preferred ? (
       <ActionForm action={startSubjectImage} successMessage="Image queued" className="inline-flex gap-1">
         {subjectHidden}
         <input type="hidden" name="intent" value={intent} />
@@ -284,10 +296,11 @@ export function LocationVisualBiblePanel(props: {
           {preferred ? (
             <details className="text-[11px] text-muted">
               <summary className="cursor-pointer">Advanced</summary>
-              Generate presets use {preferred.label}
-              {preferred.paid ? " (paid)" : " (free)"}; choose another model in the Images panel below. A Shot
-              set here automatically receives its selected Location View, then the canonical appearance, then
-              the establishing views, plates and the variants that match its time of day.
+              {preferred.paid
+                ? `Generate presets open the Reference Studio, which shows the price of ${preferred.label} before anything is made.`
+                : `Generate presets use ${preferred.label} (free); choose another model in the Reference Studio.`}{" "}
+              A Shot set here automatically receives its selected Location View, then the canonical
+              appearance, then the establishing views, plates and the variants that match its time of day.
             </details>
           ) : null}
         </div>

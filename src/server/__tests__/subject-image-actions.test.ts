@@ -127,6 +127,8 @@ describe("5B-I1 Character / Location image actions", () => {
       kind: "character",
       characterId: yumeko!.id,
     });
+    // A lock protects a reference IMAGE. The seeded front slot is a locked placeholder with no stored file, so there
+    // is nothing to protect and it is filled; once it holds an image and is locked, replacing it is refused.
     const ref = data.identityRefs.find((x) => x.characterId === yumeko!.id && x.slot === "front");
     if (ref) await repo.upsert(data.project.id, "identityRefs", { ...ref, locked: true });
     else
@@ -143,7 +145,49 @@ describe("5B-I1 Character / Location image actions", () => {
       await saveAsCharacterReference(
         form({ characterId: yumeko!.id, attemptId: view!.attempt.id, slot: "front" }),
       ),
+      "a locked placeholder (no stored image) is filled",
+    ).toMatchObject({ ok: true });
+    const filled = (await repo.loadProject("ojousama"))!.identityRefs.find(
+      (x) => x.characterId === yumeko!.id && x.slot === "front",
+    )!;
+    expect(filled.assetId).toBe(view!.outputs[0]!.asset.id);
+    await repo.upsert(data.project.id, "identityRefs", { ...filled, locked: true });
+    await generate({ subjectKind: "character", subjectId: yumeko!.id, intent: "three_quarter" });
+    const second = (
+      await repo.generation.listSubjectImageAttempts({ kind: "character", characterId: yumeko!.id })
+    )[0]!;
+    expect(
+      await saveAsCharacterReference(
+        form({ characterId: yumeko!.id, attemptId: second.attempt.id, slot: "front" }),
+      ),
+      "a locked slot that holds an image is never replaced",
     ).toMatchObject({ ok: false, error: expect.stringMatching(/locked/) });
+    // the Reference Studio never swaps an UNLOCKED slot's image on one click either: it asks first
+    await repo.upsert(data.project.id, "identityRefs", { ...filled, locked: false });
+    expect(
+      await saveAsCharacterReference(
+        form({ characterId: yumeko!.id, attemptId: second.attempt.id, slot: "front", guardReplace: "1" }),
+      ),
+    ).toMatchObject({ ok: false, error: expect.stringMatching(/already has a front reference/) });
+    expect(
+      await saveAsCharacterReference(
+        form({
+          characterId: yumeko!.id,
+          attemptId: second.attempt.id,
+          slot: "front",
+          guardReplace: "1",
+          confirmReplace: "1",
+        }),
+      ),
+    ).toMatchObject({ ok: true });
+    const replaced = (await repo.loadProject("ojousama"))!;
+    expect(
+      replaced.identityRefs.find((x) => x.characterId === yumeko!.id && x.slot === "front")!.assetId,
+    ).toBe(second.outputs[0]!.asset.id);
+    expect(
+      replaced.assets.some((a) => a.id === view!.outputs[0]!.asset.id),
+      "the replaced image stays in the library",
+    ).toBe(true);
     expect(
       await saveAsCharacterReference(
         form({ characterId: other!.id, attemptId: view!.attempt.id, slot: "profile" }),

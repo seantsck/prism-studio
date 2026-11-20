@@ -1,5 +1,7 @@
+import Link from "next/link";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button, Field, Panel } from "@/components/ui";
+import { referenceOrigin, referenceOriginLabel } from "@/domain/generation/reference-integrity";
 import type { ProjectData } from "@/domain/schemas";
 import { SUGGESTED_EXPRESSIONS, visualBibleReadiness, visualRoleOf } from "@/domain/visual-bible";
 import { assetUrl } from "@/lib/utils";
@@ -48,6 +50,7 @@ export function VisualBiblePanel(props: {
   const cutoutRef = data.identityRefs.find(
     (r) => r.characterId === characterId && visualRoleOf(r) === "cutout",
   );
+  const canonicalOrigin = referenceOrigin(vb.canonicalAssetId ? assets.get(vb.canonicalAssetId) : null);
   const transparentSources = props.sources.filter(
     (s) => (assets.get(s.assetId)?.metadata as { hasAlpha?: unknown } | undefined)?.hasAlpha === true,
   );
@@ -73,8 +76,21 @@ export function VisualBiblePanel(props: {
       ))}
     </select>
   );
+  const studio = `/projects/${slug}/studio?subject=character:${characterId}`;
+  const linkButton =
+    "inline-flex h-6 items-center rounded-[3px] border border-line2 bg-panel2 px-2 text-[12px] font-medium hover:bg-[#1f1f25]";
   const generate = (intent: string, lookId?: string) =>
-    preferred ? (
+    preferred?.paid ? (
+      // a paid picture is never one click here: the Reference Studio shows its price first, then asks
+      <Link
+        href={`${studio}&make=${intent === "profile" ? "profile_left" : intent}${lookId ? `&look=${lookId}` : ""}`}
+        className={linkButton}
+        data-testid={`vb-generate-${intent}`}
+        data-paid="true"
+      >
+        {PRESET_LABEL[intent] ?? "Generate"}
+      </Link>
+    ) : preferred ? (
       <ActionForm action={startSubjectImage} successMessage="Image queued" className="inline">
         {subjectHidden}
         <input type="hidden" name="intent" value={intent} />
@@ -90,9 +106,18 @@ export function VisualBiblePanel(props: {
     <Panel
       title="Visual Bible"
       actions={
-        <Badge tone={vb.done === vb.total ? "pass" : "neutral"}>
-          {vb.done} / {vb.total} ready
-        </Badge>
+        <span className="flex items-center gap-2">
+          <Link
+            href={studio}
+            className="text-[11.5px] text-accent hover:underline"
+            data-testid="vb-open-studio"
+          >
+            Open in Reference Studio
+          </Link>
+          <Badge tone={vb.done === vb.total ? "pass" : "neutral"}>
+            {vb.done} / {vb.total} ready
+          </Badge>
+        </span>
       }
     >
       <div className="grid gap-4 p-3 md:grid-cols-[220px_1fr]" data-testid="visual-bible">
@@ -110,7 +135,19 @@ export function VisualBiblePanel(props: {
               No canonical identity yet
             </div>
           )}
-          <figcaption className="mt-1 text-sm font-medium">{character.name}</figcaption>
+          <figcaption className="mt-1 text-sm font-medium">
+            {character.name}
+            {canonicalOrigin ? (
+              // a generated reference is never presented as a photograph of the Character
+              <span
+                className="ml-2 text-[11px] font-normal text-muted"
+                data-testid="vb-canonical-origin"
+                data-origin={canonicalOrigin}
+              >
+                {referenceOriginLabel(vb.canonicalAssetId ? assets.get(vb.canonicalAssetId) : null)}
+              </span>
+            ) : null}
+          </figcaption>
         </figure>
 
         <div className="space-y-3">
@@ -273,8 +310,9 @@ export function VisualBiblePanel(props: {
           {preferred ? (
             <details className="text-[11px] text-muted">
               <summary className="cursor-pointer">Advanced</summary>
-              Generate presets use {preferred.label}
-              {preferred.paid ? " (paid)" : " (free)"}; choose another model in the Images panel below.
+              {preferred.paid
+                ? `Generate presets open the Reference Studio, which shows the price of ${preferred.label} before anything is made.`
+                : `Generate presets use ${preferred.label} (free); choose another model in the Reference Studio.`}
             </details>
           ) : null}
         </div>

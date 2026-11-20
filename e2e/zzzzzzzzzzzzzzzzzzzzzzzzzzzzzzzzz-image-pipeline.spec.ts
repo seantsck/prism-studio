@@ -325,6 +325,8 @@ test("H — Character: the Visual Bible shows readiness; Use as Canonical sets t
   await page.reload();
   await expect(page.getByTestId("vb-canonical-image")).toBeVisible();
   await expect(page.getByTestId("vb-item-canonical")).toHaveAttribute("data-done", "true");
+  // a generated canonical is labelled as a generated reference, never presented as a photograph of the Character
+  await expect(page.getByTestId("vb-canonical-origin")).toHaveText("generated reference");
 });
 
 test("I — Location: the Visual Bible shows readiness and views; Use as Canonical; replacing it needs confirmation", async ({

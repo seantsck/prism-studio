@@ -27,6 +27,8 @@ interface ActionFormProps extends Omit<FormHTMLAttributes<HTMLFormElement>, "act
   quiet?: boolean;
   /** Ask the user to confirm first (destructive actions). */
   confirmMessage?: string;
+  /** Told each result once it arrives (for a caller that must react to a refusal, e.g. by re-reading a price). */
+  onResult?: (result: ActionResult) => void;
 }
 
 /**
@@ -43,6 +45,7 @@ export function ActionForm({
   resetOnSuccess = false,
   quiet = false,
   confirmMessage,
+  onResult,
   className,
   ...rest
 }: ActionFormProps) {
@@ -61,6 +64,15 @@ export function ActionForm({
     const t = setTimeout(() => setDismissed(state), 2200);
     return () => clearTimeout(t);
   }, [state, resetOnSuccess]);
+
+  // the latest callback, without re-running the notification when the parent re-renders
+  const notify = useRef(onResult);
+  useEffect(() => {
+    notify.current = onResult;
+  }, [onResult]);
+  useEffect(() => {
+    if (state) notify.current?.(state);
+  }, [state]);
 
   return (
     <form

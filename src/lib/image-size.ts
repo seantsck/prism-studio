@@ -45,3 +45,64 @@ export function readImageSize(bytes: Uint8Array): { width: number; height: numbe
   }
   return null;
 }
+
+/**
+ * The EXIF orientation (1 to 8) a JPEG carries, or null when it carries none or the bytes are not a JPEG. A camera
+ * usually stores a portrait photograph turned on its side plus this flag: a viewer that honours the flag shows it
+ * upright, a tool that ignores it sees it sideways. Only the header segments are read; no pixel is decoded.
+ */
+export function readJpegOrientation(bytes: Uint8Array): number | null {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let o = 2;
+  while (o + 4 <= bytes.length) {
+    if (bytes[o] !== 0xff) return null;
+    const marker = bytes[o + 1]!;
+    // the picture data starts: EXIF, when present, comes before it
+    if (marker === 0xda || marker === 0xd9) return null;
+    if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01 || marker === 0xff) {
+      o += marker === 0xff ? 1 : 2;
+      continue;
+    }
+    const size = v.getUint16(o + 2);
+    if (size < 2) return null;
+    const start = o + 4;
+    const end = Math.min(o + 2 + size, bytes.length);
+    const isExif =
+      marker === 0xe1 &&
+      end - start >= 14 &&
+      String.fromCharCode(...bytes.slice(start, start + 4)) === "Exif" &&
+      bytes[start + 4] === 0 &&
+      bytes[start + 5] === 0;
+    if (isExif) return tiffOrientation(v, start + 6, end);
+    o += 2 + size;
+  }
+  return null;
+}
+
+/** Tag 0x0112 of the first image directory of a TIFF block (the body of an EXIF segment). */
+function tiffOrientation(v: DataView, tiff: number, end: number): number | null {
+  const order = v.getUint16(tiff);
+  if (order !== 0x4949 && order !== 0x4d4d) return null;
+  const little = order === 0x4949;
+  if (v.getUint16(tiff + 2, little) !== 42) return null;
+  const ifd = tiff + v.getUint32(tiff + 4, little);
+  if (ifd + 2 > end) return null;
+  const entries = v.getUint16(ifd, little);
+  for (let i = 0; i < entries; i++) {
+    const entry = ifd + 2 + i * 12;
+    if (entry + 12 > end) return null;
+    if (v.getUint16(entry, little) !== 0x0112) continue;
+    const value = v.getUint16(entry + 8, little);
+    return value >= 1 && value <= 8 ? value : null;
+  }
+  return null;
+}
+
+/** true: the orientation turns or mirrors the stored pixels (anything but "upright as stored"). */
+export const isTurned = (orientation: number | null | undefined): boolean =>
+  typeof orientation === "number" && orientation >= 2 && orientation <= 8;
+
+/** true: the orientation swaps width and height when it is honoured (a quarter turn). */
+export const swapsSides = (orientation: number | null | undefined): boolean =>
+  typeof orientation === "number" && orientation >= 5 && orientation <= 8;

@@ -11,6 +11,8 @@ import { getGenerationRepo } from "./generation";
 export async function subjectImageAssetIds(
   data: ProjectData,
   subject: { kind: "character"; characterId: string } | { kind: "location"; locationId: string },
+  /** A pure READ (a price quote, a page) passes `{ startInlineWorker: false }`: looking never starts queued work. */
+  opts: { startInlineWorker?: boolean } = {},
 ): Promise<Set<string>> {
   const ids: Array<string | null> = [];
   if (subject.kind === "character") {
@@ -20,7 +22,7 @@ export async function subjectImageAssetIds(
   } else {
     ids.push(...(data.locations.find((l) => l.id === subject.locationId)?.referenceAssetIds ?? []));
   }
-  const views = await (await getGenerationRepo()).listSubjectImageAttempts(subject);
+  const views = await (await getGenerationRepo(opts)).listSubjectImageAttempts(subject);
   for (const v of views) for (const o of v.outputs) ids.push(o.asset.id);
   return new Set(
     ids.filter((id): id is string => !!id && hasStoredImage(data.assets.find((a) => a.id === id))),

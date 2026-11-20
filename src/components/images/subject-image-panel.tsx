@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button, Field, Panel } from "@/components/ui";
 import type { SubjectAttemptView } from "@/data/generation-repository";
@@ -59,7 +60,21 @@ export function SubjectImagePanel(props: {
     </>
   );
   return (
-    <Panel title="Images" actions={active ? <Badge tone="warn">Generating…</Badge> : undefined}>
+    <Panel
+      title="Images"
+      actions={
+        <span className="flex items-center gap-2">
+          <Link
+            href={`/projects/${props.projectSlug}/studio?subject=${subject.kind}:${subject.id}`}
+            className="text-[11.5px] text-accent hover:underline"
+            data-testid="subject-image-open-studio"
+          >
+            Open in Reference Studio
+          </Link>
+          {active ? <Badge tone="warn">Generating…</Badge> : null}
+        </span>
+      }
+    >
       <div className="space-y-3 p-3" data-testid="subject-images" data-active={active ? "true" : "false"}>
         <RefreshWhileActive active={active} />
         {preferred ? (
@@ -123,6 +138,11 @@ export function SubjectImagePanel(props: {
                 {qualities.length > 0 ? <QualityField qualities={qualities} /> : null}
               </div>
             </details>
+            {usable.some((m) => m.paid) ? (
+              <p className="text-[11px] text-muted" data-testid="subject-image-paid-note">
+                A paid model is started from the Reference Studio, which shows its price first.
+              </p>
+            ) : null}
           </ActionForm>
         ) : (
           <p className="text-sm text-muted" data-testid="subject-image-unavailable">

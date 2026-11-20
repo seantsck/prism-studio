@@ -4,13 +4,16 @@ import { ModelComparePanel } from "@/components/candidates/model-compare-panel";
 import { Badge } from "@/components/ui";
 import { animationFreshness, animationSource } from "@/domain/generation/animation";
 import { candidateSetPurpose } from "@/domain/generation/candidates";
-import { adaptProviderPrompt } from "@/domain/generation/provider-prompt";
+import { adaptProviderPrompt, notesNotSent } from "@/domain/generation/provider-prompt";
+import { shotReferenceIntegrity } from "@/domain/generation/reference-integrity";
 import type { ProjectData } from "@/domain/schemas";
+import { animationPreSpendByModel } from "@/generation/candidate-set";
 import { buildModelComparison } from "@/generation/model-comparison";
 import { buildSharedEvaluation } from "@/generation/submission";
 import { assetUrl } from "@/lib/utils";
 import { getCandidateRepo } from "@/server/candidates";
 import { getGenerationConfig, getRegistry } from "@/server/generation";
+import { ReferenceCheck } from "./reference-check";
 import { ShotClipPanel } from "./shot-clip-panel";
 
 const secs = (ms: number) => `${Number((ms / 1000).toFixed(2))} s`;
@@ -39,16 +42,27 @@ export async function AnimateProductionFrame({ data, shotId }: { data: ProjectDa
     (s) => candidateSetPurpose(s.set) === "animate_production_frame",
   );
   const attemptsById = new Map(data.attempts.map((a) => [a.id, a]));
+  // each attempt's current human verdict (candidate reviews): model history, and the rejected takes of this Shot
+  const outcomes = await candidateRepo.listOutcomeRecords(data.project.id);
   const comparison = source.ok
     ? buildModelComparison({
         data,
         shotId,
         registry: getRegistry(),
-        outcomes: await candidateRepo.listOutcomeRecords(data.project.id),
+        outcomes,
         purpose: "animate_production_frame",
       })
     : null;
   const cfg = getGenerationConfig();
+  // Before spend: do the canonical references exist, and was the selected frame actually generated from them?
+  const integrity = shotReferenceIntegrity(ctx, pkg, data.attempts);
+  // ...and, per paid model, what the server will ask to be confirmed on its own (same plan as the submit path)
+  const preSpend = source.ok
+    ? animationPreSpendByModel({ data, shotId, registry: getRegistry(), config: cfg, outcomes })
+    : {};
+  const verdicts = new Map(
+    outcomes.map((o) => [o.attemptId, { decision: o.decision, negativeTags: o.negativeTags }]),
+  );
   // Phase 5B: the exact provider-facing prompt each policy-adapted model would receive (no spend; nothing is sent)
   const providerPrompts = getRegistry()
     .usable()
@@ -154,6 +168,8 @@ export async function AnimateProductionFrame({ data, shotId }: { data: ProjectDa
         </dl>
       </div>
 
+      <ReferenceCheck integrity={integrity} />
+
       {source.ok && providerPrompts.length > 0 ? (
         <div className="space-y-2" data-testid="animate-provider-prompts">
           {providerPrompts.map(({ model, prompt }) => (
@@ -204,6 +220,21 @@ export async function AnimateProductionFrame({ data, shotId }: { data: ProjectDa
                     {prompt.omitted.map((o) => o.label).join(", ")}
                   </p>
                 ) : null}
+                {notesNotSent(prompt).length > 0 ? (
+                  <div data-testid="animate-provider-prompt-not-sent">
+                    <div className="text-[11px] uppercase tracking-wide text-warn">
+                      Shot notes not sent to {model.displayName}
+                    </div>
+                    <ul className="list-disc pl-4">
+                      {notesNotSent(prompt).map((n) => (
+                        <li key={`${n.field}:${n.source}`}>
+                          <span className="text-fg">“{n.source}”</span>{" "}
+                          <span className="text-muted">— {n.reason}.</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 {prompt.problem ? <p className="text-fail">{prompt.problem}</p> : null}
               </div>
             </details>
@@ -217,6 +248,7 @@ export async function AnimateProductionFrame({ data, shotId }: { data: ProjectDa
         pkg={pkg}
         models={getRegistry().usable()}
         candidateSetOf={candidateSetOf}
+        verdicts={verdicts}
       />
 
       {!source.ok ? (
@@ -249,6 +281,7 @@ export async function AnimateProductionFrame({ data, shotId }: { data: ProjectDa
             maxCandidates={cfg.candidateSet.maxCandidates}
             setCeilingUsd={cfg.candidateSet.maxUsd}
             paidEnabled={cfg.paid.enabled}
+            preSpend={preSpend}
           />
         </>
       ) : null}

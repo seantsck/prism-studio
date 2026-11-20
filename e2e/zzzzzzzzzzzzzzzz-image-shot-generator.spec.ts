@@ -58,10 +58,18 @@ test("Generate candidates: three still images from three image models, no 3D set
   await expect(pf).not.toContainText(/3D|GPU|COLMAP|splat|reconstruction|Vulkan/i);
   await expect(panel.getByTestId("pf-text-only")).toContainText("written intent alone");
 
-  // only still-image models are offered, never a video model. The three Runway image models are listed but NOT
-  // selectable here: this environment has no Runway key and paid generation is off (a key alone never enables spend).
+  // only still-image models are offered, never a video model. The real (paid) image models are listed but NOT
+  // selectable here: this environment has no provider key and paid generation is off (a key alone never enables
+  // spend). The catalog grows (I2 added the direct GPT Image models), so what is pinned is the KINDS offered: exactly
+  // the three free mock stills are selectable; every other row is listed and disabled.
   const models = panel.getByTestId("model-row");
-  await expect(models).toHaveCount(6);
+  await expect(panel.locator('[data-testid="model-row"][data-model^="mock-image"]')).toHaveCount(3);
+  const offered = await models.evaluateAll((rows) => rows.map((r) => r.getAttribute("data-model") ?? ""));
+  expect(offered.length).toBeGreaterThanOrEqual(6);
+  for (const id of offered.filter((m) => !m.startsWith("mock-image")))
+    await expect(
+      panel.locator(`[data-testid="model-row"][data-model="${id}"]`).getByTestId("model-pick"),
+    ).toBeDisabled();
   await expect(models.filter({ hasText: /video/i })).toHaveCount(0);
   for (const id of ["gpt_image_2_5_flare", "muse_image", "seedream5_lite"]) {
     const row = panel.locator(`[data-testid="model-row"][data-model="${id}"]`);

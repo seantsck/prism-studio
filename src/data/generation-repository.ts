@@ -170,6 +170,17 @@ export interface ReviewInput {
   now: string;
 }
 
+/**
+ * Creative review of a Character / Location image (Reference Studio). There is no "approved": a reference is accepted
+ * by the explicit "Use as…" act, which points a Visual Bible slot at it. A rejected image stays in history, with why.
+ */
+export interface SubjectReviewInput {
+  status: "rejected" | "unreviewed";
+  categories: RejectionCategory[];
+  reason: string;
+  now: string;
+}
+
 export interface GenerationRepository {
   /**
    * Opaque revision of the revision-covered package inputs (generation history excluded; the later Production
@@ -196,6 +207,19 @@ export interface GenerationRepository {
   /** Newest first. Only the subject's own attempts (never a Shot's). */
   listSubjectImageAttempts(subject: ImageSubjectRef): Promise<SubjectAttemptView[]>;
   getSubjectImageAttempt(attemptId: string): Promise<SubjectAttemptView | null>;
+  /**
+   * Every Character / Location image attempt of the project, newest first: the Reference Studio's history, and the
+   * actual costs its dollar estimates are compared with. Never a Shot's attempt.
+   */
+  listProjectSubjectImageAttempts(projectId: string): Promise<SubjectAttemptView[]>;
+  /**
+   * Narrow review write for a Character / Location image (never rewrites the creative request; never approves).
+   * Null when the id is not a subject attempt.
+   */
+  reviewSubjectImageAttempt(
+    attemptId: string,
+    review: SubjectReviewInput,
+  ): Promise<SubjectImageAttempt | null>;
   /**
    * 0051 shared-database compatibility gate: why a Character / Location image attempt still needs this Asset (it was
    * sent as an INPUT reference). Its OWN output is provenance, not a use: deleting an unreferenced generated subject

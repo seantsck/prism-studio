@@ -18,6 +18,11 @@ import {
   type SpendGateInput,
 } from "@/domain/generation/gate";
 import { animationRequestViolations } from "@/domain/generation/animation";
+import {
+  referenceIntegrityAcknowledgements,
+  shotReferenceIntegrity,
+} from "@/domain/generation/reference-integrity";
+import { priorTakes, retakeAcknowledgements, type TakeVerdict } from "@/domain/generation/retake";
 import { parseFrozenProviderPrompt, type AdaptedProviderPrompt } from "@/domain/generation/provider-prompt";
 import { buildPromptPlan, normalizeDirection, type CreatorDirection } from "@/domain/generation/prompt-plan";
 import {
@@ -94,6 +99,12 @@ export function evaluateShotForModel(args: {
   edit?: ImageEditSpec;
   /** Phase 5B-I6: the creator's direction (Production Frame candidates only); never replaces a protected line. */
   direction?: CreatorDirection | null;
+  /**
+   * The current human verdicts on this project's attempts (candidate reviews). With them, a paid animation that would
+   * re-send a request identical to a rejected take needs its own acknowledgement. Absent = only the attempts' own
+   * approve/reject status is known.
+   */
+  verdicts?: readonly TakeVerdict[];
 }): Evaluation {
   const shared = args.shared ?? buildSharedEvaluation(args.data, args.shotId, args.now);
   const { ctx, pkg } = shared;
@@ -145,6 +156,28 @@ export function evaluateShotForModel(args: {
       animationRequestViolations(req, pkg).forEach((message, i) =>
         adapterBlockers.push({ code: `animate.invariant.${i}`, source: "submission", message }),
       );
+      // Before spend on an animation: the video model receives only the Production Frame, so (1) a reference that
+      // frame was generated without cannot be added by animating it, and (2) a request identical to a creatively
+      // rejected take is another roll of the same instruction. Both are explicit acknowledgements, recorded on the
+      // attempt; free (mock / local) models are not gated.
+      if (purpose === "animate_production_frame" && args.registry.billsMoney(model)) {
+        const preSpend = [
+          ...referenceIntegrityAcknowledgements(shotReferenceIntegrity(ctx, pkg, args.data.attempts)),
+          ...retakeAcknowledgements(
+            priorTakes({
+              attempts: args.data.attempts,
+              verdicts: args.verdicts ?? [],
+              shotId: ctx.shot.id,
+              request: req,
+            }),
+          ),
+        ];
+        if (preSpend.length > 0)
+          compatibility = {
+            ...compatibility,
+            ignoredFeatures: [...compatibility.ignoredFeatures, ...preSpend],
+          };
+      }
       const check = adapter.validateRequest(req, model);
       if (!check.ok) {
         check.errors.forEach((message, i) =>
@@ -223,6 +256,8 @@ export function prepareSubmission(args: {
   edit?: ImageEditSpec;
   /** Phase 5B-I6: the creator's direction (Production Frame candidates only); recorded on the attempt. */
   direction?: CreatorDirection | null;
+  /** The current human verdicts on this project's attempts (see `evaluateShotForModel`). */
+  verdicts?: readonly TakeVerdict[];
 }): PreparedSubmission {
   const now = args.now ?? new Date();
   const evaluation = evaluateShotForModel({ ...args, now });

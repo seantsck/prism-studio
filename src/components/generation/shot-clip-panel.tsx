@@ -4,7 +4,12 @@ import { Badge, Button } from "@/components/ui";
 import type { ShotContext } from "@/domain/context";
 import type { GenerationPackage } from "@/domain/generation-package";
 import { buildPromptPlan, renderPromptPlan } from "@/domain/generation/prompt-plan";
-import { NEGATIVE_LABELS, NEGATIVE_TAGS } from "@/domain/generation/reviews";
+import {
+  NEGATIVE_LABELS,
+  NEGATIVE_TAGS,
+  type NegativeTag,
+  type ReviewDecision,
+} from "@/domain/generation/reviews";
 import {
   clipDurationChoices,
   SHOT_CLIP_EARLIER_FRAME,
@@ -31,6 +36,7 @@ export function ShotClipPanel({
   pkg,
   models,
   candidateSetOf,
+  verdicts,
 }: {
   data: ProjectData;
   ctx: ShotContext;
@@ -38,6 +44,8 @@ export function ShotClipPanel({
   models: GenerationModel[];
   /** attempt id → its animation candidate set id */
   candidateSetOf: Map<string, string>;
+  /** attempt id → its current human verdict (candidate reviews). A rejection and its reasons stay visible here. */
+  verdicts?: Map<string, { decision: ReviewDecision; negativeTags: NegativeTag[] }>;
 }) {
   const slug = data.project.slug;
   const shotId = ctx.shot.id;
@@ -156,6 +164,9 @@ export function ShotClipPanel({
               const setId = candidateSetOf.get(c.attempt.id) ?? "";
               const note = (c.attempt.modelSettings as { creatorDirection?: { text?: string } })
                 .creatorDirection?.text;
+              const verdict = verdicts?.get(c.attempt.id);
+              const rejected = c.attempt.reviewStatus === "rejected" || verdict?.decision === "reject";
+              const reasons = verdict?.decision === "reject" ? verdict.negativeTags : [];
               return (
                 <li
                   key={c.attempt.id}
@@ -170,7 +181,14 @@ export function ShotClipPanel({
                     </span>
                     {note ? <span className="text-muted">“{note}”</span> : null}
                     {c.selected ? <Badge tone="pass">Shot Clip</Badge> : null}
-                    {c.attempt.reviewStatus === "rejected" ? <Badge tone="fail">rejected</Badge> : null}
+                    {rejected ? (
+                      <span data-testid="shot-clip-rejected">
+                        <Badge tone="fail">
+                          rejected
+                          {reasons.length ? `: ${reasons.map((t) => NEGATIVE_LABELS[t]).join(", ")}` : ""}
+                        </Badge>
+                      </span>
+                    ) : null}
                     {c.fromEarlierFrame ? <Badge tone="warn">{SHOT_CLIP_EARLIER_FRAME}</Badge> : null}
                     {c.freshness.status !== "fresh" && !c.fromEarlierFrame ? (
                       <Badge tone="warn">needs review</Badge>
@@ -213,7 +231,7 @@ export function ShotClipPanel({
                         </Button>
                       </ActionForm>
                     ) : null}
-                    {!c.selected && c.attempt.reviewStatus !== "rejected" ? (
+                    {!c.selected && !rejected ? (
                       <ActionForm action={reviewCandidate} quiet className="flex items-center gap-1">
                         <input type="hidden" name="projectSlug" value={slug} />
                         <input type="hidden" name="attemptId" value={c.attempt.id} />

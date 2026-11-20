@@ -5,6 +5,7 @@ import {
   CONTINUITY_LOCK_EXPLANATION,
   ContinuityLockCard,
 } from "@/components/character-continuity/continuity-lock-ui";
+import { referenceOrigin, referenceOriginLabel } from "@/domain/generation/reference-integrity";
 import { IDENTITY_SLOTS } from "@/domain/schemas";
 import { assetUrl } from "@/lib/utils";
 import {
@@ -143,6 +144,7 @@ export default async function CharacterPage({
               const ref = refs.find((r) => r.slot === slot);
               const asset = data.assets.find((a) => a.id === ref?.assetId);
               const url = assetUrl(asset);
+              const origin = url ? referenceOrigin(asset) : null;
               return (
                 <div key={slot} data-testid={`identity-slot-${slot}`} className="border border-line p-2">
                   <div className="mb-1 flex items-center justify-between text-[11px] uppercase tracking-wide text-muted">
@@ -150,8 +152,20 @@ export default async function CharacterPage({
                     {ref?.locked ? <Badge tone="pass">locked</Badge> : null}
                   </div>
                   {url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={url} alt={slot} className="aspect-[3/4] w-full object-cover" />
+                    <figure>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={url} alt={slot} className="aspect-[3/4] w-full object-cover" />
+                      {origin ? (
+                        // a generated reference is never presented as a photograph of the Character
+                        <figcaption
+                          className="mt-0.5 text-[10.5px] text-muted"
+                          data-testid="identity-origin"
+                          data-origin={origin}
+                        >
+                          {referenceOriginLabel(asset)}
+                        </figcaption>
+                      ) : null}
+                    </figure>
                   ) : (
                     <FramePlaceholder
                       code={slot}

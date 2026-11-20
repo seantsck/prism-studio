@@ -138,6 +138,8 @@ async function createCandidateSet_impl(form: FormData) {
         direction: s.direction ?? null,
       })),
       acknowledgeAll: str(form, "ackAll") === "1",
+      // confirmed on its own in the comparison panel; never implied by "ackAll"
+      acknowledgePreSpend: str(form, "ackPreSpend") === "1",
       confirmedTotalUsd:
         confirmedTotalUsd != null && Number.isFinite(confirmedTotalUsd) ? confirmedTotalUsd : null,
       title: str(form, "title").slice(0, 120),

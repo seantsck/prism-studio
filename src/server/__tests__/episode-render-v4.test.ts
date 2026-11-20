@@ -393,7 +393,11 @@ describe.skipIf(!HAS_FFMPEG)("5B-V4 Ojou-sama final film (real ffmpeg, mock medi
     // 28. private, inside the project's own storage prefix, served only through the owner-checked asset route
     expect(() => assertPathInProject(asset.objectPath!, asset.projectId)).not.toThrow();
     expect(asset.storageProvider).toBe("local");
-    expect(o.fonts.map((f) => f.family)).toContain("Noto Serif JP");
+    // the Film title family is either open Noto family the renderer accepts (src/render/fonts.ts): "Noto Serif JP"
+    // where the JP fonts are installed, "Noto Serif CJK" on Debian's fonts-noto-cjk (the hosted render image)
+    expect(o.fonts.map((f) => f.family).some((f) => f === "Noto Serif JP" || f === "Noto Serif CJK")).toBe(
+      true,
+    );
     // a re-probe of the stored bytes agrees
     const file = lab.write(bytes, "mp4");
     const probe = await new FfmpegEpisodeRenderer().probe(lab.dir, file.split(/[\\/]/).pop()!);

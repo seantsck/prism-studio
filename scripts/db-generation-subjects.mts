@@ -174,6 +174,78 @@ try {
   }
   check("a stranger cannot create in the owner's project", strangerErr.length > 0, strangerErr.slice(0, 80));
 
+  // ── Reference Studio: the project-wide listing, and the review write (review fields only, never an approval) ──
+  const projectWide = await owner.listProjectSubjectImageAttempts(pid);
+  check(
+    "the project-wide listing has every subject attempt of the project and no Shot attempt",
+    created.every((id) => projectWide.some((v) => v.attempt.id === id)) &&
+      projectWide.every((v) => v.attempt.shotId === null),
+    `${projectWide.length} listed`,
+  );
+  check(
+    "the project-wide listing is newest first",
+    projectWide.every((v, i) => i === 0 || projectWide[i - 1]!.attempt.createdAt >= v.attempt.createdAt),
+  );
+  check(
+    "a stranger's project-wide listing is empty",
+    (await stranger.listProjectSubjectImageAttempts(pid)).length === 0,
+  );
+  const reviewedAt = new Date().toISOString();
+  const rejected = await owner.reviewSubjectImageAttempt(a.attempt.id, {
+    status: "rejected",
+    categories: ["identity_drift"],
+    reason: "not the same person",
+    now: reviewedAt,
+  });
+  const afterReject = (await owner.getSubjectImageAttempt(a.attempt.id))!.attempt;
+  check(
+    "the owner rejects a subject image: review fields only, never approved, the creative request untouched",
+    rejected?.reviewStatus === "rejected" &&
+      afterReject.reviewStatus === "rejected" &&
+      afterReject.approved === false &&
+      afterReject.rejectionCategories.join() === "identity_drift" &&
+      afterReject.rejectionReason === "not the same person" &&
+      afterReject.reviewedAt !== null &&
+      afterReject.prompt === a.attempt.prompt &&
+      afterReject.packageFingerprint === a.attempt.packageFingerprint,
+  );
+  check(
+    "a stranger cannot review it (RLS: no row is theirs)",
+    (await stranger.reviewSubjectImageAttempt(a.attempt.id, {
+      status: "unreviewed",
+      categories: [],
+      reason: "",
+      now: reviewedAt,
+    })) === null && (await owner.getSubjectImageAttempt(a.attempt.id))!.attempt.reviewStatus === "rejected",
+  );
+  const restored = await owner.reviewSubjectImageAttempt(a.attempt.id, {
+    status: "unreviewed",
+    categories: [],
+    reason: "",
+    now: reviewedAt,
+  });
+  check(
+    "restoring clears the review",
+    restored?.reviewStatus === "unreviewed" &&
+      restored.rejectionCategories.length === 0 &&
+      restored.rejectionReason === "" &&
+      restored.reviewedAt === null,
+  );
+  const shotAttempt = data.attempts[0];
+  if (shotAttempt) {
+    check(
+      "a Shot attempt is never reviewed through the subject path",
+      (await owner.reviewSubjectImageAttempt(shotAttempt.id, {
+        status: "rejected",
+        categories: ["other"],
+        reason: "",
+        now: reviewedAt,
+      })) === null &&
+        (await pool.query("select review_status from generation_attempts where id = $1", [shotAttempt.id]))
+          .rows[0].review_status === shotAttempt.reviewStatus,
+    );
+  }
+
   // ── constraints ──
   const base = (await pool.query("select * from generation_attempts where id = $1", [a.attempt.id])).rows[0];
   const cols = Object.keys(base).filter(

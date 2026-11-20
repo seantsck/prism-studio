@@ -3,13 +3,8 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { GenerationSubmitError, type SubjectAttemptView } from "@/data/generation-repository";
-import {
-  CHARACTER_IMAGE_INTENTS,
-  hasStoredImage,
-  LOCATION_IMAGE_INTENTS,
-  type CharacterImageIntent,
-  type LocationImageIntent,
-} from "@/domain/generation/subject-image";
+import { paidConfirmationRefusal } from "@/domain/generation/paid-confirmation";
+import { hasStoredImage } from "@/domain/generation/subject-image";
 import { IDENTITY_SLOTS, type ProjectData } from "@/domain/schemas";
 import { HOSTED_MATTING_ENGINE, prepareBackgroundRemoval } from "@/generation/background-removal";
 import { prepareSubjectImage } from "@/generation/subject-submission";
@@ -17,6 +12,7 @@ import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { createLocationViewFromReference } from "./location-view-actions";
 import { requireUser } from "./auth";
 import { getGenerationConfig, getGenerationRepo, getRegistry } from "./generation";
+import { readSubjectImageForm } from "./reference-request";
 import { getRepo, requireProjectFresh } from "./repo";
 import { subjectImageAssetIds } from "./subject-image-sources";
 
@@ -31,62 +27,33 @@ const refresh = (slug: string) => revalidatePath(`/projects/${slug}`, "layout");
 
 async function startSubjectImage_impl(form: FormData) {
   const slug = str(form, "projectSlug");
-  const kind = str(form, "subjectKind");
-  const subjectId = str(form, "subjectId");
-  const intent = str(form, "intent");
-  // the form posts the chosen model as "provider/modelId" (the human's choice; never substituted)
-  const [provider = "", modelId = ""] = (
-    str(form, "model") || `${str(form, "provider")}/${str(form, "modelId")}`
-  ).split("/");
-  if (!provider || !modelId) throw new UserFacingError("Choose an image model.");
   const user = await requireUser();
   const data = await requireProjectFresh(slug);
-  let subject;
-  if (kind === "character") {
-    if (!(CHARACTER_IMAGE_INTENTS as readonly string[]).includes(intent))
-      throw new UserFacingError("Choose what to generate for this character.");
-    subject = {
-      kind: "character" as const,
-      characterId: subjectId,
-      intent: intent as CharacterImageIntent,
-      lookId: str(form, "lookId") || null,
-    };
-  } else if (kind === "location") {
-    if (!(LOCATION_IMAGE_INTENTS as readonly string[]).includes(intent))
-      throw new UserFacingError("Choose what to generate for this location.");
-    subject = { kind: "location" as const, locationId: subjectId, intent: intent as LocationImageIntent };
-  } else throw new UserFacingError("Nothing to generate an image for.");
-
-  // Phase 5B-I2: Edit Image starts only from one of THIS subject's own images (its references or generated images)
-  const sourceAssetId = str(form, "sourceAssetId");
-  const edit = sourceAssetId ? { sourceAssetId, instruction: str(form, "instruction") } : undefined;
-  if (edit) {
-    const own = await subjectImageAssetIds(
-      data,
-      subject.kind === "character"
-        ? { kind: "character", characterId: subject.characterId }
-        : { kind: "location", locationId: subject.locationId },
-    );
-    if (!own.has(edit.sourceAssetId))
-      throw new UserFacingError("That image does not belong to this subject.");
-  }
-  const background = str(form, "transparent") === "1" ? ("transparent" as const) : undefined;
-  const quality = str(form, "quality") || undefined;
+  const req = await readSubjectImageForm(form, data);
   const clientKey = str(form, "idempotencyKey");
+  const registry = getRegistry();
   const prepared = prepareSubjectImage({
     data,
-    input: { subject, direction: subjectDirection(form, intent) },
-    registry: getRegistry(),
-    provider,
-    modelId,
-    aspectRatio: str(form, "aspectRatio") || null,
+    input: { subject: req.subject, direction: req.direction, sourceAssetIds: req.sourceAssetIds },
+    registry,
+    provider: req.provider,
+    modelId: req.modelId,
+    aspectRatio: req.aspectRatio,
     userId: user.kind === "supabase" ? user.id : null,
     idempotencyKey: clientKey.length >= 8 ? clientKey : `subject-${randomUUID()}`,
     config: getGenerationConfig(),
-    edit,
-    options: background || quality ? { background, quality } : undefined,
+    edit: req.edit,
+    options: req.options,
+    composer: req.composer,
   });
   if (!prepared.ok) throw new UserFacingError(prepared.reasons.slice(0, 3).join(" · "));
+  // A paid image is never started on a click that showed no price. The creator confirms the dollar amount they saw
+  // (the Reference Studio's Generate button carries it); the server recomputes it and refuses a smaller confirmation.
+  const model = registry.model(req.provider, req.modelId);
+  if (model && registry.billsMoney(model)) {
+    const refusal = paidConfirmationRefusal(prepared.estimate.amount, str(form, "confirmedTotalUsd"));
+    if (refusal) throw new UserFacingError(refusal);
+  }
   try {
     await (await getGenerationRepo()).createSubjectImageAttempt(prepared.input);
   } catch (err) {
@@ -134,8 +101,22 @@ async function saveAsCharacterReference_impl(form: FormData) {
   const existing = data.identityRefs.find(
     (r) => r.characterId === characterId && r.slot === slot && slot !== "additional",
   );
-  if (existing?.locked)
+  // A lock protects a reference IMAGE. A slot that only holds a placeholder record (no stored file) has nothing to
+  // protect, so it can be filled; a slot that holds an image is replaced only by an explicit unlock-then-replace.
+  const current = existing?.assetId ? data.assets.find((a) => a.id === existing.assetId) : undefined;
+  const holdsImage = hasStoredImage(current);
+  if (existing?.locked && holdsImage)
     throw new UserFacingError("That reference slot is locked. Unlock it before replacing its image.");
+  // The Reference Studio never swaps a slot's image on one click: it asks for the replacement to be confirmed.
+  if (
+    holdsImage &&
+    existing!.assetId !== assetId &&
+    str(form, "guardReplace") === "1" &&
+    str(form, "confirmReplace") !== "1"
+  )
+    throw new UserFacingError(
+      `${character.name} already has a ${slot.replace("_", " ")} reference. Confirm to replace it (the old image stays in the library).`,
+    );
   const repo = await getRepo();
   await repo.upsert(data.project.id, "identityRefs", {
     id: existing?.id ?? randomUUID(),
@@ -239,14 +220,6 @@ async function saveAsLocationView_impl(form: FormData): Promise<ActionResult> {
 
 export async function saveAsLocationView(form: FormData): Promise<ActionResult> {
   return runAction(() => saveAsLocationView_impl(form), { name: "saveAsLocationView" });
-}
-
-/** Phase 5B-I5: a Time-of-Day Variant names its time / state ("night"); it leads the creator's own direction. */
-function subjectDirection(form: FormData, intent: string): string {
-  const direction = str(form, "direction");
-  const variant = str(form, "variant").slice(0, 60);
-  if (intent !== "time_variant" || !variant) return direction;
-  return [`Time of day / state: ${variant}.`, direction].filter(Boolean).join(" ");
 }
 
 /**

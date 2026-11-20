@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readImageSize } from "../image-size";
 import { assertPathInProject, buildObjectPath, safeFileName } from "../storage-paths";
-import { checkUpload, sniffUpload } from "../upload-policy";
+import { checkUpload, MAX_BYTES, singleUploadLimit, sniffUpload } from "../upload-policy";
 import { makeWav } from "./audio-fixtures";
 
 const PROJECT = "7b5fdc2d-d7dd-464d-a9cc-e6834bcada91";
@@ -94,5 +94,28 @@ describe("image size", () => {
   });
   it("returns null for unknown data", () => {
     expect(readImageSize(new Uint8Array(40))).toBeNull();
+  });
+});
+
+describe("what ONE upload request can carry on this deployment", () => {
+  const MB = 1024 * 1024;
+
+  it("is Prism's own limit on a host that sets none", () => {
+    expect(singleUploadLimit({})).toBe(MAX_BYTES.image);
+    expect(singleUploadLimit({}, "document")).toBe(MAX_BYTES.document);
+  });
+
+  it("is 4 MB on Vercel, whose functions refuse a request body over 4.5 MB", () => {
+    expect(singleUploadLimit({ VERCEL: "1" })).toBe(4 * MB);
+  });
+
+  it("is what the operator states, never more than Prism itself accepts, and a nonsense value is ignored", () => {
+    expect(singleUploadLimit({ PRISM_STUDIO_MAX_UPLOAD_BYTES: "8388608" })).toBe(8 * MB);
+    expect(singleUploadLimit({ VERCEL: "1", PRISM_STUDIO_MAX_UPLOAD_BYTES: "1000000" })).toBe(1_000_000);
+    expect(singleUploadLimit({ PRISM_STUDIO_MAX_UPLOAD_BYTES: String(900 * MB) })).toBe(MAX_BYTES.image);
+    for (const nonsense of ["", "0", "-5", "12", "4mb", "4.5", "NaN"]) {
+      expect(singleUploadLimit({ PRISM_STUDIO_MAX_UPLOAD_BYTES: nonsense })).toBe(MAX_BYTES.image);
+      expect(singleUploadLimit({ VERCEL: "1", PRISM_STUDIO_MAX_UPLOAD_BYTES: nonsense })).toBe(4 * MB);
+    }
   });
 });
