@@ -151,8 +151,8 @@ async function addToReferenceSet_impl(form: FormData) {
   const holds = (r: IdentityRef | undefined) =>
     !!r?.assetId && hasStoredImage(data.assets.find((a) => a.id === r.assetId));
   const slotRef =
-    viewId === "half_body"
-      ? refs.find((r) => r.slot === "additional" && (r.metadata as { view?: unknown }).view === "half_body")
+    view.slot === "additional"
+      ? refs.find((r) => r.slot === "additional" && (r.metadata as { view?: unknown }).view === viewId)
       : refs.find((r) => r.slot === view.slot && visualRoleOf(r) === null);
   const canonicalRef = view.canonical ? refs.find((r) => visualRoleOf(r) === "canonical") : undefined;
 
@@ -177,7 +177,7 @@ async function addToReferenceSet_impl(form: FormData) {
     assetId,
     label: view.label,
     metadata: {
-      ...(viewId === "half_body" ? { view: "half_body" } : {}),
+      ...(view.slot === "additional" ? { view: viewId } : {}),
       source,
       ...(str(form, "attemptId") ? { attemptId: str(form, "attemptId") } : {}),
     },

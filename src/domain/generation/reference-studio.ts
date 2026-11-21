@@ -423,8 +423,8 @@ export function closestFormat(
  * A Character's reference set: the views every Production Frame of that Character is made from. Prism sends ALL of a
  * Character's identity references with a Shot (the canonical identity first, then the others), so the set is what
  * "canonical from several angles" means here: the front view IS the canonical identity, and the other views stand
- * beside it. Each view is one identity slot; the half body, which has no slot of its own, is an extra reference
- * marked as the half body.
+ * beside it. Each view is one identity slot; the right profile and the half body, which have no slot of their own,
+ * are extra references marked with their view (`metadata.view`). The profile slot holds the LEFT profile.
  */
 export const REFERENCE_SET_VIEWS = [
   { id: "front", label: "Front", slot: "front", intent: "portrait", canonical: true },
@@ -435,7 +435,14 @@ export const REFERENCE_SET_VIEWS = [
     intent: "three_quarter",
     canonical: false,
   },
-  { id: "profile", label: "Profile", slot: "profile", intent: "profile_left", canonical: false },
+  { id: "profile", label: "Left profile", slot: "profile", intent: "profile_left", canonical: false },
+  {
+    id: "right_profile",
+    label: "Right profile",
+    slot: "additional",
+    intent: "profile_right",
+    canonical: false,
+  },
   { id: "half_body", label: "Half body", slot: "additional", intent: "half_body", canonical: false },
   { id: "full_body", label: "Full body", slot: "full_body", intent: "full_body", canonical: false },
 ] as const;
@@ -453,8 +460,9 @@ export function referenceSetViewOf(intent: string | null | undefined): Reference
     case "three_quarter":
       return "three_quarter";
     case "profile_left":
-    case "profile_right":
       return "profile";
+    case "profile_right":
+      return "right_profile";
     case "half_body":
       return "half_body";
     case "full_body":
@@ -468,7 +476,7 @@ export function referenceSetViewOf(intent: string | null | undefined): Reference
 export const REFERENCE_SET_GUIDANCE = [
   "Your own photos are the ground truth: 4 to 8 good ones, the face large, sharp and evenly lit, from slightly different angles. Crop full-phone screenshots first.",
   "Make each view from those photos, judge it beside them, and add only the ones that are clearly the same person. A wrong view is copied into every Shot.",
-  "Five views are enough: front, 3/4, profile, half body, full body. Past that, more pictures blur the likeness rather than sharpen it, and each one sent costs more.",
+  "Six views are enough: front, 3/4, left and right profile, half body, full body. Past that, more pictures blur the likeness rather than sharpen it, and each one sent costs more.",
   "Add a Look for each outfit, and an expression only when a scene needs it.",
 ] as const;
 

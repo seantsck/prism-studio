@@ -23,7 +23,7 @@ const carriesPicture = (e: DragEvent<HTMLElement>) =>
   Array.from(e.dataTransfer.types).includes(PICTURE_DRAG_TYPE);
 
 /**
- * A Character's reference set: the five views every Production Frame of the Character is made from, and what is in
+ * A Character's reference set: the six views every Production Frame of the Character is made from, and what is in
  * each. A picture goes into a view by dragging it there (from Start from or Takes) or with Choose; an empty view can
  * also be made (which only fills in the brief: nothing is spent until Generate). Dropping or choosing onto a filled
  * view replaces its picture, which stays in the library. Beside it, in a few lines, what makes a strong set.
@@ -106,7 +106,7 @@ export function ReferenceSetPanel({
           Every Production Frame of {subject.name} is made from these, the front first.
         </p>
       </div>
-      <ul className="mt-2 grid grid-cols-5 gap-2">
+      <ul className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-6">
         {set.map((v) => (
           <li
             key={v.id}

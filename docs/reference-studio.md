@@ -122,8 +122,8 @@ Code: `src/domain/generation/reference-studio.ts` (the three rules above, pure),
 
 ## The reference set
 
-A Character's **reference set** is the five views every Production Frame of that Character is made from: front,
-3/4, profile, half body and full body. Prism sends all of a Character's identity references with a Shot, the
+A Character's **reference set** is the six views every Production Frame of that Character is made from: front,
+3/4, left profile, right profile, half body and full body. Prism sends all of a Character's identity references with a Shot, the
 canonical identity first, so the set is how "canonical from several angles" works: the **front view is the canonical
 identity**, and the other views stand beside it.
 
@@ -138,13 +138,14 @@ identity**, and the other views stand beside it.
 - **On each of the creator's own photos** (its facts, under "Start from"), the same control: a good real photo is the
   best reference there is.
 - **What makes the best set** is written beside it: 4 to 8 good real photos, a view made from them and judged beside
-  them, five views, a Look per outfit. The older "Use as canonical identity" and slot buttons remain under "Other
+  them, six views, a Look per outfit. The older "Use as canonical identity" and slot buttons remain under "Other
   uses".
 
 Code: `REFERENCE_SET_VIEWS` and `referenceSetViewOf` in `src/domain/generation/reference-studio.ts`, `addToReferenceSet`
 in `src/server/visual-bible-actions.ts`, `StudioState.referenceSet` in `src/server/reference-studio.ts`,
 `src/components/studio/reference-set.tsx`. No migration: the views are the existing identity slots (the half body is an
-extra reference marked `metadata.view = "half_body"`).
+extra reference marked `metadata.view = "half_body"`, the right profile likewise with `"right_profile"`; the
+profile slot holds the left profile).
 
 ## Test models and real models
 
