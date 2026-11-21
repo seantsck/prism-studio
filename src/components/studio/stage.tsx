@@ -20,6 +20,7 @@ import {
   saveAsCharacterReference,
   saveAsLocationReference,
   saveAsLocationView,
+  replaceLookReference,
   saveAsLookReference,
 } from "@/server/subject-image-actions";
 import type { HostedMattingOffer } from "@/server/subject-images";
@@ -556,6 +557,64 @@ export function Stage({
                     >
                       Add to Look
                     </Button>
+                  </ActionForm>
+                ) : null}
+                {character &&
+                subject.looks.length > 0 &&
+                !focused.asset.hasAlpha &&
+                focused.settings.intent === "outfit_variant" ? (
+                  // a wardrobe reference made from the reference set is what a Look's picture should be: it shows
+                  // this Character's face, so it replaces an older picture rather than standing beside it
+                  <ActionForm
+                    action={replaceLookReference}
+                    successMessage="It is now the Look's picture"
+                    className="flex flex-col"
+                  >
+                    {hidden}
+                    <input type="hidden" name="attemptId" value={focused.attemptId} />
+                    <input
+                      type="hidden"
+                      name="lookId"
+                      value={focused.settings.lookId ?? subject.looks[0]!.id}
+                    />
+                    <input type="hidden" name="confirmReplace" value="1" />
+                    {(() => {
+                      const look =
+                        subject.looks.find((l) => l.id === focused.settings.lookId) ?? subject.looks[0]!;
+                      return (
+                        <>
+                          <Button
+                            type="submit"
+                            variant="primary"
+                            disabled={look.locked}
+                            data-testid="studio-replace-look"
+                          >
+                            Make it the picture of &ldquo;{look.name}&rdquo;
+                          </Button>
+                          <span
+                            className="mt-1 text-[11px] text-muted"
+                            data-testid="studio-replace-look-note"
+                          >
+                            {look.locked ? (
+                              <>
+                                This Look is locked.{" "}
+                                <Link
+                                  href={`/projects/${slug}/characters/${subject.id}`}
+                                  className="underline"
+                                >
+                                  Unlock it on {subject.name}&apos;s page
+                                </Link>{" "}
+                                first.
+                              </>
+                            ) : look.references > 0 ? (
+                              `Replaces its ${look.references} current picture${look.references === 1 ? "" : "s"} (kept in the library).`
+                            ) : (
+                              "The Look has no picture yet."
+                            )}
+                          </span>
+                        </>
+                      );
+                    })()}
                   </ActionForm>
                 ) : null}
 

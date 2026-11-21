@@ -505,13 +505,38 @@ export interface ResolvedCharacterAppearance {
   canonicalIdentityAssetId?: string | null;
 }
 
+/**
+ * true: the reference is part of the Character's reference set: the canonical identity, a named identity slot, or an
+ * extra reference marked with its view (the right profile, the half body). A plain extra reference (an uploaded photo,
+ * an older generated extra) is not.
+ */
+export function isReferenceSetRef(r: Pick<IdentityRef, "slot" | "metadata">): boolean {
+  const role = visualRoleOf(r);
+  if (role === "canonical") return true;
+  if (role !== null) return false;
+  return r.slot !== "additional" || typeof (r.metadata as { view?: unknown }).view === "string";
+}
+
 export function liveAppearance(c: {
   character: Character | null;
   look: CharacterLook | null;
   identityRefs: IdentityRef[];
+  /**
+   * Which Asset ids hold a stored image. Given: once the Character's reference set holds a real image, a Shot is sent
+   * the set (and the expression and cutout designations), not also every plain extra reference: the creator's raw
+   * photos are what the set was MADE from, and sending them too doubles the images and lets a weak photo (a full
+   * phone screenshot) pull the likeness. Without a stored set image nothing changes.
+   */
+  hasImage?: (assetId: string) => boolean;
 }): ResolvedCharacterAppearance {
+  const hasImage = c.hasImage;
+  const setReady =
+    !!hasImage && c.identityRefs.some((r) => !!r.assetId && isReferenceSetRef(r) && hasImage(r.assetId));
+  const sendable = setReady
+    ? c.identityRefs.filter((r) => isReferenceSetRef(r) || visualRoleOf(r) !== null)
+    : c.identityRefs;
   // Phase 5B-I4: canonical identity first (unchanged order when no Visual Bible role exists)
-  const ordered = orderedIdentityRefs(c.identityRefs);
+  const ordered = orderedIdentityRefs(sendable);
   const refs = ordered.flatMap((r) =>
     r.assetId ? [{ assetId: r.assetId, slot: r.slot, label: r.label }] : [],
   );

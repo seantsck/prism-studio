@@ -91,7 +91,7 @@ vi.mock("@/server/storage", () => ({
 
 import { referenceStudioState } from "../reference-studio";
 import { quoteReferenceImage, reviewReferenceImage, uploadReferencePhoto } from "../reference-studio-actions";
-import { saveAsCharacterReference, startSubjectImage } from "../subject-image-actions";
+import { replaceLookReference, saveAsCharacterReference, startSubjectImage } from "../subject-image-actions";
 import { addToReferenceSet, setCanonicalIdentity } from "../visual-bible-actions";
 
 const sinkRoot = mkdtempSync(path.join(tmpdir(), "prism-studio-"));
@@ -982,5 +982,47 @@ describe("a Character's reference set", () => {
     expect(
       await put(yumeko.id, "three_quarter", { attemptId: threeQuarter.attempt.id, confirmReplace: "1" }),
     ).toMatchObject({ ok: false, error: expect.stringMatching(/is locked/) });
+  });
+});
+
+describe("a Look's picture", () => {
+  it("a wardrobe reference replaces the Look's picture (asked first, refused while locked); the old one is kept", async () => {
+    const yumeko = await yumekoOf();
+    let d = await data();
+    const look = d.looks.find((l) => l.characterId === yumeko.id)!;
+    await repo.upsert(d.project.id, "looks", { ...look, locked: false });
+    // an older picture with another face, already on the Look
+    const old = await uploadReferencePhoto(
+      form({
+        subjectKind: "character",
+        subjectId: yumeko.id,
+        as: `look:${look.id}`,
+        file: png("old-gown.png"),
+      }),
+    );
+    expect(old).toMatchObject({ ok: true });
+    expect(
+      await startSubjectImage(
+        form(make(yumeko.id, { intent: "outfit_variant", lookId: look.id, sources: "" })),
+      ),
+    ).toEqual({ ok: true });
+    await work();
+    const [made] = await attempts(yumeko.id);
+    const fields = { projectSlug: "ojousama", lookId: look.id, attemptId: made!.attempt.id };
+    expect(await replaceLookReference(form(fields))).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/already has a picture. Confirm to replace it/),
+    });
+    expect(await replaceLookReference(form({ ...fields, confirmReplace: "1" }))).toEqual({ ok: true });
+    d = await data();
+    const after = d.looks.find((l) => l.id === look.id)!;
+    expect(after.referenceAssetIds).toEqual([made!.outputs[0]!.asset.id]);
+    expect(d.assets.some((a) => a.id === (old as { assetId: string }).assetId)).toBe(true);
+    // a locked Look is not changed
+    await repo.upsert(d.project.id, "looks", { ...after, locked: true });
+    expect(await replaceLookReference(form({ ...fields, confirmReplace: "1" }))).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/is locked/),
+    });
   });
 });

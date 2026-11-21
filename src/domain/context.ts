@@ -141,7 +141,15 @@ export function buildShotContext(data: ProjectData, shotId: string): ShotContext
       continuityLockIssue: continuity.issue,
       appearance: continuity.selected
         ? lockedAppearance(continuity.selected)
-        : liveAppearance({ character, look, identityRefs }),
+        : liveAppearance({
+            character,
+            look,
+            identityRefs,
+            hasImage: (id) => {
+              const a = assets.get(id);
+              return !!a && a.type === "image" && !!a.objectPath && !!a.checksum;
+            },
+          }),
     };
   });
 
