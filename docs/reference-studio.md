@@ -160,6 +160,23 @@ reference-set panel: drag a take onto it, or **Choose**, and it becomes the Look
 library); **Make it** fills in a Wardrobe reference in that Look. A take made with a Look also offers **Make it the
 picture of "…"**. A locked Look shows where to unlock it. The Reference Studio is first in the project navigation.
 
+## Production checklist
+
+`/projects/<project>/checklist`, second in the navigation: for one Episode (by default the one with the most Shots),
+everything its frames need, in the order it has to happen.
+
+- **Next steps**, numbered, each with the button that opens the screen that fixes it, already set up: add photos of a
+  person (until they have 4), make their missing views (the Studio opens on them with the first missing view's preset),
+  make each outfit's picture (the Studio opens with Wardrobe reference and that Look), make a picture of each place,
+  choose a missing outfit or location on a Shot, and make the frame of each Shot that has everything.
+- **People**: photos, the six views, their outfits, and **Approve**, which locks their reference images and the Looks
+  this Episode uses in one act (unlocked on their Character page).
+- **Shots**, each with a light: green (everything it needs), amber (can be made, could be better), red (a person in it
+  has no face yet), and what is missing.
+
+It reads what exists and changes nothing except through Approve. Code: `src/domain/production-checklist.ts`,
+`src/app/projects/[project]/checklist/page.tsx`, `approveCharacter` in `src/server/visual-bible-actions.ts`.
+
 ## Test models and real models
 
 A deployment can switch on free **test models** ("Mock Image 1"). A test model draws a coloured pattern, never a
