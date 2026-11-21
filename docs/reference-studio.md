@@ -155,9 +155,10 @@ creator's raw photos: the set was made from them, sending both doubles the image
 screenshot) pulls the likeness. Until the set holds an image nothing changes. (`liveAppearance` in
 `src/domain/character-continuity.ts`; Continuity Locks freeze their own references and are unchanged.)
 
-A Look's picture is sent with every Shot in that Look, and it shows a whole person. A **Wardrobe reference** made in
-the Studio from the reference set offers **Make it the picture of "…"**, which replaces the Look's picture (the old one
-stays in the library). A locked Look is unlocked on the Character page first.
+A Look's picture is sent with every Shot in that Look, and it shows a whole person. Each Look is a slot in the
+reference-set panel: drag a take onto it, or **Choose**, and it becomes the Look's picture (the old one stays in the
+library); **Make it** fills in a Wardrobe reference in that Look. A take made with a Look also offers **Make it the
+picture of "…"**. A locked Look shows where to unlock it. The Reference Studio is first in the project navigation.
 
 ## Test models and real models
 
