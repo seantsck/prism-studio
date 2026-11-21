@@ -129,6 +129,9 @@ identity**, and the other views stand beside it.
 
 - **On the stage**, under the take, the set shows what each view holds ("your photo", "take #10") or **Make it** for an
   empty view. Make it fills in the brief with that view's preset; nothing is made until Generate.
+- **Into a view**: drag any picture (a tile under "Start from", or a take thumbnail) onto the view, or click
+  **Choose** (**Change** on a filled view) and pick one. Dropping or choosing onto a filled view replaces its picture;
+  the old one stays in the library.
 - **On every finished take**, one control: the view it was made for is suggested, and the button says what happens
   ("Add to the set as 3/4 view", "Replace the front", "In the set as profile"). Replacing keeps the old picture in the
   library. A locked slot that holds an image is not replaced from here.

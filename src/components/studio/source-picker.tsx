@@ -5,6 +5,7 @@ import { fileSize } from "@/domain/generation/reference-upload";
 import { cn } from "@/lib/utils";
 import type { StudioImage, StudioState } from "@/server/reference-studio";
 import { PhotoDropZone, type PhotoUpload } from "./photo-upload";
+import { startPictureDrag } from "./reference-set";
 
 const VERDICT_TONE = {
   good: "text-pass",
@@ -98,6 +99,8 @@ export function SourcePicker({
                 aria-label={`${i.label} (${i.originLabel})`}
                 title={`${i.label} · ${i.originLabel}`}
                 onClick={() => onToggle(i.assetId)}
+                draggable
+                onDragStart={(e) => startPictureDrag(e, { assetId: i.assetId, attemptId: i.attemptId })}
                 data-testid="studio-source"
                 data-asset={i.assetId}
                 data-origin={i.origin ?? ""}
