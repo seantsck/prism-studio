@@ -310,3 +310,152 @@ export function productionChecklist(data: ProjectData, episodeId: string): Produ
     shots: checklistShots,
   };
 }
+
+// ───────────────────────── the project's four areas, for Home ─────────────────────────
+
+export type AreaId = "story" | "cast" | "world" | "shots";
+
+export interface AreaCard {
+  id: AreaId;
+  title: string;
+  /** Where the area stands, in a few words. */
+  summary: string;
+  /** The one next thing, or null when nothing is missing. */
+  next: { label: string; href: string } | null;
+  /** When nothing can be done here yet, what it is waiting on (a hint, never a lock). */
+  waiting: string | null;
+  /** The area's main page. */
+  href: string;
+}
+
+const hasLocationPicture = (data: ProjectData, assets: Map<string, Asset>, locationId: string) => {
+  const l = data.locations.find((x) => x.id === locationId);
+  if (!l) return false;
+  const bible = locationBibleOf(l);
+  return (
+    stored(assets, bible.canonicalAssetId) ||
+    l.referenceAssetIds.some((a) => stored(assets, a)) ||
+    bible.entries.some((e) => stored(assets, e.assetId))
+  );
+};
+
+/** The Episode a project is mostly about: the one with the most Shots. */
+export function mainEpisodeId(data: ProjectData): string | null {
+  const count = (id: string) => data.shots.filter((s) => s.episodeId === id).length;
+  return [...data.episodes].sort((a, b) => count(b.id) - count(a.id) || a.order - b.order)[0]?.id ?? null;
+}
+
+/**
+ * Home's four cards: Story, Cast, World and Shots, each with where it stands and the one next thing. Any area can be
+ * worked on first; "waiting" only says what would make it go further.
+ */
+export function projectAreas(data: ProjectData): AreaCard[] {
+  const slug = data.project.slug;
+  const base = `/projects/${slug}`;
+  const assets = new Map(data.assets.map((a) => [a.id, a]));
+  const episodeId = mainEpisodeId(data);
+  const list = episodeId ? productionChecklist(data, episodeId) : null;
+  const first = (area: ChecklistArea | ChecklistArea[]) => {
+    const areas = Array.isArray(area) ? area : [area];
+    const s = list?.steps.find((x) => areas.includes(x.area));
+    return s ? { label: s.title, href: s.href } : null;
+  };
+
+  // Story
+  const premise = !!data.bible?.premise?.trim();
+  const episodes = [...data.episodes].sort((a, b) => a.order - b.order);
+  const unscripted = episodes.find((e) => !e.scriptText?.trim());
+  const scripted = episodes.filter((e) => e.scriptText?.trim()).length;
+  const story: AreaCard = {
+    id: "story",
+    title: "Story",
+    summary: `${premise ? "Bible written" : "No Bible yet"} · ${
+      episodes.length === 0 ? "no episodes" : `${scripted} of ${episodes.length} episodes scripted`
+    }`,
+    next: !premise
+      ? { label: "Write the Bible, or import a story", href: `${base}/story` }
+      : episodes.length === 0
+        ? { label: "Add the first episode", href: `${base}/episodes` }
+        : unscripted
+          ? {
+              label: `Write the script of “${unscripted.title}”`,
+              href: `${base}/episodes/${unscripted.slug}/script`,
+            }
+          : null,
+    waiting: null,
+    href: `${base}/bible`,
+  };
+
+  // Cast: every Character, ready once their face (front view) exists
+  const ready = data.characters.filter((c) =>
+    referenceSetFill(
+      data.identityRefs.filter((r) => r.characterId === c.id),
+      assets,
+    ).get("front"),
+  );
+  const notReady = data.characters.filter((c) => !ready.includes(c));
+  const cast: AreaCard = {
+    id: "cast",
+    title: "Cast",
+    summary:
+      data.characters.length === 0
+        ? "No characters yet"
+        : [
+            ready.length ? `${ready.map((c) => c.name).join(", ")} ready` : "",
+            notReady.length ? `${notReady.map((c) => c.name).join(", ")} not started` : "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
+    next:
+      data.characters.length === 0
+        ? { label: "Add a character", href: `${base}/characters` }
+        : (first(["people", "outfits"]) ??
+          (notReady[0]
+            ? {
+                label: `Start ${notReady[0].name}`,
+                href: `${base}/studio?subject=character:${notReady[0].id}`,
+              }
+            : null)),
+    waiting: null,
+    href: `${base}/studio`,
+  };
+
+  // World
+  const pictured = data.locations.filter((l) => hasLocationPicture(data, assets, l.id));
+  const bare = data.locations.find((l) => !pictured.includes(l));
+  const world: AreaCard = {
+    id: "world",
+    title: "World",
+    summary:
+      data.locations.length === 0
+        ? "No places yet"
+        : `${pictured.length} of ${data.locations.length} places pictured`,
+    next:
+      data.locations.length === 0
+        ? { label: "Add a place", href: `${base}/locations` }
+        : (first("places") ??
+          (bare
+            ? { label: `Make a picture of ${bare.name}`, href: `${base}/studio?subject=location:${bare.id}` }
+            : null)),
+    waiting: null,
+    href: `${base}/locations`,
+  };
+
+  // Shots
+  const framed = new Set((data.productionFrameSelections ?? []).map((s) => s.shotId));
+  const shotsNext = first("shots");
+  const blocked = (list?.shots ?? []).filter((s) => s.light === "blocked").length;
+  const shots: AreaCard = {
+    id: "shots",
+    title: "Shots",
+    summary: `${data.shots.length} shots · ${data.shots.filter((s) => framed.has(s.id)).length} frames`,
+    next: shotsNext,
+    waiting:
+      !shotsNext && data.shots.length > 0 && blocked > 0
+        ? `${blocked} shot${blocked === 1 ? "" : "s"} waiting on Cast or World`
+        : null,
+    href: `${base}/storyboard`,
+  };
+
+  return [story, cast, world, shots];
+}

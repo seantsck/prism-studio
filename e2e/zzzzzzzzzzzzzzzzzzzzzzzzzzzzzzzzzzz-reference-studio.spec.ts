@@ -165,11 +165,15 @@ test("A: the Studio is in the navigation, opens on the first Character and offer
   page,
 }) => {
   await page.goto(P);
-  // the Studio comes first in the project's navigation: everything after it is made from its references
-  const nav = page.getByRole("navigation").getByRole("link");
-  await expect(nav.nth(1)).toHaveText("Production checklist");
-  await expect(nav.nth(2)).toHaveText("Reference Studio");
-  await expect(nav.nth(3)).toHaveText("Import Story");
+  // the navigation is Home, the four areas (Story, Cast, World, Shots), then the specialist pages under More tools
+  const nav = page.getByRole("navigation");
+  await expect(nav.getByRole("link").first()).toHaveText("Home");
+  for (const area of ["Story", "Cast", "World", "Shots"])
+    await expect(nav.getByText(area, { exact: true })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Import Story" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Shot QA" })).toBeHidden();
+  await nav.getByText("More tools").click();
+  await expect(nav.getByRole("link", { name: "Shot QA" })).toBeVisible();
   await page.getByRole("link", { name: "Reference Studio", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`${STUDIO}$`));
   await expect(page.getByRole("heading", { name: "Reference Studio" })).toBeVisible();
@@ -1071,7 +1075,17 @@ test("P: the Production checklist lists what each person, outfit, place and Shot
   page,
 }) => {
   await page.goto(P);
-  await page.getByRole("link", { name: "Production checklist", exact: true }).click();
+  // Home: the four areas, each with where it stands and the one next thing
+  const areas = page.getByTestId("home-area");
+  await expect(areas).toHaveCount(4);
+  await expect(page.locator('[data-testid="home-area"][data-area="cast"]')).toContainText("Yumeko");
+  await expect(page.locator('[data-testid="home-area"][data-area="world"]')).toContainText("places pictured");
+  await expect(page.getByTestId("home-next")).toContainText("Next steps");
+  // and the full list, one click away
+  await page
+    .getByTestId("home-next")
+    .getByRole("link", { name: /^All \d+$/ })
+    .click();
   await expect(page.getByRole("heading", { name: "Production checklist" })).toBeVisible();
   const next = page.getByTestId("checklist-next");
   await expect(next).toContainText("Next steps for");

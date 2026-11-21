@@ -325,7 +325,8 @@ test.describe("persistent 3D set", () => {
     const total = () => page.evaluate(() => (window as unknown as { __gl: unknown[] }).__gl.length);
 
     for (let i = 0; i < 4; i++) {
-      await page.locator("summary").first().click();
+      // the first Location card (the sidebar has its own "More tools" disclosure)
+      await page.getByRole("main").locator("summary").first().click();
       await page.locator('[data-testid^="open-3d-set-"]').first().click();
       await expect(page.getByTestId("virtual-set")).toHaveAttribute("data-ready", "true", {
         timeout: 30_000,
