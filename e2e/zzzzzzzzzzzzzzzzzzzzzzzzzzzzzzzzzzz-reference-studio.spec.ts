@@ -194,6 +194,16 @@ test("A: the Studio is in the navigation, opens on the first Character and offer
     "scene_variation",
   ])
     await expect(page.getByTestId(`studio-preset-${preset}`)).toBeVisible();
+  // no photo of her yet: the brief opens on her written description, filled from the Bible, ready to make the front
+  // view from words alone (which only fills in the brief)
+  const describe = page.getByTestId("studio-describe");
+  await expect(describe).toContainText("Describe Yumeko");
+  await expect(page.getByTestId("studio-describe-text")).toHaveValue(/shoulder-length black hair/);
+  await expect(page.getByTestId("studio-describe-about")).toContainText("Lead — heiress");
+  await expect(page.getByTestId("studio-describe-save")).toBeDisabled();
+  await page.getByTestId("studio-describe-make").click();
+  await expect(page.getByTestId("studio-preset-portrait")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("studio-source-none")).toHaveAttribute("aria-pressed", "true");
   // nothing exists yet: the stage says what to do, and nothing has been billed
   await expect(page.getByTestId("studio-empty")).toContainText("No picture of Yumeko yet");
   await expect(page.getByTestId("studio-spent")).toHaveText("Nothing billed for Yumeko yet");
@@ -1077,7 +1087,7 @@ test("P: the Production checklist lists what each person, outfit, place and Shot
   for (const light of await shots.evaluateAll((els) => els.map((e) => e.getAttribute("data-light"))))
     expect(["ready", "partial", "blocked"]).toContain(light);
   // a person step opens the Studio on that person, already set up
-  const sean = steps.filter({ hasText: "Add photos of Sean" });
+  const sean = steps.filter({ hasText: "Add photos of Sean (1 of 4)" });
   await expect(sean).toHaveCount(1);
   await sean.getByTestId("checklist-step-go").click();
   await expect(page.getByTestId("reference-studio")).toHaveAttribute("data-subject", /^character:/);

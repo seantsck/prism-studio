@@ -232,7 +232,16 @@ export function productionChecklist(data: ProjectData, episodeId: string): Produ
   // ── the next steps, in the order they have to happen ──
   const steps: ChecklistStep[] = [];
   for (const p of people) {
-    if (p.photos < PHOTOS_WANTED)
+    const hasFront = !!p.views.find((v) => v.id === "front")?.filled;
+    if (!hasFront && p.photos === 0)
+      steps.push({
+        area: "people",
+        title: `Add photos of ${p.name}, or describe them`,
+        detail: `A real person: ${PHOTOS_WANTED} to 8 photos, the face large and sharp. A fictional one: describe how they look, and the front view is made from the description.`,
+        href: p.studioHref,
+        action: "Open the Studio",
+      });
+    else if (p.photos > 0 && p.photos < PHOTOS_WANTED)
       steps.push({
         area: "people",
         title: `Add photos of ${p.name} (${p.photos} of ${PHOTOS_WANTED})`,
@@ -242,12 +251,12 @@ export function productionChecklist(data: ProjectData, episodeId: string): Produ
         action: "Add photos",
       });
     const empty = p.views.filter((v) => !v.filled);
-    if (empty.length > 0 && p.photos > 0) {
+    if (empty.length > 0 && (p.photos > 0 || hasFront)) {
       const first = REFERENCE_SET_VIEWS.find((v) => v.id === empty[0]!.id)!;
       steps.push({
         area: "people",
         title: `Make ${p.name}'s ${empty.map((v) => v.label.toLowerCase()).join(", ")}`,
-        detail: `${p.views.length - empty.length} of ${p.views.length} views done. Make each from their photos, then drop it on its view.`,
+        detail: `${p.views.length - empty.length} of ${p.views.length} views done. Make each from their ${p.photos > 0 ? "photos" : "front view"}, then drop it on its view.`,
         href: studio(`character:${p.characterId}`, `&make=${first.intent}`),
         action: `Make the ${first.label.toLowerCase()}`,
       });

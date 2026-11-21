@@ -39,8 +39,9 @@ describe("the Production checklist", () => {
     const yumeko = list.people.find((p) => p.name === "Yumeko")!;
     expect(yumeko).toMatchObject({ photos: 0, locked: false, readyToApprove: false });
     expect(yumeko.views.every((v) => !v.filled)).toBe(true);
-    expect(list.steps[0]).toMatchObject({ area: "people", action: "Add photos" });
-    expect(list.steps.map((s) => s.title)).toContain("Add photos of Yumeko (0 of 4)");
+    expect(list.steps[0]).toMatchObject({ area: "people", action: "Open the Studio" });
+    // a real person brings photos; a fictional one is described instead
+    expect(list.steps.map((s) => s.title)).toContain("Add photos of Yumeko, or describe them");
     // a Shot with a person who has no face yet is not ready
     const withYumeko = list.shots.filter((s) => s.people.includes("Yumeko"));
     expect(withYumeko.length).toBeGreaterThan(0);

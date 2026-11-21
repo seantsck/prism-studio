@@ -23,6 +23,7 @@ import type { StudioModel, StudioState, StudioTake } from "@/server/reference-st
 import { quoteReferenceImage } from "@/server/reference-studio-actions";
 import { removeBackground, startSubjectImage } from "@/server/subject-image-actions";
 import { usePhotoUpload } from "./photo-upload";
+import { DescribeCharacter } from "./describe-character";
 import { AddToSet } from "./reference-set";
 import { rememberModel, useRememberedModel } from "./remembered-model";
 import { SourcePicker } from "./source-picker";
@@ -330,6 +331,20 @@ export function ReferenceStudio({
         data-testid="studio-brief"
       >
         <div className="space-y-4 p-3">
+          {kind === "character" && ownPhotos.length === 0 ? (
+            <DescribeCharacter
+              slug={slug}
+              subject={subject}
+              hasPhotos={false}
+              onMakeFront={() => {
+                // from words alone: nothing selected, the Front portrait preset
+                setMode("make");
+                setIntent("portrait");
+                setPresetValue("");
+                pickStart([]);
+              }}
+            />
+          ) : null}
           <SourcePicker
             subject={subject}
             images={images}
@@ -363,6 +378,10 @@ export function ReferenceStudio({
               stageView === "take" && focused && sources.length > 0 ? () => setStageView("start") : undefined
             }
           />
+
+          {kind === "character" && ownPhotos.length > 0 ? (
+            <DescribeCharacter slug={slug} subject={subject} hasPhotos onMakeFront={() => undefined} />
+          ) : null}
 
           <div>
             <div className="mb-2 flex gap-1" role="tablist" aria-label="What to do">
