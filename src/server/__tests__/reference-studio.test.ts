@@ -92,7 +92,12 @@ vi.mock("@/server/storage", () => ({
 import { referenceStudioState } from "../reference-studio";
 import { quoteReferenceImage, reviewReferenceImage, uploadReferencePhoto } from "../reference-studio-actions";
 import { replaceLookReference, saveAsCharacterReference, startSubjectImage } from "../subject-image-actions";
-import { addToReferenceSet, approveCharacter, setCanonicalIdentity } from "../visual-bible-actions";
+import {
+  addToReferenceSet,
+  approveCharacter,
+  saveCharacterAppearance,
+  setCanonicalIdentity,
+} from "../visual-bible-actions";
 
 const sinkRoot = mkdtempSync(path.join(tmpdir(), "prism-studio-"));
 afterAll(() => rmSync(sinkRoot, { recursive: true, force: true }));
@@ -1049,5 +1054,32 @@ describe("Approve from the Production checklist", () => {
     d = await data();
     expect(d.identityRefs.find((r) => r.id === photo.id)!.locked).toBe(true);
     expect(d.looks.find((l) => l.id === look.id)!.locked).toBe(true);
+  });
+});
+
+describe("describing a fictional Character", () => {
+  it("the Studio shows the written appearance and the Bible's context; saving it changes what a picture is made from", async () => {
+    const takumi = (await data()).characters.find((c) => c.name === "Takumi")!;
+    let state = await referenceStudioState(await data(), `character:${takumi.id}`);
+    expect(state.selected).toMatchObject({ appearance: takumi.physicalDescription });
+    expect(state.selected!.about).toContain(takumi.role);
+    const text =
+      "Mid 30s Japanese man, oval face, narrow dark eyes, swept-back black hair, clean-shaven, tall and slim.";
+    expect(
+      await saveCharacterAppearance(
+        form({ projectSlug: "ojousama", characterId: takumi.id, appearance: text }),
+      ),
+    ).toEqual({ ok: true });
+    state = await referenceStudioState(await data(), `character:${takumi.id}`);
+    expect(state.selected!.appearance).toBe(text);
+    // and a picture from words alone is made from it
+    const q = await quoteReferenceImage(form(make(takumi.id, { intent: "portrait", sources: "chosen" })));
+    expect(q).toMatchObject({ ok: true });
+    expect((q as { prompt: string }).prompt).toContain("narrow dark eyes");
+    expect(
+      await saveCharacterAppearance(
+        form({ projectSlug: "ojousama", characterId: takumi.id, appearance: " " }),
+      ),
+    ).toMatchObject({ ok: false, error: "Describe how they look first." });
   });
 });

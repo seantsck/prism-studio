@@ -120,6 +120,15 @@ Code: `src/domain/generation/reference-studio.ts` (the three rules above, pure),
 (`StudioImage.wardrobeOnly`, `.canonical`, `.addedAt`, `.test`; `StudioTake.test`), `src/components/studio/`
 (`reference-studio.tsx` the selection, `source-picker.tsx` the brief, `stage.tsx` the stage).
 
+## A fictional Character
+
+A Character with no photo of their own (fictional, or no photo yet) opens the Studio on **Describe <name>**: their
+written appearance, filled from the Character, with the Bible's role, description and personality beside it and a line
+on what to say (age, origin, face, eyes, hair, build, anything distinctive). **Save** changes the Character's
+appearance (`saveCharacterAppearance`); **Make the front view from this** fills in a Front portrait from words alone.
+Judge it, drop it on Front, and make the other views from it. Once there are photos the description is a short note
+under them, and the pictures win where the two differ. The Production checklist asks for "photos, or describe them".
+
 ## The reference set
 
 A Character's **reference set** is the six views every Production Frame of that Character is made from: front,

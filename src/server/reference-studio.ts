@@ -187,6 +187,10 @@ export interface StudioState {
         }>;
         /** Identity slots that already hold a stored image (replacing one is confirmed, never one click). */
         filledSlots: string[];
+        /** A Character's written appearance: what a picture made from words alone is made from. */
+        appearance: string;
+        /** What the Bible says about who the Character is (role, description, personality), for context. */
+        about: string;
       })
     | null;
   images: StudioImage[];
@@ -434,6 +438,7 @@ export async function referenceStudioState(
     };
   }
 
+  const character = base.kind === "character" ? data.characters.find((c) => c.id === base.id) : undefined;
   const own = all.filter((v) =>
     base.kind === "character" ? v.attempt.characterId === base.id : v.attempt.locationId === base.id,
   );
@@ -624,6 +629,10 @@ export async function referenceStudioState(
     selected: {
       ...base,
       locked: location?.locked === true,
+      appearance: character?.physicalDescription ?? "",
+      about: character
+        ? [character.role, character.description, character.personality].filter((x) => x?.trim()).join(" · ")
+        : "",
       filledSlots: refs
         .filter(
           (r) => r.slot !== "additional" && visualRoleOf(r) === null && stored(assets.get(r.assetId ?? "")),

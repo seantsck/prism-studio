@@ -227,3 +227,28 @@ async function approveCharacter_impl(form: FormData) {
 export async function approveCharacter(form: FormData): Promise<ActionResult> {
   return runAction(() => approveCharacter_impl(form), { name: "approveCharacter" });
 }
+
+/** How long a written appearance may be (it is part of every prompt made from words). */
+const MAX_APPEARANCE = 1200;
+
+/**
+ * Saves a Character's written appearance from the Reference Studio. For a fictional Character it is all a first
+ * picture is made from; once there are pictures, the prompt says the pictures win where they differ.
+ */
+async function saveCharacterAppearance_impl(form: FormData) {
+  const { slug, data, character } = await loadCharacter(form);
+  const appearance = String(form.get("appearance") ?? "").trim();
+  if (!appearance) throw new UserFacingError("Describe how they look first.");
+  if (appearance.length > MAX_APPEARANCE)
+    throw new UserFacingError(
+      `Keep it under ${MAX_APPEARANCE} characters: the essentials of the face and build.`,
+    );
+  await (
+    await getRepo()
+  ).upsert(data.project.id, "characters", { ...character, physicalDescription: appearance });
+  refresh(slug);
+}
+
+export async function saveCharacterAppearance(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveCharacterAppearance_impl(form), { name: "saveCharacterAppearance" });
+}
