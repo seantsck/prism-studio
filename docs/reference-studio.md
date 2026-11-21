@@ -120,6 +120,29 @@ Code: `src/domain/generation/reference-studio.ts` (the three rules above, pure),
 (`StudioImage.wardrobeOnly`, `.canonical`, `.addedAt`, `.test`; `StudioTake.test`), `src/components/studio/`
 (`reference-studio.tsx` the selection, `source-picker.tsx` the brief, `stage.tsx` the stage).
 
+## The reference set
+
+A Character's **reference set** is the five views every Production Frame of that Character is made from: front,
+3/4, profile, half body and full body. Prism sends all of a Character's identity references with a Shot, the
+canonical identity first, so the set is how "canonical from several angles" works: the **front view is the canonical
+identity**, and the other views stand beside it.
+
+- **On the stage**, under the take, the set shows what each view holds ("your photo", "take #10") or **Make it** for an
+  empty view. Make it fills in the brief with that view's preset; nothing is made until Generate.
+- **On every finished take**, one control: the view it was made for is suggested, and the button says what happens
+  ("Add to the set as 3/4 view", "Replace the front", "In the set as profile"). Replacing keeps the old picture in the
+  library. A locked slot that holds an image is not replaced from here.
+- **On each of the creator's own photos** (its facts, under "Start from"), the same control: a good real photo is the
+  best reference there is.
+- **What makes the best set** is written beside it: 4 to 8 good real photos, a view made from them and judged beside
+  them, five views, a Look per outfit. The older "Use as canonical identity" and slot buttons remain under "Other
+  uses".
+
+Code: `REFERENCE_SET_VIEWS` and `referenceSetViewOf` in `src/domain/generation/reference-studio.ts`, `addToReferenceSet`
+in `src/server/visual-bible-actions.ts`, `StudioState.referenceSet` in `src/server/reference-studio.ts`,
+`src/components/studio/reference-set.tsx`. No migration: the views are the existing identity slots (the half body is an
+extra reference marked `metadata.view = "half_body"`).
+
 ## Test models and real models
 
 A deployment can switch on free **test models** ("Mock Image 1"). A test model draws a coloured pattern, never a

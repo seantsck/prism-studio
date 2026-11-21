@@ -23,6 +23,7 @@ import type { StudioModel, StudioState, StudioTake } from "@/server/reference-st
 import { quoteReferenceImage } from "@/server/reference-studio-actions";
 import { removeBackground, startSubjectImage } from "@/server/subject-image-actions";
 import { usePhotoUpload } from "./photo-upload";
+import { AddToSet } from "./reference-set";
 import { rememberModel, useRememberedModel } from "./remembered-model";
 import { SourcePicker } from "./source-picker";
 import { Stage } from "./stage";
@@ -343,6 +344,21 @@ export function ReferenceStudio({
             ownPhotos={ownPhotos}
             onSelect={pickStart}
             // while the stage shows a take, the selected pictures can be put on it without changing the selection
+            setControl={
+              kind === "character" && state.referenceSet.length > 0
+                ? (i) =>
+                    i.origin === "uploaded" && !i.wardrobeOnly ? (
+                      <AddToSet
+                        compact
+                        slug={slug}
+                        characterId={subject.id}
+                        set={state.referenceSet}
+                        assetId={i.assetId}
+                        suggested={null}
+                      />
+                    ) : null
+                : undefined
+            }
             onShowLarge={
               stageView === "take" && focused && sources.length > 0 ? () => setStageView("start") : undefined
             }
@@ -680,6 +696,16 @@ export function ReferenceStudio({
         onReuse={reuse}
         onChoosePhotos={upload.choose}
         dragging={dragging}
+        referenceSet={state.referenceSet}
+        photos={ownPhotos.length}
+        onMake={(want) => {
+          // fills in the brief only: the view is made from the selected starting images when Generate is pressed
+          setMode("make");
+          if (presets.some((p) => p.intent === want)) setIntent(want);
+          setPresetValue("");
+          setStageView("start");
+          if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+        }}
       />
     </div>
   );

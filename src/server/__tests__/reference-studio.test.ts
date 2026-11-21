@@ -92,7 +92,7 @@ vi.mock("@/server/storage", () => ({
 import { referenceStudioState } from "../reference-studio";
 import { quoteReferenceImage, reviewReferenceImage, uploadReferencePhoto } from "../reference-studio-actions";
 import { saveAsCharacterReference, startSubjectImage } from "../subject-image-actions";
-import { setCanonicalIdentity } from "../visual-bible-actions";
+import { addToReferenceSet, setCanonicalIdentity } from "../visual-bible-actions";
 
 const sinkRoot = mkdtempSync(path.join(tmpdir(), "prism-studio-"));
 afterAll(() => rmSync(sinkRoot, { recursive: true, force: true }));
@@ -880,5 +880,105 @@ describe("where a real model can be used, the Studio offers no test model and sh
     );
     expect(off.models.filter((m) => m.test)).toEqual([]);
     expect(off.models.find((m) => m.value === PAID)).toMatchObject({ available: false });
+  });
+});
+
+describe("a Character's reference set", () => {
+  async function scene() {
+    const yumeko = await yumekoOf();
+    await uploadReferencePhoto(
+      form({ subjectKind: "character", subjectId: yumeko.id, file: png("yumeko.png") }),
+    );
+    const photo = (await data()).identityRefs.find((r) => r.label === "Reference photo")!.assetId!;
+    for (const intent of ["three_quarter", "portrait"])
+      expect(await startSubjectImage(form(make(yumeko.id, { intent, startAssetId: [photo] })))).toEqual({
+        ok: true,
+      });
+    await work();
+    const [front, threeQuarter] = await attempts(yumeko.id);
+    return { yumeko, photo, front: front!, threeQuarter: threeQuarter! };
+  }
+  const setOf = async (id: string) =>
+    (await referenceStudioState(await data(), `character:${id}`)).referenceSet.map((v) => [v.id, v.from]);
+  const put = (characterId: string, view: string, source: Record<string, string>) =>
+    addToReferenceSet(form({ projectSlug: "ojousama", characterId, view, ...source }));
+
+  it("starts empty, and a take or a photo goes into a view with one act", async () => {
+    const { yumeko, photo, threeQuarter } = await scene();
+    expect(await setOf(yumeko.id)).toEqual([
+      ["front", null],
+      ["three_quarter", null],
+      ["profile", null],
+      ["half_body", null],
+      ["full_body", null],
+    ]);
+    expect(await put(yumeko.id, "three_quarter", { attemptId: threeQuarter.attempt.id })).toEqual({
+      ok: true,
+    });
+    expect(await put(yumeko.id, "half_body", { assetId: photo })).toEqual({ ok: true });
+    expect(await setOf(yumeko.id)).toEqual([
+      ["front", null],
+      ["three_quarter", `take #${threeQuarter.attempt.attemptNumber}`],
+      ["profile", null],
+      ["half_body", "your photo"],
+      ["full_body", null],
+    ]);
+    // the seeded 3/4 slot was a placeholder with no image: it was filled, not duplicated
+    const refs = (await data()).identityRefs.filter((r) => r.characterId === yumeko.id);
+    expect(refs.filter((r) => r.slot === "three_quarter")).toHaveLength(1);
+    expect(refs.find((r) => (r.metadata as { view?: string }).view === "half_body")).toMatchObject({
+      slot: "additional",
+      assetId: photo,
+    });
+  });
+
+  it("the front view is the canonical identity; replacing either asks first, and the old image is kept", async () => {
+    const { yumeko, photo, front } = await scene();
+    expect(await put(yumeko.id, "front", { assetId: photo })).toEqual({ ok: true });
+    let refs = (await data()).identityRefs.filter((r) => r.characterId === yumeko.id);
+    expect(refs.find((r) => r.slot === "front")!.assetId).toBe(photo);
+    expect(
+      refs.find((r) => (r.metadata as { visualRole?: string }).visualRole === "canonical")!.assetId,
+    ).toBe(photo);
+    expect((await setOf(yumeko.id))[0]).toEqual(["front", "your photo"]);
+
+    const frontTake = front.outputs[0]!.asset.id;
+    expect(await put(yumeko.id, "front", { attemptId: front.attempt.id })).toMatchObject({
+      ok: false,
+      error: "Yumeko already has a front. Confirm to replace it (the old image stays in the library).",
+    });
+    expect(await put(yumeko.id, "front", { attemptId: front.attempt.id, confirmReplace: "1" })).toEqual({
+      ok: true,
+    });
+    refs = (await data()).identityRefs.filter((r) => r.characterId === yumeko.id);
+    expect(refs.find((r) => r.slot === "front")!.assetId).toBe(frontTake);
+    expect(
+      refs
+        .filter((r) => (r.metadata as { visualRole?: string }).visualRole === "canonical")
+        .map((r) => r.assetId),
+    ).toEqual([frontTake]);
+    // the photo is still in the library, and still one of her references
+    expect((await data()).assets.some((a) => a.id === photo)).toBe(true);
+    expect(refs.some((r) => r.assetId === photo)).toBe(true);
+  });
+
+  it("refuses a view that is not in the set, another Character's picture, and a locked view holding an image", async () => {
+    const { yumeko, photo, threeQuarter } = await scene();
+    expect(await put(yumeko.id, "back", { assetId: photo })).toMatchObject({
+      ok: false,
+      error: "Choose a view.",
+    });
+    const sean = (await data()).characters.find((c) => c.name === "Sean")!;
+    expect(await put(sean.id, "front", { assetId: photo })).toMatchObject({
+      ok: false,
+      error: "That image does not belong to this character.",
+    });
+    expect(await put(yumeko.id, "three_quarter", { assetId: photo })).toEqual({ ok: true });
+    const d = await data();
+    const slot = d.identityRefs.find((r) => r.characterId === yumeko.id && r.slot === "three_quarter")!;
+    await repo.upsert(d.project.id, "identityRefs", { ...slot, locked: true });
+    expect(
+      await put(yumeko.id, "three_quarter", { attemptId: threeQuarter.attempt.id, confirmReplace: "1" }),
+    ).toMatchObject({ ok: false, error: expect.stringMatching(/is locked/) });
   });
 });

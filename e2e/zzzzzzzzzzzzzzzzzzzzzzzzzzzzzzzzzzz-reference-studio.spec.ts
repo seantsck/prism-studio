@@ -960,3 +960,56 @@ test("N: photos added after a picture was made open the stage, all selected; Gen
   await expect(selected).toHaveCount(3);
   await expect(page.getByTestId("studio-spent")).toHaveText("Nothing billed for Yumeko yet");
 });
+
+test("O: the reference set: what is in each view, Make it for an empty one, and one click to add a take or a photo", async ({
+  page,
+}) => {
+  await openYumeko(page);
+  const set = page.getByTestId("studio-reference-set");
+  const view = (id: string) => set.locator(`[data-testid="studio-set-view"][data-view="${id}"]`);
+  await expect(set).toContainText("Yumeko's reference set");
+  // story E put take #1 into the 3/4 slot; the seeded front and profile slots hold no image
+  await expect(view("three_quarter")).toHaveAttribute("data-filled", "true");
+  await expect(view("three_quarter")).toContainText("take #1");
+  await expect(view("profile")).toHaveAttribute("data-filled", "false");
+  await expect(page.getByTestId("studio-set-count")).toHaveText("(1 of 5 views)");
+  await set.locator("summary").click();
+  await expect(page.getByTestId("studio-set-guidance")).toContainText("4 to 8 good ones");
+
+  // an empty view: Make it fills in the brief (nothing is made until Generate)
+  const takes = await page.getByTestId("studio-take-thumb").count();
+  await view("profile").getByTestId("studio-set-make").click();
+  await expect(page.getByTestId("studio-preset-profile_left")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("studio-take-thumb")).toHaveCount(takes);
+  await priced(page);
+  await page.getByTestId("studio-generate").click();
+  await finished(page, takes + 1);
+
+  // the take suggests the view it was made for; one click puts it there
+  const onTake = page.getByTestId("studio-use");
+  const add = onTake.getByTestId("studio-add-to-set-submit");
+  await expect(onTake.getByTestId("studio-set-choice")).toHaveValue("profile");
+  await expect(add).toHaveText("Add to the set as profile");
+  await add.click();
+  await expect(view("profile")).toHaveAttribute("data-filled", "true", { timeout: 30_000 });
+  await expect(view("profile")).toContainText(`take #${takes + 1}`);
+  await expect(add).toHaveText("In the set as profile");
+  await expect(page.getByTestId("studio-set-count")).toHaveText("(2 of 5 views)");
+
+  // the creator's own photo as the front, which is the canonical identity
+  // (all three of her photos are starting images: each has a line of facts that opens to its details)
+  await expect(page.getByRole("button", { name: /^yumeko-front\.png/ })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  const facts = page.locator('[data-testid="studio-inspection"]').filter({ hasText: "yumeko-front.png" });
+  await facts.locator("summary").first().click();
+  const photoControl = facts.getByTestId("studio-add-to-set");
+  await photoControl.getByTestId("studio-set-choice").selectOption("front");
+  await expect(photoControl.getByTestId("studio-add-to-set-submit")).toHaveText("Add to the set as front");
+  await photoControl.getByTestId("studio-add-to-set-submit").click();
+  await expect(view("front")).toHaveAttribute("data-filled", "true", { timeout: 30_000 });
+  await expect(view("front")).toContainText("your photo");
+  await expect(view("front")).toContainText("canonical");
+  await expect(page.getByTestId("studio-set-count")).toHaveText("(3 of 5 views)");
+});

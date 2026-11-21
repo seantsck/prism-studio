@@ -2,6 +2,8 @@
 
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
+import { isReferenceSetView, REFERENCE_SET_VIEWS } from "@/domain/generation/reference-studio";
+import { hasStoredImage } from "@/domain/generation/subject-image";
 import type { IdentityRef, ProjectData } from "@/domain/schemas";
 import { normalizeExpression, visualRoleOf, type VisualRole } from "@/domain/visual-bible";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
@@ -130,4 +132,70 @@ async function clearDesignation_impl(form: FormData) {
 
 export async function clearVisualBibleDesignation(form: FormData): Promise<ActionResult> {
   return runAction(() => clearDesignation_impl(form), { name: "clearVisualBibleDesignation" });
+}
+
+/**
+ * The Reference Studio's one act for a Character's reference set: put a picture (a finished take, or one of the
+ * creator's own photos of this Character) into one view. The front view is the canonical identity, so it sets both.
+ * A view that already holds a DIFFERENT image is replaced only with `confirmReplace=1` (the old image stays in the
+ * library); a locked slot that holds an image is never replaced here.
+ */
+async function addToReferenceSet_impl(form: FormData) {
+  const { slug, data, character } = await loadCharacter(form);
+  const viewId = str(form, "view");
+  if (!isReferenceSetView(viewId)) throw new UserFacingError("Choose a view.");
+  const view = REFERENCE_SET_VIEWS.find((v) => v.id === viewId)!;
+  const assetId = await resolveSource(data, character.id, form);
+  const confirmed = str(form, "confirmReplace") === "1";
+  const refs = data.identityRefs.filter((r) => r.characterId === character.id);
+  const holds = (r: IdentityRef | undefined) =>
+    !!r?.assetId && hasStoredImage(data.assets.find((a) => a.id === r.assetId));
+  const slotRef =
+    viewId === "half_body"
+      ? refs.find((r) => r.slot === "additional" && (r.metadata as { view?: unknown }).view === "half_body")
+      : refs.find((r) => r.slot === view.slot && visualRoleOf(r) === null);
+  const canonicalRef = view.canonical ? refs.find((r) => visualRoleOf(r) === "canonical") : undefined;
+
+  for (const r of [slotRef, canonicalRef]) {
+    if (!holds(r) || r!.assetId === assetId) continue;
+    if (r!.locked)
+      throw new UserFacingError(
+        `${character.name}'s ${view.label.toLowerCase()} is locked. Unlock the identity references first.`,
+      );
+    if (!confirmed)
+      throw new UserFacingError(
+        `${character.name} already has a ${view.label.toLowerCase()}. Confirm to replace it (the old image stays in the library).`,
+      );
+  }
+
+  const repo = await getRepo();
+  const source = str(form, "attemptId") ? "generated" : "photo";
+  await repo.upsert(data.project.id, "identityRefs", {
+    id: slotRef?.id ?? randomUUID(),
+    characterId: character.id,
+    slot: view.slot,
+    assetId,
+    label: view.label,
+    metadata: {
+      ...(viewId === "half_body" ? { view: "half_body" } : {}),
+      source,
+      ...(str(form, "attemptId") ? { attemptId: str(form, "attemptId") } : {}),
+    },
+    locked: false,
+  });
+  if (view.canonical && canonicalRef?.assetId !== assetId)
+    await repo.upsert(data.project.id, "identityRefs", {
+      id: canonicalRef?.id ?? randomUUID(),
+      characterId: character.id,
+      slot: "additional",
+      assetId,
+      label: "Canonical identity",
+      metadata: { visualRole: "canonical", source: "visual_bible" },
+      locked: false,
+    });
+  refresh(slug);
+}
+
+export async function addToReferenceSet(form: FormData): Promise<ActionResult> {
+  return runAction(() => addToReferenceSet_impl(form), { name: "addToReferenceSet" });
 }
