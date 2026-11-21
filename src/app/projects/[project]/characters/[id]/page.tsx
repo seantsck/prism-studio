@@ -24,6 +24,9 @@ import { ActionForm } from "@/components/action-form";
 import { SubjectImagePanel } from "@/components/images/subject-image-panel";
 import { VisualBiblePanel } from "@/components/images/visual-bible-panel";
 import { subjectImageState } from "@/server/subject-images";
+import { ArchiveButton, ArchivedPanel } from "@/components/studio/archive";
+import { referenceStudioState } from "@/server/reference-studio";
+import Link from "next/link";
 
 const join = (xs: string[]) => xs.join("\n");
 
@@ -55,6 +58,9 @@ export default async function CharacterPage({
   const hidden = <input type="hidden" name="projectSlug" value={slug} />;
   // Phase 5B-I1: this Character's generated images (its own subject attempts; never Shot history)
   const images = await subjectImageState({ kind: "character", characterId: c.id }, data);
+  // every picture of this Character (their photos, Look pictures, finished takes), each with Archive, and the archive
+  const pictures = await referenceStudioState(data, `character:${c.id}`);
+  const archiveSubject = { kind: "character" as const, id: c.id, name: c.name };
 
   return (
     <div>
@@ -68,6 +74,53 @@ export default async function CharacterPage({
         }
       />
       <div className="grid gap-4 p-6 xl:grid-cols-2">
+        <Panel
+          title={`Pictures (${pictures.images.length})`}
+          className="xl:col-span-2"
+          actions={
+            <Link
+              href={`/projects/${slug}/studio?subject=character:${c.id}`}
+              className="text-[12px] text-accent hover:underline"
+            >
+              Open in the Reference Studio
+            </Link>
+          }
+        >
+          <div data-testid="character-pictures">
+            {pictures.images.length === 0 ? (
+              <p className="text-[12px] text-muted">
+                No pictures yet. Add photos or make one in the Reference Studio.
+              </p>
+            ) : (
+              <ul className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3">
+                {pictures.images.map((i) => (
+                  <li
+                    key={i.assetId}
+                    className="flex flex-col gap-1"
+                    data-testid="character-picture"
+                    data-asset={i.assetId}
+                  >
+                    <div className="aspect-[3/4] overflow-hidden rounded-[3px] border border-line2 bg-[#232326]">
+                      {i.url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={i.url} alt={i.label} className="h-full w-full object-cover" />
+                      ) : null}
+                    </div>
+                    <div className="truncate text-[11.5px]" title={i.label}>
+                      {i.label}
+                    </div>
+                    <div className="text-[10.5px] text-muted">
+                      {i.roles.length > 0 ? i.roles.join(", ") : i.originLabel}
+                      {i.rejected ? " · rejected" : ""}
+                    </div>
+                    <ArchiveButton slug={slug} subject={archiveSubject} assetId={i.assetId} />
+                  </li>
+                ))}
+              </ul>
+            )}
+            <ArchivedPanel slug={slug} subject={archiveSubject} archived={pictures.archived} />
+          </div>
+        </Panel>
         <div className="xl:col-span-2">
           <VisualBiblePanel
             data={data}
