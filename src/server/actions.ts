@@ -34,6 +34,7 @@ import {
   type IDENTITY_SLOTS,
   type Shot,
 } from "@/domain/schemas";
+import { PREMISE_MAX } from "@/domain/series-start";
 import { emptyShot } from "@/domain/shot-defaults";
 import { SHOT_SECTION_SPECS, applySection } from "@/domain/shot-fields";
 import { validateLookLink } from "@/domain/looks";
@@ -100,9 +101,12 @@ async function createProject_impl(form: FormData) {
     createdAt: now(),
     updatedAt: now(),
   });
+  // Starting from a prompt: the premise seeds the Bible, Episode 1 waits (empty) for the writing assistant, and the
+  // creator lands on the guided start page. Without one, a project opens exactly as before.
+  const premise = str(form, "premise").slice(0, PREMISE_MAX);
   const bible = bibleSchema.parse({
     projectId: id,
-    premise: "",
+    premise,
     genre: project.genre,
     tone: project.tone,
     visualStyle: "",
@@ -124,8 +128,45 @@ async function createProject_impl(form: FormData) {
     updatedAt: now(),
   });
   await repo.createProject(project, bible);
+  if (premise) await repo.upsert(id, "episodes", emptyEpisodeOne(id));
   revalidatePath("/");
-  redirect(`/projects/${slug}`);
+  redirect(premise ? `/projects/${slug}/start` : `/projects/${slug}`);
+}
+
+/** An empty Episode 1, waiting for the writing assistant (starting from a prompt). */
+function emptyEpisodeOne(projectId: string) {
+  return episodeSchema.parse({
+    id: randomUUID(),
+    projectId,
+    number: 1,
+    slug: "ep-1",
+    title: "Episode 1",
+    synopsis: "",
+    scriptText: "",
+    order: 0,
+    createdAt: now(),
+    updatedAt: now(),
+  });
+}
+
+/**
+ * Start an existing project from a prompt: the premise goes into the Bible (replacing an empty one only — a written
+ * premise is never overwritten here) and, if the project has no Episode yet, an empty Episode 1 is added. Then the
+ * guided start page.
+ */
+async function startFromPremise_impl(form: FormData) {
+  const { data, repo, slug } = await load(form);
+  const premise = str(form, "premise").slice(0, PREMISE_MAX);
+  if (!premise) throw new UserFacingError("Describe your series in a few lines.");
+  if (data.bible?.premise?.trim())
+    throw new UserFacingError("This project already has a premise. Edit it on the Bible page.");
+  await repo.saveBible(
+    bibleSchema.parse({ ...data.bible, projectId: data.project.id, premise, updatedAt: now() }),
+  );
+  if (data.episodes.length === 0)
+    await repo.upsert(data.project.id, "episodes", emptyEpisodeOne(data.project.id));
+  refresh(slug);
+  redirect(`/projects/${slug}/start`);
 }
 
 async function saveProject_impl(form: FormData) {
@@ -1146,6 +1187,10 @@ async function createShotFromSources_impl(form: FormData) {
 // ───────── public server actions (every one returns an inline-renderable result) ─────────
 export async function createProject(form: FormData): Promise<ActionResult> {
   return runAction(() => createProject_impl(form), { name: "createProject" });
+}
+
+export async function startFromPremise(form: FormData): Promise<ActionResult> {
+  return runAction(() => startFromPremise_impl(form), { name: "startFromPremise" });
 }
 
 export async function saveProject(form: FormData): Promise<ActionResult> {

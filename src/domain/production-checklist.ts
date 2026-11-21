@@ -372,16 +372,19 @@ export function projectAreas(data: ProjectData): AreaCard[] {
     summary: `${premise ? "Bible written" : "No Bible yet"} · ${
       episodes.length === 0 ? "no episodes" : `${scripted} of ${episodes.length} episodes scripted`
     }`,
-    next: !premise
-      ? { label: "Write the Bible, or import a story", href: `${base}/story` }
-      : episodes.length === 0
-        ? { label: "Add the first episode", href: `${base}/episodes` }
-        : unscripted
-          ? {
-              label: `Write the script of “${unscripted.title}”`,
-              href: `${base}/episodes/${unscripted.slug}/script`,
-            }
-          : null,
+    next:
+      !premise && scripted === 0
+        ? { label: "Start from a premise, or import a story", href: `${base}/start` }
+        : !premise
+          ? { label: "Write the Bible, or import a story", href: `${base}/story` }
+          : scripted === 0
+            ? { label: "Write Episode 1 from your premise", href: `${base}/start` }
+            : unscripted
+              ? {
+                  label: `Write the script of “${unscripted.title}”`,
+                  href: `${base}/episodes/${unscripted.slug}/script`,
+                }
+              : null,
     waiting: null,
     href: `${base}/bible`,
   };

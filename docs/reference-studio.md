@@ -171,10 +171,29 @@ picture of "…"**. A locked Look shows where to unlock it. The Reference Studio
 
 ## Home and the Production checklist
 
-The navigation is **Home**, the four areas (**Story**: Import Story, Bible, Script, Episodes; **Cast**: Characters,
+The navigation is **Home**, the four areas (**Story**: Start from a prompt, Import Story, Bible, Script, Episodes; **Cast**: Characters,
 Reference Studio; **World**: Locations; **Shots**: Storyboard, Sequence, Animatic), then **More tools** for every
 specialist page. Home shows a card per area (where it stands, the one next thing, or what it waits on: a hint, never a
 lock) and the first next steps. Any area can be worked on first.
+
+### Starting from a prompt
+
+The New project form takes an optional **Describe your series**. With it, the premise goes into the Bible, an empty
+Episode 1 is added, and the project opens on `/projects/<project>/start` (also in the sidebar, and where Home's Story
+card points until Episode 1 has a script). An existing project without a premise can be started there too (a written
+premise is never overwritten). The page is four steps, each marked done / now / later:
+
+1. **Describe your series**: the premise.
+2. **Write Episode 1**: the existing writing assistant, Continue on the empty Episode, asked for a short screenplay
+   from the premise (`episodeOneInstruction`). It opens on the Write page as a proposal; Accept puts it in the script.
+   Writing it by hand works just as well.
+3. **Turn it into a Bible, cast, places and Shots**: the existing Import Story on Episode 1's script. The proposal
+   (characters with their written looks, locations, Shots) is reviewed and applied on its page; nothing changes before.
+4. **Carry on in any order** from Home.
+
+Steps 2 and 3 name their price on the button before anything runs ("free with …" or "up to $X with …"), worked out by
+`src/server/series-start.ts` exactly as `askPrism` / `analyzeStory` work it out; a paid button sends that amount as the
+confirmation, so the action accepts nothing more. A free model is offered first, as on Import Story.
 
 `/projects/<project>/checklist` (under More tools, and "All" on Home): for one Episode (by default the one with the most Shots),
 everything its frames need, in the order it has to happen.

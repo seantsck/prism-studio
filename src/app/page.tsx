@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Badge, Button, Field, Panel } from "@/components/ui";
 import { PROJECT_TYPES } from "@/domain/schemas";
+import { PREMISE_MAX } from "@/domain/series-start";
 import { createProject } from "@/server/actions";
 import { UserMenu } from "@/components/user-menu";
 import { requireUser } from "@/server/auth";
@@ -48,6 +49,12 @@ export default async function HomePage() {
           <ActionForm action={createProject} className="space-y-3">
             <Field label="Title">
               <input name="title" required placeholder="Working title" />
+            </Field>
+            <Field
+              label="Describe your series (optional)"
+              hint="A few lines is enough. Prism then helps you draft Episode 1, the Bible, the cast and the places — you review each step."
+            >
+              <textarea name="premise" rows={4} maxLength={PREMISE_MAX} data-testid="new-project-premise" />
             </Field>
             <Field label="Type">
               <select name="projectType" defaultValue="series">
