@@ -909,6 +909,7 @@ describe("a Character's reference set", () => {
       ["front", null],
       ["three_quarter", null],
       ["profile", null],
+      ["right_profile", null],
       ["half_body", null],
       ["full_body", null],
     ]);
@@ -920,6 +921,7 @@ describe("a Character's reference set", () => {
       ["front", null],
       ["three_quarter", `take #${threeQuarter.attempt.attemptNumber}`],
       ["profile", null],
+      ["right_profile", null],
       ["half_body", "your photo"],
       ["full_body", null],
     ]);

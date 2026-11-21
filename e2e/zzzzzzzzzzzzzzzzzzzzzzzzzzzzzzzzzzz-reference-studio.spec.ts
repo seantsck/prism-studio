@@ -972,7 +972,7 @@ test("O: the reference set: what is in each view, Make it for an empty one, and 
   await expect(view("three_quarter")).toHaveAttribute("data-filled", "true");
   await expect(view("three_quarter")).toContainText("take #1");
   await expect(view("profile")).toHaveAttribute("data-filled", "false");
-  await expect(page.getByTestId("studio-set-count")).toHaveText("(1 of 5 views)");
+  await expect(page.getByTestId("studio-set-count")).toHaveText("(1 of 6 views)");
   await set.locator("summary").click();
   await expect(page.getByTestId("studio-set-guidance")).toContainText("4 to 8 good ones");
 
@@ -989,12 +989,12 @@ test("O: the reference set: what is in each view, Make it for an empty one, and 
   const onTake = page.getByTestId("studio-use");
   const add = onTake.getByTestId("studio-add-to-set-submit");
   await expect(onTake.getByTestId("studio-set-choice")).toHaveValue("profile");
-  await expect(add).toHaveText("Add to the set as profile");
+  await expect(add).toHaveText("Add to the set as left profile");
   await add.click();
   await expect(view("profile")).toHaveAttribute("data-filled", "true", { timeout: 30_000 });
   await expect(view("profile")).toContainText(`take #${takes + 1}`);
-  await expect(add).toHaveText("In the set as profile");
-  await expect(page.getByTestId("studio-set-count")).toHaveText("(2 of 5 views)");
+  await expect(add).toHaveText("In the set as left profile");
+  await expect(page.getByTestId("studio-set-count")).toHaveText("(2 of 6 views)");
 
   // the creator's own photo as the front, which is the canonical identity
   // (all three of her photos are starting images: each has a line of facts that opens to its details)
@@ -1011,7 +1011,7 @@ test("O: the reference set: what is in each view, Make it for an empty one, and 
   await expect(view("front")).toHaveAttribute("data-filled", "true", { timeout: 30_000 });
   await expect(view("front")).toContainText("your photo");
   await expect(view("front")).toContainText("canonical");
-  await expect(page.getByTestId("studio-set-count")).toHaveText("(3 of 5 views)");
+  await expect(page.getByTestId("studio-set-count")).toHaveText("(3 of 6 views)");
 
   // Choose on a view: pick any picture of hers
   await view("half_body").getByTestId("studio-set-choose").click();
@@ -1027,7 +1027,7 @@ test("O: the reference set: what is in each view, Make it for an empty one, and 
   await thumb.dragTo(view("full_body"));
   await expect(view("full_body")).toHaveAttribute("data-filled", "true", { timeout: 30_000 });
   await expect(view("full_body")).toContainText("take #");
-  await expect(page.getByTestId("studio-set-count")).toHaveText("(5 of 5 views)");
+  await expect(page.getByTestId("studio-set-count")).toHaveText("(5 of 6 views)");
 
   // dropping onto a filled view replaces it (the drop is the explicit act); the old picture stays in the library
   // (the tile is at the top of the page and the view far below it: the drop is dispatched the way a browser does)

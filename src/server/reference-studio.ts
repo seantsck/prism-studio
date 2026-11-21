@@ -642,9 +642,9 @@ export async function referenceStudioState(
       base.kind === "character"
         ? REFERENCE_SET_VIEWS.map((v) => {
             const slotRef =
-              v.id === "half_body"
+              v.slot === "additional"
                 ? refs.find(
-                    (r) => r.slot === "additional" && (r.metadata as { view?: unknown }).view === "half_body",
+                    (r) => r.slot === "additional" && (r.metadata as { view?: unknown }).view === v.id,
                   )
                 : refs.find((r) => r.slot === v.slot && visualRoleOf(r) === null);
             const canonicalRef = v.canonical ? refs.find((r) => visualRoleOf(r) === "canonical") : undefined;
