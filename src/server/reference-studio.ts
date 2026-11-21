@@ -1,5 +1,6 @@
 import "server-only";
 import type { SubjectAttemptView } from "@/data/generation-repository";
+import { archiveOf, isArchived } from "@/domain/archive";
 import { findAssetUsage } from "@/domain/asset-usage";
 import { catalogModel } from "@/domain/generation/models/catalog";
 import {
@@ -73,6 +74,20 @@ export interface StudioImage {
   attemptId: string | null;
   /** Rejected in review: kept in history, not offered as a starting image. */
   rejected: boolean;
+}
+
+/** A picture archived from this subject: out of the Studio's lists and never sent, until it is restored. */
+export interface StudioArchivedImage {
+  assetId: string;
+  url: string | null;
+  label: string;
+  archivedAt: string;
+  /** The take that made it, when Prism generated it. */
+  takeNumber: number | null;
+  /** Delete permanently is offered (nothing depends on it). Re-checked by the action. */
+  deletable: boolean;
+  /** Why it is kept when it can't be deleted: one plain sentence. */
+  keptBecause: string | null;
 }
 
 export interface StudioTake {
@@ -205,6 +220,8 @@ export interface StudioState {
   shots: StudioShot[];
   /** A Character's reference set (empty for a Location). */
   referenceSet: StudioSetView[];
+  /** Pictures archived from this subject, newest first. */
+  archived: StudioArchivedImage[];
 }
 
 const stored = (a: Asset | undefined): a is Asset => hasStoredImage(a);
@@ -341,7 +358,8 @@ export async function referenceStudioState(
   const all = testModels
     ? everyAttempt
     : everyAttempt.filter((v) => !madeByTestModel(v) || v.outputs.some((o) => inVisualBible.has(o.asset.id)));
-  const finished = (v: SubjectAttemptView) => v.attempt.status === "succeeded" && !!primaryOf(v);
+  const finished = (v: SubjectAttemptView) =>
+    v.attempt.status === "succeeded" && !!primaryOf(v) && !isArchived(assets.get(primaryOf(v)!.asset.id));
 
   const characterImages = (id: string) => {
     const ids = new Set<string>();
@@ -435,6 +453,7 @@ export async function referenceStudioState(
       spent: { usd: 0, images: 0 },
       shots: [],
       referenceSet: [],
+      archived: [],
     };
   }
 
@@ -478,7 +497,7 @@ export async function referenceStudioState(
   const images: StudioImage[] = [];
   const addImage = (assetId: string | null, label: string, view: SubjectAttemptView | null) => {
     const a = assetId ? assets.get(assetId) : undefined;
-    if (!stored(a) || images.some((x) => x.assetId === a.id)) return;
+    if (!stored(a) || isArchived(a) || images.some((x) => x.assetId === a.id)) return;
     const usage = findAssetUsage(data, a.id);
     const origin = referenceOrigin(a);
     images.push({
@@ -543,88 +562,134 @@ export async function referenceStudioState(
   } else for (const id of location?.referenceAssetIds ?? []) addImage(id, "Reference", null);
 
   const labelOf = new Map(images.map((i) => [i.assetId, i.label]));
-  const takes: StudioTake[] = own.map((v) => {
+  const archivedOutput = (v: SubjectAttemptView) => {
     const out = primaryOf(v);
-    const s = v.attempt.modelSettings as {
-      intent?: string;
-      aspectRatio?: string;
-      editSourceAssetId?: string;
-      backgroundRemovalSourceAssetId?: string;
-      sourceAssetIds?: string[];
-      composer?: Record<string, string>;
-      providerOptions?: { quality?: string; background?: string };
-    };
-    const request = v.attempt.request as { references?: Array<{ assetId: string; label: string }> } | null;
-    const sent =
-      request?.references && request.references.length > 0
-        ? request.references.map((r) => r.assetId)
-        : s.backgroundRemovalSourceAssetId
-          ? [s.backgroundRemovalSourceAssetId]
-          : v.attempt.inputAssetIds;
-    const model = registry.model(v.attempt.provider, v.attempt.model);
-    const snapshot = v.attempt.packageSnapshot as { subject?: { look?: { id?: string } | null } } | null;
-    const { what, operation } = whatOf(v);
-    const asset = out ? (assets.get(out.asset.id) ?? out.asset) : null;
-    return {
-      attemptId: v.attempt.id,
-      number: v.attempt.attemptNumber,
-      status: v.attempt.status,
-      rejected: v.attempt.reviewStatus === "rejected",
-      rejection:
-        v.attempt.reviewStatus === "rejected"
-          ? [
-              ...v.attempt.rejectionCategories.map((c) => REJECTION_LABELS[c as RejectionCategory] ?? c),
-              v.attempt.rejectionReason,
-            ]
-              .filter(Boolean)
-              .join(" · ") || "Rejected"
+    return !!out && isArchived(assets.get(out.asset.id));
+  };
+  // a take whose picture was deleted leaves the list (its cost still counts in what was spent)
+  const deletedOutput = (v: SubjectAttemptView) => v.attempt.status === "succeeded" && !primaryOf(v);
+  const takes: StudioTake[] = own
+    .filter((v) => !archivedOutput(v) && !deletedOutput(v))
+    .map((v) => {
+      const out = primaryOf(v);
+      const s = v.attempt.modelSettings as {
+        intent?: string;
+        aspectRatio?: string;
+        editSourceAssetId?: string;
+        backgroundRemovalSourceAssetId?: string;
+        sourceAssetIds?: string[];
+        composer?: Record<string, string>;
+        providerOptions?: { quality?: string; background?: string };
+      };
+      const request = v.attempt.request as { references?: Array<{ assetId: string; label: string }> } | null;
+      const sent =
+        request?.references && request.references.length > 0
+          ? request.references.map((r) => r.assetId)
+          : s.backgroundRemovalSourceAssetId
+            ? [s.backgroundRemovalSourceAssetId]
+            : v.attempt.inputAssetIds;
+      const model = registry.model(v.attempt.provider, v.attempt.model);
+      const snapshot = v.attempt.packageSnapshot as { subject?: { look?: { id?: string } | null } } | null;
+      const { what, operation } = whatOf(v);
+      const asset = out ? (assets.get(out.asset.id) ?? out.asset) : null;
+      return {
+        attemptId: v.attempt.id,
+        number: v.attempt.attemptNumber,
+        status: v.attempt.status,
+        rejected: v.attempt.reviewStatus === "rejected",
+        rejection:
+          v.attempt.reviewStatus === "rejected"
+            ? [
+                ...v.attempt.rejectionCategories.map((c) => REJECTION_LABELS[c as RejectionCategory] ?? c),
+                v.attempt.rejectionReason,
+              ]
+                .filter(Boolean)
+                .join(" · ") || "Rejected"
+            : null,
+        what,
+        operation,
+        provider: v.attempt.provider,
+        model: v.attempt.model,
+        modelLabel: model?.displayName ?? v.attempt.model,
+        test: madeByTestModel(v),
+        createdAt: v.attempt.createdAt,
+        asset: asset
+          ? {
+              id: asset.id,
+              url: assetUrl(asset),
+              width: asset.width ?? null,
+              height: asset.height ?? null,
+              hasAlpha: (asset.metadata as { hasAlpha?: unknown } | undefined)?.hasAlpha === true,
+            }
           : null,
-      what,
-      operation,
-      provider: v.attempt.provider,
-      model: v.attempt.model,
-      modelLabel: model?.displayName ?? v.attempt.model,
-      test: madeByTestModel(v),
-      createdAt: v.attempt.createdAt,
-      asset: asset
-        ? {
-            id: asset.id,
-            url: assetUrl(asset),
-            width: asset.width ?? null,
-            height: asset.height ?? null,
-            hasAlpha: (asset.metadata as { hasAlpha?: unknown } | undefined)?.hasAlpha === true,
-          }
-        : null,
-      paid: bills(v),
-      estimateUsd: bills(v) ? estimateOf(v) : null,
-      actualUsd: bills(v) ? actualOf(v) : null,
-      inputs: sent.map((id) => ({
-        assetId: id,
-        label: labelOf.get(id) ?? assets.get(id)?.name ?? "an earlier image",
-        url: assetUrl(assets.get(id)),
-      })),
-      prompt: v.attempt.prompt,
-      error:
-        v.attempt.status === "failed" ? v.job?.lastErrorMessage || "This image could not be made." : null,
-      cutoutRefused:
-        operation === "cutout" &&
-        v.attempt.status === "failed" &&
-        v.job?.lastErrorCode === "matting_background_not_plain",
-      roles: asset ? rolesOf(asset.id) : [],
-      settings: {
-        intent: String(s.intent ?? ""),
-        lookId: snapshot?.subject?.look?.id ?? null,
-        aspectRatio: s.aspectRatio ?? null,
-        quality: s.providerOptions?.quality ?? null,
-        transparent: s.providerOptions?.background === "transparent",
-        sourceAssetIds: s.sourceAssetIds ?? [],
-        editSourceAssetId: s.editSourceAssetId ?? null,
-        composer: s.composer ?? {},
-      },
-    };
-  });
+        paid: bills(v),
+        estimateUsd: bills(v) ? estimateOf(v) : null,
+        actualUsd: bills(v) ? actualOf(v) : null,
+        inputs: sent.map((id) => ({
+          assetId: id,
+          label: labelOf.get(id) ?? assets.get(id)?.name ?? "an earlier image",
+          url: assetUrl(assets.get(id)),
+        })),
+        prompt: v.attempt.prompt,
+        error:
+          v.attempt.status === "failed" ? v.job?.lastErrorMessage || "This image could not be made." : null,
+        cutoutRefused:
+          operation === "cutout" &&
+          v.attempt.status === "failed" &&
+          v.job?.lastErrorCode === "matting_background_not_plain",
+        roles: asset ? rolesOf(asset.id) : [],
+        settings: {
+          intent: String(s.intent ?? ""),
+          lookId: snapshot?.subject?.look?.id ?? null,
+          aspectRatio: s.aspectRatio ?? null,
+          quality: s.providerOptions?.quality ?? null,
+          transparent: s.providerOptions?.background === "transparent",
+          sourceAssetIds: s.sourceAssetIds ?? [],
+          editSourceAssetId: s.editSourceAssetId ?? null,
+          composer: s.composer ?? {},
+        },
+      };
+    });
+
+  // this subject's archive: what was archived from it (photos and takes), newest first
+  const key = `${base.kind}:${base.id}`;
+  const takeOf = new Map<string, number>();
+  for (const v of everyAttempt) {
+    const out = primaryOf(v);
+    if (out) takeOf.set(out.asset.id, v.attempt.attemptNumber);
+  }
+  const archived: StudioArchivedImage[] = data.assets
+    .filter((a) => archiveOf(a)?.subject === key && stored(a))
+    .map((a) => {
+      const takeNumber = takeOf.get(a.id) ?? null;
+      const sentTo = everyAttempt
+        .filter((v) => v.attempt.inputAssetIds.includes(a.id))
+        .map((v) => v.attempt.attemptNumber)
+        .sort((x, y) => x - y);
+      const usage = findAssetUsage(data, a.id);
+      const keptBecause =
+        sentTo.length > 0
+          ? `Sent to take${sentTo.length === 1 ? "" : "s"} ${sentTo.map((n) => `#${n}`).join(", ")}: kept so ${sentTo.length === 1 ? "that take's" : "their"} record stays complete.`
+          : usage.inUse
+            ? `Still used: ${usage.direct
+                .slice(0, 2)
+                .map((u) => u.label)
+                .join("; ")}.`
+            : null;
+      return {
+        assetId: a.id,
+        url: assetUrl(a),
+        label: takeNumber != null ? `Take #${takeNumber}` : a.name || "Photo",
+        archivedAt: archiveOf(a)!.at,
+        takeNumber,
+        deletable: keptBecause === null,
+        keptBecause,
+      };
+    })
+    .sort((x, y) => y.archivedAt.localeCompare(x.archivedAt));
 
   return {
+    archived,
     subjects,
     selected: {
       ...base,

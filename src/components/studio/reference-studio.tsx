@@ -26,6 +26,7 @@ import { usePhotoUpload } from "./photo-upload";
 import { DescribeCharacter } from "./describe-character";
 import { AddToSet } from "./reference-set";
 import { rememberModel, useRememberedModel } from "./remembered-model";
+import { ArchiveButton, ArchivedPanel } from "./archive";
 import { SourcePicker } from "./source-picker";
 import { Stage } from "./stage";
 
@@ -359,21 +360,24 @@ export function ReferenceStudio({
             ownPhotos={ownPhotos}
             onSelect={pickStart}
             // while the stage shows a take, the selected pictures can be put on it without changing the selection
-            setControl={
-              kind === "character" && state.referenceSet.length > 0
-                ? (i) =>
-                    i.origin === "uploaded" && !i.wardrobeOnly ? (
-                      <AddToSet
-                        compact
-                        slug={slug}
-                        characterId={subject.id}
-                        set={state.referenceSet}
-                        assetId={i.assetId}
-                        suggested={null}
-                      />
-                    ) : null
-                : undefined
-            }
+            setControl={(i) => (
+              <div className="mt-1 flex flex-wrap items-start gap-2">
+                {kind === "character" &&
+                state.referenceSet.length > 0 &&
+                i.origin === "uploaded" &&
+                !i.wardrobeOnly ? (
+                  <AddToSet
+                    compact
+                    slug={slug}
+                    characterId={subject.id}
+                    set={state.referenceSet}
+                    assetId={i.assetId}
+                    suggested={null}
+                  />
+                ) : null}
+                <ArchiveButton slug={slug} subject={subject} assetId={i.assetId} />
+              </div>
+            )}
             onShowLarge={
               stageView === "take" && focused && sources.length > 0 ? () => setStageView("start") : undefined
             }
@@ -382,6 +386,8 @@ export function ReferenceStudio({
           {kind === "character" && ownPhotos.length > 0 ? (
             <DescribeCharacter slug={slug} subject={subject} hasPhotos onMakeFront={() => undefined} />
           ) : null}
+
+          <ArchivedPanel slug={slug} subject={subject} archived={state.archived} />
 
           <div>
             <div className="mb-2 flex gap-1" role="tablist" aria-label="What to do">

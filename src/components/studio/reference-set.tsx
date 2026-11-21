@@ -156,6 +156,7 @@ export function ReferenceSetPanel({
             data-testid="studio-set-view"
             data-view={v.id}
             data-filled={v.assetId ? "true" : "false"}
+            data-asset={v.assetId ?? ""}
             onDragOver={(e) => {
               if (!carriesPicture(e)) return;
               e.preventDefault();

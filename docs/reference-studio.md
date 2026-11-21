@@ -324,6 +324,24 @@ the explicit promotion. `reviewSubjectImageAttempt` writes review fields only (`
 `rejection_reason`, `reviewed_at`), which the append-only guard allows. A picture the project currently uses cannot be
 rejected until that use ends.
 
+## Archive and delete
+
+**Archive** (on a take, or on a selected starting image) takes a picture out of the Studio: out of the takes, out of
+Start from, out of the subject's count, and never sent with anything. Nothing is deleted. The record is the Asset's own
+`metadata.archived` (who it was archived from, when, and every plain pointer that was lifted out), so no schema change.
+
+- Lifted out with it, and put back by **Restore**: an extra reference photo of a Character (a plain identity reference
+  with no view or role), a Location's reference photo.
+- Refused, with what to change first: a view of the reference set or the canonical identity, a Look's picture, a
+  Location's designation, a locked reference, a use in a Shot (frames, continuity locks…).
+- **Archived (N)**, under Start from: each archived picture with **Restore**, and **Delete permanently** (confirmed,
+  can't be undone) only when nothing depends on it. Deleting a take's picture keeps the take in the history, with its
+  cost, and no picture (it leaves the takes list; Spent is unchanged). A picture that was SENT to a take (a photo, or
+  an earlier take) can't be deleted, so that take's record stays complete; the reason is shown in place of the button.
+
+The rule for permanent deletion is one function (`src/server/asset-deletion.ts`), shared with the Assets library, so
+the two never disagree.
+
 ## Locks
 
 - A locked identity slot protects a reference **image**. A slot that only holds a placeholder record with no stored

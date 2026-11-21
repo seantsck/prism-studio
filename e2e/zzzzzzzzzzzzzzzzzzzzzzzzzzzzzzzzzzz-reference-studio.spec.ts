@@ -1140,3 +1140,47 @@ test("Q: a series starts from a prompt: premise → Episode 1 drafted by Prism (
     "Write Episode 1 from your premise",
   );
 });
+
+test("R: a take is archived out of the Studio and restored (delete offered); a set view is refused", async ({
+  page,
+}) => {
+  await openYumeko(page);
+  // a fresh take (free test model), then Archive on it
+  const takes = await page.getByTestId("studio-take-thumb").count();
+  await priced(page);
+  await page.getByTestId("studio-generate").click();
+  await finished(page, takes + 1);
+  const take = page.getByTestId("studio-take");
+  const attempt = await take.getAttribute("data-attempt");
+  await take.getByTestId("studio-archive").click();
+  await expect(page.locator(`[data-testid="studio-take-thumb"][data-attempt="${attempt}"]`)).toHaveCount(0, {
+    timeout: 30_000,
+  });
+  const archived = page.getByTestId("studio-archived");
+  await expect(archived.locator("summary")).toHaveText(/^Archived \(\d+\)$/);
+  await archived.locator("summary").click();
+  const item = archived.getByTestId("studio-archived-item").filter({ hasText: `Take #${takes + 1}` });
+  // nothing depends on it: it can be deleted for good (confirmed first); here it is restored instead
+  await expect(item.getByTestId("studio-delete")).toBeVisible();
+  await expect(item.getByTestId("studio-delete-confirm")).not.toBeChecked();
+  // Restore puts it back among the takes
+  await item.getByTestId("studio-restore").click();
+  await expect(page.locator(`[data-testid="studio-take-thumb"][data-attempt="${attempt}"]`)).toHaveCount(1, {
+    timeout: 30_000,
+  });
+
+  // a picture that is a view of the reference set (the left profile, a take since story O) is refused with what to
+  // change first, and stays where it is
+  const profile = page.locator('[data-testid="studio-set-view"][data-view="profile"]');
+  await expect(profile).toHaveAttribute("data-filled", "true");
+  const inSet = await profile.getAttribute("data-asset");
+  // from its Start from tile: selected alone, its card offers Archive too
+  await page.getByTestId("studio-source-none").click();
+  await choose(page.locator(`[data-testid="studio-source"][data-asset="${inSet}"]`));
+  await page
+    .locator(`[data-testid="studio-inspection"][data-asset="${inSet}"]`)
+    .getByTestId("studio-archive")
+    .click();
+  await expect(page.getByText(/take it out of the reference set first/)).toBeVisible();
+  await expect(profile).toHaveAttribute("data-asset", inSet!);
+});
