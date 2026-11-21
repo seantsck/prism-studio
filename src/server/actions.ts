@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { buildShotContext } from "@/domain/context";
-import { findAssetUsage } from "@/domain/asset-usage";
 import { approvalSnapshot } from "@/domain/fingerprint";
 import { assembleGenerationPackage } from "@/domain/generation-package";
 import { reorderShotsInScene } from "@/domain/ordering";
@@ -40,12 +39,9 @@ import { SHOT_SECTION_SPECS, applySection } from "@/domain/shot-fields";
 import { validateLookLink } from "@/domain/looks";
 import { nextTakeNumber, selectTake as selectTakeDomain } from "@/domain/takes";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
-import { getGenerationRepo } from "./generation";
-import { getMediaQaRepo } from "./media-qa";
-import { getPrevisRepo } from "./previs";
 import { getRepo, requireProjectFresh } from "./repo";
 import { recordCreatorEdit, syncEpisodeScript } from "./script-sync";
-import { getStoryRepo } from "./story";
+import { assetDeletionRefusal } from "./asset-deletion";
 import { discardUpload, hasFile, ingestUpload } from "./ingest-upload";
 
 // ───────────────────────── helpers ─────────────────────────
@@ -1066,38 +1062,8 @@ async function deleteAsset_impl(form: FormData) {
   const { data, repo, slug } = await load(form);
   const asset = data.assets.find((a) => a.id === str(form, "assetId"));
   if (!asset) throw new UserFacingError("That asset no longer exists.");
-  const usage = findAssetUsage(data, asset.id);
-  if (usage.inUse) {
-    throw new UserFacingError(
-      `This asset is in use and can't be deleted: ${usage.direct
-        .slice(0, 3)
-        .map((u) => u.label)
-        .join("; ")}${usage.direct.length > 3 ? ` and ${usage.direct.length - 3} more` : ""}.`,
-    );
-  }
-  // A spatial control-pass bundle is immutable historical truth: its machine assets cannot be removed.
-  if (await (await getPrevisRepo()).spatialPassUsesAsset(asset.id)) {
-    throw new UserFacingError("This asset can't be deleted: it belongs to a spatial control-pass bundle.");
-  }
-  // A Location's spatial reconstruction (a Gaussian splat and the reference images it was built from) is origin truth.
-  if (await (await getPrevisRepo()).reconstructionUsesAsset(asset.id)) {
-    throw new UserFacingError(
-      "This asset can't be deleted: it belongs to a spatial reconstruction of a location.",
-    );
-  }
-  // Derived-media lineage and QA history also pin an asset: nothing is orphaned silently.
-  const pins = [
-    ...(await (await getMediaQaRepo()).assetPins(asset.id)),
-    // a Character / Location image attempt that sent this Asset as a reference (0051 compatibility gate)
-    ...(await (await getGenerationRepo()).subjectImageAssetPins(data.project.id, asset.id)),
-  ];
-  if (pins.length > 0) {
-    throw new UserFacingError(`This asset can't be deleted: ${pins.join("; ")}.`);
-  }
-  // Phase 5B-S1: an uploaded screenplay that a Production Proposal was made from is its immutable source
-  if (await (await getStoryRepo({ startInlineWorker: false })).usesAsset(asset.id)) {
-    throw new UserFacingError("This asset can't be deleted: it is the source of a Story proposal.");
-  }
+  const refusal = await assetDeletionRefusal(data, asset);
+  if (refusal) throw new UserFacingError(refusal);
   await repo.remove(data.project.id, "assets", asset.id);
   await discardUpload(asset);
   refresh(slug);

@@ -89,6 +89,7 @@ vi.mock("@/server/storage", () => ({
   }),
 }));
 
+import { archiveStudioImage, deleteArchivedImage, restoreStudioImage } from "../archive-actions";
 import { referenceStudioState } from "../reference-studio";
 import { quoteReferenceImage, reviewReferenceImage, uploadReferencePhoto } from "../reference-studio-actions";
 import { replaceLookReference, saveAsCharacterReference, startSubjectImage } from "../subject-image-actions";
@@ -1081,5 +1082,163 @@ describe("describing a fictional Character", () => {
         form({ projectSlug: "ojousama", characterId: takumi.id, appearance: " " }),
       ),
     ).toMatchObject({ ok: false, error: "Describe how they look first." });
+  });
+});
+
+describe("archive and delete", () => {
+  const upload = async (characterId: string, name: string) => {
+    const r = await uploadReferencePhoto(
+      form({ subjectKind: "character", subjectId: characterId, file: png(name) }),
+    );
+    return (r as { assetId: string }).assetId;
+  };
+  const act = (fn: typeof archiveStudioImage, characterId: string, assetId: string, extra = {}) =>
+    fn(form({ subjectKind: "character", subjectId: characterId, assetId, ...extra }));
+  const stateOf = async (id: string) => referenceStudioState(await data(), `character:${id}`);
+
+  it("a photo is archived out of the Studio and no longer a reference; Restore puts it back as it was", async () => {
+    const yumeko = await yumekoOf();
+    const photo = await upload(yumeko.id, "extra.png");
+    const ref = (await data()).identityRefs.find((r) => r.assetId === photo)!;
+    expect(await act(archiveStudioImage, yumeko.id, photo)).toEqual({ ok: true });
+    let d = await data();
+    expect(d.identityRefs.some((r) => r.assetId === photo)).toBe(false);
+    expect(d.assets.some((a) => a.id === photo)).toBe(true); // nothing deleted
+    let state = await stateOf(yumeko.id);
+    expect(state.images.some((i) => i.assetId === photo)).toBe(false);
+    expect(state.archived).toEqual([
+      expect.objectContaining({ assetId: photo, label: "extra.png", deletable: true, keptBecause: null }),
+    ]);
+    expect(await act(archiveStudioImage, yumeko.id, photo)).toMatchObject({ ok: false });
+
+    expect(await act(restoreStudioImage, yumeko.id, photo)).toEqual({ ok: true });
+    d = await data();
+    expect(d.identityRefs.find((r) => r.assetId === photo)).toEqual(ref);
+    expect(
+      (d.assets.find((a) => a.id === photo)!.metadata as { archived?: unknown }).archived,
+    ).toBeUndefined();
+    state = await stateOf(yumeko.id);
+    expect(state.images.some((i) => i.assetId === photo)).toBe(true);
+    expect(state.archived).toEqual([]);
+  });
+
+  it("a picture with a job (a view of the set, a Look's picture) is refused with what to change first", async () => {
+    const yumeko = await yumekoOf();
+    const photo = await upload(yumeko.id, "set.png");
+    await addToReferenceSet(form({ characterId: yumeko.id, view: "half_body", assetId: photo }));
+    const r = await act(archiveStudioImage, yumeko.id, photo);
+    expect(r).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("take it out of the reference set first"),
+    });
+    // a Look's picture: the seeded Look is given this photo as its picture
+    const seeded = (await data()).looks.find((l) => l.characterId === yumeko.id)!;
+    const worn = await upload(yumeko.id, "worn.png");
+    await repo.upsert((await data()).project.id, "looks", { ...seeded, referenceAssetIds: [worn] });
+    const look = (await data()).looks.find((l) => l.id === seeded.id)!;
+    {
+      expect(await act(archiveStudioImage, yumeko.id, worn)).toMatchObject({
+        ok: false,
+        error: expect.stringContaining(`Look "${look.name}" (change the Look's picture first)`),
+      });
+    }
+    expect((await stateOf(yumeko.id)).archived).toEqual([]);
+  });
+
+  it("a take is archived out of the takes and pictures, and can be deleted; its record and cost stay", async () => {
+    const yumeko = await yumekoOf();
+    const photo = await upload(yumeko.id, "start.png");
+    expect(await startSubjectImage(form(make(yumeko.id, { startAssetId: [photo] })))).toEqual({ ok: true });
+    await work();
+    const [take] = await attempts(yumeko.id);
+    const out = take!.outputs[0]!.asset.id;
+    const n = take!.attempt.attemptNumber;
+    const spent = (await stateOf(yumeko.id)).spent;
+    expect(await act(archiveStudioImage, yumeko.id, out)).toEqual({ ok: true });
+    let state = await stateOf(yumeko.id);
+    expect(state.takes.some((t) => t.attemptId === take!.attempt.id)).toBe(false);
+    expect(state.images.some((i) => i.assetId === out)).toBe(false);
+    expect(state.archived.find((a) => a.assetId === out)).toMatchObject({
+      label: `Take #${n}`,
+      takeNumber: n,
+      deletable: true,
+      keptBecause: null,
+    });
+    // the photo it started from can be archived, but not deleted: that take's record names it
+    expect(await act(archiveStudioImage, yumeko.id, photo)).toEqual({ ok: true });
+    expect((await stateOf(yumeko.id)).archived.find((a) => a.assetId === photo)).toMatchObject({
+      deletable: false,
+      keptBecause: `Sent to take #${n}: kept so that take's record stays complete.`,
+    });
+    expect(await act(deleteArchivedImage, yumeko.id, photo, { confirm: "1" })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining(`image attempt ${n} input`),
+    });
+    // the take's own picture is deleted for good: the take stays in the history, with its cost, and no picture
+    expect(await act(deleteArchivedImage, yumeko.id, out, { confirm: "1" })).toEqual({ ok: true });
+    expect((await data()).assets.some((a) => a.id === out)).toBe(false);
+    const kept = await repo.generation.getSubjectImageAttempt(take!.attempt.id);
+    expect(kept!.attempt).toMatchObject({ status: "succeeded", outputAssetId: null });
+    state = await stateOf(yumeko.id);
+    expect(state.takes.some((t) => t.attemptId === take!.attempt.id)).toBe(false);
+    expect(state.archived.some((a) => a.assetId === out)).toBe(false);
+    expect(state.spent).toEqual(spent);
+  });
+
+  it("a photo nothing depends on is deleted for good, only from the archive and only once confirmed", async () => {
+    const yumeko = await yumekoOf();
+    const photo = await upload(yumeko.id, "mistake.png");
+    const path = (await data()).assets.find((a) => a.id === photo)!.objectPath!;
+    expect(world.stored.has(path)).toBe(true);
+    expect(await act(deleteArchivedImage, yumeko.id, photo, { confirm: "1" })).toMatchObject({
+      ok: false,
+      error: "Archive the picture first; a picture is deleted only from the archive.",
+    });
+    await act(archiveStudioImage, yumeko.id, photo);
+    expect(await act(deleteArchivedImage, yumeko.id, photo)).toMatchObject({
+      ok: false,
+      error: "Confirm that you want to delete it for good.",
+    });
+    expect(await act(deleteArchivedImage, yumeko.id, photo, { confirm: "1" })).toEqual({ ok: true });
+    expect((await data()).assets.some((a) => a.id === photo)).toBe(false);
+    expect(world.stored.has(path)).toBe(false);
+    expect((await stateOf(yumeko.id)).archived).toEqual([]);
+  });
+
+  it("a Location's reference photo is archived and restored the same way; a locked Location refuses", async () => {
+    let lobby = await lobbyOf();
+    const d = await data();
+    if (lobby.locked) await repo.upsert(d.project.id, "locations", { ...lobby, locked: false });
+    lobby = await lobbyOf();
+    const r = await uploadReferencePhoto(
+      form({ subjectKind: "location", subjectId: lobby.id, file: png("lobby.png") }),
+    );
+    expect(r).toMatchObject({ ok: true });
+    const photo = (r as { assetId: string }).assetId;
+    const loc = (f: string) => (f === "archive" ? archiveStudioImage : restoreStudioImage);
+    expect(
+      await loc("archive")(form({ subjectKind: "location", subjectId: lobby.id, assetId: photo })),
+    ).toEqual({
+      ok: true,
+    });
+    expect((await lobbyOf()).referenceAssetIds).not.toContain(photo);
+    // a locked Location keeps its references as they are: Restore waits until it is unlocked
+    await repo.upsert(d.project.id, "locations", { ...(await lobbyOf()), locked: true });
+    expect(
+      await loc("restore")(form({ subjectKind: "location", subjectId: lobby.id, assetId: photo })),
+    ).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("is locked"),
+    });
+    await repo.upsert(d.project.id, "locations", { ...(await lobbyOf()), locked: false });
+    expect(
+      (await referenceStudioState(await data(), `location:${lobby.id}`)).archived.map((a) => a.assetId),
+    ).toEqual([photo]);
+    expect(
+      await loc("restore")(form({ subjectKind: "location", subjectId: lobby.id, assetId: photo })),
+    ).toEqual({
+      ok: true,
+    });
+    expect((await lobbyOf()).referenceAssetIds).toContain(photo);
   });
 });

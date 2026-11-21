@@ -25,6 +25,7 @@ import {
 } from "@/server/subject-image-actions";
 import type { HostedMattingOffer } from "@/server/subject-images";
 import { setCanonicalIdentity, setCharacterCutout } from "@/server/visual-bible-actions";
+import { ArchiveButton } from "./archive";
 import { AddToSet, ReferenceSetPanel, startPictureDrag } from "./reference-set";
 
 const SLOTS: Array<[string, string]> = [
@@ -391,6 +392,11 @@ export function Stage({
                 {r}
               </Badge>
             ))}
+            {focused.status === "succeeded" && focused.asset ? (
+              <span className="ml-auto">
+                <ArchiveButton slug={slug} subject={subject} assetId={focused.asset.id} what="take" />
+              </span>
+            ) : null}
           </div>
           <p className="mt-1 text-[11.5px] text-muted">
             {focused.modelLabel} · {when(focused.createdAt)}
@@ -902,6 +908,7 @@ export function Stage({
                   }
                   data-testid="studio-take-thumb"
                   data-attempt={t.attemptId}
+                  data-asset={t.asset?.id ?? ""}
                   data-status={t.status}
                   className={cn(
                     "relative block h-[96px] w-full overflow-hidden rounded-[3px] border bg-[#232326]",
