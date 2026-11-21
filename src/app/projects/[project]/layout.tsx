@@ -9,6 +9,8 @@ export const dynamic = "force-dynamic";
 
 const NAV = [
   ["", "Overview"],
+  // what is missing, in order, with the button that fixes each thing
+  ["/checklist", "Production checklist"],
   // the references come first: everything after them (Shots, frames, animation) is made from them
   ["/studio", "Reference Studio"],
   ["/story", "Import Story"],

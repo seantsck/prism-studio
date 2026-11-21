@@ -199,3 +199,31 @@ async function addToReferenceSet_impl(form: FormData) {
 export async function addToReferenceSet(form: FormData): Promise<ActionResult> {
   return runAction(() => addToReferenceSet_impl(form), { name: "addToReferenceSet" });
 }
+
+/**
+ * The Production checklist's "Approve": lock a Character's reference images and the Looks an Episode uses, in one act.
+ * Locked references are what every Shot is made from; they are unlocked on the Character page.
+ */
+async function approveCharacter_impl(form: FormData) {
+  const { slug, data, character } = await loadCharacter(form);
+  const repo = await getRepo();
+  const withImage = data.identityRefs.filter(
+    (r) =>
+      r.characterId === character.id &&
+      !!r.assetId &&
+      hasStoredImage(data.assets.find((a) => a.id === r.assetId)),
+  );
+  if (withImage.length === 0)
+    throw new UserFacingError(`${character.name} has no reference image to approve yet.`);
+  for (const r of withImage)
+    if (!r.locked) await repo.upsert(data.project.id, "identityRefs", { ...r, locked: true });
+  const lookIds = new Set(form.getAll("lookId").map(String));
+  for (const l of data.looks)
+    if (l.characterId === character.id && lookIds.has(l.id) && !l.locked)
+      await repo.upsert(data.project.id, "looks", { ...l, locked: true });
+  refresh(slug);
+}
+
+export async function approveCharacter(form: FormData): Promise<ActionResult> {
+  return runAction(() => approveCharacter_impl(form), { name: "approveCharacter" });
+}

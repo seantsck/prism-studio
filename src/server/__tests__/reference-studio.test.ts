@@ -92,7 +92,7 @@ vi.mock("@/server/storage", () => ({
 import { referenceStudioState } from "../reference-studio";
 import { quoteReferenceImage, reviewReferenceImage, uploadReferencePhoto } from "../reference-studio-actions";
 import { replaceLookReference, saveAsCharacterReference, startSubjectImage } from "../subject-image-actions";
-import { addToReferenceSet, setCanonicalIdentity } from "../visual-bible-actions";
+import { addToReferenceSet, approveCharacter, setCanonicalIdentity } from "../visual-bible-actions";
 
 const sinkRoot = mkdtempSync(path.join(tmpdir(), "prism-studio-"));
 afterAll(() => rmSync(sinkRoot, { recursive: true, force: true }));
@@ -1024,5 +1024,30 @@ describe("a Look's picture", () => {
       ok: false,
       error: expect.stringMatching(/is locked/),
     });
+  });
+});
+
+describe("Approve from the Production checklist", () => {
+  it("locks the person's reference images and the named Looks, and nothing without an image", async () => {
+    const yumeko = await yumekoOf();
+    expect(await approveCharacter(form({ projectSlug: "ojousama", characterId: yumeko.id }))).toMatchObject({
+      ok: false,
+      error: "Yumeko has no reference image to approve yet.",
+    });
+    let d = await data();
+    const look = d.looks.find((l) => l.characterId === yumeko.id)!;
+    await repo.upsert(d.project.id, "looks", { ...look, locked: false });
+    await uploadReferencePhoto(
+      form({ subjectKind: "character", subjectId: yumeko.id, file: png("yumeko.png") }),
+    );
+    d = await data();
+    const photo = d.identityRefs.find((r) => r.characterId === yumeko.id && r.label === "Reference photo")!;
+    await repo.upsert(d.project.id, "identityRefs", { ...photo, locked: false });
+    expect(
+      await approveCharacter(form({ projectSlug: "ojousama", characterId: yumeko.id, lookId: look.id })),
+    ).toEqual({ ok: true });
+    d = await data();
+    expect(d.identityRefs.find((r) => r.id === photo.id)!.locked).toBe(true);
+    expect(d.looks.find((l) => l.id === look.id)!.locked).toBe(true);
   });
 });

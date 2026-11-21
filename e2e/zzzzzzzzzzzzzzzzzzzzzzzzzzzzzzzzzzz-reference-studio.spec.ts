@@ -167,8 +167,9 @@ test("A: the Studio is in the navigation, opens on the first Character and offer
   await page.goto(P);
   // the Studio comes first in the project's navigation: everything after it is made from its references
   const nav = page.getByRole("navigation").getByRole("link");
-  await expect(nav.nth(1)).toHaveText("Reference Studio");
-  await expect(nav.nth(2)).toHaveText("Import Story");
+  await expect(nav.nth(1)).toHaveText("Production checklist");
+  await expect(nav.nth(2)).toHaveText("Reference Studio");
+  await expect(nav.nth(3)).toHaveText("Import Story");
   await page.getByRole("link", { name: "Reference Studio", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`${STUDIO}$`));
   await expect(page.getByRole("heading", { name: "Reference Studio" })).toBeVisible();
@@ -1054,4 +1055,34 @@ test("O: the reference set: what is in each view, Make it for an empty one, and 
   await expect(view("profile").locator("img")).not.toHaveAttribute("src", before!);
   const old = await page.request.get(before!);
   expect(old.ok()).toBe(true);
+});
+
+test("P: the Production checklist lists what each person, outfit, place and Shot still needs, with the button for each", async ({
+  page,
+}) => {
+  await page.goto(P);
+  await page.getByRole("link", { name: "Production checklist", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Production checklist" })).toBeVisible();
+  const next = page.getByTestId("checklist-next");
+  await expect(next).toContainText("Next steps for");
+  const steps = page.getByTestId("checklist-step");
+  expect(await steps.count()).toBeGreaterThan(0);
+  // every person in the Episode's Shots, with their photos and views
+  const yumeko = page.getByTestId("checklist-person").filter({ hasText: "Yumeko" });
+  await expect(yumeko).toContainText("photos of their own");
+  await expect(yumeko).toContainText("Front");
+  // every Shot has a light
+  const shots = page.getByTestId("checklist-shot");
+  expect(await shots.count()).toBeGreaterThan(5);
+  for (const light of await shots.evaluateAll((els) => els.map((e) => e.getAttribute("data-light"))))
+    expect(["ready", "partial", "blocked"]).toContain(light);
+  // a person step opens the Studio on that person, already set up
+  const sean = steps.filter({ hasText: "Add photos of Sean" });
+  await expect(sean).toHaveCount(1);
+  await sean.getByTestId("checklist-step-go").click();
+  await expect(page.getByTestId("reference-studio")).toHaveAttribute("data-subject", /^character:/);
+  await expect(page.getByTestId("studio-subject").filter({ hasText: "Sean" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
 });
