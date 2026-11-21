@@ -1110,3 +1110,33 @@ test("P: the Production checklist lists what each person, outfit, place and Shot
     "page",
   );
 });
+
+test("Q: a series starts from a prompt: premise → Episode 1 drafted by Prism (free here, price on the button) → next steps", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const premise =
+    "A shy sushi apprentice in Osaka secretly enters a televised cooking contest under a false name.";
+  await page.locator('input[name="title"]').fill("Night Counter");
+  await page.getByTestId("new-project-premise").fill(premise);
+  await page.getByRole("button", { name: "Create project" }).click();
+  await expect(page).toHaveURL(/\/projects\/night-counter\/start$/);
+  await expect(page.getByRole("heading", { name: "Start your series" })).toBeVisible();
+  await expect(page.getByTestId("start-premise")).toHaveAttribute("data-state", "done");
+  await expect(page.getByTestId("start-premise-text")).toHaveText(premise);
+  await expect(page.getByTestId("start-write")).toHaveAttribute("data-state", "now");
+  await expect(page.getByTestId("start-analyze")).toHaveAttribute("data-state", "later");
+  await expect(page.getByRole("navigation").getByRole("link", { name: "Start from a prompt" })).toBeVisible();
+  // the price is on the button before anything runs
+  const write = page.getByTestId("start-write-go");
+  await expect(write).toHaveText(/^Write Episode 1 · free with /);
+  await write.click();
+  await expect(page).toHaveURL(/\/projects\/night-counter\/episodes\/ep-1\/write\?session=/);
+  // back on the start page the draft is one click away, and Home points here until Episode 1 has a script
+  await page.goto("/projects/night-counter/start");
+  await expect(page.getByTestId("start-open-draft")).toBeVisible();
+  await page.goto("/projects/night-counter");
+  await expect(page.locator('[data-testid="home-area"][data-area="story"]')).toContainText(
+    "Write Episode 1 from your premise",
+  );
+});
