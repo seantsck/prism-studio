@@ -6,6 +6,8 @@ import { Button } from "@/components/ui";
 import { REFERENCE_SET_GUIDANCE, type ReferenceSetViewId } from "@/domain/generation/reference-studio";
 import { cn } from "@/lib/utils";
 import type { StudioImage, StudioSetView, StudioState } from "@/server/reference-studio";
+import Link from "next/link";
+import { replaceLookReference } from "@/server/subject-image-actions";
 import { addToReferenceSet } from "@/server/visual-bible-actions";
 
 /** The drag payload of one of the subject's pictures (a Start-from tile or a take), dropped on a view. */
@@ -43,16 +45,57 @@ export function ReferenceSetPanel({
   pictures: StudioImage[];
   /** How many of the creator's own photos of the subject there are. */
   photos: number;
-  /** Fills in the brief to make this view (from the selected starting images). */
-  onMake: (intent: string) => void;
+  /** Fills in the brief to make this view (from the selected starting images), with a Look for a wardrobe picture. */
+  onMake: (intent: string, lookId?: string) => void;
 }) {
   const filled = set.filter((v) => v.assetId).length;
   const [choosing, setChoosing] = useState<string | null>(null);
+  const looks = subject.looks;
+  const lookKey = (id: string) => `look:${id}`;
   const [over, setOver] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<{ view: string; text: string; ok: boolean } | null>(null);
   const [, startTransition] = useTransition();
   const target = set.find((v) => v.id === choosing) ?? null;
+  const targetLook = looks.find((l) => lookKey(l.id) === choosing) ?? null;
+
+  /** Makes a take the Look's picture (replacing the old one, which stays in the library). */
+  const assignLook = (
+    look: (typeof looks)[number],
+    picture: { assetId: string; attemptId?: string | null },
+  ) => {
+    const key = lookKey(look.id);
+    setChoosing(null);
+    if (look.pictureAssetId === picture.assetId) return;
+    if (look.locked) {
+      setMessage({ view: key, text: "This Look is locked: unlock it first.", ok: false });
+      return;
+    }
+    if (!picture.attemptId) {
+      setMessage({
+        view: key,
+        text: "Use a picture made here: your own photo is a picture of the person, not of the Look.",
+        ok: false,
+      });
+      return;
+    }
+    const form = new FormData();
+    form.set("projectSlug", slug);
+    form.set("lookId", look.id);
+    form.set("attemptId", picture.attemptId);
+    form.set("confirmReplace", "1");
+    setBusy(key);
+    setMessage(null);
+    startTransition(async () => {
+      const result = await replaceLookReference(form);
+      setBusy(null);
+      setMessage(
+        result.ok
+          ? { view: key, text: look.pictureAssetId ? "Replaced" : "Added", ok: true }
+          : { view: key, text: result.error, ok: false },
+      );
+    });
+  };
 
   /** Puts a picture into a view. Dropping or choosing onto a filled view is the explicit replacement. */
   const assign = (view: StudioSetView, picture: { assetId: string; attemptId?: string | null }) => {
@@ -191,7 +234,150 @@ export function ReferenceSetPanel({
           </li>
         ))}
       </ul>
-      {target ? (
+      {looks.length > 0 ? (
+        <div className="mt-3">
+          <p className="text-[11.5px] text-muted">
+            Wardrobe: each Look&apos;s picture is sent with every Shot in that Look, so it must show{" "}
+            {subject.name}
+            &apos;s own face. Drop a Wardrobe reference made here onto it.
+          </p>
+          <ul className="mt-1.5 grid grid-cols-3 gap-2 sm:grid-cols-6">
+            {looks.map((l) => {
+              const key = lookKey(l.id);
+              return (
+                <li
+                  key={l.id}
+                  data-testid="studio-set-look"
+                  data-look={l.id}
+                  data-filled={l.pictureAssetId ? "true" : "false"}
+                  onDragOver={(e) => {
+                    if (!carriesPicture(e)) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.dataTransfer.dropEffect = "copy";
+                    if (over !== key) setOver(key);
+                  }}
+                  onDragLeave={() => setOver((x) => (x === key ? null : x))}
+                  onDrop={(e) => {
+                    if (!carriesPicture(e)) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setOver(null);
+                    try {
+                      assignLook(l, JSON.parse(e.dataTransfer.getData(PICTURE_DRAG_TYPE)));
+                    } catch {
+                      // not one of this Studio's pictures
+                    }
+                  }}
+                >
+                  <div
+                    className={cn(
+                      "relative flex h-[112px] items-center justify-center overflow-hidden rounded-[3px] border bg-[#232326]",
+                      over === key
+                        ? "border-accent ring-2 ring-accent"
+                        : choosing === key
+                          ? "border-accent"
+                          : l.pictureUrl
+                            ? "border-line2"
+                            : "border-dashed border-line2",
+                    )}
+                  >
+                    {l.pictureUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={l.pictureUrl}
+                        alt={`${l.name}`}
+                        className={cn("h-full w-full object-cover", busy === key ? "opacity-40" : "")}
+                      />
+                    ) : (
+                      <span className="px-1 text-center text-[10.5px] text-faint">Drop a picture here</span>
+                    )}
+                    {over === key ? (
+                      <span className="absolute inset-x-0 bottom-0 bg-black/75 py-0.5 text-center text-[10.5px] text-fg">
+                        {l.pictureUrl ? "Replace its picture" : "Use as its picture"}
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-0.5 truncate text-[11px] font-medium" title={l.name}>
+                    {l.name}
+                  </p>
+                  {l.locked ? (
+                    <p className="text-[10.5px] text-warn">
+                      Locked.{" "}
+                      <Link href={`/projects/${slug}/characters/${subject.id}`} className="underline">
+                        Unlock
+                      </Link>
+                    </p>
+                  ) : (
+                    <p className="mt-0.5 flex flex-wrap gap-x-2 text-[11px]">
+                      <button
+                        type="button"
+                        className="text-accent hover:underline"
+                        onClick={() => setChoosing(choosing === key ? null : key)}
+                        data-testid="studio-look-choose"
+                      >
+                        {l.pictureUrl ? "Change" : "Choose"}
+                      </button>
+                      <button
+                        type="button"
+                        className="text-accent hover:underline"
+                        onClick={() => onMake("outfit_variant", l.id)}
+                        data-testid="studio-look-make"
+                      >
+                        Make it
+                      </button>
+                    </p>
+                  )}
+                  {message?.view === key ? (
+                    <p
+                      className={cn("text-[10.5px]", message.ok ? "text-pass" : "text-warn")}
+                      role="status"
+                      data-testid="studio-set-message"
+                    >
+                      {message.text}
+                    </p>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
+      {targetLook ? (
+        <div className="mt-2 rounded-[3px] border border-line bg-bg p-2" data-testid="studio-set-picker">
+          <p className="mb-1.5 text-[11.5px]">
+            The picture of <span className="font-medium">{targetLook.name}</span>: click a picture made here.{" "}
+            <button type="button" className="text-muted hover:text-fg" onClick={() => setChoosing(null)}>
+              Cancel
+            </button>
+          </p>
+          <ul className="flex flex-wrap gap-1.5">
+            {pictures
+              .filter((p) => p.attemptId)
+              .map((p) => (
+                <li key={p.assetId}>
+                  <button
+                    type="button"
+                    onClick={() => assignLook(targetLook, p)}
+                    title={p.label}
+                    aria-label={p.label}
+                    className="relative block h-[84px] w-[66px] overflow-hidden rounded-[3px] border border-line2 bg-[#232326] hover:border-accent"
+                    data-testid="studio-set-pick"
+                    data-asset={p.assetId}
+                  >
+                    {p.url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={p.url} alt="" className="h-full w-full object-cover" />
+                    ) : null}
+                    <span className="absolute inset-x-0 bottom-0 bg-black/70 text-center text-[9px] text-fg">
+                      {p.label.replace(/^Generated /, "")}
+                    </span>
+                  </button>
+                </li>
+              ))}
+          </ul>
+        </div>
+      ) : target ? (
         <div className="mt-2 rounded-[3px] border border-line bg-bg p-2" data-testid="studio-set-picker">
           <p className="mb-1.5 text-[11.5px]">
             {target.assetId ? "Replace" : "Choose"} the{" "}

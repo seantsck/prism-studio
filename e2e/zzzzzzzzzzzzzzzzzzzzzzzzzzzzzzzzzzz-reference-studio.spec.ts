@@ -165,6 +165,10 @@ test("A: the Studio is in the navigation, opens on the first Character and offer
   page,
 }) => {
   await page.goto(P);
+  // the Studio comes first in the project's navigation: everything after it is made from its references
+  const nav = page.getByRole("navigation").getByRole("link");
+  await expect(nav.nth(1)).toHaveText("Reference Studio");
+  await expect(nav.nth(2)).toHaveText("Import Story");
   await page.getByRole("link", { name: "Reference Studio", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`${STUDIO}$`));
   await expect(page.getByRole("heading", { name: "Reference Studio" })).toBeVisible();
@@ -975,6 +979,12 @@ test("O: the reference set: what is in each view, Make it for an empty one, and 
   await expect(page.getByTestId("studio-set-count")).toHaveText("(1 of 6 views)");
   await set.locator("summary").click();
   await expect(page.getByTestId("studio-set-guidance")).toContainText("4 to 8 good ones");
+  // her Look's picture is a slot of the same panel; the seeded Look is locked, and says where to unlock it
+  const look = set.getByTestId("studio-set-look");
+  await expect(look).toHaveCount(1);
+  await expect(look).toContainText("Episode 1");
+  await expect(look).toContainText("Locked.");
+  await expect(look.getByRole("link", { name: "Unlock" })).toHaveAttribute("href", /\/characters\//);
 
   // an empty view: Make it fills in the brief (nothing is made until Generate)
   const takes = await page.getByTestId("studio-take-thumb").count();

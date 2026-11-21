@@ -176,7 +176,15 @@ export interface StudioState {
     | (StudioSubject & {
         /** A locked Location: its references and Visual Bible cannot change until it is unlocked. */
         locked: boolean;
-        looks: Array<{ id: string; name: string; references: number; locked: boolean }>;
+        looks: Array<{
+          id: string;
+          name: string;
+          references: number;
+          locked: boolean;
+          /** The Look's (first) picture: it is sent with every Shot in this Look. */
+          pictureUrl: string | null;
+          pictureAssetId: string | null;
+        }>;
         /** Identity slots that already hold a stored image (replacing one is confirmed, never one click). */
         filledSlots: string[];
       })
@@ -621,12 +629,17 @@ export async function referenceStudioState(
           (r) => r.slot !== "additional" && visualRoleOf(r) === null && stored(assets.get(r.assetId ?? "")),
         )
         .map((r) => r.slot),
-      looks: looks.map((l) => ({
-        id: l.id,
-        name: l.name,
-        references: l.referenceAssetIds.filter((id) => stored(assets.get(id))).length,
-        locked: l.locked,
-      })),
+      looks: looks.map((l) => {
+        const pictures = l.referenceAssetIds.filter((id) => stored(assets.get(id)));
+        return {
+          id: l.id,
+          name: l.name,
+          references: pictures.length,
+          locked: l.locked,
+          pictureUrl: pictures[0] ? assetUrl(assets.get(pictures[0])) : null,
+          pictureAssetId: pictures[0] ?? null,
+        };
+      }),
     },
     images,
     takes,

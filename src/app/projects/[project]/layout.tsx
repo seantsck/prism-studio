@@ -9,6 +9,8 @@ export const dynamic = "force-dynamic";
 
 const NAV = [
   ["", "Overview"],
+  // the references come first: everything after them (Shots, frames, animation) is made from them
+  ["/studio", "Reference Studio"],
   ["/story", "Import Story"],
   ["/bible", "Bible"],
   ["/script", "Script"],
@@ -16,7 +18,6 @@ const NAV = [
   ["/breakdown", "Breakdown"],
   ["/characters", "Characters"],
   ["/locations", "Locations"],
-  ["/studio", "Reference Studio"],
   ["/episodes", "Episodes"],
   ["/storyboard", "Storyboard"],
   ["/sequence", "Sequence"],

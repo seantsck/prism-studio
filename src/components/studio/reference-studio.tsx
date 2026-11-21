@@ -698,10 +698,11 @@ export function ReferenceStudio({
         dragging={dragging}
         referenceSet={state.referenceSet}
         photos={ownPhotos.length}
-        onMake={(want) => {
+        onMake={(want, look) => {
           // fills in the brief only: the view is made from the selected starting images when Generate is pressed
           setMode("make");
           if (presets.some((p) => p.intent === want)) setIntent(want);
+          if (look) setLookId(look);
           setPresetValue("");
           setStageView("start");
           if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });

@@ -124,8 +124,8 @@ export function Stage({
   referenceSet: StudioSetView[];
   /** How many of the creator's own photos of the subject there are. */
   photos: number;
-  /** Fills in the brief to make a view of the reference set. */
-  onMake: (intent: string) => void;
+  /** Fills in the brief to make a view of the reference set (or a Look's picture). */
+  onMake: (intent: string, lookId?: string) => void;
 }) {
   // while the creator is choosing what to start from, the stage shows that, not an older result
   const focused = view === "start" && starting.length > 0 ? null : focusedTake;
@@ -562,7 +562,7 @@ export function Stage({
                 {character &&
                 subject.looks.length > 0 &&
                 !focused.asset.hasAlpha &&
-                focused.settings.intent === "outfit_variant" ? (
+                (focused.settings.intent === "outfit_variant" || !!focused.settings.lookId) ? (
                   // a wardrobe reference made from the reference set is what a Look's picture should be: it shows
                   // this Character's face, so it replaces an older picture rather than standing beside it
                   <ActionForm
