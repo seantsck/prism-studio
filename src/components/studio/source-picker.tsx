@@ -323,9 +323,10 @@ function PictureFacts({
               {usedAs ? <li>{usedAs}</li> : null}
               {more}
             </ul>
-            {extra}
           </details>
           {warnings}
+          {/* the actions on each picture stay in view, even when its facts are folded */}
+          {extra}
         </>
       )}
     </div>

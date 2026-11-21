@@ -1184,3 +1184,39 @@ test("R: a take is archived out of the Studio and restored (delete offered); a s
   await expect(page.getByText(/take it out of the reference set first/)).toBeVisible();
   await expect(profile).toHaveAttribute("data-asset", inSet!);
 });
+
+test("S: Archive is in view on every selected photo, and a Character's page lists every picture with Archive", async ({
+  page,
+}) => {
+  await openYumeko(page);
+  // several of the creator's photos selected: each line keeps its Archive in view (not folded away)
+  const photos = page.locator('[data-testid="studio-source"][data-origin="uploaded"]');
+  expect(await photos.count()).toBeGreaterThan(1);
+  for (const i of [0, 1]) await choose(photos.nth(i));
+  const lines = page.getByTestId("studio-inspection");
+  expect(await lines.count()).toBeGreaterThan(1);
+  for (const line of await lines.all()) await expect(line.getByTestId("studio-archive")).toBeVisible();
+
+  // the Character page: every picture, each with Archive, and the archive under them
+  await page.goto(`${P}/characters`);
+  await page.getByRole("main").getByRole("link", { name: "Yumeko" }).first().click();
+  await expect(page).toHaveURL(/\/characters\/[0-9a-f-]+$/);
+  await expect(page.getByRole("heading", { name: "Yumeko", level: 1 })).toBeVisible();
+  const panel = page.getByTestId("character-pictures");
+  const pictures = panel.getByTestId("character-picture");
+  await expect(pictures.first()).toBeVisible();
+  const before = await pictures.count();
+  expect(before).toBeGreaterThan(0);
+  for (const p of await pictures.all()) await expect(p.getByTestId("studio-archive")).toBeVisible();
+  // a take that has no job: archive it here, find it in Archived, restore it
+  const free = pictures.filter({ hasText: "generated reference" }).first();
+  const asset = await free.getAttribute("data-asset");
+  await free.getByTestId("studio-archive").click();
+  await expect(panel.locator(`[data-testid="character-picture"][data-asset="${asset}"]`)).toHaveCount(0, {
+    timeout: 30_000,
+  });
+  await panel.getByTestId("studio-archived").locator("summary").click();
+  const item = panel.locator(`[data-testid="studio-archived-item"][data-asset="${asset}"]`);
+  await item.getByTestId("studio-restore").click();
+  await expect(pictures).toHaveCount(before, { timeout: 30_000 });
+});

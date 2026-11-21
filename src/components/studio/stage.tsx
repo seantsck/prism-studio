@@ -394,7 +394,13 @@ export function Stage({
             ))}
             {focused.status === "succeeded" && focused.asset ? (
               <span className="ml-auto">
-                <ArchiveButton slug={slug} subject={subject} assetId={focused.asset.id} what="take" />
+                <ArchiveButton
+                  slug={slug}
+                  subject={subject}
+                  assetId={focused.asset.id}
+                  what="take"
+                  label="Archive take"
+                />
               </span>
             ) : null}
           </div>
