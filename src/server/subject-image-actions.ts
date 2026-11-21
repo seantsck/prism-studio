@@ -157,6 +157,36 @@ export async function saveAsLookReference(form: FormData): Promise<ActionResult>
 }
 
 /**
+ * Makes the generated image THE Look's picture: the Look's references become just this image. A Look picture shows a
+ * whole person, and a Shot sends it beside the Character's references, so an older picture with another face is
+ * replaced rather than kept beside the new one. The replaced pictures stay in the library; replacing asks first.
+ */
+async function replaceLookReference_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  await requireUser();
+  const data = await requireProjectFresh(slug);
+  const look = data.looks.find((l) => l.id === str(form, "lookId"));
+  if (!look) throw new UserFacingError("That Look no longer exists.");
+  if (look.locked)
+    throw new UserFacingError(
+      `The Look "${look.name}" is locked. Unlock it on the Characters page before changing its picture.`,
+    );
+  const { assetId } = await generatedImage(data, str(form, "attemptId"), { characterId: look.characterId });
+  if (look.referenceAssetIds.length === 1 && look.referenceAssetIds[0] === assetId) return;
+  const others = look.referenceAssetIds.filter((id) => id !== assetId);
+  if (others.length > 0 && str(form, "confirmReplace") !== "1")
+    throw new UserFacingError(
+      `The Look "${look.name}" already has a picture. Confirm to replace it (the old one stays in the library).`,
+    );
+  await (await getRepo()).upsert(data.project.id, "looks", { ...look, referenceAssetIds: [assetId] });
+  refresh(slug);
+}
+
+export async function replaceLookReference(form: FormData): Promise<ActionResult> {
+  return runAction(() => replaceLookReference_impl(form), { name: "replaceLookReference" });
+}
+
+/**
  * Adds the generated image to the Location's references. A Location View is then created from it with the existing
  * "create Location View from reference" action (Phase 2G.3), unchanged.
  */

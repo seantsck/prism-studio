@@ -147,6 +147,18 @@ in `src/server/visual-bible-actions.ts`, `StudioState.referenceSet` in `src/serv
 extra reference marked `metadata.view = "half_body"`, the right profile likewise with `"right_profile"`; the
 profile slot holds the left profile).
 
+## What a Shot is sent
+
+Once a Character's reference set holds a stored image, a Shot (its Production Frame) is sent the set, canonical first,
+plus the expression and cutout designations. It is no longer also sent every plain extra reference, such as the
+creator's raw photos: the set was made from them, sending both doubles the images, and a weak photo (a full phone
+screenshot) pulls the likeness. Until the set holds an image nothing changes. (`liveAppearance` in
+`src/domain/character-continuity.ts`; Continuity Locks freeze their own references and are unchanged.)
+
+A Look's picture is sent with every Shot in that Look, and it shows a whole person. A **Wardrobe reference** made in
+the Studio from the reference set offers **Make it the picture of "…"**, which replaces the Look's picture (the old one
+stays in the library). A locked Look is unlocked on the Character page first.
+
 ## Test models and real models
 
 A deployment can switch on free **test models** ("Mock Image 1"). A test model draws a coloured pattern, never a
