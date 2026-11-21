@@ -1,29 +1,48 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { NavLink } from "@/components/nav";
+import { MoreTools, NavLink } from "@/components/nav";
 import { UserMenu } from "@/components/user-menu";
 import { getCurrentUser } from "@/server/auth";
 import { loadProjectCached } from "@/server/repo";
 
 export const dynamic = "force-dynamic";
 
-const NAV = [
-  ["", "Overview"],
-  // what is missing, in order, with the button that fixes each thing
+/**
+ * The project's four areas, in the order a film is usually made but usable in any order, then every specialist page
+ * under "More tools". The Home page says what each area still needs.
+ */
+const AREAS = [
+  {
+    title: "Story",
+    items: [
+      ["/story", "Import Story"],
+      ["/bible", "Bible"],
+      ["/script", "Script"],
+      ["/episodes", "Episodes"],
+    ],
+  },
+  {
+    title: "Cast",
+    items: [
+      ["/characters", "Characters"],
+      ["/studio", "Reference Studio"],
+    ],
+  },
+  { title: "World", items: [["/locations", "Locations"]] },
+  {
+    title: "Shots",
+    items: [
+      ["/storyboard", "Storyboard"],
+      ["/sequence", "Sequence"],
+      ["/animatic", "Animatic"],
+    ],
+  },
+] as const;
+
+const MORE = [
   ["/checklist", "Production checklist"],
-  // the references come first: everything after them (Shots, frames, animation) is made from them
-  ["/studio", "Reference Studio"],
-  ["/story", "Import Story"],
-  ["/bible", "Bible"],
-  ["/script", "Script"],
-  ["/perform", "Perform"],
   ["/breakdown", "Breakdown"],
-  ["/characters", "Characters"],
-  ["/locations", "Locations"],
-  ["/episodes", "Episodes"],
-  ["/storyboard", "Storyboard"],
-  ["/sequence", "Sequence"],
-  ["/animatic", "Animatic"],
+  ["/perform", "Perform"],
   ["/generations", "Generations"],
   ["/qa", "Shot QA"],
   ["/candidates", "Experiments"],
@@ -59,11 +78,20 @@ export default async function ProjectLayout({
           </div>
         </div>
         <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
-          {NAV.map(([href, label]) => (
-            <NavLink key={label} href={`${base}${href}`} exact={href === ""}>
-              {label}
-            </NavLink>
+          <NavLink href={base} exact>
+            Home
+          </NavLink>
+          {AREAS.map((area) => (
+            <div key={area.title} className="pt-2">
+              <div className="px-2.5 pb-0.5 text-[11px] text-faint">{area.title}</div>
+              {area.items.map(([href, label]) => (
+                <NavLink key={label} href={`${base}${href}`}>
+                  {label}
+                </NavLink>
+              ))}
+            </div>
           ))}
+          <MoreTools base={base} items={MORE} />
         </nav>
         <div className="border-t border-line px-4 py-2">{user ? <UserMenu user={user} /> : null}</div>
       </aside>

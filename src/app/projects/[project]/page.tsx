@@ -10,6 +10,8 @@ import { saveProject } from "@/server/actions";
 import { loadPipeline } from "@/server/pipeline";
 import { requireProject } from "@/server/repo";
 import { ActionForm } from "@/components/action-form";
+import { mainEpisodeId, productionChecklist, projectAreas } from "@/domain/production-checklist";
+import { cn } from "@/lib/utils";
 
 export default async function OverviewPage({ params }: { params: Promise<{ project: string }> }) {
   const { project: slug } = await params;
@@ -26,6 +28,10 @@ export default async function OverviewPage({ params }: { params: Promise<{ proje
   ).length;
 
   const pipeline = await loadPipeline(data);
+  // Home: the four areas, in any order, and what comes next
+  const areas = projectAreas(data);
+  const mainEpisode = mainEpisodeId(data);
+  const next = mainEpisode ? (productionChecklist(data, mainEpisode)?.steps ?? []) : [];
   const stats: Array<[string, string, string?]> = [
     ["Episodes", String(data.episodes.length)],
     ["Shots", String(allShots.length), `${ready} ready to generate`],
@@ -45,6 +51,65 @@ export default async function OverviewPage({ params }: { params: Promise<{ proje
       />
       <div className="space-y-6 p-6">
         {data.project.purpose !== "production" ? <BenchmarkBanner /> : null}
+        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4" data-testid="home-areas">
+          {areas.map((a) => (
+            <div
+              key={a.id}
+              className="flex flex-col rounded-[3px] border border-line bg-panel p-3"
+              data-testid="home-area"
+              data-area={a.id}
+            >
+              <Link href={a.href} className="text-[14px] font-medium hover:underline">
+                {a.title}
+              </Link>
+              <p className="mt-1 text-[12px] text-muted">{a.summary}</p>
+              <div className="mt-auto pt-3">
+                {a.next ? (
+                  <Link
+                    href={a.next.href}
+                    className="block rounded-[3px] border border-line2 px-2.5 py-1.5 text-[12px] hover:border-accent"
+                    data-testid="home-area-next"
+                  >
+                    <span className="text-faint">Next: </span>
+                    {a.next.label}
+                  </Link>
+                ) : a.waiting ? (
+                  <p className="text-[12px] text-faint">{a.waiting}</p>
+                ) : (
+                  <p className="text-[12px] text-pass">Nothing missing</p>
+                )}
+              </div>
+            </div>
+          ))}
+        </section>
+
+        {next.length > 0 ? (
+          <section className="rounded-[3px] border border-line bg-panel p-3" data-testid="home-next">
+            <div className="flex items-baseline justify-between">
+              <h2 className="text-[13px] font-medium">Next steps</h2>
+              <Link href={`/projects/${slug}/checklist`} className="text-[12px] text-accent hover:underline">
+                All {next.length}
+              </Link>
+            </div>
+            <ol className="mt-2 space-y-1">
+              {next.slice(0, 5).map((s, i) => (
+                <li key={`${s.title}-${i}`} className="flex items-center gap-3 text-[12.5px]">
+                  <span className="w-4 text-right text-faint">{i + 1}</span>
+                  <span className="min-w-0 flex-1 truncate">{s.title}</span>
+                  <Link
+                    href={s.href}
+                    className={cn(
+                      "rounded-[3px] px-2 py-0.5 text-[12px]",
+                      i === 0 ? "bg-accent text-accentfg" : "border border-line2 hover:border-muted",
+                    )}
+                  >
+                    {s.action}
+                  </Link>
+                </li>
+              ))}
+            </ol>
+          </section>
+        ) : null}
         <div className="grid grid-cols-2 gap-px border border-line bg-line md:grid-cols-4 xl:grid-cols-7">
           {stats.map(([label, value, sub]) => (
             <div key={label} className="bg-panel px-3 py-2.5">

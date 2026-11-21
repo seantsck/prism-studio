@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { productionChecklist } from "../production-checklist";
+import { productionChecklist, projectAreas } from "../production-checklist";
 import type { Asset, ProjectData } from "../schemas";
 import { seed } from "./helpers";
 
@@ -119,5 +119,35 @@ describe("the Production checklist", () => {
     // her Shots no longer wait on her; a Shot with only her and a pictured place would be ready
     for (const s of list.shots.filter((x) => x.people.join() === "Yumeko"))
       expect(s.missing.filter((m) => m.startsWith("Yumeko"))).toEqual([]);
+  });
+});
+
+describe("Home's four areas", () => {
+  it("each says where it stands and the one next thing, in any order", () => {
+    const data = seed();
+    const areas = projectAreas(data);
+    expect(areas.map((a) => a.id)).toEqual(["story", "cast", "world", "shots"]);
+    const [story, cast, world, shots] = areas;
+    expect(story!.summary).toMatch(/Bible written · \d+ of \d+ episodes scripted/);
+    // nobody has a face yet: every character is "not started", and Cast's next step is the first person step
+    expect(cast!.summary).toContain("not started");
+    expect(cast!.next!.href).toContain("/studio?subject=character:");
+    expect(world!.summary).toBe(`0 of ${data.locations.length} places pictured`);
+    expect(world!.next!.href).toContain("/studio?subject=location:");
+    expect(shots!.summary).toBe(`${data.shots.length} shots · 0 frames`);
+    // nothing in Shots can be done yet: it says what it is waiting on, and nothing is locked
+    expect(shots!.next).toBeNull();
+    expect(shots!.waiting).toMatch(/waiting on Cast or World/);
+  });
+
+  it("an empty project starts anywhere", () => {
+    const data = seed();
+    data.characters = [];
+    data.locations = [];
+    data.shots = [];
+    const [, cast, world, shots] = projectAreas(data);
+    expect(cast!.next).toMatchObject({ label: "Add a character" });
+    expect(world!.next).toMatchObject({ label: "Add a place" });
+    expect(shots!.waiting).toBeNull();
   });
 });

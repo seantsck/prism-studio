@@ -169,9 +169,14 @@ reference-set panel: drag a take onto it, or **Choose**, and it becomes the Look
 library); **Make it** fills in a Wardrobe reference in that Look. A take made with a Look also offers **Make it the
 picture of "…"**. A locked Look shows where to unlock it. The Reference Studio is first in the project navigation.
 
-## Production checklist
+## Home and the Production checklist
 
-`/projects/<project>/checklist`, second in the navigation: for one Episode (by default the one with the most Shots),
+The navigation is **Home**, the four areas (**Story**: Import Story, Bible, Script, Episodes; **Cast**: Characters,
+Reference Studio; **World**: Locations; **Shots**: Storyboard, Sequence, Animatic), then **More tools** for every
+specialist page. Home shows a card per area (where it stands, the one next thing, or what it waits on: a hint, never a
+lock) and the first next steps. Any area can be worked on first.
+
+`/projects/<project>/checklist` (under More tools, and "All" on Home): for one Episode (by default the one with the most Shots),
 everything its frames need, in the order it has to happen.
 
 - **Next steps**, numbered, each with the button that opens the screen that fixes it, already set up: add photos of a
