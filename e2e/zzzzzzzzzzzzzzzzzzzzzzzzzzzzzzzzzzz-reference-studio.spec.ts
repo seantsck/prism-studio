@@ -1012,4 +1012,36 @@ test("O: the reference set: what is in each view, Make it for an empty one, and 
   await expect(view("front")).toContainText("your photo");
   await expect(view("front")).toContainText("canonical");
   await expect(page.getByTestId("studio-set-count")).toHaveText("(3 of 5 views)");
+
+  // Choose on a view: pick any picture of hers
+  await view("half_body").getByTestId("studio-set-choose").click();
+  const picker = page.getByTestId("studio-set-picker");
+  await expect(picker).toContainText("Choose the half body");
+  await picker.locator('[data-testid="studio-set-pick"]').first().click();
+  await expect(view("half_body")).toHaveAttribute("data-filled", "true", { timeout: 30_000 });
+  await expect(view("half_body").getByTestId("studio-set-message")).toHaveText("Added");
+  await expect(picker).toHaveCount(0);
+
+  // drag a take onto a view
+  const thumb = page.getByTestId("studio-take-thumb").first();
+  await thumb.dragTo(view("full_body"));
+  await expect(view("full_body")).toHaveAttribute("data-filled", "true", { timeout: 30_000 });
+  await expect(view("full_body")).toContainText("take #");
+  await expect(page.getByTestId("studio-set-count")).toHaveText("(5 of 5 views)");
+
+  // dropping onto a filled view replaces it (the drop is the explicit act); the old picture stays in the library
+  // (the tile is at the top of the page and the view far below it: the drop is dispatched the way a browser does)
+  const before = await view("profile").locator("img").getAttribute("src");
+  const photoId = (await page.getByTestId("studio-source").first().getAttribute("data-asset"))!;
+  const dataTransfer = await page.evaluateHandle((assetId) => {
+    const dt = new DataTransfer();
+    dt.setData("application/x-prism-picture", JSON.stringify({ assetId, attemptId: null }));
+    return dt;
+  }, photoId);
+  await view("profile").dispatchEvent("dragover", { dataTransfer });
+  await view("profile").dispatchEvent("drop", { dataTransfer });
+  await expect(view("profile").getByTestId("studio-set-message")).toHaveText("Replaced", { timeout: 30_000 });
+  await expect(view("profile").locator("img")).not.toHaveAttribute("src", before!);
+  const old = await page.request.get(before!);
+  expect(old.ok()).toBe(true);
 });

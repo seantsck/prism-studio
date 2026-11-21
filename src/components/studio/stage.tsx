@@ -24,7 +24,7 @@ import {
 } from "@/server/subject-image-actions";
 import type { HostedMattingOffer } from "@/server/subject-images";
 import { setCanonicalIdentity, setCharacterCutout } from "@/server/visual-bible-actions";
-import { AddToSet, ReferenceSetPanel } from "./reference-set";
+import { AddToSet, ReferenceSetPanel, startPictureDrag } from "./reference-set";
 
 const SLOTS: Array<[string, string]> = [
   ["front", "Front"],
@@ -798,7 +798,14 @@ export function Stage({
       ) : null}
 
       {character && referenceSet.length > 0 ? (
-        <ReferenceSetPanel subject={subject} set={referenceSet} photos={photos} onMake={onMake} />
+        <ReferenceSetPanel
+          slug={slug}
+          subject={subject}
+          set={referenceSet}
+          pictures={images.filter((i) => !i.wardrobeOnly && !i.rejected)}
+          photos={photos}
+          onMake={onMake}
+        />
       ) : null}
 
       {takes.length > 0 ? (
@@ -830,6 +837,10 @@ export function Stage({
                   aria-pressed={t.attemptId === focused?.attemptId}
                   aria-label={`Take ${t.number}: ${t.what}, ${t.rejected ? "rejected" : t.status}`}
                   onClick={() => onFocus(t.attemptId)}
+                  draggable={!!t.asset && t.status === "succeeded" && !t.rejected}
+                  onDragStart={(e) =>
+                    t.asset ? startPictureDrag(e, { assetId: t.asset.id, attemptId: t.attemptId }) : undefined
+                  }
                   data-testid="studio-take-thumb"
                   data-attempt={t.attemptId}
                   data-status={t.status}
