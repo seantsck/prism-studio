@@ -27,6 +27,13 @@ import { subjectImageState } from "@/server/subject-images";
 import { ArchiveButton, ArchivedPanel, DeleteButton, DeleteSubjectButton } from "@/components/studio/archive";
 import { LibraryToggle } from "@/components/characters/library";
 import { UseInProject } from "@/components/library/use-in-project";
+import { CharacterAi } from "@/components/characters/character-ai";
+import { ReferencePlanPanel } from "@/components/characters/reference-plan";
+import { referencePlan } from "@/domain/generation/reference-plan";
+import type { WritingProposal } from "@/data/writing-repository";
+import { characterSheetThin, isCharacterRequest } from "@/domain/character-ai";
+import { quoteCharacterFill } from "@/server/series-start";
+import { getWritingRepo } from "@/server/story";
 import { referenceStudioState } from "@/server/reference-studio";
 import Link from "next/link";
 
@@ -65,9 +72,21 @@ export default async function CharacterPage({
   const images = await subjectImageState({ kind: "character", characterId: c.id }, data);
   // every picture of this Character (their photos, Look pictures, finished takes), each with Archive, and the archive
   const pictures = await referenceStudioState(data, `character:${c.id}`);
+  const ownPhotos = pictures.images.filter((i) => i.origin === "uploaded").length;
   const archiveSubject = { kind: "character" as const, id: c.id, name: c.name };
   const repo = await getRepo();
   const library = await repo.libraryEntries();
+  // the newest "Fill in with Prism" request for this Character (kept with Episode 1), while newer than the sheet
+  let aiLatest: WritingProposal | null = null;
+  const firstEpisode = [...data.episodes].sort((a, b) => a.number - b.number)[0];
+  if (firstEpisode) {
+    const writing = await getWritingRepo();
+    for (const s of await writing.listSessions(data.project.id, firstEpisode.id))
+      for (const p of await writing.listProposals(data.project.id, s.id))
+        if (isCharacterRequest(p.instruction, c.id) && (!aiLatest || p.createdAt > aiLatest.createdAt))
+          aiLatest = p;
+  }
+  if (aiLatest && (aiLatest.createdAt <= c.updatedAt || aiLatest.status === "rejected")) aiLatest = null;
   const saved = library.entries.some((e) => e.characterId === c.id);
   // made on its own (the account's library, in no story): it has no role here, and joins projects from this page
   const inLibrary = data.project.purpose === "library";
@@ -94,6 +113,24 @@ export default async function CharacterPage({
         }
       />
       <div className="grid gap-4 p-6 xl:grid-cols-2">
+        <CharacterAi
+          slug={slug}
+          character={c}
+          inStory={!inLibrary}
+          latest={aiLatest}
+          fillQuote={quoteCharacterFill(data, c.id)}
+          refineQuote={quoteCharacterFill(data, c.id, null, { refine: true })}
+          prominent={characterSheetThin(c)}
+        />
+        <ReferencePlanPanel
+          name={c.name}
+          plan={referencePlan(
+            new Set(pictures.referenceSet.filter((v) => v.assetId).map((v) => v.id)),
+            ownPhotos,
+          )}
+          photos={ownPhotos}
+          studioHref={`/projects/${slug}/studio?subject=character:${c.id}`}
+        />
         {inLibrary ? (
           <div className="xl:col-span-2">
             <UseInProject
@@ -106,56 +143,59 @@ export default async function CharacterPage({
             />
           </div>
         ) : null}
-        <Panel
-          title={`Pictures (${pictures.images.length})`}
-          className="xl:col-span-2"
-          actions={
-            <Link
-              href={`/projects/${slug}/studio?subject=character:${c.id}`}
-              className="text-[12px] text-accent hover:underline"
-            >
-              Open in the Reference Studio
-            </Link>
-          }
-        >
-          <div data-testid="character-pictures">
-            {pictures.images.length === 0 ? (
-              <p className="text-[12px] text-muted">
-                No pictures yet. Add photos or make one in the Reference Studio.
-              </p>
-            ) : (
-              <ul className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3">
-                {pictures.images.map((i) => (
-                  <li
-                    key={i.assetId}
-                    className="flex flex-col gap-1"
-                    data-testid="character-picture"
-                    data-asset={i.assetId}
-                  >
-                    <div className="aspect-[3/4] overflow-hidden rounded-[3px] border border-line2 bg-[#232326]">
-                      {i.url ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={i.url} alt={i.label} className="h-full w-full object-cover" />
-                      ) : null}
-                    </div>
-                    <div className="truncate text-[11.5px]" title={i.label}>
-                      {i.label}
-                    </div>
-                    <div className="text-[10.5px] text-muted">
-                      {i.roles.length > 0 ? i.roles.join(", ") : i.originLabel}
-                      {i.rejected ? " · rejected" : ""}
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      <ArchiveButton slug={slug} subject={archiveSubject} assetId={i.assetId} />
-                      <DeleteButton slug={slug} subject={archiveSubject} assetId={i.assetId} />
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <ArchivedPanel slug={slug} subject={archiveSubject} archived={pictures.archived} />
-          </div>
-        </Panel>
+        {/* the picture list only once there is something in it (making the first ones is just below) */}
+        {pictures.images.length > 0 || pictures.archived.length > 0 ? (
+          <Panel
+            title={`Pictures (${pictures.images.length})`}
+            className="xl:col-span-2"
+            actions={
+              <Link
+                href={`/projects/${slug}/studio?subject=character:${c.id}`}
+                className="text-[12px] text-accent hover:underline"
+              >
+                Open in the Reference Studio
+              </Link>
+            }
+          >
+            <div data-testid="character-pictures">
+              {pictures.images.length === 0 ? (
+                <p className="text-[12px] text-muted">
+                  No pictures yet. Add photos or make one in the Reference Studio.
+                </p>
+              ) : (
+                <ul className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3">
+                  {pictures.images.map((i) => (
+                    <li
+                      key={i.assetId}
+                      className="flex flex-col gap-1"
+                      data-testid="character-picture"
+                      data-asset={i.assetId}
+                    >
+                      <div className="aspect-[3/4] overflow-hidden rounded-[3px] border border-line2 bg-[#232326]">
+                        {i.url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={i.url} alt={i.label} className="h-full w-full object-cover" />
+                        ) : null}
+                      </div>
+                      <div className="truncate text-[11.5px]" title={i.label}>
+                        {i.label}
+                      </div>
+                      <div className="text-[10.5px] text-muted">
+                        {i.roles.length > 0 ? i.roles.join(", ") : i.originLabel}
+                        {i.rejected ? " · rejected" : ""}
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        <ArchiveButton slug={slug} subject={archiveSubject} assetId={i.assetId} />
+                        <DeleteButton slug={slug} subject={archiveSubject} assetId={i.assetId} />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <ArchivedPanel slug={slug} subject={archiveSubject} archived={pictures.archived} />
+            </div>
+          </Panel>
+        ) : null}
         <div className="xl:col-span-2">
           <VisualBiblePanel
             data={data}
