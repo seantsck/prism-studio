@@ -127,5 +127,5 @@ export function planArchive(data: ProjectData, subject: ArchiveSubject, assetId:
 }
 
 /** One sentence for a refused archive. */
-export const archiveRefusal = (blockers: string[]) =>
-  `This picture can't be archived yet: ${blockers.slice(0, 3).join("; ")}${blockers.length > 3 ? ` and ${blockers.length - 3} more` : ""}.`;
+export const archiveRefusal = (blockers: string[], verb: "archived" | "deleted" = "archived") =>
+  `This picture can't be ${verb} yet: ${blockers.slice(0, 3).join("; ")}${blockers.length > 3 ? ` and ${blockers.length - 3} more` : ""}.`;

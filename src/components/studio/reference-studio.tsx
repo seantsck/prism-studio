@@ -26,7 +26,7 @@ import { usePhotoUpload } from "./photo-upload";
 import { DescribeCharacter } from "./describe-character";
 import { AddToSet } from "./reference-set";
 import { rememberModel, useRememberedModel } from "./remembered-model";
-import { ArchiveButton, ArchivedPanel } from "./archive";
+import { ArchiveButton, ArchivedPanel, DeleteButton } from "./archive";
 import { SourcePicker } from "./source-picker";
 import { Stage } from "./stage";
 
@@ -376,6 +376,7 @@ export function ReferenceStudio({
                   />
                 ) : null}
                 <ArchiveButton slug={slug} subject={subject} assetId={i.assetId} />
+                <DeleteButton slug={slug} subject={subject} assetId={i.assetId} />
               </div>
             )}
             onShowLarge={

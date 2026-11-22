@@ -19,8 +19,8 @@ import { getRepo, requireProjectFresh } from "./repo";
 
 /**
  * The Reference Studio's archive. Archive hides a picture from the Studio and stops it being sent (its plain pointers
- * are lifted out and remembered); Restore puts every pointer back; Delete permanently is offered only from the archive,
- * and only when nothing in the project or in any generation's record depends on the picture.
+ * are lifted out and remembered); Restore puts every pointer back; Delete permanently (from the archive, or straight
+ * from where the picture is shown) only when nothing in the project or in any generation's record depends on it.
  */
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
@@ -115,6 +115,47 @@ async function deleteArchived_impl(form: FormData) {
   await repo.remove(data.project.id, "assets", asset.id);
   await discardUpload(asset);
   refresh(slug);
+}
+
+/**
+ * Delete a picture for good, straight from where it is shown (no archive step): the same checks as archiving it (a
+ * picture with a job is refused with what to change first) and as deleting it from the archive (nothing in the project
+ * or any generation's record may depend on it). Nothing changes unless every check passes.
+ */
+async function deleteNow_impl(form: FormData) {
+  const { data, asset, repo, slug } = await load(form);
+  if (str(form, "confirm") !== "1") throw new UserFacingError("Confirm that you want to delete it for good.");
+  if (!hasStoredImage(asset)) throw new UserFacingError("Only a stored picture can be deleted here.");
+  const subject = subjectOf(data, form);
+  // an archived picture has already had its pointers lifted
+  const plan = archiveOf(asset)
+    ? { ok: true as const, blockers: [], lift: [] }
+    : planArchive(data, subject, asset.id);
+  if (!plan.ok) throw new UserFacingError(archiveRefusal(plan.blockers, "deleted"));
+  // checked as it will be once its plain pointers (a photo slot, a location reference) are lifted out
+  const liftedRefs = new Set(plan.lift.flatMap((p) => (p.kind === "identity_ref" ? [p.refId] : [])));
+  const liftedFrom = new Set(plan.lift.flatMap((p) => (p.kind === "location_ref" ? [p.locationId] : [])));
+  const after: ProjectData = {
+    ...data,
+    identityRefs: data.identityRefs.filter((r) => !liftedRefs.has(r.id)),
+    locations: data.locations.map((l) =>
+      liftedFrom.has(l.id)
+        ? { ...l, referenceAssetIds: l.referenceAssetIds.filter((id) => id !== asset.id) }
+        : l,
+    ),
+  };
+  const refusal = await assetDeletionRefusal(after, asset);
+  if (refusal) throw new UserFacingError(refusal.replace("This asset", "This picture"));
+  for (const id of liftedRefs) await repo.remove(data.project.id, "identityRefs", id);
+  for (const l of after.locations)
+    if (liftedFrom.has(l.id)) await repo.upsert(data.project.id, "locations", l);
+  await repo.remove(data.project.id, "assets", asset.id);
+  await discardUpload(asset);
+  refresh(slug);
+}
+
+export async function deleteStudioImage(form: FormData): Promise<ActionResult> {
+  return runAction(() => deleteNow_impl(form), { name: "deleteStudioImage" });
 }
 
 export async function archiveStudioImage(form: FormData): Promise<ActionResult> {

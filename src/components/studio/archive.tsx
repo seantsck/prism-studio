@@ -1,8 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import { ActionForm } from "@/components/action-form";
 import { Button } from "@/components/ui";
-import { archiveStudioImage, deleteArchivedImage, restoreStudioImage } from "@/server/archive-actions";
+import {
+  archiveStudioImage,
+  deleteArchivedImage,
+  deleteStudioImage,
+  restoreStudioImage,
+} from "@/server/archive-actions";
 import type { StudioArchivedImage } from "@/server/reference-studio";
 
 type Subject = { kind: "character" | "location"; id: string; name: string };
@@ -123,5 +129,55 @@ export function ArchivedPanel({
         ))}
       </ul>
     </details>
+  );
+}
+
+/**
+ * Delete one picture for good, from where it is shown: "Delete…" asks for a confirmation first. A picture with a job
+ * (a view of the reference set, a Look's picture, a Shot, a generation's record) is refused with what to change first.
+ */
+export function DeleteButton({
+  slug,
+  subject,
+  assetId,
+  what = "picture",
+}: {
+  slug: string;
+  subject: Subject;
+  assetId: string;
+  what?: string;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  if (!confirming)
+    return (
+      <Button
+        type="button"
+        variant="ghost"
+        className="text-fail"
+        onClick={() => setConfirming(true)}
+        data-testid="picture-delete-open"
+      >
+        Delete…
+      </Button>
+    );
+  return (
+    <ActionForm
+      action={deleteStudioImage}
+      successMessage="Deleted"
+      className="flex flex-col gap-1 rounded-[3px] border border-fail/50 p-1.5 text-[11px]"
+      data-testid="picture-delete-confirm"
+    >
+      <Hidden slug={slug} subject={subject} assetId={assetId} />
+      <input type="hidden" name="confirm" value="1" />
+      <span>Delete this {what} for good? This can&apos;t be undone.</span>
+      <span className="flex gap-1">
+        <Button type="submit" variant="ghost" className="text-fail" data-testid="picture-delete">
+          Delete
+        </Button>
+        <Button type="button" variant="ghost" onClick={() => setConfirming(false)}>
+          Cancel
+        </Button>
+      </span>
+    </ActionForm>
   );
 }

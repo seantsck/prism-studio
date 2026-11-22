@@ -25,7 +25,7 @@ import {
 } from "@/server/subject-image-actions";
 import type { HostedMattingOffer } from "@/server/subject-images";
 import { setCanonicalIdentity, setCharacterCutout } from "@/server/visual-bible-actions";
-import { ArchiveButton } from "./archive";
+import { ArchiveButton, DeleteButton } from "./archive";
 import { AddToSet, ReferenceSetPanel, startPictureDrag } from "./reference-set";
 
 const SLOTS: Array<[string, string]> = [
@@ -394,13 +394,16 @@ export function Stage({
             ))}
             {focused.status === "succeeded" && focused.asset ? (
               <span className="ml-auto">
-                <ArchiveButton
-                  slug={slug}
-                  subject={subject}
-                  assetId={focused.asset.id}
-                  what="take"
-                  label="Archive take"
-                />
+                <span className="inline-flex gap-1">
+                  <ArchiveButton
+                    slug={slug}
+                    subject={subject}
+                    assetId={focused.asset.id}
+                    what="take"
+                    label="Archive take"
+                  />
+                  <DeleteButton slug={slug} subject={subject} assetId={focused.asset.id} what="take" />
+                </span>
               </span>
             ) : null}
           </div>

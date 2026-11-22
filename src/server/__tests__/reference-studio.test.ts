@@ -89,7 +89,12 @@ vi.mock("@/server/storage", () => ({
   }),
 }));
 
-import { archiveStudioImage, deleteArchivedImage, restoreStudioImage } from "../archive-actions";
+import {
+  archiveStudioImage,
+  deleteArchivedImage,
+  deleteStudioImage,
+  restoreStudioImage,
+} from "../archive-actions";
 import { referenceStudioState } from "../reference-studio";
 import { quoteReferenceImage, reviewReferenceImage, uploadReferencePhoto } from "../reference-studio-actions";
 import { replaceLookReference, saveAsCharacterReference, startSubjectImage } from "../subject-image-actions";
@@ -1203,6 +1208,59 @@ describe("archive and delete", () => {
     expect((await data()).assets.some((a) => a.id === photo)).toBe(false);
     expect(world.stored.has(path)).toBe(false);
     expect((await stateOf(yumeko.id)).archived).toEqual([]);
+  });
+
+  it("a picture is deleted straight from where it is shown, once confirmed: its photo slot goes with it", async () => {
+    const yumeko = await yumekoOf();
+    const photo = await upload(yumeko.id, "oops.png");
+    const path = (await data()).assets.find((a) => a.id === photo)!.objectPath!;
+    expect((await data()).identityRefs.some((r) => r.assetId === photo)).toBe(true);
+    expect(await act(deleteStudioImage, yumeko.id, photo)).toMatchObject({
+      ok: false,
+      error: "Confirm that you want to delete it for good.",
+    });
+    expect(await act(deleteStudioImage, yumeko.id, photo, { confirm: "1" })).toEqual({ ok: true });
+    const d = await data();
+    expect(d.assets.some((a) => a.id === photo)).toBe(false);
+    expect(d.identityRefs.some((r) => r.assetId === photo)).toBe(false);
+    expect(world.stored.has(path)).toBe(false);
+    const state = await stateOf(yumeko.id);
+    expect(state.images.some((i) => i.assetId === photo)).toBe(false);
+    expect(state.archived).toEqual([]);
+  });
+
+  it("deleting straight away refuses what archiving or the archive would, and changes nothing", async () => {
+    const yumeko = await yumekoOf();
+    // a view of the reference set: refused with what to change first
+    const photo = await upload(yumeko.id, "view.png");
+    await addToReferenceSet(form({ characterId: yumeko.id, view: "half_body", assetId: photo }));
+    expect(await act(deleteStudioImage, yumeko.id, photo, { confirm: "1" })).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(
+        /^This picture can't be deleted yet: .*take it out of the reference set first/,
+      ),
+    });
+    expect((await data()).assets.some((a) => a.id === photo)).toBe(true);
+    // a photo a take was made from: its record keeps it, and its photo slot stays as it was
+    const start = await upload(yumeko.id, "from.png");
+    expect(await startSubjectImage(form(make(yumeko.id, { startAssetId: [start] })))).toEqual({ ok: true });
+    await work();
+    const before = (await data()).identityRefs.filter((r) => r.assetId === start);
+    expect(await act(deleteStudioImage, yumeko.id, start, { confirm: "1" })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("This picture can't be deleted"),
+    });
+    const after = await data();
+    expect(after.assets.some((a) => a.id === start)).toBe(true);
+    expect(after.identityRefs.filter((r) => r.assetId === start)).toEqual(before);
+    // the take's own picture can go: the take stays in the history with its cost
+    const [take] = await attempts(yumeko.id);
+    const out = take!.outputs[0]!.asset.id;
+    expect(await act(deleteStudioImage, yumeko.id, out, { confirm: "1" })).toEqual({ ok: true });
+    expect((await repo.generation.getSubjectImageAttempt(take!.attempt.id))!.attempt).toMatchObject({
+      status: "succeeded",
+      outputAssetId: null,
+    });
   });
 
   it("a Location's reference photo is archived and restored the same way; a locked Location refuses", async () => {

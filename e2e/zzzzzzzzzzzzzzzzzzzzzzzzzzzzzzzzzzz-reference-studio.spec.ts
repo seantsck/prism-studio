@@ -1484,3 +1484,42 @@ test("W: a character saved to the library is added to another project as its own
   await row.getByTestId("project-delete-open").click();
   await expect(row.getByTestId("project-delete-library")).toContainText("Yumeko leaves your library too");
 });
+
+test("X: a picture is deleted straight from where it is shown, after a confirmation", async ({ page }) => {
+  await openYumeko(page);
+  // a fresh take (free test model), then Delete… on it: a confirmation first, Cancel keeps it
+  const takes = await page.getByTestId("studio-take-thumb").count();
+  await priced(page);
+  await page.getByTestId("studio-generate").click();
+  await finished(page, takes + 1);
+  const take = page.getByTestId("studio-take");
+  const attempt = await take.getAttribute("data-attempt");
+  await take.getByTestId("picture-delete-open").click();
+  await expect(take.getByTestId("picture-delete-confirm")).toContainText("Delete this take for good?");
+  await take.getByRole("button", { name: "Cancel" }).click();
+  await expect(take.getByTestId("picture-delete-confirm")).toHaveCount(0);
+  await take.getByTestId("picture-delete-open").click();
+  await take.getByTestId("picture-delete").click();
+  await expect(page.locator(`[data-testid="studio-take-thumb"][data-attempt="${attempt}"]`)).toHaveCount(0, {
+    timeout: 30_000,
+  });
+
+  // on the character's page every picture offers Delete… too: another take (the next attempt number), deleted there
+  await priced(page);
+  await page.getByTestId("studio-generate").click();
+  await finished(page, takes + 2);
+  await page.goto(`${P}/characters`);
+  await page.locator(`a[href^="${P}/characters/"]`).filter({ hasText: "Yumeko" }).first().click();
+  await expect(page.getByRole("heading", { name: "Yumeko" })).toBeVisible();
+  const takePictures = page.getByTestId("character-picture").filter({ hasText: "Generated #" });
+  await expect(takePictures.first()).toBeVisible();
+  const before = await takePictures.count();
+  const one = takePictures.first();
+  const asset = await one.getAttribute("data-asset");
+  await one.getByTestId("picture-delete-open").click();
+  await one.getByTestId("picture-delete").click();
+  await expect(page.locator(`[data-testid="character-picture"][data-asset="${asset}"]`)).toHaveCount(0, {
+    timeout: 30_000,
+  });
+  await expect(takePictures).toHaveCount(before - 1);
+});
