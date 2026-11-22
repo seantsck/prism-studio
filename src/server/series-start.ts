@@ -5,7 +5,14 @@ import { canonical, estimateWritingInputTokens, scopeOf, writingOutputTokens } f
 import { estimateUsd } from "@/story/provider";
 import { buildWritingContext } from "@/story/writing-context";
 import { WRITING_INSTRUCTIONS, writingInput } from "@/story/writing-prompt";
-import { episodeOneInstruction } from "@/domain/series-start";
+import {
+  episodeOneInstruction,
+  freshProjectData,
+  NEW_PROJECT_LIMITS,
+  newProjectRecords,
+  PREMISE_MAX,
+  TITLE_MAX,
+} from "@/domain/series-start";
 import { getStoryRegistry } from "./story";
 
 /**
@@ -77,4 +84,28 @@ export function quoteAnalyzeEpisode(episode: Episode): StepQuoteResult {
   if (model.paid && usd > registry.spend.maxUsd)
     return { ok: false, reason: `It would cost up to $${usd.toFixed(4)}, over this server's limit.` };
   return { ok: true, model: `${model.provider}/${model.modelId}`, label: model.label, paid: model.paid, usd };
+}
+
+/**
+ * The price of "Prism writes Episode 1" BEFORE the project exists: the same request priced for the longest new project
+ * the form accepts (every field at its limit, in the densest script), so it is a true ceiling for whatever is typed. The
+ * real request is priced again when it is made and accepted only within this confirmation.
+ */
+export function quoteNewSeriesDraft(): StepQuoteResult {
+  const dense = (n: number) => "あ".repeat(n);
+  const records = newProjectRecords({
+    id: "00000000-0000-4000-8000-000000000000",
+    userId: "00000000-0000-4000-8000-000000000001",
+    title: dense(TITLE_MAX),
+    slug: "ceiling",
+    projectType: "series",
+    description: dense(NEW_PROJECT_LIMITS.description),
+    genre: dense(NEW_PROJECT_LIMITS.genre),
+    tone: dense(NEW_PROJECT_LIMITS.tone),
+    defaultLanguage: "x".repeat(NEW_PROJECT_LIMITS.language),
+    premise: dense(PREMISE_MAX),
+    now: new Date(0).toISOString(),
+  });
+  const data = freshProjectData(records);
+  return quoteWriteEpisode(data, records.episodeOne!, records.bible.premise);
 }

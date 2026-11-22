@@ -33,7 +33,15 @@ import {
   type IDENTITY_SLOTS,
   type Shot,
 } from "@/domain/schemas";
-import { PREMISE_MAX } from "@/domain/series-start";
+import {
+  emptyEpisodeOne,
+  episodeOneInstruction,
+  freshProjectData,
+  newProjectRecords,
+  PREMISE_MAX,
+  TITLE_MAX,
+  titleFromPremise,
+} from "@/domain/series-start";
 import { emptyShot } from "@/domain/shot-defaults";
 import { SHOT_SECTION_SPECS, applySection } from "@/domain/shot-fields";
 import { validateLookLink } from "@/domain/looks";
@@ -43,6 +51,7 @@ import { ProjectArchiveUnavailableError } from "@/data/repository";
 import { getRepo, requireProjectFresh } from "./repo";
 import { recordCreatorEdit, syncEpisodeScript } from "./script-sync";
 import { assetDeletionRefusal } from "./asset-deletion";
+import { askPrism } from "./writing-actions";
 import { discardUpload, hasFile, ingestUpload } from "./ingest-upload";
 
 // ───────────────────────── helpers ─────────────────────────
@@ -77,73 +86,49 @@ function refresh(slug: string) {
 // ───────────────────────── Projects & bible ─────────────────────────
 
 async function createProject_impl(form: FormData) {
-  const title = str(form, "title");
-  if (!title) throw new UserFacingError("Title is required");
+  // Starting from a prompt: the premise seeds the Bible, Episode 1 waits (empty) for the writing assistant, and the
+  // creator lands on the guided start page (or, when they asked for it, straight on Prism's draft of Episode 1).
+  // Without one, a project opens exactly as before. With no title, the premise names it (titleFromPremise).
+  const premise = str(form, "premise").slice(0, PREMISE_MAX);
+  const title = (str(form, "title") || titleFromPremise(premise)).slice(0, TITLE_MAX);
+  if (!title) throw new UserFacingError("Describe your series, or give it a title.");
   const repo = await getRepo();
   const existing = new Set((await repo.listProjects()).map((p) => p.slug));
-  let slug = slugify(title);
+  let slug = slugify(title) || "series";
   while (existing.has(slug)) slug = `${slug}-${randomUUID().slice(0, 4)}`;
   const id = randomUUID();
-  const project = projectSchema.parse({
+  const records = newProjectRecords({
     id,
     userId: repo.currentUserId(),
     title,
     slug,
-    projectType: str(form, "projectType") || "series",
+    projectType: str(form, "projectType"),
     description: str(form, "description"),
     genre: str(form, "genre"),
     tone: str(form, "tone"),
-    defaultLanguage: str(form, "defaultLanguage") || "en",
-    productionStatus: "development",
-    createdAt: now(),
-    updatedAt: now(),
-  });
-  // Starting from a prompt: the premise seeds the Bible, Episode 1 waits (empty) for the writing assistant, and the
-  // creator lands on the guided start page. Without one, a project opens exactly as before.
-  const premise = str(form, "premise").slice(0, PREMISE_MAX);
-  const bible = bibleSchema.parse({
-    projectId: id,
+    defaultLanguage: str(form, "defaultLanguage"),
     premise,
-    genre: project.genre,
-    tone: project.tone,
-    visualStyle: "",
-    cinematographyRules: [],
-    colorLanguage: "",
-    aspectRatio: "16:9",
-    defaultFrameRate: 24,
-    dialogueLanguageStrategy: "",
-    subtitleStrategy: "",
-    audioPhilosophy: "",
-    canonFacts: [],
-    continuityRules: [],
-    guardrails: [
-      "Never silently rewrite approved dialogue.",
-      "Never change a locked character Look.",
-      "Never add characters not assigned to a shot.",
-      "Never change a locked location/set.",
-    ],
-    updatedAt: now(),
+    now: now(),
   });
-  await repo.createProject(project, bible);
-  if (premise) await repo.upsert(id, "episodes", emptyEpisodeOne(id));
+  await repo.createProject(records.project, records.bible);
+  if (records.episodeOne) await repo.upsert(id, "episodes", records.episodeOne);
   revalidatePath("/");
+  if (records.episodeOne && str(form, "draftEpisode") === "1") {
+    // the price was shown on the button (a ceiling for any premise); the writing assistant re-prices this exact request
+    // and accepts it only if it fits what was confirmed. On success it opens the draft on the Write page.
+    const ask = new FormData();
+    ask.set("projectSlug", slug);
+    ask.set("episodeId", records.episodeOne.id);
+    ask.set("preset", "continue");
+    ask.set("scopeKind", "episode");
+    ask.set("instruction", episodeOneInstruction(freshProjectData(records), premise));
+    ask.set("model", str(form, "model"));
+    if (str(form, "confirmedTotalUsd")) ask.set("confirmedTotalUsd", str(form, "confirmedTotalUsd"));
+    // queued: it redirects to the draft (and stops here). Refused (say, nothing confirmed for a paid model): the project
+    // is made all the same and the start page offers the step with its price.
+    if ((await askPrism(ask)).ok) return;
+  }
   redirect(premise ? `/projects/${slug}/start` : `/projects/${slug}`);
-}
-
-/** An empty Episode 1, waiting for the writing assistant (starting from a prompt). */
-function emptyEpisodeOne(projectId: string) {
-  return episodeSchema.parse({
-    id: randomUUID(),
-    projectId,
-    number: 1,
-    slug: "ep-1",
-    title: "Episode 1",
-    synopsis: "",
-    scriptText: "",
-    order: 0,
-    createdAt: now(),
-    updatedAt: now(),
-  });
 }
 
 /**
@@ -161,7 +146,7 @@ async function startFromPremise_impl(form: FormData) {
     bibleSchema.parse({ ...data.bible, projectId: data.project.id, premise, updatedAt: now() }),
   );
   if (data.episodes.length === 0)
-    await repo.upsert(data.project.id, "episodes", emptyEpisodeOne(data.project.id));
+    await repo.upsert(data.project.id, "episodes", emptyEpisodeOne(data.project.id, now()));
   refresh(slug);
   redirect(`/projects/${slug}/start`);
 }
