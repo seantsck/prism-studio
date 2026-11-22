@@ -402,7 +402,8 @@ Start from, out of the subject's count, and never sent with anything. Nothing is
 - **Archived (N)**, under Start from: each archived picture with **Restore**, and **Delete** (to the Trash: see
   "The Trash") only when nothing depends on it. Deleting a take's picture keeps the take in the history, with its
   cost, and no picture (it leaves the takes list; Spent is unchanged). A picture that was SENT to a take (a photo, or
-  an earlier take) can't be deleted, so that take's record stays complete; the reason is shown in place of the button.
+  an earlier take) can be deleted too (owner's decision, 2026-11-22): the take keeps its record, and its inputs show
+  that picture as "In the Trash", then "Picture deleted".
 
 The rule for permanent deletion is one function (`src/server/asset-deletion.ts`), shared with the Assets library, so
 the two never disagree.

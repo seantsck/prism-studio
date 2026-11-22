@@ -196,7 +196,7 @@ describe("0051 shared-database compatibility gate — asset usage", () => {
     expect(await del(assetId)).toMatchObject({ ok: true });
   });
 
-  it("a generated Character image sent as an INPUT to a later image attempt stays pinned by that attempt", async () => {
+  it("a generated Character image sent as an INPUT to a later image attempt can still be deleted; the later attempt keeps the record", async () => {
     const yumeko = (await data()).characters.find((c) => c.name === "Yumeko")!;
     const first = await generated("character", yumeko.id);
     expect(
@@ -215,10 +215,13 @@ describe("0051 shared-database compatibility gate — asset usage", () => {
       "identityRefs",
       d.identityRefs.find((r) => r.assetId === first.assetId)!.id,
     );
-    expect(await del(first.assetId)).toMatchObject({
-      ok: false,
-      error: expect.stringContaining('Character "Yumeko" · image attempt'),
-    });
+    expect(await del(first.assetId)).toMatchObject({ ok: true });
+    expect(await purge(first.assetId)).toMatchObject({ ok: true });
+    expect((await data()).assets.some((a) => a.id === first.assetId)).toBe(false);
+    // the later attempt still records that it was sent (nothing about it changed)
+    const kept = await repo.generation.getSubjectImageAttempt(second.attempt.id);
+    expect(kept!.attempt.inputAssetIds).toContain(first.assetId);
+    expect(kept!.attempt.status).toBe("succeeded");
   });
 
   it("3 + 4 + 5: Location image - unreferenced deletable; a Location reference pins it until removed", async () => {
