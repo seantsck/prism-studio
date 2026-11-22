@@ -30,6 +30,7 @@ export default async function HomePage() {
   const draft: DraftOffer | null = quote.ok
     ? { model: quote.model, label: quote.label, paid: quote.paid, usd: quote.usd }
     : null;
+  const draftOff = quote.ok ? null : quote.reason;
 
   return (
     <main className="relative min-h-screen overflow-hidden">
@@ -55,7 +56,7 @@ export default async function HomePage() {
           Shots, and you review every step.
         </p>
         <div className="mt-8 w-full text-left">
-          <NewSeries draft={draft} premiseMax={PREMISE_MAX} />
+          <NewSeries draft={draft} draftOff={draftOff} premiseMax={PREMISE_MAX} />
         </div>
       </section>
 

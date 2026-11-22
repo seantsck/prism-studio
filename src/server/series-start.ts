@@ -13,6 +13,7 @@ import {
   PREMISE_MAX,
   TITLE_MAX,
 } from "@/domain/series-start";
+import { FAKE_STORY_PROVIDER_ID } from "@/story/providers/fake";
 import { getStoryRegistry } from "./story";
 
 /**
@@ -32,14 +33,25 @@ export interface StepQuote {
 }
 export type StepQuoteResult = StepQuote | { ok: false; reason: string };
 
+/**
+ * The model these one-click steps use: a REAL writer only. The free test writer returns a placeholder, so it is never
+ * offered here unless this server asks for test models (PRISM_STUDIO_SHOW_TEST_MODELS=1, a test deployment); with no
+ * real writer switched on, the steps say so instead of offering a placeholder.
+ */
 function firstAvailable() {
   const registry = getStoryRegistry();
-  // a free model first, as Import Story suggests; the creator can still choose another on those pages
-  const models = registry.models();
-  const listed = models.find((m) => m.available && !m.paid) ?? models.find((m) => m.available);
-  if (!listed) return { registry, model: null, reason: "Prism AI is not set up on this server." };
+  const tests = process.env.PRISM_STUDIO_SHOW_TEST_MODELS === "1";
+  const models = registry
+    .models()
+    .filter((m) => m.available && (tests || m.provider !== FAKE_STORY_PROVIDER_ID));
+  // a free model first when there is one (a test server), as Import Story suggests
+  const listed = models.find((m) => !m.paid) ?? models[0];
+  if (!listed) return { registry, model: null, reason: WRITING_AI_OFF };
   return { registry, model: registry.model(listed.provider, listed.modelId)!, reason: null };
 }
+
+/** Shown when no real writing model is switched on. */
+export const WRITING_AI_OFF = "Prism's writing AI is switched off on this server.";
 
 export function quoteWriteEpisode(data: ProjectData, episode: Episode, premise: string): StepQuoteResult {
   const { registry, model, reason } = firstAvailable();

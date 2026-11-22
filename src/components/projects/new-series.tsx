@@ -44,7 +44,16 @@ export interface DraftOffer {
  * The Projects page's one big box: describe a series and create it. Title is optional (the idea names it), the format
  * and language are one tap, and Prism can write Episode 1 straight after, at the price shown before anything runs.
  */
-export function NewSeries({ draft, premiseMax }: { draft: DraftOffer | null; premiseMax: number }) {
+export function NewSeries({
+  draft,
+  draftOff,
+  premiseMax,
+}: {
+  draft: DraftOffer | null;
+  /** Why Prism can't write Episode 1 here (no real writing model switched on), shown in place of the switch. */
+  draftOff: string | null;
+  premiseMax: number;
+}) {
   const [premise, setPremise] = useState("");
   const [title, setTitle] = useState("");
   const [type, setType] = useState<string>("series");
@@ -152,6 +161,10 @@ export function NewSeries({ draft, premiseMax }: { draft: DraftOffer | null; pre
                 Prism writes Episode 1 next <span className="text-faint">· {price}</span>
               </span>
             </label>
+          ) : draftOff ? (
+            <span className="text-[12px] text-faint" data-testid="new-series-draft-off">
+              {draftOff} Episode 1 starts empty; you can write it yourself.
+            </span>
           ) : null}
           <button
             type="submit"

@@ -17,6 +17,8 @@ vi.hoisted(() => {
   process.env.PRISM_STUDIO_INLINE_WORKER = "0";
   process.env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER = "1";
   process.env.PRISM_STUDIO_STORY_AI_PROVIDERS = "openai";
+  // a test server: the free test writer may be offered (a real deployment never offers it; see below)
+  process.env.PRISM_STUDIO_SHOW_TEST_MODELS = "1";
   delete process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI;
 });
 const world = vi.hoisted(() => ({
@@ -57,7 +59,7 @@ vi.mock("@/server/storage", () => {
 });
 
 import { createProject, startFromPremise } from "../actions";
-import { quoteAnalyzeEpisode, quoteNewSeriesDraft, quoteWriteEpisode } from "../series-start";
+import { quoteAnalyzeEpisode, quoteNewSeriesDraft, quoteWriteEpisode, WRITING_AI_OFF } from "../series-start";
 import { analyzeStory } from "../story-actions";
 import { askPrism } from "../writing-actions";
 
@@ -77,6 +79,7 @@ afterEach(() => {
   fetchSpy.mockRestore();
   delete process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI;
   process.env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER = "1";
+  process.env.PRISM_STUDIO_SHOW_TEST_MODELS = "1";
 });
 
 const form = (fields: Record<string, string>) => {
@@ -318,5 +321,20 @@ describe("starting a series from a prompt", () => {
       await createProject(form({ premise: "A quiet idea.", draftEpisode: "1", model: ceiling.model })),
     ).toMatchObject({ ok: true });
     expect(world.redirects.at(-1)).toBe("/projects/a-quiet-idea/start");
+  });
+
+  it("a real deployment never offers the test writer: with no real writer on it says so, and a real one is used when on", async () => {
+    delete process.env.PRISM_STUDIO_SHOW_TEST_MODELS;
+    // the test writer is installed (as on the hosted site) but paid writing is off: nothing to offer
+    expect(quoteNewSeriesDraft()).toEqual({ ok: false, reason: WRITING_AI_OFF });
+    const { data } = await newSeries();
+    expect(quoteWriteEpisode(data, data.episodes[0]!, data.bible.premise)).toEqual({
+      ok: false,
+      reason: WRITING_AI_OFF,
+    });
+    // paid writing on: the real model, even though the free test writer is still installed
+    process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI = "true";
+    const q = quoteNewSeriesDraft();
+    expect(q).toMatchObject({ ok: true, paid: true, model: expect.stringMatching(/^openai\//) });
   });
 });
