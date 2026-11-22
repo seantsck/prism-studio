@@ -179,25 +179,36 @@ lock) and the first next steps. Any area can be worked on first.
 ### Starting from a prompt
 
 The Projects page opens on one box: a title (optional: `titleFromPremise` names it otherwise), the description, Series /
-Film / Short (a series picks its number of episodes: 6 · 8 · 10 · 12, or any whole number from 1 to 50) and the
+Film / Short (a series picks its number of episodes: 6 · 8 · 10 · 12, or any whole number up to 500) and the
 language. The project is created with the premise in its Bible and its Episodes empty (a film or short has one,
 "Screenplay"), and opens on `/projects/<project>/start`:
 
 1. **Describe it**: the premise (an existing project without one can add it here; a written one is never overwritten).
-2. **Plan the season** (series only): one brainstorm request on Episode 1, an idea per Episode (title + what happens).
-   **Use this plan** writes each idea into its Episode's title and synopsis (no script). The plan is then **editable in
-   place** (each title and synopsis, **Save plan**) and **Refine with Prism** takes a note: Prism gets the current plan
-   (`seasonPlan` in the context) and returns the whole revised plan, shown beside yours; nothing changes until **Use
-   this plan**. Refining is priced as a ceiling for the longest note (`REFINE_NOTE_MAX`). A plan of more than 10
+2. **Plan the season** (series only): one plan editor (`PlanEditor`) holds each Episode's title and what happens in it,
+   so the plan can be written by hand. **Plan N episodes with Prism** asks for one idea per Episode (a brainstorm on
+   Episode 1); when it arrives the editor holds **Prism's plan**, editable: **Save this plan** writes the fields (as
+   edited) into the Episodes. **Save and refine** takes a note: the fields are saved as they are, then Prism gets that
+   plan (`seasonPlan` in the context) and returns the whole revised plan, which arrives in the editor the same way;
+   **Keep my plan** sets a revision aside (`editSeasonPlan`). A season of more than `PLAN_BATCH` (40) episodes is
+   planned by the worker in batches (`planBatch` in the context), each asked only for its own episodes and shown the
+   ones planned before it (the last 60 in full, earlier ones by title: `plannedSoFar`), into ONE plan; up to
+   `MAX_EPISODES` (500). Long seasons send each synopsis cut shorter (`planSynopsisChars`). A refine is priced for the
+   longest plan that can be typed (`planCeiling`) and the longest note (`REFINE_NOTE_MAX`). A plan of more than 10
    episodes records 10 as requested (the database's limit) and carries its real count in its context (`ideaCount`).
 3. **Shape the Bible (optional)**: opens the Bible page, whose **Shape the Bible with Prism** panel drafts every
    creative field (premise, genre, tone, visual style, color language, cinematography rules, dialogue language and
    subtitle strategies, audio philosophy, canon facts, continuity rules; never the technical format or the house
    guardrails) from the premise and the season plan, or refines the Bible as it stands with a note. A draft is a
    brainstorm whose ideas are the fields (`src/domain/bible-ai.ts`, `parseBibleIdeas`); it is shown beside the current
-   Bible field by field, ticked where they differ, and only the ticked fields are applied (`applyBibleDraft`). The Bible
-   stays editable by hand below. Writing a whole Episode or film sends the Bible's filled fields (`bible` in the
-   context) and asks the writer to follow them.
+   Bible field by field in **editable** fields, ticked where they differ (`reviewBible`): **Apply the ticked fields**
+   uses the text as edited; **Refine the draft** sends the draft as it reads (edits included, `bibleDraft`) with a note
+   and leaves the Bible unchanged; **Discard the draft** sets it aside. A draft refine is priced for every field at its
+   longest. The Bible stays editable by hand below. Writing a whole Episode or film sends the Bible's filled fields
+   (`bible` in the context) and asks the writer to follow them.
+
+The start page and the Bible page update on their own every few seconds while Prism is working on something they show
+(`RefreshWhileActive`), so a plan, a Bible draft, a written Episode or an analysis appears without reloading.
+
 4. **Write it** (`WriteIt`): choose the writer (**Recommended by Prism**, or a named model; the free test writer is
    listed only on a test server, `PRISM_STUDIO_SHOW_TEST_MODELS=1`) and, for a series, **Episode N only** or **All N
    episodes**; a film is written whole. **Write…** opens a confirmation with the writer and the most it can cost;

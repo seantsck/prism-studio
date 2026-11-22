@@ -100,8 +100,8 @@ export const MAX_RECORDED_COUNT = 10;
 export const LIMITS = {
   instruction: 4000,
   alternatives: 5,
-  /** A season plan has one idea per Episode (up to 50). */
-  ideas: 50,
+  /** A season plan has one idea per Episode (up to 500, planned PLAN_BATCH at a time). */
+  ideas: 500,
   /** One alternative's text (a whole episode or film written in parts fits; the database allows 400 000). */
   text: 400_000,
   message: 2000,
@@ -415,6 +415,72 @@ export function longFormTokens(baseInputTokens: number, plan: LongFormPlan) {
     inputTokens: plan.parts * baseInputTokens + (plan.parts - 1) * tail,
     maxOutputTokens: plan.parts * plan.partTokens,
   };
+}
+
+/**
+ * A season plan longer than this many Episodes is planned in batches of this size: one answer stays well inside the
+ * model's output budget (a reasoning model spends part of it thinking), and each batch sees the ideas before it.
+ */
+export const PLAN_BATCH = 40;
+
+/** The batches of a plan of `total` ideas: [start, end) per batch. */
+export function planBatches(total: number, size = PLAN_BATCH): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (let s = 0; s < total; s += size) out.push([s, Math.min(total, s + size)]);
+  return out;
+}
+
+/**
+ * A later batch is shown the last PLANNED_FULL ideas in full and the earlier ones by title (cut to
+ * PLANNED_TITLE_CHARS), so a 500-episode plan still fits the model. The ceilings a priced batch allows per idea, in
+ * tokens: a full idea is bounded by what one batch can write (its output budget per idea), a title by its length in
+ * the densest script.
+ */
+export const PLANNED_FULL = 60;
+export const PLANNED_TITLE_CHARS = 80;
+export const PLANNED_IDEA_TOKENS = 450;
+export const PLANNED_TITLE_TOKENS = Math.ceil(PLANNED_TITLE_CHARS * 1.5) + 10;
+
+/** The input-token ceiling for showing `before` earlier ideas to a batch. */
+export const plannedSoFarTokens = (before: number) =>
+  Math.min(before, PLANNED_FULL) * PLANNED_IDEA_TOKENS +
+  Math.max(0, before - PLANNED_FULL) * PLANNED_TITLE_TOKENS;
+
+/** What a later batch is shown of the ideas planned before it. */
+export function plannedSoFar(
+  ideas: ReadonlyArray<{ title: string; detail: string }>,
+): Array<{ episode: number; title: string; detail: string }> {
+  const full = Math.max(0, ideas.length - PLANNED_FULL);
+  return ideas.map((d, i) => ({
+    episode: i + 1,
+    title: i < full ? d.title.slice(0, PLANNED_TITLE_CHARS) : d.title,
+    detail: i < full ? "" : d.detail,
+  }));
+}
+
+/**
+ * How much of each Episode's synopsis a request is sent with the season plan: all 400 characters for a season of up
+ * to 60, less for longer ones (every title still goes), so the whole plan stays a bounded part of the request.
+ */
+export const planSynopsisChars = (episodes: number) =>
+  episodes <= 60 ? 400 : Math.max(60, Math.floor(24_000 / episodes));
+
+/** What one batch of a long plan is asked, on top of the creator's instruction. */
+export function planBatchInstruction(instruction: string, start: number, end: number, total: number): string {
+  return [
+    `This call plans only episodes ${start + 1} to ${end} of ${total}: give exactly ${end - start} ideas, one per episode, in order, starting with episode ${start + 1}.`,
+    start === 0
+      ? "Plan them as the opening of the whole season, setting up the arc the later episodes will continue."
+      : "The episodes already planned are in the context (plannedSoFar): continue the same story from where they end, without repeating them.",
+    end === total
+      ? "These are the last episodes: bring the season to its ending."
+      : "Do not end the season yet.",
+    "Ignore any other number of ideas in the instruction below; it describes the whole season.",
+    "",
+    instruction,
+  ]
+    .join("\n")
+    .slice(0, LIMITS.instruction);
 }
 
 /** What each part is asked, on top of the creator's instruction. */

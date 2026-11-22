@@ -1111,7 +1111,7 @@ test("P: the Production checklist lists what each person, outfit, place and Shot
   );
 });
 
-test("Q: a series from a prompt: the season planned, then every episode written, each a proposal to review (free here)", async ({
+test("Q: a series from a prompt: the season planned, edited and refined without reloading, then every episode written (free here)", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -1119,8 +1119,9 @@ test("Q: a series from a prompt: the season planned, then every episode written,
   const premise =
     "A shy sushi apprentice in Osaka secretly enters a televised cooking contest under a false name.";
   await page.getByTestId("new-project-premise").fill(premise);
-  // the count can be typed (any number from 1 to 50); the shortcuts set it too
-  await page.getByTestId("new-series-episodes-input").fill("7");
+  // the count can be typed (any number, up to 500); the shortcuts set it too
+  await page.getByTestId("new-series-episodes-input").fill("120");
+  await expect(page.getByTestId("new-series-episodes-input")).toHaveValue("120");
   await page.getByTestId("new-series-episodes-6").click();
   await expect(page.getByTestId("new-series-episodes-input")).toHaveValue("6");
   // the title is the creator's own, in the box itself
@@ -1134,43 +1135,41 @@ test("Q: a series from a prompt: the season planned, then every episode written,
   await expect(page.getByTestId("start-plan")).toContainText("Plan the season (6 episodes)");
   await expect(page.getByTestId("start-write")).toHaveAttribute("data-state", "later");
   await expect(page.getByRole("navigation").getByRole("link", { name: "Start from a prompt" })).toBeVisible();
+  // the plan can be written by hand from the start
+  await expect(page.getByTestId("start-plan-editor")).toHaveAttribute("data-source", "episodes");
 
-  // plan the season: the price is on the button; the plan comes back to use with one click
+  // plan the season: the price is on the button; Prism's plan arrives in the editor on its own (no reload)
   const planGo = page.getByTestId("start-plan-go");
-  await expect(planGo).toHaveText(/^Plan 6 episodes · free with /);
+  await expect(planGo).toHaveText(/^Plan 6 episodes with Prism · free with /);
   await planGo.click();
-  await expect(async () => {
-    await page.reload();
-    await expect(page.getByTestId("start-plan-ready")).toBeVisible({ timeout: 1000 });
-  }).toPass({ timeout: 30_000 });
-  await expect(page.getByTestId("start-plan-ready").locator("li")).toHaveCount(6);
-  await page.getByTestId("start-plan-use").click();
-  await expect(page.getByTestId("start-plan")).toHaveAttribute("data-state", "done", { timeout: 30_000 });
-  // the plan is editable in place
   const editor = page.getByTestId("start-plan-editor");
+  await expect(editor).toHaveAttribute("data-source", "prism", { timeout: 30_000 });
+  await expect(editor.getByTestId("start-plan-draft-note")).toContainText("Prism's plan.");
   await expect(editor.getByTestId("start-plan-episode")).toHaveCount(6);
+  await expect(editor.getByLabel("What happens in episode 1")).not.toHaveValue("");
+  // edit Prism's plan before using it
   await editor.getByLabel("Episode 2 title").fill("The Tasting");
   await editor.getByLabel("What happens in episode 2").fill("He cooks for the judges under his false name.");
   await editor.getByTestId("start-plan-save").click();
-  await expect(editor).toContainText("Plan saved", { timeout: 30_000 });
+  await expect(page.getByTestId("start-plan")).toHaveAttribute("data-state", "done", { timeout: 30_000 });
+  await expect(editor).toHaveAttribute("data-source", "episodes");
   await page.reload();
   await expect(page.getByTestId("start-plan-editor").getByLabel("Episode 2 title")).toHaveValue(
     "The Tasting",
   );
-  // and Prism can refine it: the revised plan is shown, and nothing changes until it is used
-  const refine = page.getByTestId("start-plan-refine");
-  await expect(refine.getByTestId("start-plan-refine-go")).toHaveText(/^Refine the plan · free with /);
+
+  // refine: an unsaved edit is saved with it; Prism's revision arrives on its own; "Keep my plan" sets it aside
+  await editor.getByLabel("Episode 3 title").fill("The Rival");
+  const refine = editor.getByTestId("start-plan-refine");
+  await expect(refine.getByTestId("start-plan-refine-go")).toHaveText(/^Save and refine · free with /);
   await refine.getByTestId("start-plan-note").fill("Raise the stakes in the middle of the season.");
   await refine.getByTestId("start-plan-refine-go").click();
-  await expect(async () => {
-    await page.reload();
-    await expect(page.getByTestId("start-plan-revised")).toBeVisible({ timeout: 1000 });
-  }).toPass({ timeout: 30_000 });
-  await expect(page.getByTestId("start-plan-editor").getByLabel("Episode 2 title")).toHaveValue(
-    "The Tasting",
-  );
-  await page.getByTestId("start-plan-revised").getByTestId("start-plan-use").click();
-  await expect(page.getByTestId("start-plan-revised")).toHaveCount(0, { timeout: 30_000 });
+  await expect(editor).toHaveAttribute("data-source", "prism", { timeout: 30_000 });
+  await expect(editor.getByTestId("start-plan-draft-note")).toContainText("Prism's revised plan.");
+  await editor.getByTestId("start-plan-keep").click();
+  await expect(editor).toHaveAttribute("data-source", "episodes", { timeout: 30_000 });
+  await expect(editor.getByLabel("Episode 2 title")).toHaveValue("The Tasting");
+  await expect(editor.getByLabel("Episode 3 title")).toHaveValue("The Rival");
 
   // write all 6: the writer and the scope are chosen, then a confirmation names the price before anything runs
   const write = page.getByTestId("write-it");
@@ -1374,7 +1373,7 @@ test("U: a film from the Projects page: written whole, with the writer and the p
   ).toContainText("Film");
 });
 
-test("V: the Bible drafted with Prism, reviewed field by field, applied where ticked, then refined (free here)", async ({
+test("V: the Bible drafted with Prism, edited and applied where ticked; a draft refined as edited, then discarded (free here)", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -1386,36 +1385,39 @@ test("V: the Bible drafted with Prism, reviewed field by field, applied where ti
   const panel = page.getByTestId("bible-ai");
   await expect(panel.getByTestId("bible-ai-draft")).toHaveText(/^Draft the Bible · free with /);
   await panel.getByTestId("bible-ai-draft").click();
+  // Prism's draft arrives on its own (no reload), in editable fields
   const review = page.getByTestId("bible-ai-review");
-  await expect(async () => {
-    await page.reload();
-    await expect(review).toBeVisible({ timeout: 1000 });
-  }).toPass({ timeout: 30_000 });
+  await expect(review).toBeVisible({ timeout: 30_000 });
   const fields = review.getByTestId("bible-ai-field");
   await expect(fields).toHaveCount(11);
-  // keep only the genre: untick the rest
+  // keep only the genre, edited: untick the rest
   for (const f of await fields.all())
     if ((await f.getAttribute("data-field")) !== "genre") {
       const box = f.getByRole("checkbox");
       if (await box.isChecked()) await box.uncheck();
     }
-  const genreBefore = await page.locator('input[name="genre"]').inputValue();
+  const genre = review.locator('[data-field="genre"]').getByTestId("bible-ai-text");
+  await expect(genre).toHaveValue("Test genre for Night Counter.");
+  await genre.fill("Kitchen drama with a comic heart");
   const toneBefore = await page.locator('input[name="tone"]').inputValue();
   await review.getByTestId("bible-ai-apply").click();
-  await expect(page.locator('input[name="genre"]')).toHaveValue("Test genre for Night Counter.", {
+  await expect(page.locator('input[name="genre"]')).toHaveValue("Kitchen drama with a comic heart", {
     timeout: 30_000,
   });
-  expect(genreBefore).not.toBe("Test genre for Night Counter.");
   await expect(page.locator('input[name="tone"]')).toHaveValue(toneBefore); // not ticked: unchanged
   await expect(review).toHaveCount(0); // applied: the draft is done
 
-  // refine with a note: a new version to review, nothing changed until it is applied
-  const refine = page.getByTestId("bible-ai-refine");
-  await refine.getByTestId("bible-ai-note").fill("Warmer, and mostly Japanese dialogue.");
-  await refine.getByTestId("bible-ai-refine-go").click();
-  await expect(async () => {
-    await page.reload();
-    await expect(page.getByTestId("bible-ai-review")).toBeVisible({ timeout: 1000 });
-  }).toPass({ timeout: 30_000 });
+  // a new draft, edited, then refined as edited: Prism's revision arrives on its own; the Bible is unchanged
+  await panel.getByTestId("bible-ai-draft").click();
+  await expect(review).toBeVisible({ timeout: 30_000 });
+  await review.locator('[data-field="visualStyle"]').getByTestId("bible-ai-text").fill("Neon over steel.");
+  await review.getByTestId("bible-ai-draft-note").fill("Warmer, and mostly Japanese dialogue.");
+  await review.getByTestId("bible-ai-draft-refine-go").click();
+  await expect(page.getByTestId("bible-ai-review")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('input[name="genre"]')).toHaveValue("Kitchen drama with a comic heart");
+  // set it aside: the draft and refine forms come back
+  await page.getByTestId("bible-ai-discard").click();
+  await expect(page.getByTestId("bible-ai-review")).toHaveCount(0, { timeout: 30_000 });
+  await expect(panel.getByTestId("bible-ai-draft")).toBeVisible();
   await expect(page.locator('input[name="tone"]')).toHaveValue(toneBefore);
 });

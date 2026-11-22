@@ -1,9 +1,14 @@
 import { bibleAsText } from "@/domain/bible-ai";
+import { isSeasonPlanRequest } from "@/domain/series-start";
 import type { Episode, ProjectData } from "@/domain/schemas";
 import {
   estimateWritingInputTokens,
   LIMITS,
   MAX_RECORDED_COUNT,
+  PLAN_BATCH,
+  plannedSoFarTokens,
+  planBatches,
+  planSynopsisChars,
   LONG_FORM_TAIL_CHARS,
   longFormTokens,
   writingOutputTokens,
@@ -52,6 +57,8 @@ export function priceWriting(args: {
   withPlan?: boolean;
   /** Send the project Bible as it stands (refining it). */
   withBible?: boolean;
+  /** With `withBible`: send this draft of the Bible (field by field) instead of the Bible as it stands. */
+  bibleText?: Record<string, string> | null;
 }): WritingPrice {
   const built = buildWritingContext({
     data: args.data,
@@ -61,10 +68,14 @@ export function priceWriting(args: {
     instruction: args.instruction,
     conversation: args.conversation,
   });
+  const cut = planSynopsisChars(args.data.episodes.length);
   const plan = args.data.episodes
     .filter((e) => e.synopsis.trim())
     .sort((a, b) => a.number - b.number)
-    .map((e) => ({ episode: e.number, title: e.title, synopsis: e.synopsis.slice(0, 400) }));
+    .map((e) => ({ episode: e.number, title: e.title, synopsis: e.synopsis.slice(0, cut) }));
+  // a long season plan is planned in batches by the worker
+  const batched =
+    args.mode === "brainstorm" && args.count > PLAN_BATCH && isSeasonPlanRequest(args.instruction);
   const context: WritingContext = {
     ...built,
     ...(args.longForm ? { longForm: args.longForm } : {}),
@@ -74,8 +85,11 @@ export function priceWriting(args: {
     ...(args.mode === "brainstorm" && args.count > MAX_RECORDED_COUNT ? { ideaCount: args.count } : {}),
     // refining the Bible sends all of it; writing a whole Episode or film sends what it has (its look, rules, canon)
     ...(args.withBible || (args.longForm && filled(args.data.bible))
-      ? { bible: args.withBible ? bibleAsText(args.data.bible) : filled(args.data.bible)! }
+      ? {
+          bible: args.withBible ? (args.bibleText ?? bibleAsText(args.data.bible)) : filled(args.data.bible)!,
+        }
       : {}),
+    ...(batched ? { planBatch: { size: PLAN_BATCH, total: args.count } } : {}),
   };
   const promptText = writingInput({
     mode: args.mode,
@@ -95,6 +109,27 @@ export function priceWriting(args: {
       ...t,
       usd: estimateUsd(args.model, t.inputTokens, t.maxOutputTokens),
       tooLong: args.model.paid && perPart > args.model.contextTokens,
+    };
+  }
+  if (batched) {
+    // every batch sends the same request plus the ideas planned before it (each at most PLANNED_IDEA_TOKENS)
+    let inputTokens = 0;
+    let maxOutputTokens = 0;
+    let tooLong = false;
+    const cap = args.model.maxOutputTokens || 32_000;
+    for (const [start, end] of planBatches(args.count)) {
+      const input = base + plannedSoFarTokens(start) + 200;
+      const output = writingOutputTokens("brainstorm", end - start, 0, cap);
+      inputTokens += input;
+      maxOutputTokens += output;
+      if (args.model.paid && input + output > args.model.contextTokens) tooLong = true;
+    }
+    return {
+      context,
+      inputTokens,
+      maxOutputTokens,
+      usd: estimateUsd(args.model, inputTokens, maxOutputTokens),
+      tooLong,
     };
   }
   const maxOutputTokens = writingOutputTokens(

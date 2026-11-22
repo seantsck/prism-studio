@@ -11,6 +11,10 @@ import {
   LIMITS,
   LONG_FORM_TAIL_CHARS,
   longFormPartInstruction,
+  planBatches,
+  planBatchInstruction,
+  plannedSoFar,
+  writingOutputTokens,
   validateWriting,
   type LongFormPlan,
 } from "@/domain/story/writing";
@@ -236,6 +240,8 @@ export class StoryWorker {
     const refusal = this.spendRefusal(model, row);
     if (refusal) return fail(...refusal);
     if (row.context.longForm) return this.writeLong(store, row, model, provider, row.context.longForm);
+    if (row.mode === "brainstorm" && row.context.planBatch)
+      return this.planLong(store, row, model, provider, row.context.planBatch);
     const result = await provider.write({
       model,
       operation: writingOperation(row.mode, row.draftText != null),
@@ -379,6 +385,109 @@ export class StoryWorker {
           },
         ],
         ideas: [],
+      },
+      usage: usage(),
+      actualUsd: actualUsd(model, usage()),
+      providerCalls: calls,
+      now: this.now(),
+    });
+  }
+
+  /**
+   * A long season plan: the batches in order, each asked for its own Episodes and shown the ideas planned before it,
+   * then ONE proposal with every idea for the creator to review. A retryable failure is tried once more on the spot;
+   * spend is re-checked after every batch against the confirmation.
+   */
+  private async planLong(
+    store: WritingWorkerStore,
+    row: WritingProposal,
+    model: StoryModel,
+    provider: StoryIntelligenceProvider,
+    batch: { size: number; total: number },
+  ) {
+    const ideas: Array<{ title: string; detail: string }> = [];
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let unknownUsage = false;
+    let calls = 0;
+    const usage = () => ({
+      inputTokens: unknownUsage ? null : inputTokens,
+      outputTokens: unknownUsage ? null : outputTokens,
+    });
+    const batches = planBatches(batch.total, batch.size);
+    for (const [i, [start, end]] of batches.entries()) {
+      const context = {
+        ...row.context,
+        planBatch: undefined,
+        ideaCount: undefined,
+        ...(ideas.length ? { plannedSoFar: plannedSoFar(ideas) } : {}),
+      };
+      const count = end - start;
+      const instruction = planBatchInstruction(row.instruction, start, end, batch.total);
+      let result: Awaited<ReturnType<StoryIntelligenceProvider["write"]>> | null = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        result = await provider.write({
+          model,
+          operation: writingOperation("brainstorm", false),
+          mode: "brainstorm",
+          scopeKind: row.scope.kind,
+          instruction,
+          count,
+          targetText: row.targetText,
+          draftText: null,
+          context,
+          maxOutputTokens: writingOutputTokens("brainstorm", count, 0, model.maxOutputTokens || 32_000),
+          validate: (raw) =>
+            validateWriting(raw, {
+              mode: "brainstorm",
+              scopeKind: row.scope.kind,
+              count,
+              targetText: row.targetText,
+            }),
+        });
+        calls += result.providerCalls;
+        if (result.usage?.inputTokens == null || result.usage?.outputTokens == null) unknownUsage = true;
+        else {
+          inputTokens += result.usage.inputTokens;
+          outputTokens += result.usage.outputTokens;
+        }
+        if (result.ok || !result.retryable) break;
+      }
+      if (!result!.ok) {
+        const r = result as Extract<typeof result, { ok: false }>;
+        return store.fail(row.id, this.deps.workerId, {
+          error: {
+            code: r.code,
+            message: `Episodes ${start + 1} to ${end} could not be planned: ${r.message}`,
+          },
+          usage: usage(),
+          actualUsd: actualUsd(model, usage()),
+          providerCalls: calls,
+          now: this.now(),
+        });
+      }
+      ideas.push(...result!.result.ideas);
+      const spent = actualUsd(model, usage());
+      if (
+        model.paid &&
+        spent != null &&
+        row.confirmedUsd != null &&
+        spent > row.confirmedUsd + 1e-9 &&
+        i < batches.length - 1
+      )
+        return store.fail(row.id, this.deps.workerId, {
+          error: { code: "spend_ceiling", message: "Stopped before going over the confirmed amount." },
+          usage: usage(),
+          actualUsd: spent,
+          providerCalls: calls,
+          now: this.now(),
+        });
+    }
+    return store.complete(row.id, this.deps.workerId, {
+      result: {
+        message: `Prism planned all ${batch.total} episodes in ${batches.length} batches. Edit anything, then save the plan.`,
+        alternatives: [],
+        ideas: ideas.slice(0, LIMITS.ideas),
       },
       usage: usage(),
       actualUsd: actualUsd(model, usage()),

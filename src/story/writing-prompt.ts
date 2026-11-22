@@ -66,6 +66,10 @@ export interface WritingContext {
   bible?: Record<string, string>;
   /** A season's plan, so each Episode written from it stays consistent with the others. */
   seasonPlan?: Array<{ episode: number; title: string; synopsis: string }>;
+  /** A long season plan, planned in batches by the worker (`total` ideas, `size` at a time). */
+  planBatch?: { size: number; total: number };
+  /** In a later batch of a long plan: the episodes already planned. */
+  plannedSoFar?: Array<{ episode: number; title: string; detail: string }>;
 }
 
 export interface WritingPromptInput {
