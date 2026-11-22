@@ -3,7 +3,7 @@
 import { ActionForm } from "@/components/action-form";
 import { Button } from "@/components/ui";
 import { archiveStudioImage, restoreStudioImage } from "@/server/archive-actions";
-import { moveToTrash } from "@/server/trash-actions";
+import { moveToTrash, trashSubject } from "@/server/trash-actions";
 import type { StudioArchivedImage } from "@/server/reference-studio";
 
 type Subject = { kind: "character" | "location"; id: string; name: string };
@@ -145,6 +145,40 @@ export function DeleteButton({
         data-testid="picture-delete"
       >
         Delete
+      </Button>
+    </ActionForm>
+  );
+}
+
+/**
+ * Delete a Character or Location: it goes to the Trash for 30 days (refused, with where, while the story uses it).
+ * The browser asks for a confirmation first.
+ */
+export function DeleteSubjectButton({
+  slug,
+  kind,
+  id,
+  name,
+}: {
+  slug: string;
+  kind: "character" | "location";
+  id: string;
+  name: string;
+}) {
+  return (
+    <ActionForm
+      action={trashSubject}
+      successMessage=""
+      confirmMessage={`Move ${name} to the Trash? You can restore ${kind === "character" ? "them" : "it"} for 30 days.`}
+      // a refusal says where it is used: kept narrow so it never squeezes the page title beside it
+      className="inline-flex max-w-xs flex-col items-end text-right"
+      data-testid="subject-delete"
+    >
+      <input type="hidden" name="projectSlug" value={slug} />
+      <input type="hidden" name="kind" value={kind} />
+      <input type="hidden" name="id" value={id} />
+      <Button type="submit" variant="ghost" className="text-fail" data-testid="subject-delete-go">
+        Delete {kind}
       </Button>
     </ActionForm>
   );

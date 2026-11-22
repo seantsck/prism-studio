@@ -207,6 +207,8 @@ export const characterSchema = z.object({
   continuityRules: z.array(text),
   signatureBehavior: text,
   relationshipNotes: text,
+  /** In the Trash since (migration 0064). Absent = not stored (never trashed, or the column is not there yet). */
+  trashedAt: iso.nullable().optional(),
   createdAt: iso,
   updatedAt: iso,
 });
@@ -291,6 +293,8 @@ export const locationSchema = z.object({
       lightRigs: z.array(z.record(z.string(), z.unknown())),
     })
     .nullable(),
+  /** In the Trash since (migration 0064). Absent = not stored (never trashed, or the column is not there yet). */
+  trashedAt: iso.nullable().optional(),
 });
 export type Location = z.infer<typeof locationSchema>;
 
@@ -730,6 +734,9 @@ export interface ProjectData extends Collections {
    * without them. Absent = none (or not loaded through the server loaders).
    */
   trashedAssets?: Asset[];
+  /** The project's Characters and Locations in the Trash, set apart the same way (their own rows stay untouched). */
+  trashedCharacters?: Character[];
+  trashedLocations?: Location[];
   /**
    * Per-shot 3D set snapshot (Phase 2F), attached by the server loaders for shots that have a production camera.
    * Never persisted here and absent for projects without 3D sets.

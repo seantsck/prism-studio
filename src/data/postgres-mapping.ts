@@ -65,13 +65,14 @@ const spec = (
 
 export const COLLECTIONS: Record<CollectionName, CollectionSpec> = {
   assets: spec("assets", assetSchema, { json: ["metadata"], numeric: ["byteSize", "frameRate"] }),
-  characters: spec("characters", characterSchema),
+  characters: spec("characters", characterSchema, { optional: ["trashedAt"] }),
   identityRefs: spec("character_identity_refs", identityRefSchema, { json: ["metadata"] }),
   looks: spec("character_looks", lookSchema),
   voiceProfiles: spec("voice_profiles", voiceProfileSchema),
   locations: spec("locations", locationSchema, {
     json: ["zones", "entrances", "visualBible"],
     virtual: ["set3d"],
+    optional: ["trashedAt"],
   }),
   props: spec("props", propSchema),
   episodes: spec("episodes", episodeSchema, { optional: ["targetMinutes"] }),

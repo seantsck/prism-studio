@@ -8,12 +8,11 @@ const FILE = "0063_project_trash.sql";
 const code = readFileSync(`${DIR}/${FILE}`, "utf8").replace(/--.*$/gm, "");
 
 describe("migration 0063: projects in the Trash", () => {
-  it("is the latest migration, follows 0062, and leaves 0062 byte-for-byte unchanged (as applied)", () => {
+  it("follows 0062, and leaves 0062 byte-for-byte unchanged (as applied)", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe(FILE);
-    expect(files.at(-2)).toBe("0062_character_library.sql");
+    expect(files[files.indexOf(FILE) - 1]).toBe("0062_character_library.sql");
     expect(checksumOf(readFileSync(`${DIR}/0062_character_library.sql`, "utf8"))).toBe(
       "494469e8f1ea9bc74a2a2aaf8104a1aacd3921879dab884e1619338024aa18bf",
     );

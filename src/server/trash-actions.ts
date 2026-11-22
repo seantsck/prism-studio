@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import type { ArchiveSubject } from "@/domain/archive";
 import { hasStoredImage } from "@/domain/generation/subject-image";
 import type { Asset, ProjectData } from "@/domain/schemas";
@@ -9,7 +10,15 @@ import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { requireUser } from "./auth";
 import { restorePointers } from "./picture-pointers";
 import { getRepo, requireProjectFresh } from "./repo";
-import { moveAssetToTrash, purgeTrashed } from "./trash";
+import {
+  deleteSubjectForGood,
+  moveAssetToTrash,
+  needsMigration0064,
+  purgeTrashed,
+  setSubjectTrashed,
+  type TrashSubjectKind,
+} from "./trash";
+import { characterUsage, inUseRefusal, locationUsage } from "@/domain/subject-trash";
 
 /**
  * The Trash (src/domain/trash.ts): Delete moves a picture, a take or an asset file here; Restore puts it back where it
@@ -75,7 +84,22 @@ async function deleteNow_impl(form: FormData) {
 async function empty_impl(form: FormData) {
   const { data, slug } = await load(form);
   if (str(form, "confirm") !== "1") throw new UserFacingError("Confirm that you want to empty the Trash.");
-  const { removed, kept } = await purgeTrashed(data, trashedAssetsOf(data));
+  // Characters and Locations first (their pictures may be in the Trash too), then pictures and files
+  let gone = 0;
+  const held: string[] = [];
+  for (const [kind, list] of [
+    ["character", data.trashedCharacters ?? []],
+    ["location", data.trashedLocations ?? []],
+  ] as const)
+    for (const x of list) {
+      const refusal = await deleteSubjectForGood(slug, kind, x.id);
+      if (refusal) held.push(refusal);
+      else gone++;
+    }
+  const fresh = gone ? await requireProjectFresh(slug) : data;
+  const result = await purgeTrashed(fresh, trashedAssetsOf(fresh));
+  const removed = result.removed + gone;
+  const kept = [...result.kept, ...held];
   refresh(slug);
   return {
     ok: true as const,
@@ -83,6 +107,74 @@ async function empty_impl(form: FormData) {
       ? `${removed} deleted; ${kept.length} kept (something depends on ${kept.length === 1 ? "it" : "them"}).`
       : `${removed} deleted.`,
   };
+}
+
+// ───────── Characters and Locations ─────────
+
+const kindOf = (form: FormData): TrashSubjectKind => {
+  const k = str(form, "kind");
+  if (k !== "character" && k !== "location") throw new UserFacingError("Choose a character or a location.");
+  return k;
+};
+
+async function withMigration<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (needsMigration0064(err)) throw new UserFacingError((err as Error).message);
+    throw err;
+  }
+}
+
+/** Delete a Character or Location: to the Trash, refused while the story still uses it (with where). */
+async function trashSubject_impl(form: FormData) {
+  const { data, slug } = await load(form);
+  const kind = kindOf(form);
+  const id = str(form, "id");
+  const subject =
+    kind === "character" ? data.characters.find((c) => c.id === id) : data.locations.find((l) => l.id === id);
+  if (!subject) throw new UserFacingError("That is not in this project, or it is already in the Trash.");
+  if (kind === "location" && (subject as { locked: boolean }).locked)
+    throw new UserFacingError(`"${subject.name}" is locked. Unlock it before deleting it.`);
+  const usage = kind === "character" ? characterUsage(data, id) : locationUsage(data, id);
+  if (usage.length) throw new UserFacingError(inUseRefusal(subject.name, usage));
+  await withMigration(() => setSubjectTrashed(data, kind, id, now()));
+  refresh(slug);
+  redirect(`/projects/${slug}/${kind === "character" ? "characters" : "locations"}`);
+}
+
+async function restoreSubject_impl(form: FormData) {
+  const { data, slug } = await load(form);
+  const kind = kindOf(form);
+  const id = str(form, "id");
+  const list = kind === "character" ? (data.trashedCharacters ?? []) : (data.trashedLocations ?? []);
+  if (!list.some((x) => x.id === id)) throw new UserFacingError("That is not in the Trash.");
+  await withMigration(() => setSubjectTrashed(data, kind, id, null));
+  refresh(slug);
+}
+
+async function deleteSubjectNow_impl(form: FormData) {
+  const { data, slug } = await load(form);
+  if (str(form, "confirm") !== "1") throw new UserFacingError("Confirm that you want to delete it for good.");
+  const kind = kindOf(form);
+  const id = str(form, "id");
+  const list = kind === "character" ? (data.trashedCharacters ?? []) : (data.trashedLocations ?? []);
+  if (!list.some((x) => x.id === id)) throw new UserFacingError("That is not in the Trash.");
+  const refusal = await deleteSubjectForGood(slug, kind, id);
+  if (refusal) throw new UserFacingError(refusal);
+  refresh(slug);
+}
+
+export async function trashSubject(form: FormData): Promise<ActionResult> {
+  return runAction(() => trashSubject_impl(form), { name: "trashSubject" });
+}
+
+export async function restoreSubject(form: FormData): Promise<ActionResult> {
+  return runAction(() => restoreSubject_impl(form), { name: "restoreSubject" });
+}
+
+export async function deleteSubjectNow(form: FormData): Promise<ActionResult> {
+  return runAction(() => deleteSubjectNow_impl(form), { name: "deleteSubjectNow" });
 }
 
 export async function moveToTrash(form: FormData): Promise<ActionResult> {

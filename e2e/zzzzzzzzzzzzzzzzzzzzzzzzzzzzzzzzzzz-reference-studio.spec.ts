@@ -1569,3 +1569,51 @@ test("X: Delete moves a picture to the Trash; it comes back with Restore, or is 
   await page.locator(`a[href^="${P}/characters/"]`).filter({ hasText: "Yumeko" }).first().click();
   await expect(page.locator(`[data-testid="character-picture"][data-asset="${asset}"]`)).toHaveCount(1);
 });
+
+test("Y: a character is deleted to the Trash, restored, then deleted for good; one the story uses is refused with where", async ({
+  page,
+}) => {
+  page.on("dialog", (d) => void d.accept()); // Delete asks the browser to confirm
+  // a character nothing uses yet
+  await page.goto(`${P}/characters`);
+  await page.locator('input[name="name"]').fill("Extra Waiter");
+  await page.getByRole("button", { name: "Create" }).click();
+  // Create opens the new character's page
+  await expect(page.getByRole("heading", { name: "Extra Waiter" })).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("subject-delete-go").click();
+  await expect(page).toHaveURL(new RegExp(`${P}/characters$`), { timeout: 30_000 });
+  await expect(page.locator(`a[href^="${P}/characters/"]`).filter({ hasText: "Extra Waiter" })).toHaveCount(
+    0,
+  );
+
+  // in the Trash: Restore brings them back
+  await page.goto(`${P}/trash`);
+  const row = page.locator('[data-testid="trash-subject"][data-name="Extra Waiter"]');
+  await expect(row).toContainText("Character · 30 days left");
+  await row.getByTestId("trash-subject-restore").click();
+  await expect(row).toHaveCount(0, { timeout: 30_000 });
+  await page.goto(`${P}/characters`);
+  await expect(page.locator(`a[href^="${P}/characters/"]`).filter({ hasText: "Extra Waiter" })).toHaveCount(
+    1,
+  );
+
+  // deleted again, then for good from the Trash
+  await page.locator(`a[href^="${P}/characters/"]`).filter({ hasText: "Extra Waiter" }).click();
+  await page.getByTestId("subject-delete-go").click();
+  await expect(page).toHaveURL(new RegExp(`${P}/characters$`), { timeout: 30_000 });
+  await page.goto(`${P}/trash`);
+  await page
+    .locator('[data-testid="trash-subject"][data-name="Extra Waiter"]')
+    .getByTestId("trash-subject-delete-now")
+    .click();
+  await expect(page.locator('[data-testid="trash-subject"][data-name="Extra Waiter"]')).toHaveCount(0, {
+    timeout: 30_000,
+  });
+
+  // Yumeko is in the story's Shots: her Delete is refused with where she is used
+  await page.goto(`${P}/characters`);
+  await page.locator(`a[href^="${P}/characters/"]`).filter({ hasText: "Yumeko" }).first().click();
+  await page.getByTestId("subject-delete-go").click();
+  await expect(page.getByTestId("subject-delete")).toContainText("can't be deleted yet: it is still used in");
+  await expect(page.getByRole("heading", { name: "Yumeko" })).toBeVisible();
+});

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Badge, Button, Field, PageHeader, Panel } from "@/components/ui";
+import { DeleteSubjectButton } from "@/components/studio/archive";
 import { saveLocation, setLocationLocked } from "@/server/actions";
 import { createLocationViewFromReference, uploadLocationView } from "@/server/location-view-actions";
 import { requireProject } from "@/server/repo";
@@ -242,6 +243,11 @@ export default async function LocationsPage({ params }: { params: Promise<{ proj
                     Open 3D Set
                   </Link>
                 </Panel>
+              ) : null}
+              {l ? (
+                <div className="mt-4 flex max-w-4xl justify-end">
+                  <DeleteSubjectButton slug={slug} kind="location" id={l.id} name={l.name} />
+                </div>
               ) : null}
             </div>
           </details>

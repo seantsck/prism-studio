@@ -24,7 +24,7 @@ import { ActionForm } from "@/components/action-form";
 import { SubjectImagePanel } from "@/components/images/subject-image-panel";
 import { VisualBiblePanel } from "@/components/images/visual-bible-panel";
 import { subjectImageState } from "@/server/subject-images";
-import { ArchiveButton, ArchivedPanel, DeleteButton } from "@/components/studio/archive";
+import { ArchiveButton, ArchivedPanel, DeleteButton, DeleteSubjectButton } from "@/components/studio/archive";
 import { LibraryToggle } from "@/components/characters/library";
 import { referenceStudioState } from "@/server/reference-studio";
 import Link from "next/link";
@@ -80,6 +80,7 @@ export default async function CharacterPage({
             <Badge tone={identityLocked ? "pass" : "warn"}>
               {identityLocked ? "Identity locked" : "Identity open"}
             </Badge>
+            <DeleteSubjectButton slug={slug} kind="character" id={c.id} name={c.name} />
           </div>
         }
       />
