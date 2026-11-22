@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { ProjectActions } from "@/components/projects/project-actions";
 import { loadLibrary } from "@/server/character-library";
+import { purgeExpiredProjects } from "@/server/trash";
+import { TrashedProjectActions } from "@/components/projects/project-actions";
+import { trashDaysLeft } from "@/domain/trash";
 import { NewSeries } from "@/components/projects/new-series";
 import { UserMenu } from "@/components/user-menu";
 import { PREMISE_MAX } from "@/domain/series-start";
@@ -23,6 +26,9 @@ export default async function HomePage() {
   const user = await requireUser();
   const repo = await getRepo();
   const all = [...(await repo.listProjects())].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // projects 30 days in the Trash are deleted for good when this page is opened (in the owner's own request)
+  await purgeExpiredProjects();
+  const trash = await repo.trashedProjects();
   const archive = await repo.archivedProjectIds();
   // which of each project's Characters are in the library (deleting the project takes them out)
   const library = await loadLibrary();
@@ -93,6 +99,40 @@ export default async function HomePage() {
                   libraryNames={libraryNamesOf(p.id)}
                 />
               ))}
+            </ul>
+          </details>
+        ) : null}
+
+        {trash.projects.length > 0 ? (
+          <details className="mt-8" data-testid="projects-trash">
+            <summary className="cursor-pointer text-[12px] text-muted hover:text-fg">
+              Trash ({trash.projects.length})
+            </summary>
+            <p className="mt-1 text-[11.5px] text-muted">
+              Deleted projects stay here for 30 days, then they are deleted for good. Restore brings one back
+              whole.
+            </p>
+            <ul className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {trash.projects.map(({ project: p, trashedAt }) => {
+                const left = trashDaysLeft(trashedAt, new Date().toISOString());
+                return (
+                  <li
+                    key={p.id}
+                    className="flex flex-col justify-between gap-3 rounded-xl border border-line bg-panel/60 p-4"
+                    data-testid="project-trash-row"
+                    data-slug={p.slug}
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-[15px] font-medium text-muted">{p.title}</div>
+                      <div className="mt-1 text-[11.5px] text-faint">
+                        {TYPE_LABEL[p.projectType]} ·{" "}
+                        {left === 0 ? "deleted today" : `${left} day${left === 1 ? "" : "s"} left`}
+                      </div>
+                    </div>
+                    <TrashedProjectActions id={p.id} title={p.title} />
+                  </li>
+                );
+              })}
             </ul>
           </details>
         ) : null}

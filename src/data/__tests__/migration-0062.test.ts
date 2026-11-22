@@ -13,12 +13,11 @@ const sql = readFileSync(`${DIR}/${FILE}`, "utf8");
 const code = sql.replace(/--.*$/gm, "").replace(/\s+/g, " ");
 
 describe("migration 0062: the character library", () => {
-  it("is the latest migration, follows 0061, and leaves 0061 byte-for-byte unchanged", () => {
+  it("follows 0061, and leaves 0061 byte-for-byte unchanged", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe(FILE);
-    expect(files.at(-2)).toBe("0061_episode_length.sql");
+    expect(files[files.indexOf(FILE) - 1]).toBe("0061_episode_length.sql");
     expect(checksumOf(readFileSync(`${DIR}/0061_episode_length.sql`, "utf8"))).toBe(
       "9a0f8cf8bf2c76ca717aa03f1788c86f3165f4e78252f4d28d5dc3770534d909",
     );

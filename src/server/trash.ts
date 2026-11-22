@@ -1,6 +1,6 @@
 import "server-only";
 import { archiveOf, type ArchiveSubject } from "@/domain/archive";
-import type { Asset, ProjectData } from "@/domain/schemas";
+import type { Asset, Project, ProjectData } from "@/domain/schemas";
 import { trashedAssetsOf, trashExpired, trashOf, type TrashRecord } from "@/domain/trash";
 import { assetDeletionRefusal } from "./asset-deletion";
 import { discardUpload } from "./ingest-upload";
@@ -64,4 +64,34 @@ export async function purgeExpiredTrash(data: ProjectData, now = new Date().toIS
   } catch {
     return 0;
   }
+}
+
+/**
+ * Deletes a project (in the Trash) for good: refused while anything for it is still queued or running (a paid
+ * generation must never finish into a project that is gone). Its stored files go after the rows, best effort (an
+ * orphaned file is harmless). Returns why it was refused, or null.
+ */
+export async function deleteProjectForGood(project: Project): Promise<string | null> {
+  const repo = await getRepo();
+  const active = await repo.activeProjectWork(project.id);
+  if (active.length > 0)
+    return `"${project.title}" still has work in progress (${active.join(", ")}). Wait for it to finish or cancel it, then delete.`;
+  const data = await repo.loadProject(project.slug, { includeTrashed: true });
+  const files = [...(data?.assets ?? [])].filter((a) => a.objectPath);
+  await repo.deleteProject(project.id);
+  for (let i = 0; i < files.length; i += 10) await Promise.all(files.slice(i, i + 10).map(discardUpload));
+  return null;
+}
+
+/** Deletes for good every project 30 days in the Trash (when the Projects page is opened, in the owner's request). */
+export async function purgeExpiredProjects(now = new Date().toISOString()): Promise<number> {
+  const repo = await getRepo();
+  let n = 0;
+  try {
+    for (const t of (await repo.trashedProjects()).projects)
+      if (trashExpired(t.trashedAt, now) && !(await deleteProjectForGood(t.project))) n++;
+  } catch {
+    // best effort: the page never fails for it
+  }
+  return n;
 }

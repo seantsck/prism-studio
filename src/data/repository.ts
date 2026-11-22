@@ -16,7 +16,8 @@ export interface Repository {
   /** Owner of every project this repository exposes. */
   currentUserId(): string;
   listProjects(): Promise<Project[]>;
-  loadProject(slug: string): Promise<ProjectData | null>;
+  /** A project of the owner's, by slug; one in the Trash only with `includeTrashed` (to delete it for good). */
+  loadProject(slug: string, opts?: { includeTrashed?: boolean }): Promise<ProjectData | null>;
   createProject(project: Project, bible: ProjectBible): Promise<void>;
   updateProject(project: Project): Promise<void>;
   saveBible(bible: ProjectBible): Promise<void>;
@@ -36,12 +37,32 @@ export interface Repository {
   /** Deletes one of the owner's projects and everything in it. Irreversible; callers confirm first. */
   deleteProject(projectId: string): Promise<void>;
   /**
+   * The owner's projects in the Trash (out of `listProjects`, and `loadProject` does not open them), newest first.
+   * `available: false` when this database cannot record it yet (migration 0063 not applied).
+   */
+  trashedProjects(): Promise<{
+    projects: Array<{ project: Project; trashedAt: string }>;
+    available: boolean;
+  }>;
+  /** Moves one of the owner's projects to the Trash, or restores it. */
+  setProjectTrashed(projectId: string, trashed: boolean): Promise<void>;
+  /**
    * The owner's character library: which Characters (in which of their projects) are saved, newest first.
    * `available: false` when this database cannot record it yet (migration 0062 not applied).
    */
   libraryEntries(): Promise<{ entries: LibraryEntry[]; available: boolean }>;
   /** Saves one of the owner's Characters to their library, or takes it out (idempotent either way). */
   setInLibrary(projectId: string, characterId: string, saved: boolean): Promise<void>;
+}
+
+/** This database cannot put projects in the Trash yet (migration 0063 is not applied). */
+export class ProjectTrashUnavailableError extends Error {
+  constructor() {
+    super(
+      "Deleting projects (to the Trash) needs a one-time database update (migration 0063) that has not been applied yet.",
+    );
+    this.name = "ProjectTrashUnavailableError";
+  }
 }
 
 /** One Character in the owner's library: it lives in its own project and is copied into others. */

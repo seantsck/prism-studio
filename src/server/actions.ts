@@ -45,10 +45,10 @@ import { SHOT_SECTION_SPECS, applySection } from "@/domain/shot-fields";
 import { validateLookLink } from "@/domain/looks";
 import { nextTakeNumber, selectTake as selectTakeDomain } from "@/domain/takes";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
-import { ProjectArchiveUnavailableError } from "@/data/repository";
+import { ProjectArchiveUnavailableError, ProjectTrashUnavailableError } from "@/data/repository";
 import { getRepo, requireProjectFresh } from "./repo";
 import { recordCreatorEdit, syncEpisodeScript } from "./script-sync";
-import { moveAssetToTrash } from "./trash";
+import { deleteProjectForGood, moveAssetToTrash } from "./trash";
 import { isTrashed } from "@/domain/trash";
 import { discardUpload, hasFile, ingestUpload } from "./ingest-upload";
 
@@ -91,7 +91,11 @@ async function createProject_impl(form: FormData) {
   const title = (str(form, "title") || titleFromPremise(premise)).slice(0, TITLE_MAX);
   if (!title) throw new UserFacingError("Describe your series, or give it a title.");
   const repo = await getRepo();
-  const existing = new Set((await repo.listProjects()).map((p) => p.slug));
+  // a project in the Trash keeps its slug until it is deleted for good
+  const existing = new Set([
+    ...(await repo.listProjects()).map((p) => p.slug),
+    ...(await repo.trashedProjects()).projects.map((t) => t.project.slug),
+  ]);
   let slug = slugify(title) || "series";
   while (existing.has(slug)) slug = `${slug}-${randomUUID().slice(0, 4)}`;
   const id = randomUUID();
@@ -157,25 +161,44 @@ async function archiveProject_impl(form: FormData) {
 }
 
 /**
- * Delete a project and everything in it, for good. Confirmed by typing the project's exact title, and refused while
- * anything for it is still queued or running (a paid generation must never finish into a project that is gone).
- * The stored files of its assets are removed after the rows, best effort (an orphaned file is harmless).
+ * Delete a project: it goes to the Trash (out of the Projects list, not openable) for 30 days, where Restore brings it
+ * back whole; after that, or with "Delete now" (confirmed by typing its exact title), it is deleted for good.
  */
 async function deleteProject_impl(form: FormData) {
   const { repo, project } = await ownedProject(form);
-  if (str(form, "confirmTitle") !== project.title.trim())
-    throw new UserFacingError(`Type the project's title exactly ("${project.title}") to delete it.`);
-  const active = await repo.activeProjectWork(project.id);
-  if (active.length > 0)
-    throw new UserFacingError(
-      `"${project.title}" still has work in progress (${active.join(", ")}). Wait for it to finish or cancel it, then delete.`,
-    );
-  const data = await repo.loadProject(project.slug);
-  const files = (data?.assets ?? []).filter((a) => a.objectPath);
-  await repo.deleteProject(project.id);
-  for (let i = 0; i < files.length; i += 10) await Promise.all(files.slice(i, i + 10).map(discardUpload));
+  if (str(form, "confirm") !== "1")
+    throw new UserFacingError("Confirm that you want to delete this project.");
+  try {
+    await repo.setProjectTrashed(project.id, true);
+  } catch (err) {
+    if (err instanceof ProjectTrashUnavailableError) throw new UserFacingError(err.message);
+    throw err;
+  }
   revalidatePath("/");
   redirect("/");
+}
+
+async function trashedProject(form: FormData) {
+  const repo = await getRepo();
+  const found = (await repo.trashedProjects()).projects.find((t) => t.project.id === str(form, "projectId"));
+  if (!found) throw new UserFacingError("That project is not in the Trash.");
+  return { repo, project: found.project };
+}
+
+async function restoreProject_impl(form: FormData) {
+  const { repo, project } = await trashedProject(form);
+  await repo.setProjectTrashed(project.id, false);
+  revalidatePath("/");
+}
+
+/** Delete a project in the Trash for good, now: confirmed by typing its exact title. */
+async function deleteProjectNow_impl(form: FormData) {
+  const { project } = await trashedProject(form);
+  if (str(form, "confirmTitle") !== project.title.trim())
+    throw new UserFacingError(`Type the project's title exactly ("${project.title}") to delete it for good.`);
+  const refusal = await deleteProjectForGood(project);
+  if (refusal) throw new UserFacingError(refusal);
+  revalidatePath("/");
 }
 
 async function saveProject_impl(form: FormData) {
@@ -1173,6 +1196,14 @@ export async function startFromPremise(form: FormData): Promise<ActionResult> {
 
 export async function archiveProject(form: FormData): Promise<ActionResult> {
   return runAction(() => archiveProject_impl(form), { name: "archiveProject" });
+}
+
+export async function restoreProject(form: FormData): Promise<ActionResult> {
+  return runAction(() => restoreProject_impl(form), { name: "restoreProject" });
+}
+
+export async function deleteProjectNow(form: FormData): Promise<ActionResult> {
+  return runAction(() => deleteProjectNow_impl(form), { name: "deleteProjectNow" });
 }
 
 export async function deleteProject(form: FormData): Promise<ActionResult> {
