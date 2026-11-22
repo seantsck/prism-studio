@@ -251,6 +251,7 @@ export class MemoryRepository implements Repository {
     if (!this.projects.has(projectId)) throw new Error(`Project ${projectId} not found`);
     this.projects.delete(projectId);
     this.archived.delete(projectId);
+    this.trashed.delete(projectId);
     // its Characters leave the library with it (as the database's cascade does)
     for (const [id, e] of this.library) if (e.projectId === projectId) this.library.delete(id);
   }
@@ -278,11 +279,32 @@ export class MemoryRepository implements Repository {
   }
 
   async listProjects(): Promise<Project[]> {
-    return [...this.projects.values()].map((p) => clone(p.project));
+    return [...this.projects.values()]
+      .filter((p) => !this.trashed.has(p.project.id))
+      .map((p) => clone(p.project));
   }
 
-  async loadProject(slug: string): Promise<ProjectData | null> {
+  private trashed = new Map<string, string>();
+
+  async trashedProjects() {
+    return {
+      projects: [...this.trashed.entries()]
+        .filter(([id]) => this.projects.has(id))
+        .map(([id, trashedAt]) => ({ project: clone(this.projects.get(id)!.project), trashedAt }))
+        .sort((a, b) => b.trashedAt.localeCompare(a.trashedAt)),
+      available: true,
+    };
+  }
+
+  async setProjectTrashed(projectId: string, trashed: boolean): Promise<void> {
+    if (!this.projects.has(projectId)) throw new Error(`Project ${projectId} not found`);
+    if (trashed) this.trashed.set(projectId, new Date().toISOString());
+    else this.trashed.delete(projectId);
+  }
+
+  async loadProject(slug: string, opts: { includeTrashed?: boolean } = {}): Promise<ProjectData | null> {
     const found = [...this.projects.values()].find((p) => p.project.slug === slug);
+    if (found && this.trashed.has(found.project.id) && !opts.includeTrashed) return null;
     return found ? clone(found) : null;
   }
 

@@ -36,6 +36,11 @@ On the Projects page each project has **Archive** (or **Restore**) and **Deleteâ
 - **Episode length** is `episodes.target_minutes` (migration `0061_episode_length.sql`; nullable integer, 1â€“600). It is an
   optional column (`CollectionSpec.optional`): an Episode that has none stored is written without it, so every write
   works before `0061` is applied; setting a length before then fails with a message naming the migration.
+- **Delete project** sets `projects.trashed_at` (migration `0063_project_trash.sql`): the project goes to the Trash on
+  the Projects page, out of `listProjects` and not openable (`loadProject` returns null unless `includeTrashed`), for
+  30 days; **Restore** clears it; **Delete now** (exact title typed) or 30 days later (`purgeExpiredProjects`, when the
+  Projects page is opened) runs the old cascade delete and removes its stored files. A new project never takes a
+  trashed project's slug. Until `0063` is applied, Delete says the migration is needed.
 - **Archive** sets `projects.archived_at` (migration `0060_project_archive.sql`). The project leaves the list for an
   **Archived (N)** section; nothing in it changes and it still opens by URL. Until `0060` is applied, the column is read
   defensively: the list works, nothing is archived, and Archive answers that it needs the database update (code can ship

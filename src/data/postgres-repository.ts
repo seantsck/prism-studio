@@ -17,6 +17,7 @@ import {
   activeWorkLines,
   CharacterLibraryUnavailableError,
   ProjectArchiveUnavailableError,
+  ProjectTrashUnavailableError,
   type LibraryEntry,
   type Repository,
 } from "./repository";
@@ -165,14 +166,18 @@ abstract class PostgresRepositoryBase implements Repository {
     const rows = await this.rows("select * from projects where user_id = $1 order by created_at", [
       this.ownerUserId,
     ]);
-    return rows.map((r) => this.parse(projectSchema, flatFromRow(r, PROJECT_SPEC)));
+    // a project in the Trash is not listed (read from the row: works before migration 0063 too)
+    return rows
+      .filter((r) => !r.trashed_at)
+      .map((r) => this.parse(projectSchema, flatFromRow(r, PROJECT_SPEC)));
   }
 
-  async loadProject(slug: string): Promise<ProjectData | null> {
+  async loadProject(slug: string, opts: { includeTrashed?: boolean } = {}): Promise<ProjectData | null> {
     const projectRow = (
       await this.rows("select * from projects where user_id = $1 and slug = $2", [this.ownerUserId, slug])
     )[0];
     if (!projectRow) return null;
+    if (projectRow.trashed_at && !opts.includeTrashed) return null;
     const projectId = String(projectRow.id);
     const P = [projectId];
     const byProject = (table: string, order = ""): [string, unknown[]] => [
@@ -307,6 +312,44 @@ abstract class PostgresRepositoryBase implements Repository {
     } catch (err) {
       // migration 0060 not applied yet: nothing is archived, and Archive says so
       if ((err as { code?: string }).code === UNDEFINED_COLUMN) return { ids: new Set(), available: false };
+      throw err;
+    }
+  }
+
+  async trashedProjects(): Promise<{
+    projects: Array<{ project: Project; trashedAt: string }>;
+    available: boolean;
+  }> {
+    try {
+      const rows = await this.rows(
+        "select * from projects where user_id = $1 and trashed_at is not null order by trashed_at desc",
+        [this.ownerUserId],
+      );
+      return {
+        projects: rows.map((r) => ({
+          project: this.parse(projectSchema, flatFromRow(r, PROJECT_SPEC)),
+          trashedAt: r.trashed_at instanceof Date ? r.trashed_at.toISOString() : String(r.trashed_at),
+        })),
+        available: true,
+      };
+    } catch (err) {
+      // migration 0063 not applied yet: nothing is in the Trash, and Delete says so
+      if ((err as { code?: string }).code === UNDEFINED_COLUMN) return { projects: [], available: false };
+      throw err;
+    }
+  }
+
+  async setProjectTrashed(projectId: string, trashed: boolean): Promise<void> {
+    try {
+      await this.tx(async (c) => {
+        const r = await c.query(
+          "update projects set trashed_at = case when $2::boolean then now() else null end where id = $1 and user_id = $3",
+          [projectId, trashed, this.ownerUserId],
+        );
+        if (r.rowCount === 0) throw new Error(`Project ${projectId} not found for the current user`);
+      });
+    } catch (err) {
+      if ((err as { code?: string }).code === UNDEFINED_COLUMN) throw new ProjectTrashUnavailableError();
       throw err;
     }
   }

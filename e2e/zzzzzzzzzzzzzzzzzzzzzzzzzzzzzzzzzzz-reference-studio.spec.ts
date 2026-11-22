@@ -1323,25 +1323,56 @@ test("T: on the Projects page a project is archived, restored, and deleted only 
     timeout: 30_000,
   });
 
-  // delete: the button stays off until the exact title is typed
+  // delete: a confirmation, then the project goes to the Trash (out of the list, can't be opened)
   const live = page.locator('[data-testid="project-row"][data-slug="throwaway-pilot"]');
   await live.getByTestId("project-delete-open").click();
   const confirm = live.getByTestId("project-delete-confirm");
-  await expect(confirm).toContainText("can't be undone");
-  const go = confirm.getByTestId("project-delete");
-  await expect(go).toBeDisabled();
-  await confirm.getByTestId("project-delete-title").fill("Throwaway");
-  await expect(go).toBeDisabled();
-  await confirm.getByTestId("project-delete-title").fill("Throwaway Pilot");
-  await expect(go).toBeEnabled();
-  await go.click();
+  await expect(confirm).toContainText("restore it for 30 days");
+  await confirm.getByTestId("project-delete").click();
+  await expect(page).toHaveURL(/\/$/);
   await expect(page.locator('[data-testid="project-row"][data-slug="throwaway-pilot"]')).toHaveCount(0, {
     timeout: 30_000,
   });
-  // the demo project is untouched
-  await expect(page.locator('[data-testid="project-row"][data-slug="ojousama"]')).toHaveCount(1);
   await page.goto("/projects/throwaway-pilot");
   await expect(page.getByText(/not found|could not be found|404/i).first()).toBeVisible();
+
+  // the Trash on the Projects page: Restore brings it back whole
+  await page.goto("/");
+  const trash = page.getByTestId("projects-trash");
+  await trash.locator("summary").click();
+  const trashed = trash.locator('[data-testid="project-trash-row"][data-slug="throwaway-pilot"]');
+  await expect(trashed).toContainText("30 days left");
+  await trashed.getByTestId("project-trash-restore").click();
+  await expect(page.locator('[data-testid="project-row"][data-slug="throwaway-pilot"]')).toHaveCount(1, {
+    timeout: 30_000,
+  });
+
+  // delete again, then for good from the Trash: the button stays off until the exact title is typed
+  await page
+    .locator('[data-testid="project-row"][data-slug="throwaway-pilot"]')
+    .getByTestId("project-delete-open")
+    .click();
+  await page.getByTestId("project-delete").click();
+  await expect(page.getByTestId("projects-trash")).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("projects-trash").locator("summary").click();
+  const again = page.locator('[data-testid="project-trash-row"][data-slug="throwaway-pilot"]');
+  await again.getByTestId("project-trash-delete-open").click();
+  const forGood = again.getByTestId("project-trash-delete-confirm");
+  await expect(forGood).toContainText("can't be undone");
+  const go = forGood.getByTestId("project-trash-delete");
+  await expect(go).toBeDisabled();
+  await forGood.getByTestId("project-trash-delete-title").fill("Throwaway");
+  await expect(go).toBeDisabled();
+  await forGood.getByTestId("project-trash-delete-title").fill("Throwaway Pilot");
+  await go.click();
+  await expect(page.locator('[data-testid="project-trash-row"][data-slug="throwaway-pilot"]')).toHaveCount(
+    0,
+    {
+      timeout: 30_000,
+    },
+  );
+  // the demo project is untouched
+  await expect(page.locator('[data-testid="project-row"][data-slug="ojousama"]')).toHaveCount(1);
 });
 
 test("U: a film from the Projects page: written whole, with the writer and the price confirmed first (free here)", async ({
@@ -1481,7 +1512,9 @@ test("W: a character saved to the library is added to another project as its own
   await page.goto("/");
   const row = page.locator(`[data-testid="project-row"][data-slug="${P.split("/").pop()}"]`);
   await row.getByTestId("project-delete-open").click();
-  await expect(row.getByTestId("project-delete-library")).toContainText("Yumeko leaves your library too");
+  await expect(row.getByTestId("project-delete-library")).toContainText(
+    "Yumeko leaves your library while it is in the Trash",
+  );
 });
 
 test("X: Delete moves a picture to the Trash; it comes back with Restore, or is deleted for good from there", async ({
