@@ -1119,8 +1119,11 @@ test("Q: a series from a prompt: the season planned, then every episode written,
   const premise =
     "A shy sushi apprentice in Osaka secretly enters a televised cooking contest under a false name.";
   await page.getByTestId("new-project-premise").fill(premise);
+  // the count can be typed (any number from 1 to 50); the shortcuts set it too
+  await page.getByTestId("new-series-episodes-input").fill("7");
   await page.getByTestId("new-series-episodes-6").click();
-  await page.getByTestId("new-series-more").locator("summary").click();
+  await expect(page.getByTestId("new-series-episodes-input")).toHaveValue("6");
+  // the title is the creator's own, in the box itself
   await page.getByTestId("new-series-title").fill("Night Counter");
   await page.getByTestId("new-series-create").click();
   await expect(page).toHaveURL(/\/projects\/night-counter\/start$/);
@@ -1143,7 +1146,31 @@ test("Q: a series from a prompt: the season planned, then every episode written,
   await expect(page.getByTestId("start-plan-ready").locator("li")).toHaveCount(6);
   await page.getByTestId("start-plan-use").click();
   await expect(page.getByTestId("start-plan")).toHaveAttribute("data-state", "done", { timeout: 30_000 });
-  await expect(page.getByTestId("start-plan-done").locator("li")).toHaveCount(6);
+  // the plan is editable in place
+  const editor = page.getByTestId("start-plan-editor");
+  await expect(editor.getByTestId("start-plan-episode")).toHaveCount(6);
+  await editor.getByLabel("Episode 2 title").fill("The Tasting");
+  await editor.getByLabel("What happens in episode 2").fill("He cooks for the judges under his false name.");
+  await editor.getByTestId("start-plan-save").click();
+  await expect(editor).toContainText("Plan saved", { timeout: 30_000 });
+  await page.reload();
+  await expect(page.getByTestId("start-plan-editor").getByLabel("Episode 2 title")).toHaveValue(
+    "The Tasting",
+  );
+  // and Prism can refine it: the revised plan is shown, and nothing changes until it is used
+  const refine = page.getByTestId("start-plan-refine");
+  await expect(refine.getByTestId("start-plan-refine-go")).toHaveText(/^Refine the plan · free with /);
+  await refine.getByTestId("start-plan-note").fill("Raise the stakes in the middle of the season.");
+  await refine.getByTestId("start-plan-refine-go").click();
+  await expect(async () => {
+    await page.reload();
+    await expect(page.getByTestId("start-plan-revised")).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 30_000 });
+  await expect(page.getByTestId("start-plan-editor").getByLabel("Episode 2 title")).toHaveValue(
+    "The Tasting",
+  );
+  await page.getByTestId("start-plan-revised").getByTestId("start-plan-use").click();
+  await expect(page.getByTestId("start-plan-revised")).toHaveCount(0, { timeout: 30_000 });
 
   // write all 6: the writer and the scope are chosen, then a confirmation names the price before anything runs
   const write = page.getByTestId("write-it");

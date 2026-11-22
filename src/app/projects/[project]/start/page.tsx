@@ -5,11 +5,11 @@ import { WriteIt, type WriteQuotes } from "@/components/projects/write-it";
 import { Button, Field, PageHeader } from "@/components/ui";
 import type { WritingProposal } from "@/data/writing-repository";
 import type { Episode } from "@/domain/schemas";
-import { PREMISE_MAX } from "@/domain/series-start";
+import { isSeasonPlanRequest, PREMISE_MAX, REFINE_NOTE_MAX } from "@/domain/series-start";
 import { cn } from "@/lib/utils";
 import { startFromPremise } from "@/server/actions";
 import { requireProject } from "@/server/repo";
-import { applySeasonPlan, planSeason } from "@/server/series-actions";
+import { applySeasonPlan, planSeason, saveSeasonPlan } from "@/server/series-actions";
 import {
   quoteAnalyzeEpisode,
   quoteSeasonPlan,
@@ -62,11 +62,15 @@ export default async function StartPage({ params }: { params: Promise<{ project:
 
   // the season plan: the newest plan asked for on Episode 1, and whether the Episodes already carry one
   const plan = first
-    ? (asked
-        .get(first.id)
-        ?.find((p) => p.mode === "brainstorm" && p.instruction.startsWith("Plan season 1")) ?? null)
+    ? (asked.get(first.id)?.find((p) => p.mode === "brainstorm" && isSeasonPlanRequest(p.instruction)) ??
+      null)
     : null;
-  const planned = kind === "series" && episodes.length > 1 && episodes.every((e) => e.synopsis.trim());
+  const planned = kind === "series" && episodes.length > 0 && episodes.every((e) => e.synopsis.trim());
+  // a plan asked for after the Episodes last changed is still to be used (or is being written)
+  const lastEdit = episodes.reduce((m, e) => (e.updatedAt > m ? e.updatedAt : m), "");
+  const fresh = plan && plan.createdAt > lastEdit ? plan : null;
+  const pendingPlan = !!fresh && (fresh.status === "queued" || fresh.status === "running");
+  const revisedPlan = fresh?.status === "ready" ? fresh : null;
   const scripted = episodes.filter((e) => e.scriptText.trim()).length;
 
   const offered = writers();
@@ -79,6 +83,7 @@ export default async function StartPage({ params }: { params: Promise<{ project:
       quotes[w.value] = { one, all: all && all.ok && all.episodes.length > 1 ? all : null };
     }
   const planQuote = premise && first && kind === "series" ? quoteSeasonPlan(data) : null;
+  const refineQuote = planned ? quoteSeasonPlan(data, null, { refine: true }) : null;
 
   const proposals = first
     ? (await (await getStoryRepo()).list(data.project.id))
@@ -148,7 +153,67 @@ export default async function StartPage({ params }: { params: Promise<{ project:
             testId="start-plan"
           >
             {planned ? (
-              <EpisodeList episodes={episodes} base={base} />
+              <div className="space-y-4">
+                {pendingPlan ? (
+                  <p className="text-[13px]" data-testid="start-plan-running">
+                    Prism is revising the plan. Refresh in a moment.
+                  </p>
+                ) : null}
+                {revisedPlan?.result ? (
+                  <div
+                    className="space-y-2 rounded-[3px] border border-accent/40 p-3"
+                    data-testid="start-plan-revised"
+                  >
+                    <div className="text-[13px] font-medium">Prism&apos;s revised plan</div>
+                    <PlanIdeas ideas={revisedPlan.result.ideas} />
+                    <ActionForm action={applySeasonPlan} successMessage="">
+                      <input type="hidden" name="projectSlug" value={slug} />
+                      <input type="hidden" name="proposalId" value={revisedPlan.id} />
+                      <Button type="submit" variant="primary" data-testid="start-plan-use">
+                        Use this plan
+                      </Button>
+                      <span className="ml-2 text-[12px] text-muted">
+                        Or keep yours below; nothing changes until you choose.
+                      </span>
+                    </ActionForm>
+                  </div>
+                ) : null}
+                <PlanEditor slug={slug} episodes={episodes} />
+                <Priced quote={refineQuote}>
+                  {(q) => (
+                    <ActionForm
+                      action={planSeason}
+                      successMessage=""
+                      quiet
+                      className="space-y-2"
+                      data-testid="start-plan-refine"
+                    >
+                      <input type="hidden" name="projectSlug" value={slug} />
+                      <input type="hidden" name="refine" value="1" />
+                      <input type="hidden" name="model" value={q.model} />
+                      {q.paid ? (
+                        <input type="hidden" name="confirmedTotalUsd" value={q.usd.toFixed(4)} />
+                      ) : null}
+                      <Field
+                        label="Refine with Prism"
+                        hint="Say what to change; Prism revises the whole plan and you choose whether to use it."
+                      >
+                        <textarea
+                          name="note"
+                          rows={2}
+                          maxLength={REFINE_NOTE_MAX}
+                          required
+                          placeholder="Make episode 3 darker, and bring in a rival halfway through the season."
+                          data-testid="start-plan-note"
+                        />
+                      </Field>
+                      <Button type="submit" data-testid="start-plan-refine-go">
+                        Refine the plan · {priceOf(q)}
+                      </Button>
+                    </ActionForm>
+                  )}
+                </Priced>
+              </div>
             ) : !premise ? (
               <Later>Comes after the premise.</Later>
             ) : plan && (plan.status === "queued" || plan.status === "running") ? (
@@ -159,16 +224,7 @@ export default async function StartPage({ params }: { params: Promise<{ project:
               <div className="space-y-3">
                 {plan?.status === "ready" && plan.result ? (
                   <div className="space-y-2" data-testid="start-plan-ready">
-                    <ol className="space-y-1.5 text-[13px]">
-                      {plan.result.ideas.map((idea, i) => (
-                        <li key={i}>
-                          <span className="font-medium">
-                            {i + 1}. {idea.title}
-                          </span>{" "}
-                          <span className="text-muted">{idea.detail}</span>
-                        </li>
-                      ))}
-                    </ol>
+                    <PlanIdeas ideas={plan.result.ideas} />
                     <ActionForm action={applySeasonPlan} successMessage="">
                       <input type="hidden" name="projectSlug" value={slug} />
                       <input type="hidden" name="proposalId" value={plan.id} />
@@ -327,23 +383,58 @@ export default async function StartPage({ params }: { params: Promise<{ project:
   );
 }
 
-function EpisodeList({ episodes, base }: { episodes: Episode[]; base: string }) {
+function PlanIdeas({ ideas }: { ideas: Array<{ title: string; detail: string }> }) {
   return (
-    <div className="space-y-1" data-testid="start-plan-done">
-      <ol className="space-y-1 text-[13px]">
+    <ol className="space-y-1.5 text-[13px]">
+      {ideas.map((idea, i) => (
+        <li key={i}>
+          <span className="font-medium">
+            {i + 1}. {idea.title}
+          </span>{" "}
+          <span className="text-muted">{idea.detail}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** The plan as the Episodes carry it, editable in place: each title and what happens in it. */
+function PlanEditor({ slug, episodes }: { slug: string; episodes: Episode[] }) {
+  return (
+    <ActionForm
+      action={saveSeasonPlan}
+      successMessage="Plan saved"
+      className="space-y-2"
+      data-testid="start-plan-editor"
+    >
+      <input type="hidden" name="projectSlug" value={slug} />
+      <ol className="space-y-2">
         {episodes.map((e) => (
-          <li key={e.id}>
-            <span className="font-medium">
-              {e.number}. {e.title}
-            </span>{" "}
-            <span className="text-muted">{e.synopsis}</span>
+          <li key={e.id} className="grid gap-1 sm:grid-cols-[2rem_1fr]" data-testid="start-plan-episode">
+            <span className="pt-1 text-[12px] text-muted">{e.number}.</span>
+            <div className="space-y-1">
+              <input
+                name={`title_${e.id}`}
+                defaultValue={e.title}
+                maxLength={120}
+                aria-label={`Episode ${e.number} title`}
+                className="font-medium"
+              />
+              <textarea
+                name={`synopsis_${e.id}`}
+                defaultValue={e.synopsis}
+                rows={2}
+                maxLength={2000}
+                aria-label={`What happens in episode ${e.number}`}
+              />
+            </div>
           </li>
         ))}
       </ol>
-      <Link href={`${base}/episodes`} className="text-[12px] text-accent hover:underline">
-        Edit them on the Episodes page
-      </Link>
-    </div>
+      <Button type="submit" data-testid="start-plan-save">
+        Save plan
+      </Button>
+    </ActionForm>
   );
 }
 

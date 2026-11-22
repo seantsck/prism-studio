@@ -242,7 +242,7 @@ export class StoryWorker {
       mode: row.mode,
       scopeKind: row.scope.kind,
       instruction: row.instruction,
-      count: row.alternativesRequested,
+      count: row.context.ideaCount ?? row.alternativesRequested,
       targetText: row.targetText,
       draftText: row.draftText,
       context: row.context,
@@ -251,7 +251,7 @@ export class StoryWorker {
         validateWriting(raw, {
           mode: row.mode,
           scopeKind: row.scope.kind,
-          count: row.alternativesRequested,
+          count: row.context.ideaCount ?? row.alternativesRequested,
           targetText: row.targetText,
         }),
     });

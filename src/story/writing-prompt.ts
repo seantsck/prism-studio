@@ -60,6 +60,8 @@ export interface WritingContext {
   conversation: Array<{ instruction: string; reply: string; chosen: string | null }>;
   /** A whole Episode or film written in parts (the worker runs the parts). Absent = one answer. */
   longForm?: LongFormPlan;
+  /** A brainstorm asked for more ideas than the database records as requested (a season plan of 11+ episodes). */
+  ideaCount?: number;
   /** A season's plan, so each Episode written from it stays consistent with the others. */
   seasonPlan?: Array<{ episode: number; title: string; synopsis: string }>;
 }

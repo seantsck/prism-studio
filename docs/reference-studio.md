@@ -178,13 +178,18 @@ lock) and the first next steps. Any area can be worked on first.
 
 ### Starting from a prompt
 
-The Projects page opens on one box: describe the series, pick Series / Film / Short (a series also picks 6 · 8 · 10 ·
-12 episodes) and the language; the title is optional (`titleFromPremise`). The project is created with the premise in
-its Bible and its Episodes empty (a film or short has one, "Screenplay"), and opens on `/projects/<project>/start`:
+The Projects page opens on one box: a title (optional: `titleFromPremise` names it otherwise), the description, Series /
+Film / Short (a series picks its number of episodes: 6 · 8 · 10 · 12, or any whole number from 1 to 50) and the
+language. The project is created with the premise in its Bible and its Episodes empty (a film or short has one,
+"Screenplay"), and opens on `/projects/<project>/start`:
 
 1. **Describe it**: the premise (an existing project without one can add it here; a written one is never overwritten).
 2. **Plan the season** (series only): one brainstorm request on Episode 1, an idea per Episode (title + what happens).
-   **Use this plan** writes each idea into its Episode's title and synopsis (no script). Edit them on the Episodes page.
+   **Use this plan** writes each idea into its Episode's title and synopsis (no script). The plan is then **editable in
+   place** (each title and synopsis, **Save plan**) and **Refine with Prism** takes a note: Prism gets the current plan
+   (`seasonPlan` in the context) and returns the whole revised plan, shown beside yours; nothing changes until **Use
+   this plan**. Refining is priced as a ceiling for the longest note (`REFINE_NOTE_MAX`). A plan of more than 10
+   episodes records 10 as requested (the database's limit) and carries its real count in its context (`ideaCount`).
 3. **Write it** (`WriteIt`): choose the writer (**Recommended by Prism**, or a named model; the free test writer is
    listed only on a test server, `PRISM_STUDIO_SHOW_TEST_MODELS=1`) and, for a series, **Episode N only** or **All N
    episodes**; a film is written whole. **Write…** opens a confirmation with the writer and the most it can cost;
