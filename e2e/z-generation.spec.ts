@@ -28,7 +28,7 @@ test("3A: compatibility, cost and blockers are explicit before anything is gener
   // capable model: pass, 4.5 s accepted unchanged, cost estimated from declared pricing
   await expect(page.getByTestId("compat-summary")).toContainText("PASS");
   await expect(page.getByTestId("duration-compat")).toContainText("Production 4.5s");
-  await expect(page.getByTestId("estimated-cost")).toContainText("$0.225");
+  await expect(page.getByTestId("estimated-cost")).toContainText("$0.68");
   await expect(page.getByTestId("generate-button")).toBeEnabled();
 
   // limited model: duration is NOT silently rounded; generate is disabled with a reason

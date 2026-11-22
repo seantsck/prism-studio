@@ -306,6 +306,25 @@ target project's own storage (archived and trashed pictures stay behind; a faile
 trashed Location is out of the library until restored; deleting its project takes it out. Until 0066 is applied the
 library says it needs the migration and nothing else changes.
 
+## Prices
+
+Every paid step shows the creator ONE exact price before it runs, and that is what they are charged: Prism's own
+pre-spend cost for that exact request times `PRICE_MULTIPLIER` (3, the owner's decision on 2026-11-22), rounded up to
+the cent (`src/domain/pricing/user-price.ts`). It is shown on the Reference Studio's Generate button and price line, a
+take's "Price", the cutout buttons, the writing and Bible steps, Shot pictures and Shot clips. The spend gates, the
+per-generation ceiling and the confirmation sent back with a request all stay in Prism's cost; a price the creator
+types (Shot pictures' "Confirm total price") is divided by the multiplier before it reaches the gate. The owner's cost
+and what the provider really billed appear beside the price only on the review deployment
+(`NEXT_PUBLIC_PRISM_STUDIO_ENVIRONMENT=staging`). There is no billing system yet: this is the price shown.
+
+The OpenAI image estimate is calibrated from the 15 real Flare pictures (`openai-image-2026-11-22-calibrated`): at most
+400 output tokens and 1,600 input tokens per reference at medium quality, where the earlier provisional bound was four
+to five times the real bills.
+
+Picture models offered (owner, 2026-11-22): GPT Image 2.5 Flare (OpenAI direct), Seedream 5 Lite and Muse Image.
+Runway's GPT Image 2.5 Flare (the same model, billed in Runway credits) and GPT Image 2.5 Sunburst (never used) stay in
+the catalog, so past pictures still say what made them, but are not offered (`NOT_OFFERED_MODELS`).
+
 ## Test models and real models
 
 A deployment can switch on free **test models** ("Mock Image 1"). A test model draws a coloured pattern, never a

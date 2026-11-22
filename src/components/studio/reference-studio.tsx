@@ -1,5 +1,6 @@
 "use client";
 
+import { PRICE_MULTIPLIER, priceText, showsOwnerCost } from "@/domain/pricing/user-price";
 import { useEffect, useState, type DragEvent } from "react";
 import { ActionForm } from "@/components/action-form";
 import { RefreshWhileActive } from "@/components/images/refresh-while-active";
@@ -691,7 +692,7 @@ export function ReferenceStudio({
               data-paid={quote?.ok && quote.paid ? "true" : "false"}
             >
               {quote?.ok && quote.paid
-                ? `${changing ? "Change" : "Generate"} · up to ${usd(quote.estimateUsd)}`
+                ? `${changing ? "Change" : "Generate"} · ${priceText(quote.estimateUsd)}`
                 : model?.test
                   ? // a test model draws a pattern: the button never promises a picture
                     "Generate test pattern"
@@ -786,20 +787,18 @@ function Price({
       {quote.paid ? (
         <p>
           <span className="font-medium" data-testid="studio-estimate">
-            Up to {usd(quote.estimateUsd)}
+            {priceText(quote.estimateUsd)}
           </span>
-          <span className="text-muted">
-            {" "}
-            for this image.{" "}
-            {typical ? (
-              <span data-testid="studio-typical">
-                Images like it have cost about {usd(typical.usd)} here ({typical.samples} so far
-                {typical.nearest ? ", with a different number of starting images" : ""}).
-              </span>
-            ) : (
-              <span data-testid="studio-typical">Nothing comparable has been made here yet.</span>
-            )}
-          </span>
+          <span className="text-muted"> for this image, charged when you press Generate.</span>
+          {showsOwnerCost() ? (
+            <span className="block text-[11px] text-faint" data-testid="studio-owner-cost">
+              Owner view: Prism&apos;s cost is at most {usd(quote.estimateUsd)} (price = cost ×{" "}
+              {PRICE_MULTIPLIER}).{" "}
+              {typical
+                ? `Images like it have cost Prism about ${usd(typical.usd)} here (${typical.samples} so far${typical.nearest ? ", with a different number of starting images" : ""}).`
+                : "Nothing comparable has been made here yet."}
+            </span>
+          ) : null}
         </p>
       ) : model?.test ? (
         // a test model proves the workflow and nothing else: say so where the button is, and offer the real thing
@@ -882,7 +881,7 @@ function Price({
           {quote.paid ? (
             // in dollars and words: the estimator's own arithmetic is in provider credits, which say nothing here
             <p className="text-[10.5px] text-faint" data-testid="studio-basis">
-              Upper bound from the provider&rsquo;s published prices. It covers the picture
+              One price for this exact request. It covers the picture
               {quote.sending.length === 0
                 ? ""
                 : quote.sending.length === 1

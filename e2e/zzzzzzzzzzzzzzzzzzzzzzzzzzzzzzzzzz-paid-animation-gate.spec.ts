@@ -105,8 +105,9 @@ test("C — Runway Gen-4.5: the exact prompt, the estimate, and a check that mus
 
   // paid rows are selectable here and priced before anything is chosen
   await expect(row(page, GEN45).getByTestId("model-pick")).toBeEnabled();
-  await expect(row(page, GEN45).getByTestId("model-cost")).toContainText("$0.600");
-  await expect(row(page, "gen4_turbo").getByTestId("model-cost")).toContainText("$0.250");
+  // the creator's price: 3 × Prism's cost ($0.60 and $0.25)
+  await expect(row(page, GEN45).getByTestId("model-cost")).toContainText("$1.80");
+  await expect(row(page, "gen4_turbo").getByTestId("model-cost")).toContainText("$0.75");
 
   // the exact text Runway would receive: the positive, motion-only policy; never a negation (Runway reads one as
   // the thing to do) and never the appearance the Production Frame already shows
@@ -125,7 +126,7 @@ test("C — Runway Gen-4.5: the exact prompt, the estimate, and a check that mus
   await expect(checks).toHaveCount(0);
 
   await row(page, GEN45).getByTestId("model-pick").check();
-  await expect(panel(page).getByTestId("selected-total")).toContainText("$0.600");
+  await expect(panel(page).getByTestId("selected-total")).toContainText("$1.80");
   await expect(checks).toBeVisible();
   const item = panel(page).getByTestId("pre-spend-check");
   await expect(item).toHaveCount(1);

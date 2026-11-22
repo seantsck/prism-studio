@@ -1,3 +1,4 @@
+import { priceText } from "@/domain/pricing/user-price";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button, Field } from "@/components/ui";
 import { buildShotContext } from "@/domain/context";
@@ -292,8 +293,8 @@ export async function ShotImageActions({
                   </select>
                 </Field>
                 <Field
-                  label="Confirm total (USD)"
-                  hint="Required only for a paid model: per candidate × candidates."
+                  label="Confirm total price (USD)"
+                  hint="Required only for a paid model: price per candidate × candidates."
                 >
                   <input name="confirmedTotalUsd" inputMode="decimal" />
                 </Field>
@@ -304,8 +305,8 @@ export async function ShotImageActions({
                   ? "estimate unavailable"
                   : perCandidateUsd === 0
                     ? "free"
-                    : `about $${perCandidateUsd.toFixed(2)} per candidate`}
-                . The total is per candidate × candidates; paid models need the confirmed total.
+                    : `${priceText(perCandidateUsd)} per candidate`}
+                . The total is price per candidate × candidates; paid models need the confirmed total price.
               </p>
               <ol className="space-y-0.5 text-[11.5px]" data-testid="pf-inputs-references">
                 {inputs.references.map((r) => {

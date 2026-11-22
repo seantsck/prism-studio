@@ -1,5 +1,7 @@
 "use server";
 
+import { PRICE_MULTIPLIER } from "@/domain/pricing/user-price";
+
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { isProductionFrameAttempt } from "@/domain/generation/schemas";
@@ -86,7 +88,8 @@ async function startShotImage_impl(form: FormData): Promise<ActionResult> {
   fd.set("purpose", PURPOSE[kind]);
   fd.set("ackAll", "1"); // the candidate page still discloses every input the chosen model will not use
   const confirmed = str(form, "confirmedTotalUsd");
-  if (confirmed) fd.set("confirmedTotalUsd", confirmed); // paid models: the creator's explicit confirmation
+  // paid models: the creator confirms the PRICE they are shown (cost × PRICE_MULTIPLIER); the spend gate works in cost
+  if (confirmed) fd.set("confirmedTotalUsd", String(Number(confirmed) / PRICE_MULTIPLIER));
   return createCandidateSet(fd);
 }
 

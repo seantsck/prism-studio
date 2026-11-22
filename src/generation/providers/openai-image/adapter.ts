@@ -305,7 +305,7 @@ export class OpenAIImageProvider implements GenerationProviderAdapter {
     return {
       amount,
       currency: "USD",
-      basis: `Upper bound (provisional): ${image.basis}; + ≤${textBound} text tokens × $${OPENAI_IMAGE_TOKEN_RATES.textInput}/1M`,
+      basis: `Upper bound (calibrated): ${image.basis}; + ≤${textBound} text tokens × $${OPENAI_IMAGE_TOKEN_RATES.textInput}/1M`,
       units: null,
     };
   }

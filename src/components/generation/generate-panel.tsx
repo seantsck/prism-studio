@@ -1,5 +1,7 @@
 "use client";
 
+import { priceText, showsOwnerCost } from "@/domain/pricing/user-price";
+
 import { useMemo, useState } from "react";
 import { AlertTriangle, Check, X } from "lucide-react";
 import { ActionForm } from "@/components/action-form";
@@ -164,11 +166,14 @@ export function GeneratePanel({
             )}
           </div>
           <div className="border border-line bg-bg p-2.5">
-            <div className="text-[10.5px] uppercase tracking-wide text-muted">Estimated cost</div>
+            <div className="text-[10.5px] uppercase tracking-wide text-muted">Price</div>
             <div className="mt-1 text-[12px]" data-testid="estimated-cost">
-              {view.estimate ? money(view.estimate.amount, view.estimate.currency) : "—"}
-              {view.estimate ? (
-                <span className="block text-[11px] text-muted">{view.estimate.basis}</span>
+              {view.estimate ? priceText(view.estimate.amount) : "—"}
+              {view.estimate && showsOwnerCost() ? (
+                <span className="block text-[11px] text-muted">
+                  Owner view: cost at most {money(view.estimate.amount, view.estimate.currency)}.{" "}
+                  {view.estimate.basis}
+                </span>
               ) : null}
             </div>
           </div>
@@ -387,8 +392,8 @@ export function GeneratePanel({
               <dd>{plan?.framing.productionLabel ?? "—"}</dd>
               <dt className="text-muted">Provider canvas</dt>
               <dd>{adapted ? plan?.framing.providerLabel : (plan?.framing.productionLabel ?? "—")}</dd>
-              <dt className="text-muted">Estimated cost</dt>
-              <dd>{view.estimate ? money(view.estimate.amount, view.estimate.currency) : "—"}</dd>
+              <dt className="text-muted">Price</dt>
+              <dd>{view.estimate ? priceText(view.estimate.amount) : "—"}</dd>
               <dt className="text-muted">Inputs used</dt>
               <dd>
                 {option.inputs

@@ -1,4 +1,5 @@
 import type { GenerationModel, GenerationProviderInfo, ModelAvailability } from "@/domain/generation/schemas";
+import { isOffered } from "@/domain/generation/models/offered";
 import { missingConfig, readGenerationConfig, type GenerationConfig } from "./config";
 import type { GenerationProviderAdapter } from "./provider";
 import { MockProvider } from "./providers/mock";
@@ -28,6 +29,7 @@ import { PrismMattingProvider } from "./providers/prism-matting/adapter";
  * configured. It exposes availability WITHOUT credentials: `ModelAvailability` carries names of missing
  * configuration, never values.
  */
+
 export class ModelRegistry {
   private readonly adapters_ = new Map<string, GenerationProviderAdapter>();
 
@@ -51,8 +53,11 @@ export class ModelRegistry {
     return this.adapters_.get(provider) ?? null;
   }
 
+  /** The models offered for new work (lists and pickers). `model()` still finds one that is no longer offered. */
   models(): GenerationModel[] {
-    return [...this.adapters_.values()].flatMap((a) => a.listModels());
+    return [...this.adapters_.values()]
+      .flatMap((a) => a.listModels())
+      .filter((m) => isOffered(m.provider, m.modelId));
   }
 
   model(provider: string, modelId: string): GenerationModel | null {

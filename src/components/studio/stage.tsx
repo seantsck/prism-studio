@@ -1,5 +1,7 @@
 "use client";
 
+import { priceText, showsOwnerCost } from "@/domain/pricing/user-price";
+
 import Link from "next/link";
 import { useState } from "react";
 import { ActionForm } from "@/components/action-form";
@@ -59,16 +61,19 @@ const kindNote = (t: StudioTake) =>
 
 const when = (iso: string) => `${iso.slice(0, 16).replace("T", " ")} UTC`;
 
-const cost = (t: StudioTake) =>
-  !t.paid
-    ? "No charge"
-    : t.actualUsd != null
-      ? `Billed ${usd(t.actualUsd)}${t.estimateUsd != null ? ` (estimated up to ${usd(t.estimateUsd)})` : ""}`
+/** What the creator was charged: the price shown before it ran (the owner also sees what the provider billed). */
+const cost = (t: StudioTake) => {
+  if (!t.paid) return "No charge";
+  const price = t.estimateUsd != null ? `Price ${priceText(t.estimateUsd)}` : "";
+  if (!showsOwnerCost()) return price;
+  const billed =
+    t.actualUsd != null
+      ? `provider billed ${usd(t.actualUsd)}`
       : t.status === "succeeded"
-        ? "Billed amount not reported"
-        : t.estimateUsd != null
-          ? `Estimated up to ${usd(t.estimateUsd)}`
-          : "";
+        ? "provider bill not reported"
+        : "";
+  return [price, billed].filter(Boolean).join(" · ");
+};
 
 /**
  * The stage: a result beside what it was made from, at a size a picture can be judged at, on a neutral grey surround;
@@ -748,7 +753,7 @@ export function Stage({
                         className="mt-1"
                         data-testid="studio-high-quality"
                       >
-                        High Quality Removal · {usd(hostedMatting.usdPerImage)}
+                        High Quality Removal · {priceText(hostedMatting.usdPerImage)}
                       </Button>
                       <p className="mt-1 text-[11px] text-muted">{hostedMatting.privacyShort}</p>
                     </ActionForm>

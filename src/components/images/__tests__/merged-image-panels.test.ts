@@ -130,7 +130,8 @@ describe("5B-I3b + I4 merged Character image UI", () => {
     ]);
     expect(count(html, "high-quality-offer")).toBe(1);
     expect(html).toContain("This image has a complex background.");
-    expect(html).toMatch(/High Quality Removal — (<!-- -->)?\$0\.02/);
+    // the creator's price (3 × Prism's $0.02 cost); the confirmation sent back is still Prism's cost
+    expect(html).toMatch(/High Quality Removal — (<!-- -->)?\$0\.06/);
     expect(html).toContain('name="quality" value="high"');
     expect(html).toContain('name="confirmedTotalUsd" value="0.02"');
     expect(html).toContain(PHOTOROOM_PRIVACY_SHORT);

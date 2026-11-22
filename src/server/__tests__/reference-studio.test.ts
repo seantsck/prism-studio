@@ -509,7 +509,7 @@ describe("making, reviewing and promoting", () => {
     expect(state.takes[1]!.attemptId).toBe(first.attempt.id);
     expect(second.attempt.attemptNumber).toBe(2);
     // a free test model reports a pretend cost: it is never shown as money billed
-    expect(state.spent).toEqual({ usd: 0, images: 0 });
+    expect(state.spent).toEqual({ usd: 0, images: 0, charged: 0 });
     expect(state.costHistory).toEqual([]);
     expect(state.takes[0]).toMatchObject({ paid: false, actualUsd: null, estimateUsd: null });
     // and its result is marked as what it is: a test model's placeholder pattern, never a real picture
@@ -842,7 +842,7 @@ describe("where a real model can be used, the Studio offers no test model and sh
     expect(state.takes).toEqual([]);
     expect(state.images.map((i) => [i.assetId, i.origin, i.test])).toEqual([[photo, "uploaded", false]]);
     expect(state.subjects.find((s) => s.name === "Yumeko")).toMatchObject({ images: 1 });
-    expect(state.spent).toEqual({ usd: 0, images: 0 });
+    expect(state.spent).toEqual({ usd: 0, images: 0, charged: 0 });
     // with no take in sight, the stage opens on the photograph
     expect(defaultStartingImages(state.images)).toEqual([photo]);
     expect(opensOnStartingImages(state.images, state.takes[0]?.createdAt ?? null)).toBe(true);

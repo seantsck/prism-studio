@@ -210,7 +210,7 @@ test("A: the Studio is in the navigation, opens on the first Character and offer
   await expect(page.getByTestId("studio-source-none")).toHaveAttribute("aria-pressed", "true");
   // nothing exists yet: the stage says what to do, and nothing has been billed
   await expect(page.getByTestId("studio-empty")).toContainText("No picture of Yumeko yet");
-  await expect(page.getByTestId("studio-spent")).toHaveText("Nothing billed for Yumeko yet");
+  await expect(page.getByTestId("studio-spent")).toHaveText("Nothing charged for Yumeko yet");
   // Prism suggests a free model first; the paid one is listed, labelled, and never chosen for the creator
   await expect(page.getByTestId("studio-model")).toHaveValue("mock/mock-image-1");
   await expect(page.getByTestId("studio-model").locator(`option[value="${PAID_MODEL}"]`)).toHaveText(
@@ -311,7 +311,7 @@ test("C: a 3/4 view FROM the photo: what will be sent is shown, then a labelled 
   await expect(page.getByTestId("studio-kind-note")).toHaveText("Generated reference, not a photograph");
   await expect(page.getByTestId("studio-test-take")).toHaveText("Test pattern, not a real picture");
   await expect(page.getByTestId("studio-cost")).toHaveText("No charge");
-  await expect(page.getByTestId("studio-spent")).toHaveText("Nothing billed for Yumeko yet");
+  await expect(page.getByTestId("studio-spent")).toHaveText("Nothing charged for Yumeko yet");
   await expect(page.getByTestId("studio-result")).toBeVisible();
   // the stage shows what THIS take was made from (named as the take's, not as what comes next), and the record
   // says so too
@@ -541,16 +541,18 @@ test("I: a paid model shows its dollar price before anything is made, and the bu
   await expect(page.getByTestId("studio-test-model")).toHaveCount(0);
   await priced(page);
   const estimate = page.getByTestId("studio-estimate");
-  await expect(estimate).toHaveText(/^Up to \$0\.\d+$/);
-  const medium = Number((await estimate.innerText()).replace("Up to $", ""));
+  // one exact price in whole cents: three times Prism's own cost (which only the owner view shows)
+  await expect(estimate).toHaveText(/^\$\d+\.\d\d$/);
+  const medium = Number((await estimate.innerText()).replace("$", ""));
   expect(medium).toBeGreaterThan(0);
-  // nothing has been made with this model here, so nothing is guessed
-  await expect(page.getByTestId("studio-typical")).toHaveText("Nothing comparable has been made here yet.");
+  await expect(page.getByTestId("studio-owner-cost")).toHaveCount(0);
   const generate = page.getByTestId("studio-generate");
   await expect(generate).toHaveAttribute("data-paid", "true");
-  await expect(generate).toHaveText(`Generate · up to $${medium}`);
+  await expect(generate).toHaveText(`Generate · $${medium.toFixed(2)}`);
   await expect(page.locator('input[name="confirmedTotalUsd"]')).toHaveCount(1);
-  expect(Number(await page.locator('input[name="confirmedTotalUsd"]').inputValue())).toBeCloseTo(medium, 3);
+  // what is confirmed back is Prism's cost; the price is that cost × 3, rounded up to the cent
+  const cost = Number(await page.locator('input[name="confirmedTotalUsd"]').inputValue());
+  expect(Math.ceil(cost * 3 * 100 - 1e-9) / 100).toBeCloseTo(medium, 6);
   // a real model offers the picture shapes a reference needs, and its own quality ladder
   await expect(page.getByTestId("studio-format").locator("option").first()).toHaveText("Auto: Portrait 2:3");
   await page.getByTestId("studio-sent").locator("summary").click();
@@ -560,7 +562,7 @@ test("I: a paid model shows its dollar price before anything is made, and the bu
   await expect(page.getByTestId("studio-prompt")).toContainText("Half-body view");
   // the fine print is in dollars and words, never in provider credits
   await expect(page.getByTestId("studio-basis")).toHaveText(
-    "Upper bound from the provider\u2019s published prices. It covers the picture, the image sent with it and the prompt text.",
+    "One price for this exact request. It covers the picture, the image sent with it and the prompt text.",
   );
   await expect(page.getByTestId("studio-price")).not.toContainText(/credit/i);
   await expect(page.getByTestId("studio-sent")).not.toContainText(/credit/i);
@@ -574,34 +576,34 @@ test("I: a paid model shows its dollar price before anything is made, and the bu
     timeout: 20_000,
   });
   await expect(page.getByTestId("studio-sent-strip")).toHaveAttribute("data-count", "2");
-  const two = Number((await estimate.innerText()).replace("Up to $", ""));
+  const two = Number((await estimate.innerText()).replace("$", ""));
   expect(two).toBeGreaterThan(medium);
-  await expect(generate).toHaveText(`Generate · up to $${two}`);
+  await expect(generate).toHaveText(`Generate · $${two.toFixed(2)}`);
   await expect(page.getByTestId("studio-basis")).toContainText("the 2 images sent with it");
   await second.click();
   await expect(page.getByTestId("studio-sent").locator("summary")).toContainText("Sends 1 image", {
     timeout: 20_000,
   });
-  await expect(generate).toHaveText(`Generate · up to $${medium}`);
+  await expect(generate).toHaveText(`Generate · $${medium.toFixed(2)}`);
   await page.getByTestId("studio-quality").selectOption("high");
   await priced(page);
   await expect
-    .poll(async () => Number((await estimate.innerText()).replace("Up to $", "")), { timeout: 20_000 })
+    .poll(async () => Number((await estimate.innerText()).replace("$", "")), { timeout: 20_000 })
     .toBeGreaterThan(medium);
   await page.getByTestId("studio-quality").selectOption("low");
   await expect
-    .poll(async () => Number((await estimate.innerText()).replace("Up to $", "")), { timeout: 20_000 })
+    .poll(async () => Number((await estimate.innerText()).replace("$", "")), { timeout: 20_000 })
     .toBeLessThan(medium);
   // from words alone it costs less than with a starting image
   await page.getByTestId("studio-quality").selectOption("");
   await page.getByTestId("studio-source-none").click();
   await expect
-    .poll(async () => Number((await estimate.innerText()).replace("Up to $", "")), { timeout: 20_000 })
+    .poll(async () => Number((await estimate.innerText()).replace("$", "")), { timeout: 20_000 })
     .toBeLessThan(medium);
   // this story never presses Generate: nothing was queued and nothing was billed
   await page.reload();
   await expect(page.getByTestId("studio-take-thumb")).toHaveCount(takesBefore);
-  await expect(page.getByTestId("studio-spent")).toHaveText("Nothing billed for Yumeko yet");
+  await expect(page.getByTestId("studio-spent")).toHaveText("Nothing charged for Yumeko yet");
   // the creator's choice of model is remembered: after a reload, and for the next Character too, so the next
   // Generate does not quietly go back to drawing a test pattern. The price is still on the button every time.
   await expect(page.getByTestId("studio-model")).toHaveValue(PAID_MODEL);
@@ -613,7 +615,7 @@ test("I: a paid model shows its dollar price before anything is made, and the bu
   );
   await expect(page.getByTestId("studio-model")).toHaveValue(PAID_MODEL);
   await priced(page);
-  await expect(page.getByTestId("studio-generate")).toHaveText(/^Generate · up to \$0\.\d+$/);
+  await expect(page.getByTestId("studio-generate")).toHaveText(/^Generate · \$\d+\.\d\d$/);
   await expect(page.getByTestId("studio-take-thumb")).toHaveCount(0);
 });
 
@@ -977,7 +979,7 @@ test("N: photos added after a picture was made open the stage, all selected; Gen
   await expect(surface).toHaveAttribute("data-view", "take");
   await expect(page.getByTestId("studio-take").locator("h2")).toHaveText(`#${takes + 1} 3/4 view`);
   await expect(selected).toHaveCount(3);
-  await expect(page.getByTestId("studio-spent")).toHaveText("Nothing billed for Yumeko yet");
+  await expect(page.getByTestId("studio-spent")).toHaveText("Nothing charged for Yumeko yet");
 });
 
 test("O: the reference set: what is in each view, Make it for an empty one, and one click to add a take or a photo", async ({
