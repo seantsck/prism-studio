@@ -71,7 +71,7 @@ test("Generate candidates: three still images from three image models, no 3D set
       panel.locator(`[data-testid="model-row"][data-model="${id}"]`).getByTestId("model-pick"),
     ).toBeDisabled();
   await expect(models.filter({ hasText: /video/i })).toHaveCount(0);
-  for (const id of ["gpt_image_2_5_flare", "muse_image", "seedream5_lite"]) {
+  for (const id of ["muse_image", "seedream5_lite"]) {
     const row = panel.locator(`[data-testid="model-row"][data-model="${id}"]`);
     await expect(row).toContainText(/not configured|disabled|paid generation is switched off/);
     await expect(row.getByTestId("model-pick")).toBeDisabled();

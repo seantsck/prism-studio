@@ -16,7 +16,7 @@ const PAID_MODEL = "openai-image/gpt-image-2.5-flare";
 const priced = async (page: Page) =>
   expect(page.getByTestId("studio-price")).toHaveAttribute("data-state", "ready", { timeout: 20_000 });
 const upTo = async (page: Page) =>
-  Number((await page.getByTestId("studio-estimate").innerText()).replace("Up to $", ""));
+  Number((await page.getByTestId("studio-estimate").innerText()).replace("$", ""));
 
 test("no test model is offered: the real model is selected, and its price is on the button before anything is made", async ({
   page,
@@ -41,7 +41,7 @@ test("no test model is offered: the real model is selected, and its price is on 
   await expect(generate).toHaveAttribute("data-paid", "true");
   const words = await upTo(page);
   expect(words).toBeGreaterThan(0);
-  await expect(generate).toHaveText(`Generate · up to $${words}`);
+  await expect(generate).toHaveText(`Generate · $${words.toFixed(2)}`);
   await expect(page.getByTestId("studio-sent").locator("summary")).toContainText("Sends no image");
 
   // two photographs: both become starting images, and the price on the button covers both
@@ -63,12 +63,12 @@ test("no test model is offered: the real model is selected, and its price is on 
   await expect(page.getByTestId("studio-sent-strip")).toHaveAttribute("data-count", "2");
   const two = await upTo(page);
   expect(two).toBeGreaterThan(words);
-  await expect(generate).toHaveText(`Generate · up to $${two}`);
+  await expect(generate).toHaveText(`Generate · $${two.toFixed(2)}`);
   await expect(page.locator('input[name="confirmedTotalUsd"]')).toHaveCount(1);
 
   // nothing was started: this story never presses Generate
   await page.reload();
   await expect(page.getByTestId("studio-take-thumb")).toHaveCount(0);
-  await expect(page.getByTestId("studio-spent")).toHaveText("Nothing billed for Yumeko yet");
+  await expect(page.getByTestId("studio-spent")).toHaveText("Nothing charged for Yumeko yet");
   await expect(page.getByTestId("studio-model")).toHaveValue(PAID_MODEL);
 });

@@ -1,3 +1,4 @@
+import { priceText } from "@/domain/pricing/user-price";
 import Link from "next/link";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button, Field, Panel } from "@/components/ui";
@@ -525,7 +526,7 @@ function HighQualityOffer({
   hidden: React.ReactNode;
   sourceAssetId: string;
 }) {
-  const price = offer?.usdPerImage != null ? `$${offer.usdPerImage.toFixed(2)}` : null;
+  const price = offer?.usdPerImage != null ? priceText(offer.usdPerImage) : null;
   return (
     <div className="mt-1 space-y-1 rounded border border-line p-2" data-testid="high-quality-offer">
       <p className="text-[12px]">This image has a complex background.</p>

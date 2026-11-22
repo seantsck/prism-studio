@@ -1,5 +1,7 @@
 "use client";
 
+import { priceText } from "@/domain/pricing/user-price";
+
 import { useMemo, useState } from "react";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button } from "@/components/ui";
@@ -277,7 +279,7 @@ export function ModelComparePanel({
                   {still ? null : <th className="px-2 py-1.5">Audio</th>}
                 </>
               )}
-              <th className="px-2 py-1.5 text-right">Est. cost</th>
+              <th className="px-2 py-1.5 text-right">Price</th>
               {animate ? <th className="px-2 py-1.5">References omitted (keyframe mode)</th> : null}
               <th className="px-2 py-1.5">Historical fit</th>
               <th className="px-2 py-1.5">Advice</th>
@@ -464,7 +466,7 @@ export function ModelComparePanel({
                       </>
                     )}
                     <td className="px-2 py-1.5 text-right tabular-nums" data-testid="model-cost">
-                      {r.kind === "mock" ? "free" : money(v.estimateUsd)}
+                      {r.kind === "mock" ? "free" : priceText(v.estimateUsd)}
                     </td>
                     {animate ? (
                       <td className="px-2 py-1.5 text-muted" data-testid="model-refs-omitted">
@@ -588,11 +590,11 @@ export function ModelComparePanel({
               ? selected.length > 0
                 ? "Estimated total: free (mock)"
                 : "Estimated total: —"
-              : `Estimated total (maximum): ${unknownCost ? "unknown" : money(totalRounded)}`}
+              : `Total price: ${unknownCost ? "unknown" : priceText(totalRounded)}`}
           </span>
           {paid.length > 0 ? (
             <span className="text-[11px] text-faint">
-              set ceiling {setCeilingUsd == null ? "not configured" : money(setCeilingUsd)}
+              set ceiling {setCeilingUsd == null ? "not configured" : priceText(setCeilingUsd)}
             </span>
           ) : null}
         </div>
@@ -602,7 +604,7 @@ export function ModelComparePanel({
               <span>{s.row.label}</span>
               <span className="tabular-nums text-muted">
                 {still && s.view.quality ? `${s.view.quality} · ` : ""}
-                {s.row.kind === "mock" ? "free" : money(s.view.estimateUsd)}
+                {s.row.kind === "mock" ? "free" : priceText(s.view.estimateUsd)}
               </span>
             </li>
           ))}
@@ -619,7 +621,7 @@ export function ModelComparePanel({
         ) : null}
         {overCeiling ? (
           <div className="text-[11px] text-fail">
-            Total {money(totalRounded)} exceeds the set ceiling {money(setCeilingUsd)}.
+            Total {priceText(totalRounded)} exceeds the set ceiling {priceText(setCeilingUsd)}.
           </div>
         ) : null}
         {allIgnored.length > 0 ? (
@@ -686,8 +688,8 @@ export function ModelComparePanel({
               data-testid="confirm-total"
             />
             <span>
-              I confirm spending up to <span className="tabular-nums">{money(totalRounded)}</span> on this
-              set. Nothing is generated until I press the button.
+              I confirm paying <span className="tabular-nums">{priceText(totalRounded)}</span> on this set.
+              Nothing is generated until I press the button.
             </span>
           </label>
         ) : null}

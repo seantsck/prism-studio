@@ -1,3 +1,4 @@
+import { priceText } from "@/domain/pricing/user-price";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { ActionForm } from "@/components/action-form";
@@ -30,7 +31,7 @@ export const dynamic = "force-dynamic";
 type StepState = "done" | "now" | "later";
 const money = (usd: number) => `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}`;
 const priceOf = (q: { paid: boolean; usd: number; label: string }) =>
-  `${q.paid ? `up to ${money(q.usd)}` : "free"} with ${q.label}`;
+  `${q.paid ? priceText(q.usd) : "free"} with ${q.label}`;
 
 /**
  * Start a series (or a film) from a prompt: the premise; for a series, Prism plans the season (an idea per Episode, used

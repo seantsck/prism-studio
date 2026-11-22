@@ -1,3 +1,4 @@
+import { priceText } from "@/domain/pricing/user-price";
 import { ActionForm } from "@/components/action-form";
 import { Button, Field, Panel } from "@/components/ui";
 import type { WritingProposal } from "@/data/writing-repository";
@@ -10,7 +11,7 @@ import type { QuoteResult } from "@/server/series-start";
 
 const money = (usd: number) => `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}`;
 const priceOf = (q: { paid: boolean; usd: number; label: string }) =>
-  `${q.paid ? `up to ${money(q.usd)}` : "free"} with ${q.label}`;
+  `${q.paid ? priceText(q.usd) : "free"} with ${q.label}`;
 
 /**
  * Shape the Bible with Prism: draft it from the premise and the plan, or refine it with a note. Prism's version is shown

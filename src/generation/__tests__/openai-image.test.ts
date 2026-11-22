@@ -84,8 +84,17 @@ async function run(h: Harness, ticks = 3) {
 describe("openai-image: registry, credentials and the worker-only secret", () => {
   it("is registered with the two GPT Image 2.5 models as paid, real, image models", () => {
     const r = createRegistry({ NODE_ENV: "test" });
-    const models = r.models().filter((m) => m.provider === "openai-image");
-    expect(models.map((m) => m.modelId)).toEqual(["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"]);
+    // Sunburst stays registered (its past pictures still resolve) but is not offered for new work (owner, 2026-11-22)
+    expect(
+      r
+        .models()
+        .filter((m) => m.provider === "openai-image")
+        .map((m) => m.modelId),
+    ).toEqual(["gpt-image-2.5-flare"]);
+    const models = ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"].map((id) =>
+      r.model("openai-image", id)!,
+    );
+    expect(models.every(Boolean)).toBe(true);
     for (const m of models) {
       expect(m.kind).toBe("real");
       expect(r.billsMoney(m)).toBe(true);
@@ -215,8 +224,15 @@ describe("openai-image: compile, validate, estimate (pure)", () => {
     expect(high).toBeGreaterThan(med);
     expect(provider.estimateCost(req("medium", 2), model).amount!).toBeGreaterThan(med);
     expect(provider.estimateCost(req("medium"), model)).toEqual(provider.estimateCost(req("medium"), model));
-    // high, 1536 px, at the published count × 1.5 at $30/1M is about $0.28: the bound must cover it
-    expect(high).toBeGreaterThanOrEqual(0.28);
+    // calibrated from 15 real pictures (medium: at most 343 output tokens, bound 400 = $0.012; 1,600 input tokens per
+    // reference = $0.0128); high is the published count scaled by the same ratio × 1.5 (≈ 2,028 tokens = $0.061)
+    expect(med).toBeGreaterThanOrEqual(0.012);
+    expect(provider.estimateCost(req("medium", 1), model).amount!).toBeGreaterThanOrEqual(0.012 + 0.0128);
+    expect(high).toBeGreaterThanOrEqual(0.06);
+    // the 4-reference medium picture that really billed $0.0582 is covered, and no longer priced at 4-5 times it
+    const four = provider.estimateCost(req("medium", 4), model).amount!;
+    expect(four).toBeGreaterThanOrEqual(0.0582);
+    expect(four).toBeLessThan(0.0582 * 1.5);
   });
 });
 
@@ -234,8 +250,8 @@ describe("openai-image: through the existing queue and worker (fake transport)",
     expect(out.asset).toMatchObject({ type: "image", mime: "image/png", source: "provider_output" });
     expect(out.asset.checksum).toMatch(/^[0-9a-f]{64}$/);
     const actual = view.costs.find((c) => c.kind === "actual")!;
-    // fake usage: 100 text-in, 20 image-in, 1500 image-out tokens
-    expect(actual.amount).toBeCloseTo((100 * 5 + 20 * 8 + 1500 * 30) / 1_000_000, 6);
+    // fake usage: 100 text-in, 20 image-in, 343 image-out tokens (the most a real medium picture has used)
+    expect(actual.amount).toBeCloseTo((100 * 5 + 20 * 8 + 343 * 30) / 1_000_000, 6);
     const estimated = view.costs.find((c) => c.kind === "estimated")!;
     expect(estimated.amount!).toBeGreaterThanOrEqual(actual.amount!);
     // the worker-only key never reaches anything Prism persists or shows

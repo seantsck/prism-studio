@@ -17,7 +17,7 @@ export class FakeOpenAIImageTransport implements OpenAIImageTransport {
   failures: OpenAIImageTransportError[] = [];
   usage: OpenAIImageCallResult["usage"] = {
     inputTokens: 120,
-    outputTokens: 1500,
+    outputTokens: 343,
     textInputTokens: 100,
     imageInputTokens: 20,
   };

@@ -1,4 +1,5 @@
 import "server-only";
+import { userPrice } from "@/domain/pricing/user-price";
 import type { SubjectAttemptView } from "@/data/generation-repository";
 import { archiveOf, isArchived } from "@/domain/archive";
 import { isTrashed } from "@/domain/trash";
@@ -215,8 +216,11 @@ export interface StudioState {
   hostedMatting: HostedMattingOffer;
   /** What finished images in this project were really billed: the honest companion to an upper-bound estimate. */
   costHistory: CostSample[];
-  /** Real money billed for this subject's images so far, and how many images that was. */
-  spent: { usd: number; images: number };
+  /**
+   * Real money billed for this subject's images so far, and how many images that was; `charged` is what the creator
+   * was charged for them (each image's price shown before it ran: src/domain/pricing/user-price.ts).
+   */
+  spent: { usd: number; images: number; charged: number };
   /** The Shots this subject appears in, in story order (the next step after references: a Production Frame). */
   shots: StudioShot[];
   /** A Character's reference set (empty for a Location). */
@@ -463,7 +467,7 @@ export async function referenceStudioState(
       models,
       hostedMatting: hostedMattingOffer(),
       costHistory,
-      spent: { usd: 0, images: 0 },
+      spent: { usd: 0, images: 0, charged: 0 },
       shots: [],
       referenceSet: [],
       archived: [],
@@ -682,11 +686,11 @@ export async function referenceStudioState(
       const takeNumber = takeOf.get(a.id) ?? null;
       const usage = findAssetUsage(data, a.id);
       const keptBecause = usage.inUse
-            ? `Still used: ${usage.direct
-                .slice(0, 2)
-                .map((u) => u.label)
-                .join("; ")}.`
-            : null;
+        ? `Still used: ${usage.direct
+            .slice(0, 2)
+            .map((u) => u.label)
+            .join("; ")}.`
+        : null;
       return {
         assetId: a.id,
         url: assetUrl(a),
@@ -734,6 +738,9 @@ export async function referenceStudioState(
     spent: {
       usd: own.filter(bills).reduce((sum, v) => sum + (actualOf(v) ?? 0), 0),
       images: own.filter((v) => bills(v) && actualOf(v) != null).length,
+      charged:
+        Math.round(own.filter(bills).reduce((sum, v) => sum + (userPrice(estimateOf(v)) ?? 0), 0) * 100) /
+        100,
     },
     shots: studioShots(data, base),
     referenceSet:

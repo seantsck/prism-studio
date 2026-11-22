@@ -30,25 +30,37 @@ import type {
  *     gpt-image-1 / dall-e-* are shut down.
  *
  * PRICING IS TOKEN-BASED (text in $5, image in $8, image out $30 per 1M tokens for both models). OpenAI publishes no
- * per-image price and no output-token counts for 2.5, so the per-image figures below are a PROVISIONAL UPPER BOUND:
- * the published output-token counts for low / medium / high at 1024x1024, 1024x1536 and 1536x1024 (the largest of the
- * three for each quality), times a 1.5 safety margin, at $30 per 1M. They must be recalibrated from the `usage`
- * reported by the first owner-approved paid run. Actual cost is ALWAYS computed from the reported usage; when the
- * provider reports none, the actual cost is recorded as unknown, never guessed.
+ * per-image price and no output-token counts for 2.5. The per-image figures below are an UPPER BOUND CALIBRATED from
+ * the usage OpenAI reported for the 15 real Flare pictures made on the hosted site (2026-11-09..21, medium quality,
+ * 1024 to 1536 px, 0 to 6 references): at most 343 image-output tokens per picture and at most 1,536 image-input
+ * tokens per reference. The bound allows 400 and 1,600. Low and high quality have no real run yet: their bound is the
+ * older published count scaled by the same observed ratio (343 / 1584), times 1.5 (provisional). The earlier
+ * provisional bound (published counts × 1.5, 6,000 tokens per reference) was 4 to 5 times the real bills. Actual cost
+ * is ALWAYS computed from the reported usage; when the provider reports none, it is recorded as unknown, never guessed.
  */
 export const OPENAI_IMAGE_PROVIDER_ID = "openai-image";
 export const OPENAI_IMAGE_SDK_REF = "openai@7.32.0";
 export const OPENAI_IMAGE_CATALOG_VERIFIED_AT = "2026-11-07";
-export const OPENAI_IMAGE_PRICING_VERSION = "openai-image-2026-11-07-provisional";
+export const OPENAI_IMAGE_PRICING_VERSION = "openai-image-2026-11-22-calibrated";
 
 /** USD per 1M tokens (pricing page, standard tier; both registered models). */
 export const OPENAI_IMAGE_TOKEN_RATES = { textInput: 5, imageInput: 8, imageOutput: 30 } as const;
 
-/** Published output-token counts (image-generation guide), the largest of the three standard sizes per quality. */
+/** Published output-token counts (image-generation guide, older models), the largest standard size per quality. */
 export const OPENAI_IMAGE_PUBLISHED_OUTPUT_TOKENS = { low: 408, medium: 1584, high: 6240 } as const;
-export const OPENAI_IMAGE_ESTIMATE_MARGIN = 1.5;
-/** Provisional upper bound of image-INPUT tokens per reference image (not published for 2.5). */
-export const OPENAI_IMAGE_PROVISIONAL_INPUT_TOKENS_PER_IMAGE = 6_000;
+/** The most image-output tokens a real 2.5 Flare picture used here (medium quality, 15 runs). */
+export const OPENAI_IMAGE_OBSERVED_MEDIUM_OUTPUT_TOKENS = 343;
+/**
+ * Upper bound of image-OUTPUT tokens per picture. Medium: observed, with headroom. Low / high: not yet observed, so the
+ * published count scaled by the observed medium ratio, times 1.5.
+ */
+export const OPENAI_IMAGE_OUTPUT_TOKEN_BOUND = {
+  low: Math.ceil(408 * (343 / 1584) * 1.5),
+  medium: 400,
+  high: Math.ceil(6240 * (343 / 1584) * 1.5),
+} as const;
+/** Upper bound of image-INPUT tokens per reference image (observed at most 1,536 in 15 real runs). */
+export const OPENAI_IMAGE_INPUT_TOKENS_PER_IMAGE = 1_600;
 
 const SOURCES = [
   "openai@7.32.0 resources/images.d.ts",
@@ -78,11 +90,8 @@ const NO_VIDEO_RULE: CreditRule = {
 const USD_PER_CREDIT = 0.01;
 const cents = (tokens: number, usdPerMillion: number) =>
   Math.ceil(((tokens * usdPerMillion) / 1_000_000) * 100 * 100) / 100;
-const outputCents = (q: keyof typeof OPENAI_IMAGE_PUBLISHED_OUTPUT_TOKENS) =>
-  cents(
-    OPENAI_IMAGE_PUBLISHED_OUTPUT_TOKENS[q] * OPENAI_IMAGE_ESTIMATE_MARGIN,
-    OPENAI_IMAGE_TOKEN_RATES.imageOutput,
-  );
+const outputCents = (q: keyof typeof OPENAI_IMAGE_OUTPUT_TOKEN_BOUND) =>
+  cents(OPENAI_IMAGE_OUTPUT_TOKEN_BOUND[q], OPENAI_IMAGE_TOKEN_RATES.imageOutput);
 
 const pricing = (): CatalogPricing => ({
   version: OPENAI_IMAGE_PRICING_VERSION,
@@ -98,10 +107,7 @@ const pricing = (): CatalogPricing => ({
       high: { std: outputCents("high") },
     },
     defaultQuality: "medium",
-    perReferenceImage: cents(
-      OPENAI_IMAGE_PROVISIONAL_INPUT_TOKENS_PER_IMAGE,
-      OPENAI_IMAGE_TOKEN_RATES.imageInput,
-    ),
+    perReferenceImage: cents(OPENAI_IMAGE_INPUT_TOKENS_PER_IMAGE, OPENAI_IMAGE_TOKEN_RATES.imageInput),
     referenceBilling: "per_request",
   },
 });
@@ -169,8 +175,8 @@ const image = (): CatalogImageSpec => ({
 });
 
 const COMMON_UNSTATED = [
-  "Output-token counts for 2.5 are not published; the estimate uses the older published counts × 1.5 (provisional).",
-  "Image-input tokens per reference are not published for 2.5; the estimate assumes at most 6,000 per image (provisional).",
+  "Output-token counts for 2.5 are not published; the medium-quality bound (400) is calibrated from 15 real pictures (at most 343); low and high are scaled from it (provisional until a real run).",
+  "Image-input tokens per reference are not published for 2.5; the bound (1,600) is calibrated from 15 real pictures (at most 1,536 per reference).",
   "Custom 16:9 / 9:16 canvases are assumed to cost no more than 1536x1024 (smaller area).",
   "Masked inpainting is prompt-guided: the documentation warns the result may not follow the mask exactly.",
 ];

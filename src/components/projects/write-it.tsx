@@ -1,5 +1,7 @@
 "use client";
 
+import { priceText } from "@/domain/pricing/user-price";
+
 import { useMemo, useState } from "react";
 import { ActionForm } from "@/components/action-form";
 import { Button } from "@/components/ui";
@@ -67,7 +69,7 @@ export function WriteIt({
       : picked.length === 1
         ? `episode ${picked[0]!.number}, "${picked[0]!.title}"`
         : `${picked.length} episodes`;
-  const price = quote?.ok ? `${quote.paid ? `up to ${money(usd)}` : "free"} with ${quote.label}` : "";
+  const price = quote?.ok ? `${quote.paid ? priceText(usd) : "free"} with ${quote.label}` : "";
   const recommendedLabel = writers.find((w) => w.value === recommended)?.label;
   const toggle = (id: string) =>
     setUnticked((prev) => {
@@ -203,9 +205,9 @@ export function WriteIt({
                 <dd>{quote.label}</dd>
               </div>
               <div className="flex justify-between gap-4">
-                <dt className="text-muted">Cost</dt>
+                <dt className="text-muted">Price</dt>
                 <dd className="font-medium" data-testid="write-it-confirm-price">
-                  {quote.paid ? `up to ${money(usd)}` : "free"}
+                  {quote.paid ? priceText(usd) : "free"}
                 </dd>
               </div>
             </dl>
@@ -213,7 +215,7 @@ export function WriteIt({
               {picked.length > 1
                 ? `Each episode is written in parts and arrives as its own proposal. Nothing goes into a script until you accept it.`
                 : `It is written in parts and arrives as a proposal. Nothing goes into the script until you accept it.`}
-              {quote.paid ? " The cost shown is the most it should take; it usually takes less." : ""}
+              {quote.paid ? " This is the exact price, charged when you press Write." : ""}
             </p>
             <ActionForm action={writeWhole} successMessage="" className="mt-4 flex justify-end gap-2">
               <input type="hidden" name="projectSlug" value={slug} />
@@ -228,7 +230,7 @@ export function WriteIt({
                 Cancel
               </Button>
               <Button type="submit" variant="primary" data-testid="write-it-confirm-go">
-                Write · {quote.paid ? `up to ${money(usd)}` : "free"}
+                Write · {quote.paid ? priceText(usd) : "free"}
               </Button>
             </ActionForm>
           </div>

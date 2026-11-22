@@ -1,3 +1,4 @@
+import { showsOwnerCost } from "@/domain/pricing/user-price";
 import Link from "next/link";
 import { CastBar } from "@/components/studio/cast-bar";
 import { ReferenceStudio } from "@/components/studio/reference-studio";
@@ -41,9 +42,13 @@ export default async function Page({
         actions={
           subject ? (
             <span className="text-[11.5px] text-muted" data-testid="studio-spent">
-              {state.spent.images === 0
-                ? `Nothing billed for ${subject.name} yet`
-                : `${usd(state.spent.usd)} billed for ${subject.name} (${state.spent.images} image${state.spent.images === 1 ? "" : "s"})`}
+              {state.spent.charged === 0
+                ? `Nothing charged for ${subject.name} yet`
+                : `$${state.spent.charged.toFixed(2)} charged for ${subject.name}${
+                    showsOwnerCost()
+                      ? ` (provider billed ${usd(state.spent.usd)} for ${state.spent.images} image${state.spent.images === 1 ? "" : "s"})`
+                      : ""
+                  }`}
             </span>
           ) : undefined
         }
