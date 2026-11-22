@@ -64,6 +64,12 @@ const ms = (iso: string) => Date.parse(iso);
  */
 export class MemoryGenerationService implements GenerationRepository, GenerationStore {
   private jobs = new Map<string, GenerationJob>();
+
+  /** Jobs of one project that are still queued or running (deleting the project waits for them). */
+  activeJobCount(projectId: string): number {
+    const done = new Set(["succeeded", "failed", "cancelled"]);
+    return [...this.jobs.values()].filter((j) => j.projectId === projectId && !done.has(j.status)).length;
+  }
   private outputs: GenerationOutput[] = [];
   private costs: GenerationCost[] = [];
   private events: GenerationEvent[] = [];

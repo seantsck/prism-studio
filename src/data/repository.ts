@@ -24,6 +24,27 @@ export interface Repository {
   upsertMany<K extends CollectionName>(projectId: string, name: K, items: Collections[K]): Promise<void>;
   remove(projectId: string, name: CollectionName, id: string): Promise<void>;
   findAsset(assetId: string): Promise<Asset | null>;
+  /**
+   * Which of the owner's projects are archived. `available: false` when this database cannot record it yet
+   * (migration 0060 not applied): then nothing is archived and Archive is offered as unavailable.
+   */
+  archivedProjectIds(): Promise<{ ids: Set<string>; available: boolean }>;
+  /** Archives (hides, keeps everything) or restores one of the owner's projects. */
+  setProjectArchived(projectId: string, archived: boolean): Promise<void>;
+  /** Work still queued or running for the project (one line per kind, e.g. "2 image generations"); empty = none. */
+  activeProjectWork(projectId: string): Promise<string[]>;
+  /** Deletes one of the owner's projects and everything in it. Irreversible; callers confirm first. */
+  deleteProject(projectId: string): Promise<void>;
+}
+
+/** This database cannot record archived projects yet (migration 0060 is not applied). */
+export class ProjectArchiveUnavailableError extends Error {
+  constructor() {
+    super(
+      "Archiving projects needs a one-time database update (migration 0060) that has not been applied yet.",
+    );
+    this.name = "ProjectArchiveUnavailableError";
+  }
 }
 
 /** Collections keyed by a field other than `id` do not exist today; kept explicit for the SQL adapter. */
@@ -45,4 +66,37 @@ export const COLLECTION_TABLES: Record<CollectionName, string> = {
   frames: "storyboard_frames",
   attempts: "generation_attempts",
   continuityChecks: "continuity_checks",
+};
+
+/** Counts of unfinished work, by kind, as the lines a refused delete shows. */
+export function activeWorkLines(counts: Partial<Record<ActiveWorkKind, number>>): string[] {
+  const out: string[] = [];
+  for (const [kind, [one, many]] of Object.entries(ACTIVE_WORK_LABELS) as Array<
+    [ActiveWorkKind, [string, string]]
+  >) {
+    const n = counts[kind] ?? 0;
+    if (n > 0) out.push(`${n} ${n === 1 ? one : many}`);
+  }
+  return out;
+}
+
+export type ActiveWorkKind =
+  | "generation"
+  | "continuity"
+  | "reconstruction"
+  | "render"
+  | "story"
+  | "writing"
+  | "shotList"
+  | "shotDirection";
+
+const ACTIVE_WORK_LABELS: Record<ActiveWorkKind, [string, string]> = {
+  generation: ["image or video generation", "image or video generations"],
+  continuity: ["continuity check", "continuity checks"],
+  reconstruction: ["3D reconstruction", "3D reconstructions"],
+  render: ["episode render", "episode renders"],
+  story: ["story analysis", "story analyses"],
+  writing: ["writing request", "writing requests"],
+  shotList: ["shot list", "shot lists"],
+  shotDirection: ["shot direction request", "shot direction requests"],
 };

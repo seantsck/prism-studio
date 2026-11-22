@@ -39,6 +39,7 @@ import { SHOT_SECTION_SPECS, applySection } from "@/domain/shot-fields";
 import { validateLookLink } from "@/domain/looks";
 import { nextTakeNumber, selectTake as selectTakeDomain } from "@/domain/takes";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
+import { ProjectArchiveUnavailableError } from "@/data/repository";
 import { getRepo, requireProjectFresh } from "./repo";
 import { recordCreatorEdit, syncEpisodeScript } from "./script-sync";
 import { assetDeletionRefusal } from "./asset-deletion";
@@ -163,6 +164,49 @@ async function startFromPremise_impl(form: FormData) {
     await repo.upsert(data.project.id, "episodes", emptyEpisodeOne(data.project.id));
   refresh(slug);
   redirect(`/projects/${slug}/start`);
+}
+
+/** One of the owner's projects, by slug (the Projects list acts on projects it shows, not on the open project). */
+async function ownedProject(form: FormData) {
+  const repo = await getRepo();
+  const project = (await repo.listProjects()).find((p) => p.slug === str(form, "projectSlug"));
+  if (!project) throw new UserFacingError("That project no longer exists.");
+  return { repo, project };
+}
+
+/** Archive: the project leaves the Projects list; everything in it is kept, and Restore brings it back. */
+async function archiveProject_impl(form: FormData) {
+  const { repo, project } = await ownedProject(form);
+  const archived = str(form, "archived") !== "0";
+  try {
+    await repo.setProjectArchived(project.id, archived);
+  } catch (err) {
+    if (err instanceof ProjectArchiveUnavailableError) throw new UserFacingError(err.message);
+    throw err;
+  }
+  revalidatePath("/");
+}
+
+/**
+ * Delete a project and everything in it, for good. Confirmed by typing the project's exact title, and refused while
+ * anything for it is still queued or running (a paid generation must never finish into a project that is gone).
+ * The stored files of its assets are removed after the rows, best effort (an orphaned file is harmless).
+ */
+async function deleteProject_impl(form: FormData) {
+  const { repo, project } = await ownedProject(form);
+  if (str(form, "confirmTitle") !== project.title.trim())
+    throw new UserFacingError(`Type the project's title exactly ("${project.title}") to delete it.`);
+  const active = await repo.activeProjectWork(project.id);
+  if (active.length > 0)
+    throw new UserFacingError(
+      `"${project.title}" still has work in progress (${active.join(", ")}). Wait for it to finish or cancel it, then delete.`,
+    );
+  const data = await repo.loadProject(project.slug);
+  const files = (data?.assets ?? []).filter((a) => a.objectPath);
+  await repo.deleteProject(project.id);
+  for (let i = 0; i < files.length; i += 10) await Promise.all(files.slice(i, i + 10).map(discardUpload));
+  revalidatePath("/");
+  redirect("/");
 }
 
 async function saveProject_impl(form: FormData) {
@@ -1157,6 +1201,14 @@ export async function createProject(form: FormData): Promise<ActionResult> {
 
 export async function startFromPremise(form: FormData): Promise<ActionResult> {
   return runAction(() => startFromPremise_impl(form), { name: "startFromPremise" });
+}
+
+export async function archiveProject(form: FormData): Promise<ActionResult> {
+  return runAction(() => archiveProject_impl(form), { name: "archiveProject" });
+}
+
+export async function deleteProject(form: FormData): Promise<ActionResult> {
+  return runAction(() => deleteProject_impl(form), { name: "deleteProject" });
 }
 
 export async function saveProject(form: FormData): Promise<ActionResult> {

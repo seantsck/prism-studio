@@ -1220,3 +1220,50 @@ test("S: Archive is in view on every selected photo, and a Character's page list
   await item.getByTestId("studio-restore").click();
   await expect(pictures).toHaveCount(before, { timeout: 30_000 });
 });
+
+test("T: on the Projects page a project is archived, restored, and deleted only once its title is typed", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.locator('input[name="title"]').fill("Throwaway Pilot");
+  await page.getByRole("button", { name: "Create project" }).click();
+  await expect(page).toHaveURL(/\/projects\/throwaway-pilot$/);
+  await page.goto("/");
+  const row = page.locator('[data-testid="project-row"][data-slug="throwaway-pilot"]');
+  await expect(row).toHaveCount(1);
+
+  // archive: it leaves the list and waits under Archived; Restore brings it back
+  await row.getByTestId("project-archive").click();
+  const archived = page.getByTestId("projects-archived");
+  await expect(archived).toBeVisible({ timeout: 30_000 });
+  await expect(
+    page.locator('[data-testid="project-row"][data-slug="throwaway-pilot"]:not([data-archived])'),
+  ).toHaveCount(0);
+  await archived.locator("summary").click();
+  await archived.locator('[data-slug="throwaway-pilot"]').getByTestId("project-restore").click();
+  await expect(
+    page.locator('[data-testid="project-row"][data-slug="throwaway-pilot"]:not([data-archived])'),
+  ).toHaveCount(1, {
+    timeout: 30_000,
+  });
+
+  // delete: the button stays off until the exact title is typed
+  const live = page.locator('[data-testid="project-row"][data-slug="throwaway-pilot"]');
+  await live.getByTestId("project-delete-open").click();
+  const confirm = live.getByTestId("project-delete-confirm");
+  await expect(confirm).toContainText("can't be undone");
+  const go = confirm.getByTestId("project-delete");
+  await expect(go).toBeDisabled();
+  await confirm.getByTestId("project-delete-title").fill("Throwaway");
+  await expect(go).toBeDisabled();
+  await confirm.getByTestId("project-delete-title").fill("Throwaway Pilot");
+  await expect(go).toBeEnabled();
+  await go.click();
+  await expect(page.locator('[data-testid="project-row"][data-slug="throwaway-pilot"]')).toHaveCount(0, {
+    timeout: 30_000,
+  });
+  // the demo project is untouched
+  await expect(page.locator('[data-testid="project-row"][data-slug="ojousama"]')).toHaveCount(1);
+  await page.goto("/projects/throwaway-pilot");
+  await expect(page.getByText(/not found|could not be found|404/i).first()).toBeVisible();
+});
