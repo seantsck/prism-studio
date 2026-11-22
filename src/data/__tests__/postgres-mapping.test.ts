@@ -165,3 +165,29 @@ describe("postgres mapping", () => {
     expect(back.generation.referenceAssetIds).toEqual(ids);
   });
 });
+
+describe("an Episode's length (migration 0061)", () => {
+  const episode = {
+    id: "00000000-0000-4000-8000-000000000001",
+    projectId: "00000000-0000-4000-8000-000000000002",
+    number: 1,
+    slug: "ep-1",
+    title: "Pilot",
+    synopsis: "",
+    scriptText: "",
+    order: 1,
+    createdAt: "2026-11-22T00:00:00.000Z",
+    updatedAt: "2026-11-22T00:00:00.000Z",
+  };
+  it("is not written when the Episode has none stored (so writes work before the migration)", () => {
+    expect(flatToRow(episode, COLLECTIONS.episodes)).not.toHaveProperty("target_minutes");
+  });
+  it("is written when set, and cleared as null", () => {
+    expect(flatToRow({ ...episode, targetMinutes: 24 }, COLLECTIONS.episodes)).toMatchObject({
+      target_minutes: 24,
+    });
+    expect(flatToRow({ ...episode, targetMinutes: null }, COLLECTIONS.episodes)).toMatchObject({
+      target_minutes: null,
+    });
+  });
+});

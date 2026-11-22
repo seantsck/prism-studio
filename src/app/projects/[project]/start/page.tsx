@@ -6,12 +6,13 @@ import { Button, Field, PageHeader } from "@/components/ui";
 import type { WritingProposal } from "@/data/writing-repository";
 import type { Episode } from "@/domain/schemas";
 import { RefreshWhileActive } from "@/components/images/refresh-while-active";
-import { isSeasonPlanRequest, PREMISE_MAX, REFINE_NOTE_MAX } from "@/domain/series-start";
+import { SetAllMinutes } from "@/components/projects/set-all-minutes";
+import { isSeasonPlanRequest, MAX_MINUTES, PREMISE_MAX, REFINE_NOTE_MAX } from "@/domain/series-start";
 import { PLAN_BATCH } from "@/domain/story/writing";
 import { cn } from "@/lib/utils";
 import { startFromPremise } from "@/server/actions";
 import { requireProject } from "@/server/repo";
-import { editSeasonPlan, planSeason } from "@/server/series-actions";
+import { editSeasonPlan, planSeason, setRuntime } from "@/server/series-actions";
 import {
   quoteAnalyzeEpisode,
   quoteSeasonPlan,
@@ -250,6 +251,7 @@ export default async function StartPage({ params }: { params: Promise<{ project:
             <Later>Comes after the season plan (or write the episodes yourself on the Episodes page).</Later>
           ) : (
             <div className="space-y-4">
+              {!series && first ? <Runtime slug={slug} episode={first} kind={kind} /> : null}
               <WritingStatus episodes={episodes} wholeOf={wholeOf} link={sessionLink} base={base} />
               {written ? null : recommended ? (
                 <WriteIt
@@ -391,22 +393,40 @@ function PlanEditor({
       ) : (
         <p className="text-[13px] text-muted">
           {hadPlan
-            ? "Your plan. Edit any title or synopsis and save, or ask Prism to refine it."
-            : "Write the plan yourself, or let Prism plan it below and edit what it gives you."}
+            ? "Your plan. Edit any title, length or synopsis and save, or ask Prism to refine it."
+            : "Write the plan yourself, or let Prism plan it below and edit what it gives you. Set each episode's length in minutes and Prism sizes its scenes and script to it."}
         </p>
       )}
+      <SetAllMinutes max={MAX_MINUTES} />
       <ol className="space-y-2">
         {episodes.map((e, i) => (
           <li key={e.id} className="grid gap-1 sm:grid-cols-[2.5rem_1fr]" data-testid="start-plan-episode">
             <span className="pt-1 text-[12px] text-muted">{e.number}.</span>
             <div className="space-y-1">
-              <input
-                name={`title_${e.id}`}
-                defaultValue={titleOf(e, i)}
-                maxLength={120}
-                aria-label={`Episode ${e.number} title`}
-                className="font-medium"
-              />
+              <div className="flex gap-2">
+                <input
+                  name={`title_${e.id}`}
+                  defaultValue={titleOf(e, i)}
+                  maxLength={120}
+                  aria-label={`Episode ${e.number} title`}
+                  className="min-w-0 flex-1 font-medium"
+                />
+                <label className="flex shrink-0 items-center gap-1 text-[12px] text-muted">
+                  <input
+                    name={`minutes_${e.id}`}
+                    type="number"
+                    min={1}
+                    max={MAX_MINUTES}
+                    inputMode="numeric"
+                    defaultValue={e.targetMinutes ?? ""}
+                    placeholder="—"
+                    aria-label={`Episode ${e.number} length in minutes`}
+                    className="w-16"
+                    data-minutes
+                  />
+                  min
+                </label>
+              </div>
               <textarea
                 name={`synopsis_${e.id}`}
                 defaultValue={synopsisOf(e, i)}
@@ -454,6 +474,40 @@ function PlanEditor({
           {refineQuote.reason}
         </p>
       ) : null}
+    </ActionForm>
+  );
+}
+
+/** A film's (or short's) length, set before it is written: Prism sizes its scenes and script to it. */
+function Runtime({ slug, episode, kind }: { slug: string; episode: Episode; kind: string }) {
+  return (
+    <ActionForm
+      action={setRuntime}
+      successMessage="Length saved"
+      className="flex flex-wrap items-end gap-2"
+      data-testid="start-runtime"
+    >
+      <input type="hidden" name="projectSlug" value={slug} />
+      <input type="hidden" name="episodeId" value={episode.id} />
+      <Field
+        label="Length"
+        hint={`Minutes on screen; Prism sizes the ${kind === "film" ? "film" : "short"}'s scenes and script to it.`}
+      >
+        <input
+          name="minutes"
+          type="number"
+          min={1}
+          max={MAX_MINUTES}
+          inputMode="numeric"
+          defaultValue={episode.targetMinutes ?? ""}
+          placeholder={kind === "film" ? "100" : "15"}
+          className="w-24"
+          data-testid="start-runtime-input"
+        />
+      </Field>
+      <Button type="submit" data-testid="start-runtime-save">
+        Set length
+      </Button>
     </ActionForm>
   );
 }

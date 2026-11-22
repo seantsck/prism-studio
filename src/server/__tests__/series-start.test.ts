@@ -3,12 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRepository } from "@/data/memory-repository";
 import { projectAreas } from "@/domain/production-checklist";
 import {
+  lengthLine,
   PREMISE_MAX,
+  runtimesLine,
   seasonPlanInstruction,
   titleFromPremise,
   wholeScriptInstruction,
 } from "@/domain/series-start";
-import { LIMITS, longFormPlan, PLAN_BATCH } from "@/domain/story/writing";
+import { LIMITS, longFormPlan, MAX_LONG_FORM_PARTS, PLAN_BATCH } from "@/domain/story/writing";
 import { FakeStoryProvider } from "@/story/providers/fake";
 import { createStoryRegistry } from "@/story/registry";
 import { StoryWorker } from "@/story/worker";
@@ -73,6 +75,7 @@ import {
   planSeason,
   reviewBible,
   saveSeasonPlan,
+  setRuntime,
   writeWhole,
 } from "../series-actions";
 import { BIBLE_AI_FIELDS, parseBibleIdeas } from "@/domain/bible-ai";
@@ -910,5 +913,109 @@ describe("starting a series from a prompt", () => {
     const q = quoteSeasonPlan(data);
     expect(q).toMatchObject({ ok: true, paid: true });
     if (q.ok) expect(q.usd).toBeLessThan(0.25);
+  });
+
+  it("a length sizes how a whole Episode or film is written: about a page a minute, in parts", () => {
+    expect(longFormPlan("series", 32_000)).toEqual({ kind: "episode", parts: 2, partTokens: 8_000 });
+    expect(longFormPlan("series", 32_000, 24)).toEqual({
+      kind: "episode",
+      parts: 2,
+      partTokens: 8_000,
+      minutes: 24,
+    });
+    expect(longFormPlan("series", 32_000, 60)).toMatchObject({ parts: 5, partTokens: 8_000 });
+    expect(longFormPlan("short", 32_000, 5)).toMatchObject({ parts: 1, partTokens: 6_000 });
+    // a very long film gets bigger parts, never more than the most parts, never above the model's maximum
+    const epic = longFormPlan("film", 32_000, 600);
+    expect(epic.parts).toBe(MAX_LONG_FORM_PARTS);
+    expect(epic.partTokens).toBeLessThanOrEqual(32_000);
+    expect(epic.parts * epic.partTokens).toBeGreaterThanOrEqual(600 * 600);
+  });
+
+  it("the plan and the script are told each episode's length", () => {
+    expect(lengthLine(24)).toContain("about 24 minutes on screen: about 24 screenplay pages");
+    expect(
+      runtimesLine([
+        { number: 1, targetMinutes: 24 },
+        { number: 2, targetMinutes: 24 },
+        { number: 3, targetMinutes: 45 },
+        { number: 4, targetMinutes: null },
+        { number: 5, targetMinutes: 24 },
+      ]),
+    ).toBe(
+      "Runtimes (pace what happens in each episode to fit): episodes 1–2: 24 min; episode 3: 45 min; episode 5: 24 min.",
+    );
+    expect(runtimesLine([{ number: 1 }, { number: 2, targetMinutes: null }])).toBe("");
+  });
+
+  it("each episode's length is set in the plan editor and used when it is planned and written", async () => {
+    const { slug, data } = await newSeries();
+    const eps = [...data.episodes].sort((a, b) => a.number - b.number);
+    const fields: Record<string, string> = { projectSlug: slug };
+    for (const e of eps) {
+      fields[`title_${e.id}`] = e.title;
+      fields[`synopsis_${e.id}`] = `Plan ${e.number}.`;
+      fields[`minutes_${e.id}`] = e.number === 3 ? "45" : "24";
+    }
+    expect(await editSeasonPlan(form({ ...fields, [`minutes_${eps[0]!.id}`]: "0" }))).toMatchObject({
+      ok: false,
+      error: "An episode's length is a whole number of minutes from 1 to 600.",
+    });
+    expect(await editSeasonPlan(form(fields))).toMatchObject({ ok: true, message: "Plan saved." });
+    let saved = (await repo.loadProject(slug))!;
+    expect(saved.episodes.find((e) => e.id === eps[2]!.id)!.targetMinutes).toBe(45);
+    expect(saved.episodes.find((e) => e.id === eps[0]!.id)!.targetMinutes).toBe(24);
+
+    // the plan is told the runtimes
+    await planSeason(form({ projectSlug: slug }));
+    expect((await newest(slug, "Plan season 1")).instruction).toContain(
+      "episodes 1–2: 24 min; episode 3: 45 min; episodes 4–8: 24 min",
+    );
+    // writing episode 3 is sized to 45 minutes and told so, and priced for it
+    const q24 = quoteWhole(
+      saved,
+      saved.episodes.find((e) => e.id === eps[0]!.id)!,
+    );
+    const q45 = quoteWhole(
+      saved,
+      saved.episodes.find((e) => e.id === eps[2]!.id)!,
+    );
+    expect(q24.ok && q45.ok).toBe(true);
+    expect(await writeWhole(form({ projectSlug: slug, episodeIds: eps[2]!.id }))).toEqual({ ok: true });
+    const whole = (await proposalsOf(slug)).find((p) => p.context.longForm)!;
+    expect(whole.context.longForm).toEqual(longFormPlan("series", 32_000, 45));
+    expect(whole.instruction).toContain("It runs about 45 minutes on screen");
+    // cleared: blank is no length
+    expect(
+      await editSeasonPlan(
+        form({
+          projectSlug: slug,
+          ...{
+            [`title_${eps[2]!.id}`]: eps[2]!.title,
+            [`synopsis_${eps[2]!.id}`]: "Plan 3.",
+            [`minutes_${eps[2]!.id}`]: "",
+          },
+        }),
+      ),
+    ).toMatchObject({ ok: true });
+    saved = (await repo.loadProject(slug))!;
+    expect(saved.episodes.find((e) => e.id === eps[2]!.id)!.targetMinutes).toBeNull();
+  });
+
+  it("a film's length is set on its own and sizes the whole film", async () => {
+    await createProject(form({ title: "Runtime", premise: PREMISE, projectType: "film" }));
+    const data = (await repo.loadProject("runtime"))!;
+    const screenplay = data.episodes[0]!;
+    expect(screenplay.targetMinutes ?? null).toBeNull();
+    expect(
+      await setRuntime(form({ projectSlug: "runtime", episodeId: screenplay.id, minutes: "100" })),
+    ).toMatchObject({ ok: true, message: "Length set to 100 minutes." });
+    expect(await writeWhole(form({ projectSlug: "runtime", scope: "one" }))).toEqual({ ok: true });
+    const [p] = (await proposalsOf("runtime")).filter((x) => x.context.longForm);
+    expect(p!.context.longForm).toEqual(longFormPlan("film", 32_000, 100));
+    expect(p!.context.longForm!.parts).toBe(6);
+    await work();
+    const [done] = (await proposalsOf("runtime")).filter((x) => x.context.longForm);
+    expect(done).toMatchObject({ status: "ready", providerCalls: 6 });
   });
 });

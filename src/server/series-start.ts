@@ -152,7 +152,11 @@ export function quoteWhole(data: ProjectData, episode: Episode, writer?: string 
     draftText: null,
     conversation: [],
     model: r.model,
-    longForm: longFormPlan(data.project.projectType, r.model.maxOutputTokens || 32_000),
+    longForm: longFormPlan(
+      data.project.projectType,
+      r.model.maxOutputTokens || 32_000,
+      episode.targetMinutes,
+    ),
   });
   const refused = over(r.model, p.usd, `Writing "${episode.title}"`);
   if (refused || p.tooLong) return { ok: false, reason: refused ?? "The script is too long for the model." };
@@ -173,7 +177,9 @@ export function episodesToWrite(data: ProjectData, scope: WriteScope): Episode[]
 }
 
 export type WritingQuote =
-  | (Quote & { episodes: Array<{ id: string; number: number; title: string; usd: number }> })
+  | (Quote & {
+      episodes: Array<{ id: string; number: number; title: string; usd: number; minutes: number | null }>;
+    })
   | { ok: false; reason: string };
 
 /** The total for writing those Episodes (each its own request, each within the per-request limit). */
@@ -185,13 +191,14 @@ export function quoteWriting(data: ProjectData, scope: WriteScope, writer?: stri
       reason:
         typeof scope === "string" ? "Every Episode already has a script." : "Pick at least one episode.",
     };
-  const priced: Array<{ id: string; number: number; title: string; usd: number }> = [];
+  const priced: Array<{ id: string; number: number; title: string; usd: number; minutes: number | null }> =
+    [];
   let first: Quote | null = null;
   for (const e of targets) {
     const q = quoteWhole(data, e, writer);
     if (!q.ok) return q;
     first ??= q;
-    priced.push({ id: e.id, number: e.number, title: e.title, usd: q.usd });
+    priced.push({ id: e.id, number: e.number, title: e.title, usd: q.usd, minutes: e.targetMinutes ?? null });
   }
   const total = Math.round(priced.reduce((s, e) => s + e.usd, 0) * 10000) / 10000;
   return { ...first!, usd: total, episodes: priced };

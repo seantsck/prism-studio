@@ -206,6 +206,15 @@ language. The project is created with the premise in its Bible and its Episodes 
    longest. The Bible stays editable by hand below. Writing a whole Episode or film sends the Bible's filled fields
    (`bible` in the context) and asks the writer to follow them.
 
+**Length.** Each episode has a length in minutes (`episodes.target_minutes`, migration 0061; 1–600, blank for none),
+set in the plan editor (one box per episode, plus **Every episode: N minutes → Apply to all**); a film or short sets its
+one length in the Write step. The season plan is told the runtimes (`runtimesLine`), the script is asked for about a
+page a minute in scenes sized to it (`lengthLine`), and the whole Episode is written in parts sized to it
+(`longFormPlan(kind, max, minutes)`: `TOKENS_PER_MINUTE` 600, at most `MAX_LONG_FORM_PARTS` 12 parts, bigger parts for
+a long film), so the price shown grows with the length. Without a length, writing is exactly as before. Before 0061 is
+applied every other write still works (the column is written only when a length is set) and setting a length says the
+migration is needed.
+
 The start page and the Bible page update on their own every few seconds while Prism is working on something they show
 (`RefreshWhileActive`), so a plan, a Bible draft, a written Episode or an analysis appears without reloading.
 

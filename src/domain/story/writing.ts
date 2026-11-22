@@ -392,16 +392,46 @@ export interface LongFormPlan {
   parts: number;
   /** Output budget of each part (never above the model's maximum). */
   partTokens: number;
+  /** The creator's target length in minutes, when set: the parts are sized to it. */
+  minutes?: number;
 }
 
 /** How much of the text written so far each later part is shown (its tail), in characters. */
 export const LONG_FORM_TAIL_CHARS = 24_000;
 
-export function longFormPlan(projectType: string, modelMaxOutputTokens: number): LongFormPlan {
+/**
+ * Output tokens a minute of screenplay may take: about a page a minute, in the densest script (Japanese dialogue),
+ * with room for the model's own thinking. A ceiling, never a quote.
+ */
+export const TOKENS_PER_MINUTE = 600;
+/** The most parts one whole Episode or film is written in (a 600-minute ceiling stays within the lease). */
+export const MAX_LONG_FORM_PARTS = 12;
+
+/**
+ * How a whole Episode or film is written: in parts, each continuing from the last. With a target length (minutes) the
+ * number of parts is sized to it; without one, the defaults (a series episode 2 × 8 000 tokens, a short 2 × 6 000, a
+ * film 4 × 10 000).
+ */
+export function longFormPlan(
+  projectType: string,
+  modelMaxOutputTokens: number,
+  minutes?: number | null,
+): LongFormPlan {
   const cap = (n: number) => Math.min(n, modelMaxOutputTokens || n);
-  if (projectType === "film") return { kind: "film", parts: 4, partTokens: cap(10_000) };
-  if (projectType === "short") return { kind: "short", parts: 2, partTokens: cap(6_000) };
-  return { kind: "episode", parts: 2, partTokens: cap(8_000) };
+  const kind: LongFormPlan["kind"] =
+    projectType === "film" ? "film" : projectType === "short" ? "short" : "episode";
+  const partTokens = cap(kind === "film" ? 10_000 : kind === "short" ? 6_000 : 8_000);
+  if (minutes && minutes > 0) {
+    const need = minutes * TOKENS_PER_MINUTE;
+    // a long one gets bigger parts (up to the model's maximum) rather than more than MAX_LONG_FORM_PARTS of them
+    const size = Math.min(
+      modelMaxOutputTokens || Infinity,
+      Math.max(partTokens, Math.ceil(need / MAX_LONG_FORM_PARTS)),
+    );
+    const parts = Math.min(MAX_LONG_FORM_PARTS, Math.max(1, Math.ceil(need / size)));
+    return { kind, parts, partTokens: size, minutes };
+  }
+  return { kind, parts: kind === "film" ? 4 : 2, partTokens };
 }
 
 /**
@@ -486,8 +516,11 @@ export function planBatchInstruction(instruction: string, start: number, end: nu
 /** What each part is asked, on top of the creator's instruction. */
 export function longFormPartInstruction(instruction: string, plan: LongFormPlan, part: number): string {
   const whole = plan.kind === "film" ? "film" : plan.kind === "short" ? "short film" : "episode";
+  const share = plan.minutes
+    ? `about ${Math.max(1, Math.round(plan.minutes / plan.parts))} minutes of it (about a page a minute)`
+    : `about ${Math.round(100 / plan.parts)}% of it`;
   const lines = [
-    `This is part ${part + 1} of ${plan.parts} of the whole ${whole}. Write about ${Math.round(100 / plan.parts)}% of it and stop at the end of a scene.`,
+    `This is part ${part + 1} of ${plan.parts} of the whole ${whole}. Write ${share} and stop at the end of a scene.`,
     part === 0
       ? "Start at the very beginning."
       : "The TARGET is the end of what is written so far: continue exactly where it ends. Do not repeat or rewrite any of it.",
