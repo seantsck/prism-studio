@@ -26,7 +26,8 @@ vi.mock("@/server/auth", () => ({
 }));
 
 import { requireProjectFresh } from "../repo";
-import { deleteSubjectNow, emptyTrash, restoreSubject, trashSubject } from "../trash-actions";
+import { deleteSubjectNow, emptyTrash, moveToTrash, restoreSubject, trashSubject } from "../trash-actions";
+import { removeShotInput } from "../actions";
 import { purgeExpiredTrash } from "../trash";
 import { loadLibrary } from "../character-library";
 
@@ -181,5 +182,44 @@ describe("Locations in the Trash", () => {
     await trashSubject(form({ kind: "location", id: l.id }));
     expect(await emptyTrash(form({ confirm: "1" }))).toMatchObject({ ok: true, message: "1 deleted." });
     expect((await raw()).locations.some((x) => x.id === l.id)).toBe(false);
+  });
+});
+
+describe("a picture a Shot is made from", () => {
+  it("can't be deleted until it is taken off the Shot; then it can (the Shot just goes without it)", async () => {
+    const d = await raw();
+    const shot = d.shots[0]!;
+    const pic = { ...d.assets[0]!, id: randomUUID(), type: "image" as const, objectPath: null, metadata: {} };
+    await repo.upsert(d.project.id, "assets", pic);
+    await repo.upsert(d.project.id, "shots", {
+      ...shot,
+      status: "draft",
+      generation: { ...shot.generation, referenceAssetIds: [...shot.generation.referenceAssetIds, pic.id] },
+    });
+    const del = () => moveToTrash(form({ assetId: pic.id }));
+    expect(await del()).toMatchObject({
+      ok: false,
+      error: expect.stringContaining(`Shot ${shot.shotCode} · generation reference`),
+    });
+    expect(await del()).toMatchObject({
+      error: expect.stringContaining('use "Remove from this Shot" first'),
+    });
+    // a locked Shot keeps its inputs
+    await repo.upsert(d.project.id, "shots", {
+      ...(await raw()).shots.find((s) => s.id === shot.id)!,
+      status: "locked",
+    });
+    const remove = () => removeShotInput(form({ shotId: shot.id, role: "reference", assetId: pic.id }));
+    expect(await remove()).toMatchObject({ ok: false, error: expect.stringContaining("locked") });
+    await repo.upsert(d.project.id, "shots", {
+      ...(await raw()).shots.find((s) => s.id === shot.id)!,
+      status: "draft",
+    });
+    expect(await remove()).toEqual({ ok: true });
+    const after = (await raw()).shots.find((s) => s.id === shot.id)!;
+    expect(after.generation.referenceAssetIds).not.toContain(pic.id);
+    expect(after.generation.referenceAssetIds).toEqual(shot.generation.referenceAssetIds);
+    expect(await remove()).toMatchObject({ ok: false, error: "That picture is no longer on this Shot." });
+    expect(await del()).toEqual({ ok: true });
   });
 });

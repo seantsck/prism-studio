@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ShotPrepView } from "@/components/views/shot-prep-view";
+import { ShotInputs } from "@/components/views/shot-inputs";
 import { audioMixFingerprint } from "@/domain/previs/audio-mix";
 import { onCurrentSet, renderedBlockingFingerprint } from "@/domain/previs/blocking";
 import { performanceAudioPlanForShot } from "@/domain/previs/audio-mix-shot";
@@ -88,6 +89,7 @@ export default async function ShotPrepPage({
           sceneLabel={`Scene ${sceneOfShot.sceneNumber}`}
         />
       ) : null}
+      {shotNow ? <ShotInputs slug={slug} shot={shotNow} assets={data.assets} /> : null}
       <ShotPrepView
         data={data}
         episode={episode}
