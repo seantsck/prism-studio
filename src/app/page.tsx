@@ -137,6 +137,54 @@ export default async function HomePage() {
           </details>
         ) : null}
       </section>
+
+      <section className="relative mx-auto max-w-6xl px-6 pb-20" data-testid="home-characters">
+        <div className="mb-4 flex items-baseline justify-between border-b border-line pb-3">
+          <h2 className="text-[15px] font-semibold tracking-tight">Your characters</h2>
+          <span className="text-[12px] text-muted">{library.characters.length}</span>
+        </div>
+        {!library.available ? (
+          <p className="py-6 text-center text-[13px] text-muted">
+            Your character library needs a one-time database update (migration 0062).
+          </p>
+        ) : library.characters.length === 0 ? (
+          <p className="py-6 text-center text-[13px] text-muted" data-testid="home-characters-empty">
+            Characters you save to your library appear here, ready for any project. Open a character and
+            choose &ldquo;Save to library&rdquo;.
+          </p>
+        ) : (
+          <ul className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3">
+            {library.characters.map((c) => (
+              <li key={c.characterId} data-testid="home-character" data-name={c.name}>
+                <Link
+                  href={`/projects/${c.projectSlug}/characters/${c.characterId}`}
+                  className="group block overflow-hidden rounded-xl border border-line bg-panel transition-colors hover:border-line2"
+                >
+                  <div className="aspect-[3/4] bg-[#232326]">
+                    {c.thumbUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={c.thumbUrl} alt="" className="h-full w-full object-cover" />
+                    ) : null}
+                  </div>
+                  <div className="space-y-0.5 p-2.5">
+                    <div className="truncate text-[13.5px] font-medium group-hover:text-accent">{c.name}</div>
+                    <div className="truncate text-[11.5px] text-muted">{c.role || "Character"}</div>
+                    <div className="truncate text-[11px] text-faint" title={c.projectTitle}>
+                      {c.projectTitle} · {c.pictures} picture{c.pictures === 1 ? "" : "s"}
+                    </div>
+                  </div>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+        {library.characters.length > 0 ? (
+          <p className="mt-3 text-[12px] text-muted">
+            Add one to another project from that project&apos;s Characters page (&ldquo;From your
+            library&rdquo;).
+          </p>
+        ) : null}
+      </section>
     </main>
   );
 }
