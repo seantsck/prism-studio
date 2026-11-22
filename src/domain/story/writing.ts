@@ -94,11 +94,14 @@ export interface WritingScope {
   endLine: number;
 }
 
+/** The most alternatives (or ideas) the database records as requested; a larger plan carries its count in its context. */
+export const MAX_RECORDED_COUNT = 10;
+
 export const LIMITS = {
   instruction: 4000,
   alternatives: 5,
-  /** A season plan has one idea per Episode (up to 12). */
-  ideas: 12,
+  /** A season plan has one idea per Episode (up to 50). */
+  ideas: 50,
   /** One alternative's text (a whole episode or film written in parts fits; the database allows 400 000). */
   text: 400_000,
   message: 2000,

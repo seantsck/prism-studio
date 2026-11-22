@@ -18,9 +18,18 @@ import { LIMITS } from "@/domain/story/writing";
 /** The longest premise kept (the rest of the writing instruction must still fit the assistant's limit). */
 export const PREMISE_MAX = 3000;
 
-/** How many Episodes a new series can be planned with. */
+/** Quick choices for a new series' Episode count; any whole number from 1 to MAX_EPISODES can be typed. */
 export const EPISODE_COUNTS = [6, 8, 10, 12] as const;
 export const DEFAULT_EPISODE_COUNT = 8;
+export const MAX_EPISODES = 50;
+/** The longest note a creator gives Prism to refine a plan. */
+export const REFINE_NOTE_MAX = 600;
+
+/** A typed Episode count, or the default when it is not a whole number from 1 to MAX_EPISODES. */
+export function episodeCountOf(value: unknown): number {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= MAX_EPISODES ? n : DEFAULT_EPISODE_COUNT;
+}
 
 const kindOf = (data: ProjectData) =>
   data.project.projectType === "film"
@@ -29,6 +38,10 @@ const kindOf = (data: ProjectData) =>
       ? "short film"
       : "series";
 
+/** A writing request that plans (or revises the plan of) a season. */
+export const isSeasonPlanRequest = (instruction: string) =>
+  instruction.startsWith("Plan season 1") || instruction.startsWith("Revise the season plan");
+
 /** What Prism is asked to plan a season from: one idea per Episode, in order (a brainstorm: nothing is written). */
 export function seasonPlanInstruction(data: ProjectData, episodes: number): string {
   return [
@@ -36,6 +49,23 @@ export function seasonPlanInstruction(data: ProjectData, episodes: number): stri
     "Each idea's title is that episode's title (no number). Its detail is 2 to 4 sentences: what happens in the",
     "episode, how it ends, and the hook into the next one. Together they tell one story with a clear arc and a",
     "satisfying season ending.",
+    "",
+    `Premise: ${data.bible.premise.trim().slice(0, PREMISE_MAX)}`,
+  ]
+    .join("\n")
+    .slice(0, LIMITS.instruction);
+}
+
+/**
+ * What Prism is asked to revise a season plan with: the current plan (titles and synopses, sent in the context as
+ * seasonPlan) and the creator's note. It returns the whole revised plan, one idea per Episode, to review before use.
+ */
+export function seasonRefineInstruction(data: ProjectData, episodes: number, note: string): string {
+  return [
+    `Revise the season plan in the context (seasonPlan) following the creator's note. Give exactly ${episodes} ideas, one per episode, in order: the whole revised plan, not only what changed.`,
+    "Keep what the note does not ask to change. Each idea's title is that episode's title (no number); its detail is 2 to 4 sentences: what happens, how it ends, and the hook into the next one.",
+    "",
+    `Creator's note: ${note.trim().slice(0, REFINE_NOTE_MAX)}`,
     "",
     `Premise: ${data.bible.premise.trim().slice(0, PREMISE_MAX)}`,
   ]
@@ -158,12 +188,7 @@ export function newProjectRecords(input: NewProjectInput): {
     ],
     updatedAt: input.now,
   });
-  const count =
-    project.projectType === "series"
-      ? (EPISODE_COUNTS as readonly number[]).includes(input.episodeCount ?? 0)
-        ? input.episodeCount!
-        : DEFAULT_EPISODE_COUNT
-      : 1;
+  const count = project.projectType === "series" ? episodeCountOf(input.episodeCount) : 1;
   const episodes = premise
     ? Array.from({ length: count }, (_, i) =>
         emptyEpisode(input.id, input.now, i + 1, project.projectType === "series" ? undefined : "Screenplay"),

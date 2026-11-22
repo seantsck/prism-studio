@@ -1,6 +1,8 @@
 import type { Episode, ProjectData } from "@/domain/schemas";
 import {
   estimateWritingInputTokens,
+  LIMITS,
+  MAX_RECORDED_COUNT,
   LONG_FORM_TAIL_CHARS,
   longFormTokens,
   writingOutputTokens,
@@ -39,6 +41,8 @@ export function priceWriting(args: {
   conversation: WritingContext["conversation"];
   model: StoryModel;
   longForm?: LongFormPlan | null;
+  /** Send the season's current plan (refining a plan, writing from one). */
+  withPlan?: boolean;
 }): WritingPrice {
   const built = buildWritingContext({
     data: args.data,
@@ -51,11 +55,14 @@ export function priceWriting(args: {
   const plan = args.data.episodes
     .filter((e) => e.synopsis.trim())
     .sort((a, b) => a.number - b.number)
-    .map((e) => ({ episode: e.number, title: e.title, synopsis: e.synopsis.slice(0, 600) }));
+    .map((e) => ({ episode: e.number, title: e.title, synopsis: e.synopsis.slice(0, 400) }));
   const context: WritingContext = {
     ...built,
     ...(args.longForm ? { longForm: args.longForm } : {}),
-    ...(args.longForm && plan.length > 1 ? { seasonPlan: plan.slice(0, 12) } : {}),
+    ...((args.longForm || args.withPlan) && plan.length > 0
+      ? { seasonPlan: plan.slice(0, LIMITS.ideas) }
+      : {}),
+    ...(args.mode === "brainstorm" && args.count > MAX_RECORDED_COUNT ? { ideaCount: args.count } : {}),
   };
   const promptText = writingInput({
     mode: args.mode,

@@ -2,7 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { seasonPlanInstruction, wholeScriptInstruction } from "@/domain/series-start";
+import {
+  REFINE_NOTE_MAX,
+  seasonPlanInstruction,
+  seasonRefineInstruction,
+  wholeScriptInstruction,
+} from "@/domain/series-start";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { getRepo, requireProjectFresh } from "./repo";
 import { quoteSeasonPlan, quoteWriting, resolveWriter } from "./series-start";
@@ -33,11 +38,19 @@ function confirmed(form: FormData, usd: number, paid: boolean) {
     throw new UserFacingError(`This costs up to $${usd.toFixed(4)}. Confirm that amount to go ahead.`);
 }
 
-/** Plan the season: one idea per Episode (a brainstorm; the creator then uses the plan or asks again). */
+/**
+ * Plan the season (one idea per Episode), or, with a note, refine the current plan (Prism gets the plan and the note,
+ * and returns the whole revised plan). Either is a brainstorm: the creator reviews it and uses it, or not.
+ */
 async function planSeason_impl(form: FormData) {
   const slug = str(form, "projectSlug");
   const data = await requireProjectFresh(slug);
-  const q = quoteSeasonPlan(data, str(form, "model"));
+  const note = str(form, "note").slice(0, REFINE_NOTE_MAX);
+  const refine = str(form, "refine") === "1";
+  if (refine && !note) throw new UserFacingError("Tell Prism what to change in the plan.");
+  if (refine && !data.episodes.some((e) => e.synopsis.trim()))
+    throw new UserFacingError("There is no plan to refine yet.");
+  const q = quoteSeasonPlan(data, str(form, "model"), { refine });
   if (!q.ok) throw new UserFacingError(q.reason);
   confirmed(form, q.usd, q.paid);
   const first = [...data.episodes].sort((a, b) => a.number - b.number)[0]!;
@@ -46,12 +59,38 @@ async function planSeason_impl(form: FormData) {
     episodeId: first.id,
     preset: "brainstorm",
     scopeKind: "episode",
-    instruction: seasonPlanInstruction(data, data.episodes.length),
+    instruction: refine
+      ? seasonRefineInstruction(data, data.episodes.length, note)
+      : seasonPlanInstruction(data, data.episodes.length),
     model: q.model,
+    ...(refine ? { withPlan: "1" } : {}),
+    // the ceiling the creator confirmed; the request is priced again and accepted only within it
     ...(q.paid ? { confirmedTotalUsd: q.usd.toFixed(4) } : {}),
   });
   revalidatePath(`/projects/${slug}`, "layout");
-  return { ok: true as const, message: "Prism is planning the season…" };
+  return {
+    ok: true as const,
+    message: refine ? "Prism is revising the plan…" : "Prism is planning the season…",
+  };
+}
+
+/** Save the creator's own edits to the plan: each Episode's title and synopsis (scripts are untouched). */
+async function saveSeasonPlan_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const data = await requireProjectFresh(slug);
+  const repo = await getRepo();
+  const now = new Date().toISOString();
+  let changed = 0;
+  for (const e of data.episodes) {
+    if (!form.has(`title_${e.id}`)) continue;
+    const title = str(form, `title_${e.id}`).slice(0, 120) || e.title;
+    const synopsis = str(form, `synopsis_${e.id}`).slice(0, 2000);
+    if (title === e.title && synopsis === e.synopsis) continue;
+    await repo.upsert(data.project.id, "episodes", { ...e, title, synopsis, updatedAt: now });
+    changed++;
+  }
+  revalidatePath(`/projects/${slug}`, "layout");
+  return { ok: true as const, message: changed ? "Plan saved." : "Nothing changed." };
 }
 
 /** Use a plan: each idea becomes an Episode's title and synopsis (Episodes are added when the plan has more). */
@@ -108,6 +147,10 @@ async function writeWhole_impl(form: FormData) {
 
 export async function planSeason(form: FormData): Promise<ActionResult> {
   return runAction(() => planSeason_impl(form), { name: "planSeason" });
+}
+
+export async function saveSeasonPlan(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveSeasonPlan_impl(form), { name: "saveSeasonPlan" });
 }
 
 export async function applySeasonPlan(form: FormData): Promise<ActionResult> {

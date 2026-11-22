@@ -13,6 +13,7 @@ import {
   canonical,
   longFormPlan,
   LIMITS,
+  MAX_RECORDED_COUNT,
   lineOfOffset,
   looksLikeBrainstorm,
   requestedCount,
@@ -215,6 +216,7 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
     conversation: conversationOf(turns),
     model,
     longForm,
+    withPlan: str(form, "withPlan") === "1",
   });
   if (tooLong)
     throw new UserFacingError("This request is too long for the model. Choose a Scene or a shorter passage.");
@@ -258,7 +260,8 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
         mode,
         scope,
         instruction,
-        alternativesRequested: whole ? 1 : count,
+        // the database records up to 10 requested; a bigger plan's count rides in its context (ideaCount)
+        alternativesRequested: whole ? 1 : Math.min(count, MAX_RECORDED_COUNT),
         baseFingerprint: sourceFingerprint(text),
         baseRevisionId:
           latest && sourceFingerprint(canonical(latest.text)) === sourceFingerprint(text) ? latest.id : null,

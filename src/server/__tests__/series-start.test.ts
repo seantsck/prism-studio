@@ -65,7 +65,7 @@ vi.mock("@/server/storage", () => {
 });
 
 import { createProject, startFromPremise } from "../actions";
-import { applySeasonPlan, planSeason, writeWhole } from "../series-actions";
+import { applySeasonPlan, planSeason, saveSeasonPlan, writeWhole } from "../series-actions";
 import {
   quoteAnalyzeEpisode,
   quoteSeasonPlan,
@@ -150,7 +150,7 @@ describe("starting a series from a prompt", () => {
     await createProject(form({ title: "Six", premise: PREMISE, episodeCount: "6" }));
     expect((await repo.loadProject("six"))!.episodes).toHaveLength(6);
     await createProject(form({ title: "Odd", premise: PREMISE, episodeCount: "7" }));
-    expect((await repo.loadProject("odd"))!.episodes).toHaveLength(8); // only 6, 8, 10 or 12
+    expect((await repo.loadProject("odd"))!.episodes).toHaveLength(7); // any number from 1 to 50
     await createProject(form({ title: "Feature", premise: PREMISE, projectType: "film" }));
     expect((await repo.loadProject("feature"))!.episodes.map((e) => e.title)).toEqual(["Screenplay"]);
     expect(await createProject(form({ title: "Blank" }))).toMatchObject({ ok: true });
@@ -357,5 +357,102 @@ describe("starting a series from a prompt", () => {
         }),
       ),
     ).toMatchObject({ ok: true });
+  });
+
+  it("any episode count from 1 to 50 can be typed; anything else falls back to 8", async () => {
+    for (const [typed, want] of [
+      ["24", 24],
+      ["1", 1],
+      ["50", 50],
+      ["0", 8],
+      ["51", 8],
+      ["2.5", 8],
+      ["abc", 8],
+    ] as const) {
+      const title = `Count ${typed}`;
+      expect(await createProject(form({ title, premise: PREMISE, episodeCount: typed }))).toMatchObject({
+        ok: true,
+      });
+      const slug = world.redirects.at(-1)!.split("/")[2]!;
+      expect((await repo.loadProject(slug))!.episodes, typed).toHaveLength(want);
+    }
+  });
+
+  it("a 24-episode season is planned in one request (past the 10 the database records), then edited and refined", async () => {
+    await createProject(form({ title: "Long Season", premise: PREMISE, episodeCount: "24" }));
+    const slug = "long-season";
+    expect(await planSeason(form({ projectSlug: slug }))).toMatchObject({ ok: true });
+    let [plan] = (await proposalsOf(slug)).filter((p) => p.mode === "brainstorm");
+    expect(plan).toMatchObject({ status: "queued", alternativesRequested: 10 });
+    expect(plan!.context.ideaCount).toBe(24);
+    await work();
+    [plan] = (await proposalsOf(slug)).filter((p) => p.mode === "brainstorm");
+    expect(plan).toMatchObject({ status: "ready" });
+    expect(plan!.result!.ideas).toHaveLength(24);
+    expect(await applySeasonPlan(form({ projectSlug: slug, proposalId: plan!.id }))).toMatchObject({
+      ok: true,
+    });
+    let data = (await repo.loadProject(slug))!;
+    expect(data.episodes.every((e) => e.synopsis.trim())).toBe(true);
+
+    // the creator's own edits: titles and synopses, scripts untouched
+    const e3 = [...data.episodes].sort((a, b) => a.number - b.number)[2]!;
+    expect(
+      await saveSeasonPlan(
+        form({
+          projectSlug: slug,
+          [`title_${e3.id}`]: "The Rival",
+          [`synopsis_${e3.id}`]: "A rival chef arrives.",
+        }),
+      ),
+    ).toMatchObject({ ok: true, message: "Plan saved." });
+    data = (await repo.loadProject(slug))!;
+    expect(data.episodes.find((e) => e.id === e3.id)).toMatchObject({
+      title: "The Rival",
+      synopsis: "A rival chef arrives.",
+    });
+
+    // refine: Prism gets the current plan and the note, and returns the whole revised plan to review
+    expect(await planSeason(form({ projectSlug: slug, refine: "1", note: " " }))).toMatchObject({
+      ok: false,
+      error: "Tell Prism what to change in the plan.",
+    });
+    expect(
+      await planSeason(form({ projectSlug: slug, refine: "1", note: "Make episode 3 darker." })),
+    ).toMatchObject({ ok: true, message: "Prism is revising the plan…" });
+    const refined = (await proposalsOf(slug))
+      .filter((p) => p.mode === "brainstorm")
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!;
+    expect(refined.instruction).toContain("Creator's note: Make episode 3 darker.");
+    expect(refined.context.seasonPlan).toHaveLength(24);
+    expect(refined.context.seasonPlan!.find((p) => p.episode === 3)).toMatchObject({ title: "The Rival" });
+    // nothing changes until the creator uses it
+    await work();
+    expect((await repo.loadProject(slug))!.episodes.find((e) => e.id === e3.id)!.title).toBe("The Rival");
+    expect(await applySeasonPlan(form({ projectSlug: slug, proposalId: refined.id }))).toMatchObject({
+      ok: true,
+    });
+    expect((await repo.loadProject(slug))!.episodes.find((e) => e.id === e3.id)!.title).not.toBe("The Rival");
+  });
+
+  it("paid: refining is priced as a ceiling for the longest note, and accepted within it", async () => {
+    const { slug } = await newSeries();
+    let data = (await repo.loadProject(slug))!;
+    for (const e of data.episodes)
+      await repo.upsert(data.project.id, "episodes", { ...e, synopsis: `Plan ${e.number}.` });
+    process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI = "true";
+    delete process.env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER;
+    data = (await repo.loadProject(slug))!;
+    const q = quoteSeasonPlan(data, null, { refine: true });
+    if (!q.ok) throw new Error(q.reason);
+    const note = "東".repeat(600); // the longest note, in the densest script
+    expect(
+      await planSeason(
+        form({ projectSlug: slug, refine: "1", note, model: q.model, confirmedTotalUsd: q.usd.toFixed(4) }),
+      ),
+    ).toMatchObject({ ok: true });
+    const [p] = (await proposalsOf(slug)).filter((x) => x.mode === "brainstorm");
+    expect(p).toMatchObject({ spendAuthorization: "confirmed" });
+    expect(p!.estimate.usd).toBeLessThanOrEqual(q.usd);
   });
 });

@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { ActionForm } from "@/components/action-form";
 import { cn } from "@/lib/utils";
-import { DEFAULT_EPISODE_COUNT, EPISODE_COUNTS } from "@/domain/series-start";
+import { DEFAULT_EPISODE_COUNT, EPISODE_COUNTS, MAX_EPISODES } from "@/domain/series-start";
 import { createProject } from "@/server/actions";
 
 const TYPES = [
@@ -53,6 +53,19 @@ export function NewSeries({ premiseMax }: { premiseMax: number }) {
       {type === "series" ? <input type="hidden" name="episodeCount" value={count} /> : null}
 
       <div className="new-series-card rounded-2xl border border-line2 bg-panel/90 shadow-[0_24px_80px_-32px_rgba(214,162,74,0.35)] backdrop-blur transition-colors focus-within:border-accent/60">
+        <label htmlFor="new-series-title" className="sr-only">
+          Title
+        </label>
+        <input
+          id="new-series-title"
+          name="title"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          maxLength={120}
+          placeholder="Title (optional: your idea names it)"
+          className="block w-full px-5 pt-4 text-[18px] font-semibold tracking-tight placeholder:font-normal placeholder:text-faint"
+          data-testid="new-series-title"
+        />
         <label htmlFor="premise" className="sr-only">
           Describe your series
         </label>
@@ -65,7 +78,7 @@ export function NewSeries({ premiseMax }: { premiseMax: number }) {
           maxLength={premiseMax}
           rows={4}
           placeholder="A shy sushi apprentice in Osaka secretly enters a televised cooking contest under a false name…"
-          className="block w-full resize-none px-5 pb-2 pt-5 text-[16px] leading-relaxed placeholder:text-faint"
+          className="block w-full resize-none px-5 pb-2 pt-2 text-[16px] leading-relaxed placeholder:text-faint"
           data-testid="new-project-premise"
         />
         <div className="flex flex-wrap items-center gap-2 px-4 pt-1">
@@ -119,7 +132,23 @@ export function NewSeries({ premiseMax }: { premiseMax: number }) {
                   {n}
                 </button>
               ))}
-              <span className="ml-1 text-[12px] text-muted">episodes</span>
+              <label className="ml-1 flex items-center gap-1 text-[12px] text-muted">
+                <span className="sr-only">Number of episodes</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={MAX_EPISODES}
+                  value={count}
+                  onChange={(e) =>
+                    setCount(Math.max(1, Math.min(MAX_EPISODES, Math.round(Number(e.target.value) || 1))))
+                  }
+                  className="new-series-count"
+                  aria-label="Number of episodes"
+                  data-testid="new-series-episodes-input"
+                />
+                episodes
+              </label>
             </div>
           ) : (
             <span className="text-[12px] text-muted">One screenplay</span>
@@ -161,18 +190,6 @@ export function NewSeries({ premiseMax }: { premiseMax: number }) {
       <details className="mx-auto mt-5 max-w-xl text-[12px]" data-testid="new-series-more">
         <summary className="cursor-pointer text-center text-muted hover:text-fg">More options</summary>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <label className="sm:col-span-2">
-            <span className="mb-1 block text-muted">
-              Title (optional: your idea names it, and you can rename it later)
-            </span>
-            <input
-              name="title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Working title"
-              data-testid="new-series-title"
-            />
-          </label>
           <label>
             <span className="mb-1 block text-muted">Genre</span>
             <input name="genre" placeholder="Action comedy" />

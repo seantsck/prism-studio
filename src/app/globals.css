@@ -130,6 +130,7 @@ details > summary::-webkit-details-marker {
   background: transparent;
   border-radius: 0;
   outline: none;
+  padding: 8px 20px;
 }
 .new-series-card select {
   width: auto;
@@ -141,4 +142,21 @@ details > summary::-webkit-details-marker {
   color: var(--muted);
   font-size: 12px;
   line-height: 30px;
+}
+.new-series-card input#new-series-title {
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  outline: none;
+  padding: 18px 20px 0;
+}
+.new-series-card input.new-series-count {
+  width: 3.25rem;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 9999px;
+  border-color: var(--line);
+  background: transparent;
+  text-align: center;
+  font-size: 12px;
 }

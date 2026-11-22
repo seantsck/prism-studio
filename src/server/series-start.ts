@@ -1,6 +1,11 @@
 import "server-only";
 import type { Episode, ProjectData } from "@/domain/schemas";
-import { seasonPlanInstruction, wholeScriptInstruction } from "@/domain/series-start";
+import {
+  REFINE_NOTE_MAX,
+  seasonPlanInstruction,
+  seasonRefineInstruction,
+  wholeScriptInstruction,
+} from "@/domain/series-start";
 import { estimateInputTokens, normalizeSourceText } from "@/domain/story/source";
 import { canonical, longFormPlan, scopeOf } from "@/domain/story/writing";
 import { estimateUsd, type StoryModel } from "@/story/provider";
@@ -79,8 +84,16 @@ const over = (model: StoryModel, usd: number, what: string): string | null => {
     : null;
 };
 
-/** The season plan: one brainstorm on Episode 1, an idea per Episode. */
-export function quoteSeasonPlan(data: ProjectData, writer?: string | null): QuoteResult {
+/**
+ * The season plan: one brainstorm on Episode 1, an idea per Episode. Refining (`refine`) sends the current plan and the
+ * creator's note; since the note is typed after the price is shown, it is priced for the longest note in the densest
+ * script, a ceiling for whatever is typed.
+ */
+export function quoteSeasonPlan(
+  data: ProjectData,
+  writer?: string | null,
+  opts: { refine?: boolean } = {},
+): QuoteResult {
   const r = resolveWriter(writer);
   if (!r) return { ok: false, reason: WRITING_AI_OFF };
   const episode = [...data.episodes].sort((a, b) => a.number - b.number)[0];
@@ -92,14 +105,17 @@ export function quoteSeasonPlan(data: ProjectData, writer?: string | null): Quot
     text,
     scope: scopeOf(text, "episode", { start: 0, end: text.length }, null),
     mode: "brainstorm",
-    instruction: seasonPlanInstruction(data, data.episodes.length),
+    instruction: opts.refine
+      ? seasonRefineInstruction(data, data.episodes.length, "あ".repeat(REFINE_NOTE_MAX))
+      : seasonPlanInstruction(data, data.episodes.length),
     count: data.episodes.length,
     targetText: text,
     draftText: null,
     conversation: [],
     model: r.model,
+    withPlan: opts.refine,
   });
-  const refused = over(r.model, p.usd, "Planning the season");
+  const refused = over(r.model, p.usd, opts.refine ? "Refining the plan" : "Planning the season");
   if (refused || p.tooLong) return { ok: false, reason: refused ?? "The plan is too long for the model." };
   return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd: p.usd };
 }
