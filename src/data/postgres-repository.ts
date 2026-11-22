@@ -13,7 +13,7 @@ import {
   type ProjectData,
   type Shot,
 } from "@/domain/schemas";
-import type { Repository } from "./repository";
+import { activeWorkLines, ProjectArchiveUnavailableError, type Repository } from "./repository";
 import {
   COLLECTIONS,
   flatFromRow,
@@ -94,6 +94,9 @@ async function insertRows(db: PoolClient, table: string, rows: Row[]): Promise<v
     );
   }
 }
+
+/** Postgres: a column this database does not have yet (an unapplied migration). */
+const UNDEFINED_COLUMN = "42703";
 
 /** Number of connections used in parallel to load one project (each is its own RLS transaction). */
 const LOAD_PARALLELISM = 5;
@@ -286,6 +289,71 @@ abstract class PostgresRepositoryBase implements Repository {
       this.ownerUserId,
     ]);
     if (r.rowCount === 0) throw new Error(`Project ${projectId} not found for the current user`);
+  }
+
+  async archivedProjectIds(): Promise<{ ids: Set<string>; available: boolean }> {
+    try {
+      const rows = await this.rows("select id from projects where user_id = $1 and archived_at is not null", [
+        this.ownerUserId,
+      ]);
+      return { ids: new Set(rows.map((r) => String(r.id))), available: true };
+    } catch (err) {
+      // migration 0060 not applied yet: nothing is archived, and Archive says so
+      if ((err as { code?: string }).code === UNDEFINED_COLUMN) return { ids: new Set(), available: false };
+      throw err;
+    }
+  }
+
+  async setProjectArchived(projectId: string, archived: boolean): Promise<void> {
+    try {
+      await this.tx(async (c) => {
+        const r = await c.query(
+          "update projects set archived_at = case when $2::boolean then now() else null end where id = $1 and user_id = $3",
+          [projectId, archived, this.ownerUserId],
+        );
+        if (r.rowCount === 0) throw new Error(`Project ${projectId} not found for the current user`);
+      });
+    } catch (err) {
+      if ((err as { code?: string }).code === UNDEFINED_COLUMN) throw new ProjectArchiveUnavailableError();
+      throw err;
+    }
+  }
+
+  async activeProjectWork(projectId: string): Promise<string[]> {
+    const counts = await this.tx(async (c) => {
+      await this.assertOwns(c, projectId);
+      const row = (
+        await c.query(
+          `select
+             (select count(*) from generation_jobs where project_id = $1
+               and status not in ('succeeded', 'failed', 'cancelled'))::int as generation,
+             (select count(*) from continuity_analysis_jobs where project_id = $1
+               and status not in ('succeeded', 'failed', 'cancelled'))::int as continuity,
+             (select count(*) from reconstruction_jobs where project_id = $1
+               and status in ('queued', 'submitting', 'running', 'ingesting'))::int as reconstruction,
+             (select count(*) from episode_renders where project_id = $1
+               and status not in ('completed', 'failed', 'cancelled'))::int as render,
+             (select count(*) from story_proposals where project_id = $1 and status in ('queued', 'running'))::int as story,
+             (select count(*) from writing_proposals where project_id = $1 and status in ('queued', 'running'))::int as writing,
+             (select count(*) from shot_list_proposals where project_id = $1 and status in ('queued', 'running'))::int as "shotList",
+             (select count(*) from shot_direction_proposals where project_id = $1 and status in ('queued', 'running'))::int as "shotDirection"`,
+          [projectId],
+        )
+      ).rows[0] as Record<string, number>;
+      return row;
+    });
+    return activeWorkLines(counts);
+  }
+
+  async deleteProject(projectId: string): Promise<void> {
+    // one statement: every project-scoped table cascades from projects (the owner's RLS policy allows the delete)
+    await this.tx(async (c) => {
+      const r = await c.query("delete from projects where id = $1 and user_id = $2", [
+        projectId,
+        this.ownerUserId,
+      ]);
+      if (r.rowCount === 0) throw new Error(`Project ${projectId} not found for the current user`);
+    });
   }
 
   async createProject(project: Project, bible: ProjectBible): Promise<void> {

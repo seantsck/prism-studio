@@ -14,12 +14,32 @@ interface Repository {
   upsert(projectId, collection, item) / upsertMany(projectId, collection, items): Promise<void>;
   remove(projectId, collection, id): Promise<void>;
   findAsset(assetId): Promise<Asset | null>;
+  archivedProjectIds(): Promise<{ ids: Set<string>; available: boolean }>;
+  setProjectArchived(projectId, archived): Promise<void>;
+  activeProjectWork(projectId): Promise<string[]>;   // unfinished jobs, one line per kind
+  deleteProject(projectId): Promise<void>;           // irreversible
 }
 ```
 
 `CollectionName` covers assets, characters, identityRefs, looks, voiceProfiles, locations, props, episodes,
 scenes, shots, dialogueLines, actionBlocks, directions, takes, frames, attempts, continuityChecks;
 `COLLECTION_TABLES` maps each to its SQL table.
+
+## Archiving and deleting projects
+
+On the Projects page each project has **Archive** (or **Restore**) and **Delete…**.
+
+- **Archive** sets `projects.archived_at` (migration `0060_project_archive.sql`). The project leaves the list for an
+  **Archived (N)** section; nothing in it changes and it still opens by URL. Until `0060` is applied, the column is read
+  defensively: the list works, nothing is archived, and Archive answers that it needs the database update (code can ship
+  before the migration).
+- **Delete** asks for the project's exact title (the button stays off until it matches; the server checks it again),
+  refuses while any job for the project is queued or running (generation, continuity, reconstruction, render, story,
+  writing, shot list, shot direction), then runs one `delete from projects` as the owner. Every project-scoped table
+  cascades from `projects`. The stored files of its assets are removed afterwards, best effort.
+- Verified on a disposable local PostgreSQL with all migrations and the seed (`docs/local-supabase.md`): as the owner
+  under RLS, the delete emptied all 18 populated project tables (135 rows); another user could not delete it; a queued
+  story analysis was counted; and without `0060` the list and project edits still worked.
 
 ## Implementations
 

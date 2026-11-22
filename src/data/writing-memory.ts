@@ -23,6 +23,13 @@ const clone = <T>(v: T): T => structuredClone(v);
 export class MemoryWritingService implements WritingRepository, WritingWorkerStore {
   private sessions: WritingSession[] = [];
   private proposals: WritingProposal[] = [];
+
+  /** Proposals of one project still queued or running (deleting the project waits for them). */
+  activeCount(projectId: string): number {
+    return this.proposals.filter(
+      (r) => r.projectId === projectId && (r.status === "queued" || r.status === "running"),
+    ).length;
+  }
   private revisions: ScriptRevision[] = [];
   private changes: SceneStoryChange[] = [];
 

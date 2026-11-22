@@ -1,5 +1,6 @@
 import type { SettlementTable } from "@/domain/continuity/sequence-automation";
 import type { IdentityRef } from "@/domain/schemas";
+import { activeWorkLines } from "./repository";
 import { LOCAL_USER_ID, buildSeedProject } from "./seed";
 import { MemoryCandidateService } from "./candidates-memory";
 import { MemoryCharacterContinuityService } from "./character-continuity-memory";
@@ -224,6 +225,32 @@ export class MemoryRepository implements Repository {
   /** A location's name, only within its own project (the memory Local Agent job path's provenance label). */
   locationName(projectId: string, locationId: string): string | null {
     return this.projects.get(projectId)?.locations.find((l) => l.id === locationId)?.name ?? null;
+  }
+
+  private archived = new Map<string, string>();
+
+  async archivedProjectIds(): Promise<{ ids: Set<string>; available: boolean }> {
+    return { ids: new Set(this.archived.keys()), available: true };
+  }
+
+  async setProjectArchived(projectId: string, archived: boolean): Promise<void> {
+    if (!this.projects.has(projectId)) throw new Error(`Project ${projectId} not found`);
+    if (archived) this.archived.set(projectId, new Date().toISOString());
+    else this.archived.delete(projectId);
+  }
+
+  async activeProjectWork(projectId: string): Promise<string[]> {
+    return activeWorkLines({
+      generation: this.generation.activeJobCount(projectId),
+      story: this.story.activeCount(projectId),
+      writing: this.writing.activeCount(projectId),
+    });
+  }
+
+  async deleteProject(projectId: string): Promise<void> {
+    if (!this.projects.has(projectId)) throw new Error(`Project ${projectId} not found`);
+    this.projects.delete(projectId);
+    this.archived.delete(projectId);
   }
 
   async listProjects(): Promise<Project[]> {

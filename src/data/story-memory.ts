@@ -16,6 +16,13 @@ const clone = <T>(v: T): T => structuredClone(v);
 export class MemoryStoryService implements StoryProposalRepository, StoryWorkerStore {
   private rows: StoryProposalRecord[] = [];
 
+  /** Proposals of one project still queued or running (deleting the project waits for them). */
+  activeCount(projectId: string): number {
+    return this.rows.filter(
+      (r) => r.projectId === projectId && (r.status === "queued" || r.status === "running"),
+    ).length;
+  }
+
   constructor(private readonly ownsProject: (projectId: string) => boolean = () => true) {}
 
   async create(input: NewStoryProposal): Promise<StoryProposalRecord> {
