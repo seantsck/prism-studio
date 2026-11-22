@@ -3,7 +3,8 @@ import type { Asset, Character, CharacterLook, IdentityRef, ProjectData, VoicePr
 /**
  * The account's character library: a Character saved from one of the creator's projects is copied into another of
  * theirs. The copy is independent (new ids throughout, pictures copied into the target project's own storage), so
- * editing either never changes the other. What travels with a Character: the Character itself, its identity
+ * editing either never changes the other. The library keeps the actor generic: their part in a story (role,
+ * relationships) is set per project, so a copy starts without it. What travels with a Character: the Character itself, its identity
  * references (canonical identity, angles, expressions, cutout), its Looks (an episode-specific Look becomes a
  * project-wide one, since the source's Episodes are not the target's) and its voice profiles, plus every picture or
  * sample those use. Archived pictures stay behind; nothing else of the source project (Shots, takes, checks) travels.
@@ -76,6 +77,10 @@ export function planCharacterCopy(
     id: newId(),
     projectId: target.project.id,
     name: freeCharacterName(original.name, target.characters),
+    // who they are in a story ("Lead — heiress") and to whom belongs to each project: the copy starts without it
+    role: "",
+    relationshipNotes: "",
+    trashedAt: undefined,
     createdAt: now,
     updatedAt: now,
   };

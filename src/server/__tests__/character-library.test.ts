@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRepository } from "@/data/memory-repository";
 import { buildSeedProject } from "@/data/seed";
 import { freeCharacterName, planCharacterCopy } from "@/domain/character-library";
+import { planLocationCopy } from "@/domain/location-library";
 import type { Asset, ProjectData } from "@/domain/schemas";
 
 /**
@@ -49,8 +50,13 @@ vi.mock("@/server/storage", () => {
   };
 });
 
-import { addFromLibrary, setCharacterInLibrary } from "../library-actions";
-import { loadLibrary } from "../character-library";
+import {
+  addFromLibrary,
+  addLocationFromLibrary,
+  setCharacterInLibrary,
+  setLocationInLibrary,
+} from "../library-actions";
+import { loadLibrary, loadLocationLibrary } from "../character-library";
 
 const form = (fields: Record<string, string>) => {
   const f = new FormData();
@@ -138,6 +144,8 @@ describe("the character library", () => {
     const yumeko = yumekoOf(source);
     const plan = planCharacterCopy(source, yumeko.id, target, randomUUID, "2026-11-22T00:00:00.000Z");
     expect(plan.character).toMatchObject({ projectId: target.project.id, name: "Yumeko (2)" });
+    // the role (e.g. "Lead — heiress") belongs to the project, not the actor: each project sets its own
+    expect(plan.character).toMatchObject({ role: "", relationshipNotes: "" });
     expect(plan.character.id).not.toBe(yumeko.id);
     // the 3/4 slot and the Look share one picture: copied once; the archived picture stays behind
     expect(plan.assets.map((a) => a.from.name).sort()).toEqual(
@@ -269,5 +277,88 @@ describe("the character library", () => {
     expect((await repo.loadProject("second-show"))!.characters.some((c) => c.name === "Yumeko (2)")).toBe(
       true,
     );
+  });
+});
+
+describe("the location library", () => {
+  async function withPictures() {
+    const place = source.locations[0]!;
+    const plate = storedPicture(source, "plate.png", { purpose: "location_ref" as Asset["purpose"] });
+    const old = storedPicture(source, "old-plate.png", { metadata: { archived: { at: "2026-11-01" } } });
+    await repo.upsertMany(source.project.id, "assets", [plate, old]);
+    await repo.upsert(source.project.id, "locations", {
+      ...place,
+      referenceAssetIds: [plate.id, old.id],
+      locked: true,
+    });
+    source = (await repo.loadProject(source.project.slug))!;
+    return source.locations.find((l) => l.id === place.id)!;
+  }
+
+  it("plans an independent, unlocked copy with its pictures (nothing archived)", async () => {
+    const place = await withPictures();
+    const plan = planLocationCopy(source, place.id, target, randomUUID, "2026-11-22T00:00:00.000Z");
+    expect(plan.location.id).not.toBe(place.id);
+    expect(plan.location).toMatchObject({ projectId: target.project.id, locked: false, set3d: null });
+    expect(plan.assets.map((a) => a.from.name)).toEqual(["plate.png"]);
+    expect(plan.location.referenceAssetIds).toEqual([plan.assets[0]!.to.id]);
+  });
+
+  it("save → add to another project copies the pictures; the original is untouched", async () => {
+    const place = await withPictures();
+    expect(
+      await setLocationInLibrary(form({ projectSlug: source.project.slug, locationId: place.id })),
+    ).toMatchObject({ ok: true, message: `${place.name} is in your library.` });
+    const lib = await loadLocationLibrary();
+    expect(lib.available).toBe(true);
+    expect(lib.locations).toEqual([
+      expect.objectContaining({ name: place.name, projectSlug: source.project.slug, pictures: 1 }),
+    ]);
+    expect(
+      await addLocationFromLibrary(form({ projectSlug: source.project.slug, locationId: place.id })),
+    ).toMatchObject({ ok: false, error: "That location already lives in this project." });
+    const before = JSON.stringify(await repo.loadProject(source.project.slug));
+    const files = world.files.size;
+    const r = await addLocationFromLibrary(form({ projectSlug: "second-show", locationId: place.id }));
+    expect(r).toMatchObject({ ok: true });
+    expect((r as { message: string }).message).toMatch(/added with 1 picture\.$/);
+    const after = (await repo.loadProject("second-show"))!;
+    const copies = after.locations.filter((l) => l.id !== place.id && l.description === place.description);
+    expect(copies.length).toBeGreaterThan(0);
+    const copy = copies.find((l) => l.referenceAssetIds.length === 1)!;
+    const a = after.assets.find((x) => x.id === copy.referenceAssetIds[0])!;
+    expect(a.objectPath!.startsWith(`${after.project.id}/${a.id}/`)).toBe(true);
+    expect(world.files.get(a.objectPath!)).toEqual(BYTES);
+    expect(world.files.size).toBe(files + 1);
+    expect(JSON.stringify(await repo.loadProject(source.project.slug))).toBe(before);
+
+    await setLocationInLibrary(form({ projectSlug: source.project.slug, locationId: place.id, saved: "0" }));
+    expect((await loadLocationLibrary()).locations).toEqual([]);
+  });
+
+  it("a location copy that fails leaves nothing behind", async () => {
+    const place = await withPictures();
+    await setLocationInLibrary(form({ projectSlug: source.project.slug, locationId: place.id }));
+    const before = (await repo.loadProject("second-show"))!;
+    const files = world.files.size;
+    const upsert = repo.upsert.bind(repo);
+    vi.spyOn(repo, "upsert").mockImplementation(async (projectId, name, item) => {
+      if (name === "locations") throw new Error("database went away");
+      return upsert(projectId, name, item as never);
+    });
+    expect(
+      (await addLocationFromLibrary(form({ projectSlug: "second-show", locationId: place.id }))).ok,
+    ).toBe(false);
+    const after = (await repo.loadProject("second-show"))!;
+    expect(after.locations).toHaveLength(before.locations.length);
+    expect(after.assets).toHaveLength(before.assets.length);
+    expect(world.files.size).toBe(files);
+  });
+
+  it("a trashed location drops out of the library", async () => {
+    const place = await withPictures();
+    await setLocationInLibrary(form({ projectSlug: source.project.slug, locationId: place.id }));
+    await repo.upsert(source.project.id, "locations", { ...place, trashedAt: "2026-11-21T00:00:00.000Z" });
+    expect((await loadLocationLibrary()).locations).toEqual([]);
   });
 });

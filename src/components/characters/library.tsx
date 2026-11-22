@@ -94,7 +94,7 @@ export function LibraryPanel({
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="text-[13px] font-medium">{c.name}</div>
                     <div className="text-[11.5px] text-muted">
-                      {c.role ? `${c.role} · ` : ""}from{" "}
+                      from{" "}
                       <Link
                         href={`/projects/${c.projectSlug}/characters/${c.characterId}`}
                         className="hover:underline"

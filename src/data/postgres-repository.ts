@@ -18,7 +18,9 @@ import {
   CharacterLibraryUnavailableError,
   ProjectArchiveUnavailableError,
   ProjectTrashUnavailableError,
+  LocationLibraryUnavailableError,
   type LibraryEntry,
+  type LocationLibraryEntry,
   type Repository,
 } from "./repository";
 import {
@@ -456,6 +458,59 @@ abstract class PostgresRepositoryBase implements Repository {
       });
     } catch (err) {
       if ((err as { code?: string }).code === UNDEFINED_TABLE) throw new CharacterLibraryUnavailableError();
+      throw err;
+    }
+  }
+
+  async locationLibraryEntries(): Promise<{ entries: LocationLibraryEntry[]; available: boolean }> {
+    try {
+      const rows = await this.rows(
+        `select l.location_id, x.project_id, l.saved_at
+           from location_library l
+           join locations x on x.id = l.location_id
+           join projects p on p.id = x.project_id and p.user_id = $1
+          where l.user_id = $1
+          order by l.saved_at desc`,
+        [this.ownerUserId],
+      );
+      return {
+        entries: rows.map((r) => ({
+          locationId: String(r.location_id),
+          projectId: String(r.project_id),
+          savedAt: r.saved_at instanceof Date ? r.saved_at.toISOString() : String(r.saved_at),
+        })),
+        available: true,
+      };
+    } catch (err) {
+      // migration 0066 not applied yet: no location library, and it says so
+      if ((err as { code?: string }).code === UNDEFINED_TABLE) return { entries: [], available: false };
+      throw err;
+    }
+  }
+
+  async setLocationInLibrary(projectId: string, locationId: string, saved: boolean): Promise<void> {
+    try {
+      await this.tx(async (c) => {
+        await this.assertOwns(c, projectId);
+        const owned = await c.query("select 1 from locations where id = $1 and project_id = $2", [
+          locationId,
+          projectId,
+        ]);
+        if (owned.rowCount === 0) throw new Error(`Location ${locationId} not found in project ${projectId}`);
+        if (saved)
+          await c.query(
+            `insert into location_library (user_id, location_id) values ($1, $2)
+             on conflict (user_id, location_id) do nothing`,
+            [this.ownerUserId, locationId],
+          );
+        else
+          await c.query("delete from location_library where user_id = $1 and location_id = $2", [
+            this.ownerUserId,
+            locationId,
+          ]);
+      });
+    } catch (err) {
+      if ((err as { code?: string }).code === UNDEFINED_TABLE) throw new LocationLibraryUnavailableError();
       throw err;
     }
   }

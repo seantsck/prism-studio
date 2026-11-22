@@ -275,13 +275,27 @@ part-way removes what it wrote. Copies never change each other or the original. 
 Character: deleting the project it lives in takes it out of the library (the delete confirmation names it; archiving
 keeps it). Until 0062 is applied the library says it needs the migration and nothing else changes.
 
+A library copy is **generic**: its role ("Lead — heiress") and relationship notes are cleared, because a role
+belongs to a project, not to the actor; each project sets its own on the copy.
 
-**Create a character** (home page, under Your characters) makes a Character outside any story from a description
-and an optional name (else taken from "…named X…", or the first words: `nameFromPrompt`). It lives in the account's one
-project of purpose `library` ("Your characters", migration 0065; made the first time, never listed among projects),
-with the description as its appearance, goes straight into the library and opens on its page, ready for pictures in
-the Reference Studio. Any project adds a copy from "From your library". Before 0065 is applied, creating one says the
-migration is needed.
+**Create a character** and **Create a location** (home page, the two smaller boxes left of the series box; below it on
+a phone) make a Character or a Location outside any story from a description and an optional name (else taken from
+"…named X…"/"…called X…", or the first words: `nameFromPrompt`, `locationNameFromPrompt`). Both live in the account's
+one project of purpose `library` ("Your library", migration 0065; made the first time, never listed among projects),
+go straight into the library and open ready for pictures (a Character on its page, a Location expanded on that
+project's Locations page, `?open=<id>`). Before 0065 is applied, creating one says the migration is needed.
+
+## The location library
+
+Locations work the same way (`location_library`, migration 0066). Each Location on a project's Locations page has
+**Save to library**; the page's **From your library** panel lists saved Locations from the creator's other projects
+with **Add to this project**, and the home page lists them under **Your locations**. Adding makes an independent copy
+(`planLocationCopy`, `src/domain/location-library.ts`; `copyLocationIntoProject`, `src/server/character-library.ts`):
+the Location with new ids, unlocked, without its 3D Set, and a copy of every reference and Visual Bible picture in the
+target project's own storage (archived and trashed pictures stay behind; a failed copy removes what it wrote). A
+trashed Location is out of the library until restored; deleting its project takes it out. Until 0066 is applied the
+library says it needs the migration and nothing else changes.
+
 ## Test models and real models
 
 A deployment can switch on free **test models** ("Mock Image 1"). A test model draws a coloured pattern, never a

@@ -1,6 +1,6 @@
 import type { SettlementTable } from "@/domain/continuity/sequence-automation";
 import type { IdentityRef } from "@/domain/schemas";
-import { activeWorkLines, type LibraryEntry } from "./repository";
+import { activeWorkLines, type LibraryEntry, type LocationLibraryEntry } from "./repository";
 import { LOCAL_USER_ID, buildSeedProject } from "./seed";
 import { MemoryCandidateService } from "./candidates-memory";
 import { MemoryCharacterContinuityService } from "./character-continuity-memory";
@@ -254,9 +254,31 @@ export class MemoryRepository implements Repository {
     this.trashed.delete(projectId);
     // its Characters leave the library with it (as the database's cascade does)
     for (const [id, e] of this.library) if (e.projectId === projectId) this.library.delete(id);
+    for (const [id, e] of this.locationLibrary)
+      if (e.projectId === projectId) this.locationLibrary.delete(id);
   }
 
   private library = new Map<string, LibraryEntry>();
+  private locationLibrary = new Map<string, LocationLibraryEntry>();
+
+  async locationLibraryEntries(): Promise<{ entries: LocationLibraryEntry[]; available: boolean }> {
+    const live = [...this.locationLibrary.values()].filter((e) =>
+      this.projects.get(e.projectId)?.locations.some((l) => l.id === e.locationId),
+    );
+    return {
+      entries: live.sort((a, b) => b.savedAt.localeCompare(a.savedAt)).map((e) => ({ ...e })),
+      available: true,
+    };
+  }
+
+  async setLocationInLibrary(projectId: string, locationId: string, saved: boolean): Promise<void> {
+    const data = this.projects.get(projectId);
+    if (!data || !data.locations.some((l) => l.id === locationId))
+      throw new Error(`Location ${locationId} not found in project ${projectId}`);
+    if (!saved) this.locationLibrary.delete(locationId);
+    else if (!this.locationLibrary.has(locationId))
+      this.locationLibrary.set(locationId, { locationId, projectId, savedAt: new Date().toISOString() });
+  }
 
   async libraryEntries(): Promise<{ entries: LibraryEntry[]; available: boolean }> {
     // an entry whose Character is gone is gone too (the database cascades the delete)

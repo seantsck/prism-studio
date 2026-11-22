@@ -3,23 +3,27 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { characterSchema, projectSchema, type Project } from "@/domain/schemas";
+import { characterSchema, locationSchema, projectSchema, type Project } from "@/domain/schemas";
 import { newProjectRecords } from "@/domain/series-start";
 import {
   CHARACTER_NAME_MAX,
   CHARACTER_PROMPT_MAX,
+  CHARACTER_STUDIO_SLUG,
   CHARACTER_STUDIO_TITLE,
+  LOCATION_NAME_MAX,
+  LOCATION_PROMPT_MAX,
+  locationNameFromPrompt,
   nameFromPrompt,
 } from "@/domain/standalone-character";
-import { CharacterLibraryUnavailableError } from "@/data/repository";
+import { CharacterLibraryUnavailableError, LocationLibraryUnavailableError } from "@/data/repository";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
-import { copyIntoProject } from "./character-library";
+import { copyIntoProject, copyLocationIntoProject } from "./character-library";
 import { getRepo, requireProjectFresh } from "./repo";
 import { actorId } from "./script-sync";
 
 /**
- * The account's character library: save a Character to it from its project, take it out, and add a saved Character
- * to another project (a copy: see src/domain/character-library.ts).
+ * The account's library: save a Character or Location to it from its project, take it out, and add a saved one to
+ * another project (a copy: see src/domain/character-library.ts and src/domain/location-library.ts).
  */
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
@@ -67,7 +71,7 @@ async function addFromLibrary_impl(form: FormData) {
   };
 }
 
-/** The account's own project for Characters made outside any story (purpose `library`), made the first time. */
+/** The account's own project for Characters and Locations made outside any story (purpose `library`), made the first time. */
 async function characterStudio(): Promise<Project> {
   const repo = await getRepo();
   const all = await repo.listProjects();
@@ -77,15 +81,15 @@ async function characterStudio(): Promise<Project> {
     ...all.map((p) => p.slug),
     ...(await repo.trashedProjects()).projects.map((t) => t.project.slug),
   ]);
-  let slug = "your-characters";
-  while (taken.has(slug)) slug = `your-characters-${randomUUID().slice(0, 4)}`;
+  let slug = CHARACTER_STUDIO_SLUG;
+  while (taken.has(slug)) slug = `${CHARACTER_STUDIO_SLUG}-${randomUUID().slice(0, 4)}`;
   const records = newProjectRecords({
     id: randomUUID(),
     userId: repo.currentUserId(),
     title: CHARACTER_STUDIO_TITLE,
     slug,
     projectType: "film",
-    description: "Characters made on their own, ready to add to any project.",
+    description: "Characters and locations made on their own, ready to add to any project.",
     now: new Date().toISOString(),
   });
   const project = projectSchema.parse({ ...records.project, purpose: "library" });
@@ -95,7 +99,7 @@ async function characterStudio(): Promise<Project> {
     // 23514: the purpose check does not allow `library` yet
     if ((err as { code?: string }).code === "23514")
       throw new UserFacingError(
-        "Creating characters on their own needs a one-time database update (migration 0065) that has not been applied yet.",
+        "Creating characters and locations on their own needs a one-time database update (migration 0065) that has not been applied yet.",
       );
     throw err;
   }
@@ -137,6 +141,91 @@ async function createStandaloneCharacter_impl(form: FormData) {
   }
   revalidatePath("/", "layout");
   redirect(`/projects/${studio.slug}/characters/${character.id}`);
+}
+
+async function setLocationInLibrary_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const data = await requireProjectFresh(slug);
+  const location = data.locations.find((l) => l.id === str(form, "locationId"));
+  if (!location) throw new UserFacingError("That location is not in this project.");
+  const saved = str(form, "saved") !== "0";
+  try {
+    await (await getRepo()).setLocationInLibrary(data.project.id, location.id, saved);
+  } catch (err) {
+    if (err instanceof LocationLibraryUnavailableError) throw new UserFacingError(err.message);
+    throw err;
+  }
+  revalidatePath("/", "layout");
+  return {
+    ok: true as const,
+    message: saved ? `${location.name} is in your library.` : `${location.name} is out of your library.`,
+  };
+}
+
+async function addLocationFromLibrary_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const target = await requireProjectFresh(slug);
+  const repo = await getRepo();
+  const locationId = str(form, "locationId");
+  const { entries, available } = await repo.locationLibraryEntries();
+  if (!available) throw new UserFacingError(new LocationLibraryUnavailableError().message);
+  const entry = entries.find((e) => e.locationId === locationId);
+  if (!entry) throw new UserFacingError("That location is not in your library.");
+  if (entry.projectId === target.project.id)
+    throw new UserFacingError("That location already lives in this project.");
+  const sourceSlug = (await repo.listProjects()).find((p) => p.id === entry.projectId)?.slug;
+  const source = sourceSlug ? await repo.loadProject(sourceSlug) : null;
+  if (!source) throw new UserFacingError("The project that location lives in is not available.");
+  const plan = await copyLocationIntoProject(target, source, locationId, await actorId());
+  revalidatePath(`/projects/${slug}`, "layout");
+  const pictures = plan.assets.filter((a) => a.from.objectPath).length;
+  return {
+    ok: true as const,
+    message: `${plan.location.name} added${pictures ? ` with ${pictures} picture${pictures === 1 ? "" : "s"}` : ""}.`,
+  };
+}
+
+/** Create a location from a description, outside any story: made in the account's library project, saved, opened. */
+async function createStandaloneLocation_impl(form: FormData) {
+  const prompt = str(form, "prompt").slice(0, LOCATION_PROMPT_MAX);
+  if (!prompt) throw new UserFacingError("Describe your location first.");
+  const name = (str(form, "name") || locationNameFromPrompt(prompt)).slice(0, LOCATION_NAME_MAX);
+  const studio = await characterStudio();
+  const repo = await getRepo();
+  const location = locationSchema.parse({
+    id: randomUUID(),
+    projectId: studio.id,
+    name,
+    description: prompt,
+    geography: "",
+    zones: [],
+    entrances: [],
+    lighting: "",
+    recurringProps: [],
+    referenceAssetIds: [],
+    locked: false,
+    set3d: null,
+  });
+  await repo.upsert(studio.id, "locations", location);
+  try {
+    await repo.setLocationInLibrary(studio.id, location.id, true);
+  } catch (err) {
+    if (!(err instanceof LocationLibraryUnavailableError)) throw err;
+  }
+  revalidatePath("/", "layout");
+  redirect(`/projects/${studio.slug}/locations?open=${location.id}`);
+}
+
+export async function createStandaloneLocation(form: FormData): Promise<ActionResult> {
+  return runAction(() => createStandaloneLocation_impl(form), { name: "createStandaloneLocation" });
+}
+
+export async function setLocationInLibrary(form: FormData): Promise<ActionResult> {
+  return runAction(() => setLocationInLibrary_impl(form), { name: "setLocationInLibrary" });
+}
+
+export async function addLocationFromLibrary(form: FormData): Promise<ActionResult> {
+  return runAction(() => addLocationFromLibrary_impl(form), { name: "addLocationFromLibrary" });
 }
 
 export async function createStandaloneCharacter(form: FormData): Promise<ActionResult> {
