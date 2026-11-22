@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ActionForm } from "@/components/action-form";
 import { Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -14,26 +14,28 @@ export interface WriterOption {
   reason: string | null;
 }
 
-export type ScopeQuote =
+/** Every Episode that can be written, each with its own price, for one writer. */
+export type WriterQuote =
   | {
       ok: true;
-      usd: number;
       paid: boolean;
       label: string;
-      episodes: Array<{ number: number; title: string }>;
+      episodes: Array<{ id: string; number: number; title: string; usd: number }>;
     }
   | { ok: false; reason: string };
 
-/** The price of each choice, per writer: what the confirmation shows and what is confirmed. */
-export type WriteQuotes = Record<string, { one: ScopeQuote; all: ScopeQuote | null }>;
+/** The price of each Episode, per writer: the confirmation sums the ones picked. */
+export type WriteQuotes = Record<string, WriterQuote>;
 
 const RECOMMENDED = "recommended";
 const money = (usd: number) => `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}`;
+/** The sum the server works out for the same Episodes (rounded the same way). */
+const total = (xs: Array<{ usd: number }>) => Math.round(xs.reduce((s, e) => s + e.usd, 0) * 10000) / 10000;
 
 /**
- * Write it: choose the writer (Prism's recommendation, or a named one) and, for a series, one Episode or every
- * unwritten one; a film is written whole. "Write…" opens a confirmation that names what will be written, by whom, and
- * the most it can cost; nothing runs before "Write" there.
+ * Write it: choose the writer (Prism's recommendation, or a named one) and, for a series, which unwritten Episodes to
+ * write (every one is ticked to start with; tick any set); a film is written whole. "Write…" opens a confirmation that
+ * names what will be written, by whom, and the most it can cost; nothing runs before "Write" there.
  */
 export function WriteIt({
   slug,
@@ -50,20 +52,30 @@ export function WriteIt({
   quotes: WriteQuotes;
 }) {
   const [writer, setWriter] = useState(RECOMMENDED);
-  const [scope, setScope] = useState<"one" | "all">("one");
+  const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const chosen = writer === RECOMMENDED ? recommended : writer;
-  const forWriter = quotes[chosen];
-  const quote = scope === "all" && forWriter?.all ? forWriter.all : forWriter?.one;
-  const what =
-    kind !== "series"
-      ? `the whole ${kind === "film" ? "film" : "short film"}`
-      : quote?.ok && quote.episodes.length > 1
-        ? `all ${quote.episodes.length} episodes`
-        : quote?.ok
-          ? `episode ${quote.episodes[0]!.number}, "${quote.episodes[0]!.title}"`
-          : "it";
+  const quote = quotes[chosen];
+  const series = kind === "series";
+  const all = useMemo(() => (quote?.ok ? quote.episodes : []), [quote]);
+  const picked = series ? all.filter((e) => !unticked.has(e.id)) : all.slice(0, 1);
+  const usd = total(picked);
+  const what = !series
+    ? `the whole ${kind === "film" ? "film" : "short film"}`
+    : picked.length === all.length && all.length > 1
+      ? `all ${all.length} episodes`
+      : picked.length === 1
+        ? `episode ${picked[0]!.number}, "${picked[0]!.title}"`
+        : `${picked.length} episodes`;
+  const price = quote?.ok ? `${quote.paid ? `up to ${money(usd)}` : "free"} with ${quote.label}` : "";
   const recommendedLabel = writers.find((w) => w.value === recommended)?.label;
+  const toggle = (id: string) =>
+    setUnticked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   return (
     <div className="space-y-3" data-testid="write-it">
@@ -105,30 +117,48 @@ export function WriteIt({
         </div>
       </div>
 
-      {kind === "series" && forWriter?.all ? (
-        <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="What to write">
-          {(
-            [
-              ["one", forWriter.one.ok ? `Episode ${forWriter.one.episodes[0]!.number} only` : "One episode"],
-              ["all", forWriter.all.ok ? `All ${forWriter.all.episodes.length} episodes` : "All episodes"],
-            ] as const
-          ).map(([id, label]) => (
+      {series && all.length > 1 ? (
+        <fieldset className="space-y-1.5" data-testid="write-it-episodes">
+          <div className="flex items-center gap-3 text-[12px]">
+            <legend className="text-muted">
+              Episodes to write ({picked.length} of {all.length})
+            </legend>
             <button
-              key={id}
               type="button"
-              role="radio"
-              aria-checked={scope === id}
-              onClick={() => setScope(id)}
-              className={cn(
-                "rounded-full border px-3 py-1 text-[12px] transition-colors",
-                scope === id ? "border-accent bg-accent/10 text-fg" : "border-line text-muted hover:text-fg",
-              )}
-              data-testid={`write-it-scope-${id}`}
+              className="text-accent hover:underline"
+              onClick={() => setUnticked(new Set())}
+              data-testid="write-it-all"
             >
-              {label}
+              All
             </button>
-          ))}
-        </div>
+            <button
+              type="button"
+              className="text-accent hover:underline"
+              onClick={() => setUnticked(new Set(all.map((e) => e.id)))}
+              data-testid="write-it-none"
+            >
+              None
+            </button>
+          </div>
+          <ul className="grid max-h-64 gap-1 overflow-y-auto pr-1 sm:grid-cols-2">
+            {all.map((e) => (
+              <li key={e.id}>
+                <label className="flex items-baseline gap-2 text-[13px]">
+                  <input
+                    type="checkbox"
+                    checked={!unticked.has(e.id)}
+                    onChange={() => toggle(e.id)}
+                    data-testid="write-it-episode"
+                    data-number={e.number}
+                  />
+                  <span className="min-w-0 truncate">
+                    {e.number}. {e.title}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </fieldset>
       ) : null}
 
       {quote && !quote.ok ? (
@@ -140,18 +170,21 @@ export function WriteIt({
           <Button
             type="button"
             variant="primary"
+            disabled={picked.length === 0}
             onClick={() => setConfirming(true)}
             data-testid="write-it-open"
           >
-            Write {what}…
+            {picked.length === 0 ? "Pick an episode to write" : `Write ${what}…`}
           </Button>
-          <span className="text-[12px] text-muted" data-testid="write-it-price">
-            {quote.paid ? `up to ${money(quote.usd)}` : "free"} with {quote.label}
-          </span>
+          {picked.length ? (
+            <span className="text-[12px] text-muted" data-testid="write-it-price">
+              {price}
+            </span>
+          ) : null}
         </div>
       ) : null}
 
-      {confirming && quote?.ok ? (
+      {confirming && quote?.ok && picked.length ? (
         <div
           role="dialog"
           aria-modal="true"
@@ -171,12 +204,12 @@ export function WriteIt({
               <div className="flex justify-between gap-4">
                 <dt className="text-muted">Cost</dt>
                 <dd className="font-medium" data-testid="write-it-confirm-price">
-                  {quote.paid ? `up to ${money(quote.usd)}` : "free"}
+                  {quote.paid ? `up to ${money(usd)}` : "free"}
                 </dd>
               </div>
             </dl>
             <p className="mt-3 text-[12px] text-muted">
-              {quote.episodes.length > 1
+              {picked.length > 1
                 ? `Each episode is written in parts and arrives as its own proposal. Nothing goes into a script until you accept it.`
                 : `It is written in parts and arrives as a proposal. Nothing goes into the script until you accept it.`}
               {quote.paid ? " The cost shown is the most it should take; it usually takes less." : ""}
@@ -184,15 +217,17 @@ export function WriteIt({
             <ActionForm action={writeWhole} successMessage="" className="mt-4 flex justify-end gap-2">
               <input type="hidden" name="projectSlug" value={slug} />
               <input type="hidden" name="model" value={chosen} />
-              <input type="hidden" name="scope" value={scope} />
-              {quote.paid ? (
-                <input type="hidden" name="confirmedTotalUsd" value={quote.usd.toFixed(4)} />
-              ) : null}
+              {series ? (
+                <input type="hidden" name="episodeIds" value={picked.map((e) => e.id).join(",")} />
+              ) : (
+                <input type="hidden" name="scope" value="one" />
+              )}
+              {quote.paid ? <input type="hidden" name="confirmedTotalUsd" value={usd.toFixed(4)} /> : null}
               <Button type="button" variant="ghost" onClick={() => setConfirming(false)}>
                 Cancel
               </Button>
               <Button type="submit" variant="primary" data-testid="write-it-confirm-go">
-                Write · {quote.paid ? `up to ${money(quote.usd)}` : "free"}
+                Write · {quote.paid ? `up to ${money(usd)}` : "free"}
               </Button>
             </ActionForm>
           </div>

@@ -68,6 +68,8 @@ export default async function StartPage({ params }: { params: Promise<{ project:
       null)
     : null;
   const planned = kind === "series" && episodes.length > 0 && episodes.every((e) => e.synopsis.trim());
+  // episodes can be written once any of them has a plan (the rest follow the premise)
+  const somePlanned = kind === "series" && episodes.some((e) => e.synopsis.trim());
   // Prism's newest plan is shown in the editor while it is newer than the Episodes (not yet saved or set aside)
   const lastEdit = episodes.reduce((m, e) => (e.updatedAt > m ? e.updatedAt : m), "");
   const pendingPlan = !!plan && (plan.status === "queued" || plan.status === "running");
@@ -79,9 +81,7 @@ export default async function StartPage({ params }: { params: Promise<{ project:
   const quotes: WriteQuotes = {};
   if (premise && first)
     for (const w of offered.filter((x) => x.available)) {
-      const one = quoteWriting(data, "one", w.value);
-      const all = kind === "series" ? quoteWriting(data, "all", w.value) : null;
-      quotes[w.value] = { one, all: all && all.ok && all.episodes.length > 1 ? all : null };
+      quotes[w.value] = quoteWriting(data, kind === "series" ? "all" : "one", w.value);
     }
   const planQuote = premise && first && kind === "series" ? quoteSeasonPlan(data) : null;
   const refineQuote =
@@ -105,7 +105,7 @@ export default async function StartPage({ params }: { params: Promise<{ project:
   const bibleShaped = !!(data.bible.visualStyle.trim() && data.bible.tone.trim());
   const writeState: StepState = written
     ? "done"
-    : premise && (kind !== "series" || planned)
+    : premise && (kind !== "series" || somePlanned)
       ? "now"
       : "later";
   const series = kind === "series";
@@ -246,7 +246,7 @@ export default async function StartPage({ params }: { params: Promise<{ project:
               </Link>
               , then come back here.
             </p>
-          ) : series && !planned ? (
+          ) : series && !somePlanned ? (
             <Later>Comes after the season plan (or write the episodes yourself on the Episodes page).</Later>
           ) : (
             <div className="space-y-4">

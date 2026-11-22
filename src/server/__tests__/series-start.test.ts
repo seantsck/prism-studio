@@ -319,6 +319,53 @@ describe("starting a series from a prompt", () => {
     expect(quoteWriting((await repo.loadProject(slug))!, "all")).toMatchObject({ ok: true });
   });
 
+  it("any set of unwritten episodes can be picked: exactly those are written, each at its own price", async () => {
+    const { slug, data } = await newSeries();
+    const eps = [...data.episodes].sort((a, b) => a.number - b.number);
+    const picked = [eps[1]!.id, eps[4]!.id, eps[6]!.id];
+    const q = quoteWriting(data, picked);
+    expect(q).toMatchObject({ ok: true, episodes: [{ number: 2 }, { number: 5 }, { number: 7 }] });
+    expect(quoteWriting(data, [])).toMatchObject({ ok: false, reason: "Pick at least one episode." });
+    expect(await writeWhole(form({ projectSlug: slug, episodeIds: picked.join(",") }))).toEqual({ ok: true });
+    const whole = (await proposalsOf(slug)).filter((p) => p.context.longForm);
+    expect(whole.map((p) => p.episode.number).sort((a, b) => a - b)).toEqual([2, 5, 7]);
+    // an episode of another project, or one that has a script, is refused (nothing queued)
+    const written = eps[0]!;
+    await repo.upsert(data.project.id, "episodes", {
+      ...written,
+      scriptText: "INT. ROOM - DAY\n\nShe waits.",
+    });
+    for (const ids of [`${written.id},${eps[2]!.id}`, "not-an-episode"])
+      expect(await writeWhole(form({ projectSlug: slug, episodeIds: ids }))).toMatchObject({
+        ok: false,
+        error: "One of the episodes picked has a script already, or is not in this project.",
+      });
+    expect((await proposalsOf(slug)).filter((p) => p.context.longForm)).toHaveLength(3);
+  });
+
+  it("paid: the picked episodes cost the sum of their prices, and less than that is refused", async () => {
+    const { slug, data } = await newSeries();
+    process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI = "true";
+    delete process.env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER;
+    const eps = [...data.episodes].sort((a, b) => a.number - b.number);
+    const picked = [eps[0]!.id, eps[3]!.id];
+    const q = quoteWriting(data, picked);
+    if (!q.ok) throw new Error(q.reason);
+    expect(q.usd).toBeCloseTo(
+      q.episodes.reduce((s, e) => s + e.usd, 0),
+      4,
+    );
+    const base = { projectSlug: slug, episodeIds: picked.join(","), model: q.model };
+    expect(await writeWhole(form({ ...base, confirmedTotalUsd: (q.usd - 0.001).toFixed(4) }))).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("Confirm that amount"),
+    });
+    expect(await writeWhole(form({ ...base, confirmedTotalUsd: q.usd.toFixed(4) }))).toEqual({ ok: true });
+    const whole = (await proposalsOf(slug)).filter((p) => p.context.longForm);
+    expect(whole).toHaveLength(2);
+    for (const p of whole) expect(p.spendAuthorization).toBe("confirmed");
+  });
+
   it("a film is written whole (one request, in parts)", async () => {
     await createProject(form({ title: "Feature", premise: PREMISE, projectType: "film" }));
     const data = (await repo.loadProject("feature"))!;

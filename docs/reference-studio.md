@@ -210,12 +210,14 @@ The start page and the Bible page update on their own every few seconds while Pr
 (`RefreshWhileActive`), so a plan, a Bible draft, a written Episode or an analysis appears without reloading.
 
 4. **Write it** (`WriteIt`): choose the writer (**Recommended by Prism**, or a named model; the free test writer is
-   listed only on a test server, `PRISM_STUDIO_SHOW_TEST_MODELS=1`) and, for a series, **Episode N only** or **All N
-   episodes**; a film is written whole. **Write…** opens a confirmation with the writer and the most it can cost;
-   nothing runs before **Write** there. Each Episode (or the film) is ONE writing request (`length=whole`) that the
-   Story worker writes in parts (`longFormPlan`: a series episode 2 × 8 000 tokens, a short 2 × 6 000, a film
-   4 × 10 000), each part continuing from the tail of the text so far (`LONG_FORM_TAIL_CHARS`), into one proposal to
-   review and accept on its Write page. Writing leases last 30 minutes (`WRITING_LEASE_MS`).
+   listed only on a test server, `PRISM_STUDIO_SHOW_TEST_MODELS=1`) and, for a series, which unwritten episodes to
+   write: every one is ticked to start with (**All** / **None**, or tick any set; `episodeIds`). Writing opens once any
+   episode has a plan. A film is written whole. **Write…** opens a confirmation with the writer and the most it can
+   cost (the sum of each picked episode's own price); nothing runs before **Write** there. Each Episode (or the film)
+   is ONE writing request (`length=whole`) that the Story worker writes in parts (`longFormPlan`: a series episode
+   2 × 8 000 tokens, a short 2 × 6 000, a film 4 × 10 000), each part continuing from the tail of the text so far
+   (`LONG_FORM_TAIL_CHARS`), into one proposal to review and accept on its Write page. Writing leases last 30 minutes
+   (`WRITING_LEASE_MS`).
 5. **Turn it into a Bible, cast, places and Shots**: Import Story on Episode 1 (or the film).
 6. **Carry on in any order** from Home.
 

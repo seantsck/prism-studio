@@ -1171,13 +1171,22 @@ test("Q: a series from a prompt: the season planned, edited and refined without 
   await expect(editor.getByLabel("Episode 2 title")).toHaveValue("The Tasting");
   await expect(editor.getByLabel("Episode 3 title")).toHaveValue("The Rival");
 
-  // write all 6: the writer and the scope are chosen, then a confirmation names the price before anything runs
+  // write all 6: the writer and the episodes are chosen (every one is ticked to start with), then a confirmation
+  // names the price before anything runs
   const write = page.getByTestId("write-it");
   await expect(write.locator('[data-testid="write-it-writer"][data-value="recommended"]')).toHaveAttribute(
     "aria-checked",
     "true",
   );
-  await write.getByTestId("write-it-scope-all").click();
+  const boxes = write.getByTestId("write-it-episode");
+  await expect(boxes).toHaveCount(6);
+  await write.getByTestId("write-it-none").click();
+  await expect(write.getByTestId("write-it-open")).toBeDisabled();
+  await boxes.nth(1).check();
+  await boxes.nth(3).check();
+  await expect(write.getByTestId("write-it-open")).toHaveText("Write 2 episodes…");
+  await write.getByTestId("write-it-all").click();
+  await expect(write.getByTestId("write-it-open")).toHaveText("Write all 6 episodes…");
   await expect(write.getByTestId("write-it-price")).toHaveText(/^free with /);
   await write.getByTestId("write-it-open").click();
   const confirm = page.getByTestId("write-it-confirm");
@@ -1349,7 +1358,7 @@ test("U: a film from the Projects page: written whole, with the writer and the p
   await expect(page.getByTestId("start-plan")).toHaveCount(0);
   await expect(page.getByTestId("start-write")).toHaveAttribute("data-state", "now");
   const write = page.getByTestId("write-it");
-  await expect(write.getByTestId("write-it-scope-all")).toHaveCount(0);
+  await expect(write.getByTestId("write-it-episodes")).toHaveCount(0);
   await write.getByTestId("write-it-open").click();
   const confirm = page.getByTestId("write-it-confirm");
   await expect(confirm).toContainText("Write the whole film?");
