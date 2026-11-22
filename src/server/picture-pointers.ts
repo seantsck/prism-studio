@@ -90,7 +90,15 @@ export async function removalPlan(
       locs.has(l.id) ? { ...l, referenceAssetIds: l.referenceAssetIds.filter((id) => id !== asset.id) } : l,
     ),
   };
-  const refusal = await assetDeletionRefusal(after, asset);
+  const found = await assetDeletionRefusal(after, asset);
+  // a Shot's inputs are changed on the Shot's own page ("Pictures this Shot is made from")
+  const refusal =
+    found &&
+    /Shot [^ ]+ · (generation reference|start frame|end frame|reference video|reference audio|lighting reference)/i.test(
+      found,
+    )
+      ? `${found} Open that Shot and use "Remove from this Shot" first.`
+      : found;
   if (refusal)
     throw new UserFacingError(
       refusal

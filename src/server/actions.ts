@@ -555,6 +555,61 @@ async function loadShot(form: FormData) {
   return { ...base, shot };
 }
 
+/** The pictures (and clips) a Shot is generated from, by where they sit on it. */
+const SHOT_INPUTS = [
+  "reference",
+  "start_frame",
+  "end_frame",
+  "reference_video",
+  "reference_audio",
+  "lighting_reference",
+] as const;
+
+/**
+ * Take one picture (or clip) off a Shot's generation inputs: its reference images, start or end frame, reference
+ * video or audio, or lighting reference. The picture itself is kept (it can then be deleted, if nothing else uses it);
+ * the Shot's next generation simply goes without it. A locked Shot refuses.
+ */
+async function removeShotInput_impl(form: FormData) {
+  const { data, shot, slug } = await loadShot(form);
+  if (shot.status === "locked")
+    throw new UserFacingError("This Shot is locked. Unlock it before changing its inputs.");
+  const role = str(form, "role") as (typeof SHOT_INPUTS)[number];
+  const assetId = str(form, "assetId");
+  if (!SHOT_INPUTS.includes(role)) throw new UserFacingError("Choose which input to remove.");
+  const g = shot.generation;
+  const next: Shot =
+    role === "lighting_reference"
+      ? { ...shot, lighting: { ...shot.lighting, referenceAssetId: null } }
+      : {
+          ...shot,
+          generation: {
+            ...g,
+            ...(role === "reference"
+              ? { referenceAssetIds: g.referenceAssetIds.filter((x) => x !== assetId) }
+              : {}),
+            ...(role === "start_frame" ? { startFrameAssetId: null } : {}),
+            ...(role === "end_frame" ? { endFrameAssetId: null } : {}),
+            ...(role === "reference_video" ? { referenceVideoAssetId: null } : {}),
+            ...(role === "reference_audio" ? { referenceAudioAssetId: null } : {}),
+          },
+        };
+  const held =
+    role === "reference"
+      ? g.referenceAssetIds.includes(assetId)
+      : role === "lighting_reference"
+        ? shot.lighting.referenceAssetId === assetId
+        : (role === "start_frame"
+            ? g.startFrameAssetId
+            : role === "end_frame"
+              ? g.endFrameAssetId
+              : role === "reference_video"
+                ? g.referenceVideoAssetId
+                : g.referenceAudioAssetId) === assetId;
+  if (!held) throw new UserFacingError("That picture is no longer on this Shot.");
+  await saveShot(data.project.id, next, slug);
+}
+
 async function saveShot(projectId: string, shot: Shot, slug: string) {
   const parsed = shotSchema.parse({ ...shot, updatedAt: now() });
   await (await getRepo()).upsert(projectId, "shots", parsed);
@@ -1204,6 +1259,10 @@ export async function restoreProject(form: FormData): Promise<ActionResult> {
 
 export async function deleteProjectNow(form: FormData): Promise<ActionResult> {
   return runAction(() => deleteProjectNow_impl(form), { name: "deleteProjectNow" });
+}
+
+export async function removeShotInput(form: FormData): Promise<ActionResult> {
+  return runAction(() => removeShotInput_impl(form), { name: "removeShotInput" });
 }
 
 export async function deleteProject(form: FormData): Promise<ActionResult> {
