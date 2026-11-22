@@ -10,6 +10,8 @@ import {
 } from "@/domain/series-start";
 import {
   BIBLE_AI_FIELDS,
+  bibleAsText,
+  bibleFieldValue,
   bibleDraftInstruction,
   bibleRefineInstruction,
   isBibleRequest,
@@ -177,6 +179,131 @@ async function applySeasonPlan_impl(form: FormData) {
   return { ok: true as const, message: "The plan is in your Episodes." };
 }
 
+/** The titles and synopses typed in a plan editor, written to the Episodes (`touchAll`: stamp each even if unchanged). */
+async function writePlan(form: FormData, slug: string, touchAll: boolean): Promise<number> {
+  const data = await requireProjectFresh(slug);
+  const repo = await getRepo();
+  const now = new Date().toISOString();
+  let changed = 0;
+  for (const e of data.episodes) {
+    if (!form.has(`title_${e.id}`)) continue;
+    const title = str(form, `title_${e.id}`).slice(0, 120) || e.title;
+    const synopsis = str(form, `synopsis_${e.id}`).slice(0, 2000);
+    if (!touchAll && title === e.title && synopsis === e.synopsis) continue;
+    await repo.upsert(data.project.id, "episodes", { ...e, title, synopsis, updatedAt: now });
+    changed++;
+  }
+  return changed;
+}
+
+/**
+ * The plan editor (the plan as the Episodes carry it, or Prism's newest plan to review, in the same fields):
+ *  - save: what is in the fields becomes the plan (Prism's plan, as edited, or the creator's own);
+ *  - refine: save it, then ask Prism to revise it with the note (Prism gets the plan as just saved);
+ *  - keep: set Prism's plan aside and keep the Episodes' plan as it is.
+ */
+async function editSeasonPlan_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const intent = str(form, "intent") || "save";
+  const proposalId = str(form, "proposalId");
+  if (intent === "keep") {
+    const data = await requireProjectFresh(slug);
+    const p = proposalId ? await (await getWritingRepo()).getProposal(data.project.id, proposalId) : null;
+    if (p && p.status === "ready")
+      await (await getWritingRepo()).rejectProposal(data.project.id, p.id, new Date().toISOString());
+    revalidatePath(`/projects/${slug}`, "layout");
+    return { ok: true as const, message: "Kept your plan." };
+  }
+  const note = str(form, "note").slice(0, REFINE_NOTE_MAX);
+  if (intent === "refine" && !note) throw new UserFacingError("Tell Prism what to change in the plan.");
+  // saving Prism's plan uses it, even where a field was left as Prism wrote it
+  const changed = await writePlan(form, slug, !!proposalId);
+  if (intent !== "refine") {
+    revalidatePath(`/projects/${slug}`, "layout");
+    return { ok: true as const, message: changed ? "Plan saved." : "Nothing changed." };
+  }
+  const data = await requireProjectFresh(slug);
+  if (!data.episodes.some((e) => e.synopsis.trim()))
+    throw new UserFacingError("Write at least one episode's synopsis first, or plan the season with Prism.");
+  const q = quoteSeasonPlan(data, str(form, "model"), { refine: true });
+  if (!q.ok) throw new UserFacingError(q.reason);
+  confirmed(form, q.usd, q.paid);
+  const first = [...data.episodes].sort((a, b) => a.number - b.number)[0]!;
+  await queue({
+    projectSlug: slug,
+    episodeId: first.id,
+    preset: "brainstorm",
+    scopeKind: "episode",
+    instruction: seasonRefineInstruction(data, data.episodes.length, note),
+    model: q.model,
+    withPlan: "1",
+    ...(q.paid ? { confirmedTotalUsd: q.usd.toFixed(4) } : {}),
+  });
+  revalidatePath(`/projects/${slug}`, "layout");
+  return { ok: true as const, message: "Plan saved. Prism is revising it…" };
+}
+
+/**
+ * Prism's Bible draft, reviewed in editable fields:
+ *  - apply: the ticked fields, as edited, go into the Bible (everything else stays as it is);
+ *  - refine: Prism revises the draft as it now reads (edits included) with the note; the Bible is unchanged;
+ *  - discard: set the draft aside.
+ */
+async function reviewBible_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const intent = str(form, "intent") || "apply";
+  const data = await requireProjectFresh(slug);
+  const writing = await getWritingRepo();
+  const proposal = await writing.getProposal(data.project.id, str(form, "proposalId"));
+  if (!proposal || !isBibleRequest(proposal.instruction) || proposal.status !== "ready" || !proposal.result)
+    throw new UserFacingError("That Bible draft is not ready.");
+  const proposed = parseBibleIdeas(proposal.result.ideas);
+  const shown = BIBLE_AI_FIELDS.filter((f) => proposed[f.key] !== undefined && form.has(`text_${f.key}`));
+
+  if (intent === "discard") {
+    await writing.rejectProposal(data.project.id, proposal.id, new Date().toISOString());
+    revalidatePath(`/projects/${slug}`, "layout");
+    return { ok: true as const, message: "Draft discarded." };
+  }
+
+  if (intent === "refine") {
+    const note = str(form, "note").slice(0, REFINE_NOTE_MAX);
+    if (!note) throw new UserFacingError("Tell Prism what to change in the draft.");
+    const draft = bibleAsText(data.bible);
+    for (const f of shown) draft[f.key] = String(form.get(`text_${f.key}`) ?? "").slice(0, 1500);
+    const q = quoteBible(data, str(form, "model"), { refine: true });
+    if (!q.ok) throw new UserFacingError(q.reason);
+    confirmed(form, q.usd, q.paid);
+    const first = [...data.episodes].sort((a, b) => a.number - b.number)[0]!;
+    await queue({
+      projectSlug: slug,
+      episodeId: first.id,
+      preset: "brainstorm",
+      scopeKind: "episode",
+      instruction: bibleRefineInstruction(data, note),
+      model: q.model,
+      withPlan: "1",
+      withBible: "1",
+      bibleDraft: JSON.stringify(draft),
+      ...(q.paid ? { confirmedTotalUsd: q.usd.toFixed(4) } : {}),
+    });
+    revalidatePath(`/projects/${slug}`, "layout");
+    return { ok: true as const, message: "Prism is revising the draft…" };
+  }
+
+  const chosen = shown.filter((f) => str(form, `use_${f.key}`) === "1");
+  if (chosen.length === 0) throw new UserFacingError("Tick the fields you want to use.");
+  const next = { ...data.bible, updatedAt: new Date().toISOString() };
+  for (const f of chosen)
+    (next as Record<string, unknown>)[f.key] = bibleFieldValue(
+      f.key,
+      String(form.get(`text_${f.key}`) ?? ""),
+    );
+  await (await getRepo()).saveBible(bibleSchema.parse(next));
+  revalidatePath(`/projects/${slug}`, "layout");
+  return { ok: true as const, message: `${chosen.length} field${chosen.length === 1 ? "" : "s"} applied.` };
+}
+
 /** Write one Episode, every unwritten Episode, or the whole film: one request each, reviewed on its Write page. */
 async function writeWhole_impl(form: FormData) {
   const slug = str(form, "projectSlug");
@@ -222,6 +349,14 @@ export async function saveSeasonPlan(form: FormData): Promise<ActionResult> {
 
 export async function applySeasonPlan(form: FormData): Promise<ActionResult> {
   return runAction(() => applySeasonPlan_impl(form), { name: "applySeasonPlan" });
+}
+
+export async function editSeasonPlan(form: FormData): Promise<ActionResult> {
+  return runAction(() => editSeasonPlan_impl(form), { name: "editSeasonPlan" });
+}
+
+export async function reviewBible(form: FormData): Promise<ActionResult> {
+  return runAction(() => reviewBible_impl(form), { name: "reviewBible" });
 }
 
 export async function writeWhole(form: FormData): Promise<ActionResult> {

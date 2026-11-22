@@ -122,15 +122,21 @@ export function parseBibleIdeas(
       (x) => norm(x.key) === norm(idea.title) || norm(x.label) === norm(idea.title),
     );
     if (!f || out[f.key] !== undefined) continue;
-    const text = idea.detail.trim();
-    out[f.key] = f.list
-      ? text
-          .split("\n")
-          .map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim())
-          .filter(Boolean)
-      : text;
+    out[f.key] = bibleFieldValue(f.key, idea.detail);
   }
   return out;
+}
+
+/** A field's text (Prism's, or the creator's edit of it) as the Bible stores it: a list field is one item per line. */
+export function bibleFieldValue(key: BibleAiKey, text: string): string | string[] {
+  const f = BIBLE_AI_FIELDS.find((x) => x.key === key)!;
+  const t = text.trim().slice(0, LIMITS.ideaDetail);
+  return f.list
+    ? t
+        .split("\n")
+        .map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim())
+        .filter(Boolean)
+    : t;
 }
 
 /** The current Bible as text, field by field (what a refine is sent, and what the review compares with). */

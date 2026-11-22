@@ -8,7 +8,7 @@ import {
   titleFromPremise,
   wholeScriptInstruction,
 } from "@/domain/series-start";
-import { LIMITS, longFormPlan } from "@/domain/story/writing";
+import { LIMITS, longFormPlan, PLAN_BATCH } from "@/domain/story/writing";
 import { FakeStoryProvider } from "@/story/providers/fake";
 import { createStoryRegistry } from "@/story/registry";
 import { StoryWorker } from "@/story/worker";
@@ -69,7 +69,9 @@ import {
   applyBibleDraft,
   applySeasonPlan,
   draftBible,
+  editSeasonPlan,
   planSeason,
+  reviewBible,
   saveSeasonPlan,
   writeWhole,
 } from "../series-actions";
@@ -125,6 +127,47 @@ const work = () =>
     registry: createStoryRegistry({ PRISM_STUDIO_STORY_AI_PROVIDERS: "" }, [new FakeStoryProvider()]),
     workerId: "test-worker",
   }).tick(20);
+
+/** The worker with the free test writer, recording every request it sends the writer. */
+function recordingWork() {
+  const provider = new FakeStoryProvider();
+  const sent: Array<Parameters<FakeStoryProvider["write"]>[0]> = [];
+  const write = provider.write.bind(provider);
+  provider.write = (req) => {
+    sent.push(req);
+    return write(req);
+  };
+  const run = () =>
+    new StoryWorker({
+      store: repo.story,
+      writing: repo.writing,
+      registry: createStoryRegistry({ PRISM_STUDIO_STORY_AI_PROVIDERS: "" }, [provider]),
+      workerId: "test-worker",
+    }).tick(20);
+  return { sent, run };
+}
+
+/** A Bible request answered with one idea per field (as the worker would store it). */
+async function answerBible(id: string, detail: (key: string, list: boolean) => string) {
+  const claimed = (await repo.writing.claim("w", 60_000, new Date().toISOString()))!;
+  expect(claimed.id).toBe(id);
+  await repo.writing.complete(id, "w", {
+    result: {
+      message: "Here is a Bible.",
+      alternatives: [],
+      ideas: BIBLE_AI_FIELDS.map((f) => ({ title: f.key, detail: detail(f.key, f.list) })),
+    },
+    usage: { inputTokens: 1, outputTokens: 1 },
+    actualUsd: 0,
+    providerCalls: 1,
+    now: new Date().toISOString(),
+  });
+}
+
+const newest = async (slug: string, startsWith: string) =>
+  (await proposalsOf(slug))
+    .filter((p) => p.instruction.startsWith(startsWith))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!;
 
 async function proposalsOf(slug: string) {
   const data = (await repo.loadProject(slug))!;
@@ -368,13 +411,13 @@ describe("starting a series from a prompt", () => {
     ).toMatchObject({ ok: true });
   });
 
-  it("any episode count from 1 to 50 can be typed; anything else falls back to 8", async () => {
+  it("any episode count from 1 to 500 can be typed (more is 500); anything else falls back to 8", async () => {
     for (const [typed, want] of [
       ["24", 24],
       ["1", 1],
-      ["50", 50],
+      ["120", 120],
       ["0", 8],
-      ["51", 8],
+      ["900", 500],
       ["2.5", 8],
       ["abc", 8],
     ] as const) {
@@ -595,5 +638,230 @@ describe("starting a series from a prompt", () => {
     for (const p of asked) expect(p.spendAuthorization).toBe("confirmed");
     const refined = asked.find((p) => p.instruction.startsWith("Revise"))!;
     expect(refined.estimate.usd).toBeLessThanOrEqual(r.usd);
+  });
+
+  it("a long season is planned in batches, each shown the episodes planned before it, as ONE plan", async () => {
+    await createProject(form({ title: "Very Long", premise: PREMISE, episodeCount: "95" }));
+    const slug = "very-long";
+    expect(await planSeason(form({ projectSlug: slug }))).toMatchObject({ ok: true });
+    const queued = await newest(slug, "Plan season 1");
+    expect(queued.context.planBatch).toEqual({ size: PLAN_BATCH, total: 95 });
+    const { sent, run } = recordingWork();
+    await run();
+    // 40 + 40 + 15: each batch asked only for its own episodes
+    expect(sent.map((r) => r.count)).toEqual([40, 40, 15]);
+    expect(sent[0]!.instruction).toContain("episodes 1 to 40 of 95");
+    expect(sent[2]!.instruction).toContain("episodes 81 to 95 of 95");
+    expect(sent[2]!.instruction).toContain("bring the season to its ending");
+    expect(sent[0]!.context.plannedSoFar).toBeUndefined();
+    expect(sent[1]!.context.plannedSoFar).toHaveLength(40);
+    expect(sent[2]!.context.plannedSoFar).toHaveLength(80);
+    // the last 60 in full, the earlier ones by title (so a 500-episode plan still fits the model)
+    expect(sent[2]!.context.plannedSoFar![0]!.detail).toBe("");
+    expect(sent[2]!.context.plannedSoFar![19]!.detail).toBe("");
+    expect(sent[2]!.context.plannedSoFar![20]!.detail).not.toBe("");
+    expect(sent.every((r) => r.context.planBatch === undefined)).toBe(true);
+    const done = await newest(slug, "Plan season 1");
+    expect(done.status).toBe("ready");
+    expect(done.result!.ideas).toHaveLength(95);
+    expect(done.providerCalls).toBe(3);
+  });
+
+  it("Prism's plan is edited before it is used, refined with the edits, or set aside for the plan you had", async () => {
+    const { slug } = await newSeries();
+    await planSeason(form({ projectSlug: slug }));
+    await work();
+    const draft = await newest(slug, "Plan season 1");
+    const data = (await repo.loadProject(slug))!;
+    const eps = [...data.episodes].sort((a, b) => a.number - b.number);
+    // the editor holds Prism's plan; the creator edits episode 2 and saves the rest as Prism wrote it
+    const fields: Record<string, string> = { projectSlug: slug, proposalId: draft.id, intent: "save" };
+    eps.forEach((e, i) => {
+      fields[`title_${e.id}`] = draft.result!.ideas[i]!.title;
+      fields[`synopsis_${e.id}`] = draft.result!.ideas[i]!.detail;
+    });
+    fields[`title_${eps[1]!.id}`] = "My Own Title";
+    expect(await editSeasonPlan(form(fields))).toMatchObject({ ok: true, message: "Plan saved." });
+    let saved = (await repo.loadProject(slug))!;
+    expect(saved.episodes.every((e) => e.synopsis.trim())).toBe(true);
+    expect(saved.episodes.find((e) => e.id === eps[1]!.id)!.title).toBe("My Own Title");
+    // the draft is now older than the Episodes: no longer shown as one to review
+    expect(saved.episodes.every((e) => e.updatedAt >= draft.createdAt)).toBe(true);
+
+    // refine with an unsaved edit: the edit is saved first, and Prism gets it
+    expect(await editSeasonPlan(form({ projectSlug: slug, intent: "refine", note: "" }))).toMatchObject({
+      ok: false,
+      error: "Tell Prism what to change in the plan.",
+    });
+    expect(
+      await editSeasonPlan(
+        form({
+          projectSlug: slug,
+          intent: "refine",
+          note: "Add a rival.",
+          [`title_${eps[2]!.id}`]: "The Rival",
+          [`synopsis_${eps[2]!.id}`]: "A rival arrives.",
+        }),
+      ),
+    ).toMatchObject({ ok: true, message: "Plan saved. Prism is revising it…" });
+    saved = (await repo.loadProject(slug))!;
+    expect(saved.episodes.find((e) => e.id === eps[2]!.id)!.title).toBe("The Rival");
+    const refine = await newest(slug, "Revise the season plan");
+    expect(refine.instruction).toContain("Creator's note: Add a rival.");
+    expect(refine.context.seasonPlan!.find((p) => p.episode === 3)).toMatchObject({
+      title: "The Rival",
+      synopsis: "A rival arrives.",
+    });
+
+    // keep my plan: the revision is set aside, the Episodes untouched
+    await work();
+    const revised = await newest(slug, "Revise the season plan");
+    expect(revised.status).toBe("ready");
+    expect(
+      await editSeasonPlan(form({ projectSlug: slug, intent: "keep", proposalId: revised.id })),
+    ).toMatchObject({ ok: true, message: "Kept your plan." });
+    expect((await newest(slug, "Revise the season plan")).status).toBe("rejected");
+    expect((await repo.loadProject(slug))!.episodes.find((e) => e.id === eps[2]!.id)!.title).toBe(
+      "The Rival",
+    );
+  });
+
+  it("the creator can write the plan with no AI at all", async () => {
+    const { slug, data } = await newSeries();
+    const e1 = [...data.episodes].sort((a, b) => a.number - b.number)[0]!;
+    expect(
+      await editSeasonPlan(
+        form({ projectSlug: slug, [`title_${e1.id}`]: "Pilot", [`synopsis_${e1.id}`]: "She says no." }),
+      ),
+    ).toMatchObject({ ok: true, message: "Plan saved." });
+    expect((await repo.loadProject(slug))!.episodes.find((e) => e.id === e1.id)).toMatchObject({
+      title: "Pilot",
+      synopsis: "She says no.",
+    });
+    expect(await proposalsOf(slug)).toHaveLength(0);
+  });
+
+  it("Prism's Bible draft is edited before it is applied, refined as edited, or discarded", async () => {
+    const { slug } = await newSeries();
+    await draftBible(form({ projectSlug: slug }));
+    const draft = await newest(slug, "Draft the project Bible");
+    await answerBible(draft.id, (k, list) => (list ? `One ${k}\nTwo ${k}` : `Prism ${k}`));
+
+    // apply: the ticked fields, as edited
+    expect(
+      await reviewBible(
+        form({
+          projectSlug: slug,
+          proposalId: draft.id,
+          intent: "apply",
+          use_genre: "1",
+          text_genre: "Edited genre",
+          use_canonFacts: "1",
+          text_canonFacts: "- Fact one\n\nFact two",
+          text_tone: "an edit that is not ticked",
+        }),
+      ),
+    ).toMatchObject({ ok: true, message: "2 fields applied." });
+    let bible = (await repo.loadProject(slug))!.bible;
+    expect(bible.genre).toBe("Edited genre");
+    expect(bible.canonFacts).toEqual(["Fact one", "Fact two"]);
+    expect(bible.tone).not.toBe("an edit that is not ticked");
+
+    // refine the draft: Prism gets the draft as edited, not the Bible; the Bible is not changed
+    await draftBible(form({ projectSlug: slug }));
+    const second = await newest(slug, "Draft the project Bible");
+    await answerBible(second.id, (k) => `Second ${k}`);
+    const fields: Record<string, string> = {
+      projectSlug: slug,
+      proposalId: second.id,
+      intent: "refine",
+      note: "Warmer.",
+    };
+    for (const f of BIBLE_AI_FIELDS) fields[`text_${f.key}`] = `Second ${f.key}`;
+    fields.text_visualStyle = "My edited look";
+    expect(await reviewBible(form({ ...fields, note: "" }))).toMatchObject({
+      ok: false,
+      error: "Tell Prism what to change in the draft.",
+    });
+    expect(await reviewBible(form(fields))).toMatchObject({
+      ok: true,
+      message: "Prism is revising the draft…",
+    });
+    const refine = await newest(slug, "Revise the project Bible");
+    expect(refine.instruction).toContain("Creator's note: Warmer.");
+    expect(refine.context.bible).toMatchObject({ visualStyle: "My edited look", genre: "Second genre" });
+    bible = (await repo.loadProject(slug))!.bible;
+    expect(bible.visualStyle).not.toBe("My edited look");
+
+    // discard
+    await answerBible(refine.id, (k) => `Third ${k}`);
+    expect(
+      await reviewBible(form({ projectSlug: slug, proposalId: refine.id, intent: "discard" })),
+    ).toMatchObject({ ok: true, message: "Draft discarded." });
+    expect((await newest(slug, "Revise the project Bible")).status).toBe("rejected");
+  });
+
+  it("paid: a refine is priced for the longest plan or draft that can be typed, and accepted within it", async () => {
+    const { slug } = await newSeries();
+    process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI = "true";
+    delete process.env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER;
+    const data = (await repo.loadProject(slug))!;
+    // the price shown before anything is typed
+    const plan = quoteSeasonPlan(data, null, { refine: true });
+    if (!plan.ok) throw new Error(plan.reason);
+    const fields: Record<string, string> = {
+      projectSlug: slug,
+      intent: "refine",
+      note: "東".repeat(600),
+      model: plan.model,
+      confirmedTotalUsd: plan.usd.toFixed(4),
+    };
+    for (const e of data.episodes) {
+      fields[`title_${e.id}`] = "東".repeat(120);
+      fields[`synopsis_${e.id}`] = "東".repeat(2000);
+    }
+    const refined = await editSeasonPlan(form(fields));
+    if (!refined.ok) throw new Error(refined.error);
+    const asked = await newest(slug, "Revise the season plan");
+    expect(asked.spendAuthorization).toBe("confirmed");
+    expect(asked.estimate.usd).toBeLessThanOrEqual(plan.usd);
+  });
+
+  it("paid: refining a Bible draft is priced for every field at its longest, and accepted within it", async () => {
+    const { slug } = await newSeries();
+    process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI = "true";
+    delete process.env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER;
+    const data = (await repo.loadProject(slug))!;
+    const d = quoteBible(data);
+    const r = quoteBible(data, null, { refine: true });
+    if (!d.ok || !r.ok) throw new Error("not priced");
+    await draftBible(form({ projectSlug: slug, model: d.model, confirmedTotalUsd: d.usd.toFixed(4) }));
+    const draft = await newest(slug, "Draft the project Bible");
+    await answerBible(draft.id, () => "x");
+    const bf: Record<string, string> = {
+      projectSlug: slug,
+      proposalId: draft.id,
+      intent: "refine",
+      note: "東".repeat(600),
+      model: r.model,
+      confirmedTotalUsd: r.usd.toFixed(4),
+    };
+    for (const f of BIBLE_AI_FIELDS) bf[`text_${f.key}`] = "東".repeat(1500);
+    const refined = await reviewBible(form(bf));
+    if (!refined.ok) throw new Error(refined.error);
+    const asked = await newest(slug, "Revise the project Bible");
+    expect(asked.spendAuthorization).toBe("confirmed");
+    expect(asked.estimate.usd).toBeLessThanOrEqual(r.usd);
+  });
+
+  it("paid: a 200-episode season is priced (in batches) and fits the per-request limit", async () => {
+    process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI = "true";
+    delete process.env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER;
+    await createProject(form({ title: "Two Hundred", premise: PREMISE, episodeCount: "200" }));
+    const data = (await repo.loadProject("two-hundred"))!;
+    expect(data.episodes).toHaveLength(200);
+    const q = quoteSeasonPlan(data);
+    expect(q).toMatchObject({ ok: true, paid: true });
+    if (q.ok) expect(q.usd).toBeLessThan(0.25);
   });
 });

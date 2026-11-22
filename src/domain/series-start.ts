@@ -21,14 +21,19 @@ export const PREMISE_MAX = 3000;
 /** Quick choices for a new series' Episode count; any whole number from 1 to MAX_EPISODES can be typed. */
 export const EPISODE_COUNTS = [6, 8, 10, 12] as const;
 export const DEFAULT_EPISODE_COUNT = 8;
-export const MAX_EPISODES = 50;
+/**
+ * The most Episodes one season can have. A plan longer than PLAN_BATCH Episodes is written in batches (each sees the
+ * Episodes planned before it), so the ceiling is the per-request spend limit, not one answer's length.
+ */
+export const MAX_EPISODES = 500;
 /** The longest note a creator gives Prism to refine a plan. */
 export const REFINE_NOTE_MAX = 600;
 
-/** A typed Episode count, or the default when it is not a whole number from 1 to MAX_EPISODES. */
+/** A typed Episode count (above MAX_EPISODES: MAX_EPISODES), or the default when it is not a whole number from 1. */
 export function episodeCountOf(value: unknown): number {
   const n = Number(value);
-  return Number.isInteger(n) && n >= 1 && n <= MAX_EPISODES ? n : DEFAULT_EPISODE_COUNT;
+  if (!Number.isInteger(n) || n < 1) return DEFAULT_EPISODE_COUNT;
+  return Math.min(n, MAX_EPISODES);
 }
 
 const kindOf = (data: ProjectData) =>

@@ -8,7 +8,7 @@ import {
   wholeScriptInstruction,
 } from "@/domain/series-start";
 import { estimateInputTokens, normalizeSourceText } from "@/domain/story/source";
-import { canonical, longFormPlan, scopeOf } from "@/domain/story/writing";
+import { canonical, LIMITS, longFormPlan, scopeOf } from "@/domain/story/writing";
 import { estimateUsd, type StoryModel } from "@/story/provider";
 import { FAKE_STORY_PROVIDER_ID } from "@/story/providers/fake";
 import { getStoryRegistry } from "./story";
@@ -69,6 +69,18 @@ export function resolveWriter(
   return model ? { model, writer } : null;
 }
 
+/** The longest plan a refine can send: every Episode with the longest title and synopsis it can be saved with. */
+export function planCeiling(data: ProjectData): ProjectData {
+  return {
+    ...data,
+    episodes: data.episodes.map((e) => ({ ...e, title: "あ".repeat(120), synopsis: "あ".repeat(2000) })),
+  };
+}
+
+/** The longest Bible (or Bible draft) a refine can send: every field at its longest. */
+const BIBLE_CEILING = () =>
+  Object.fromEntries(BIBLE_AI_FIELDS.map((f) => [f.key, "あ".repeat(LIMITS.ideaDetail)]));
+
 export interface Quote {
   ok: true;
   model: string;
@@ -97,11 +109,13 @@ export function quoteSeasonPlan(
 ): QuoteResult {
   const r = resolveWriter(writer);
   if (!r) return { ok: false, reason: WRITING_AI_OFF };
-  const episode = [...data.episodes].sort((a, b) => a.number - b.number)[0];
+  // refining sends the plan as it is when the creator presses it (edits included): priced for the longest one
+  const priced = opts.refine ? planCeiling(data) : data;
+  const episode = [...priced.episodes].sort((a, b) => a.number - b.number)[0];
   if (!episode) return { ok: false, reason: "This project has no Episode yet." };
   const text = canonical(episode.scriptText);
   const p = priceWriting({
-    data,
+    data: priced,
     episode,
     text,
     scope: scopeOf(text, "episode", { start: 0, end: text.length }, null),
@@ -217,6 +231,8 @@ export function quoteBible(
     model: r.model,
     withPlan: true,
     withBible: opts.refine,
+    // refining sends the Bible (or Prism's draft) as it is when the creator presses it: priced for the longest one
+    bibleText: opts.refine ? BIBLE_CEILING() : null,
   });
   const refused = over(r.model, p.usd, opts.refine ? "Refining the Bible" : "Drafting the Bible");
   if (refused || p.tooLong) return { ok: false, reason: refused ?? "The Bible is too long for the model." };

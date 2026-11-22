@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { WritingError, type WritingProposal, type WritingSession } from "@/data/writing-repository";
+import { BIBLE_AI_FIELDS } from "@/domain/bible-ai";
 import type { Episode, ProjectData } from "@/domain/schemas";
 import { parseScreenplay } from "@/domain/script";
 import { changedSceneIds, sceneRanges } from "@/domain/story/revisions";
@@ -218,6 +219,7 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
     longForm,
     withPlan: str(form, "withPlan") === "1",
     withBible: str(form, "withBible") === "1",
+    bibleText: bibleDraftOf(form),
   });
   if (tooLong)
     throw new UserFacingError("This request is too long for the model. Choose a Scene or a shorter passage.");
@@ -297,6 +299,25 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
     ok: true,
     message: record.mode === "brainstorm" ? "Prism is brainstorming…" : "Prism is writing a proposal…",
   };
+}
+
+/** A Bible draft to refine (sent as JSON by the Bible page): only the Bible's own fields, each within its limit. */
+function bibleDraftOf(form: FormData): Record<string, string> | null {
+  const raw = str(form, "bibleDraft");
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new UserFacingError("That Bible draft could not be read.");
+  }
+  if (!parsed || typeof parsed !== "object") throw new UserFacingError("That Bible draft could not be read.");
+  const out: Record<string, string> = {};
+  for (const f of BIBLE_AI_FIELDS) {
+    const v = (parsed as Record<string, unknown>)[f.key];
+    out[f.key] = typeof v === "string" ? v.slice(0, LIMITS.ideaDetail) : "";
+  }
+  return out;
 }
 
 export async function askPrism(form: FormData): Promise<ActionResult> {

@@ -5,11 +5,13 @@ import { WriteIt, type WriteQuotes } from "@/components/projects/write-it";
 import { Button, Field, PageHeader } from "@/components/ui";
 import type { WritingProposal } from "@/data/writing-repository";
 import type { Episode } from "@/domain/schemas";
+import { RefreshWhileActive } from "@/components/images/refresh-while-active";
 import { isSeasonPlanRequest, PREMISE_MAX, REFINE_NOTE_MAX } from "@/domain/series-start";
+import { PLAN_BATCH } from "@/domain/story/writing";
 import { cn } from "@/lib/utils";
 import { startFromPremise } from "@/server/actions";
 import { requireProject } from "@/server/repo";
-import { applySeasonPlan, planSeason, saveSeasonPlan } from "@/server/series-actions";
+import { editSeasonPlan, planSeason } from "@/server/series-actions";
 import {
   quoteAnalyzeEpisode,
   quoteSeasonPlan,
@@ -66,11 +68,10 @@ export default async function StartPage({ params }: { params: Promise<{ project:
       null)
     : null;
   const planned = kind === "series" && episodes.length > 0 && episodes.every((e) => e.synopsis.trim());
-  // a plan asked for after the Episodes last changed is still to be used (or is being written)
+  // Prism's newest plan is shown in the editor while it is newer than the Episodes (not yet saved or set aside)
   const lastEdit = episodes.reduce((m, e) => (e.updatedAt > m ? e.updatedAt : m), "");
-  const fresh = plan && plan.createdAt > lastEdit ? plan : null;
-  const pendingPlan = !!fresh && (fresh.status === "queued" || fresh.status === "running");
-  const revisedPlan = fresh?.status === "ready" ? fresh : null;
+  const pendingPlan = !!plan && (plan.status === "queued" || plan.status === "running");
+  const draft = plan?.status === "ready" && plan.result && plan.createdAt > lastEdit ? plan : null;
   const scripted = episodes.filter((e) => e.scriptText.trim()).length;
 
   const offered = writers();
@@ -83,7 +84,8 @@ export default async function StartPage({ params }: { params: Promise<{ project:
       quotes[w.value] = { one, all: all && all.ok && all.episodes.length > 1 ? all : null };
     }
   const planQuote = premise && first && kind === "series" ? quoteSeasonPlan(data) : null;
-  const refineQuote = planned ? quoteSeasonPlan(data, null, { refine: true }) : null;
+  const refineQuote =
+    premise && first && kind === "series" ? quoteSeasonPlan(data, null, { refine: true }) : null;
 
   const proposals = first
     ? (await (await getStoryRepo()).list(data.project.id))
@@ -96,6 +98,10 @@ export default async function StartPage({ params }: { params: Promise<{ project:
   const analyzeQuote = first && firstScripted && !applied ? quoteAnalyzeEpisode(first) : null;
 
   const written = episodes.length > 0 && scripted === episodes.length;
+  const busy = (p: { status: string } | null | undefined) =>
+    p?.status === "queued" || p?.status === "running";
+  // re-render on its own while Prism is working on anything shown here
+  const active = pendingPlan || episodes.some((e) => busy(wholeOf(e))) || busy(proposal);
   const bibleShaped = !!(data.bible.visualStyle.trim() && data.bible.tone.trim());
   const writeState: StepState = written
     ? "done"
@@ -108,6 +114,7 @@ export default async function StartPage({ params }: { params: Promise<{ project:
 
   return (
     <div className="max-w-3xl">
+      <RefreshWhileActive active={active} intervalMs={3000} />
       <PageHeader
         title={series ? "Start your series" : "Start your film"}
         subtitle="Describe it, let Prism plan and write it, then turn the script into your Bible, cast, places and Shots. You see each price before anything runs, and review everything. You can also skip this and work in any order from the sidebar."
@@ -153,98 +160,30 @@ export default async function StartPage({ params }: { params: Promise<{ project:
             title={`Plan the season (${episodes.length} episodes)`}
             testId="start-plan"
           >
-            {planned ? (
-              <div className="space-y-4">
-                {pendingPlan ? (
-                  <p className="text-[13px]" data-testid="start-plan-running">
-                    Prism is revising the plan. Refresh in a moment.
-                  </p>
-                ) : null}
-                {revisedPlan?.result ? (
-                  <div
-                    className="space-y-2 rounded-[3px] border border-accent/40 p-3"
-                    data-testid="start-plan-revised"
-                  >
-                    <div className="text-[13px] font-medium">Prism&apos;s revised plan</div>
-                    <PlanIdeas ideas={revisedPlan.result.ideas} />
-                    <ActionForm action={applySeasonPlan} successMessage="">
-                      <input type="hidden" name="projectSlug" value={slug} />
-                      <input type="hidden" name="proposalId" value={revisedPlan.id} />
-                      <Button type="submit" variant="primary" data-testid="start-plan-use">
-                        Use this plan
-                      </Button>
-                      <span className="ml-2 text-[12px] text-muted">
-                        Or keep yours below; nothing changes until you choose.
-                      </span>
-                    </ActionForm>
-                  </div>
-                ) : null}
-                <PlanEditor slug={slug} episodes={episodes} />
-                <Priced quote={refineQuote}>
-                  {(q) => (
-                    <ActionForm
-                      action={planSeason}
-                      successMessage=""
-                      quiet
-                      className="space-y-2"
-                      data-testid="start-plan-refine"
-                    >
-                      <input type="hidden" name="projectSlug" value={slug} />
-                      <input type="hidden" name="refine" value="1" />
-                      <input type="hidden" name="model" value={q.model} />
-                      {q.paid ? (
-                        <input type="hidden" name="confirmedTotalUsd" value={q.usd.toFixed(4)} />
-                      ) : null}
-                      <Field
-                        label="Refine with Prism"
-                        hint="Say what to change; Prism revises the whole plan and you choose whether to use it."
-                      >
-                        <textarea
-                          name="note"
-                          rows={2}
-                          maxLength={REFINE_NOTE_MAX}
-                          required
-                          placeholder="Make episode 3 darker, and bring in a rival halfway through the season."
-                          data-testid="start-plan-note"
-                        />
-                      </Field>
-                      <Button type="submit" data-testid="start-plan-refine-go">
-                        Refine the plan · {priceOf(q)}
-                      </Button>
-                    </ActionForm>
-                  )}
-                </Priced>
-              </div>
-            ) : !premise ? (
+            {!premise ? (
               <Later>Comes after the premise.</Later>
-            ) : plan && (plan.status === "queued" || plan.status === "running") ? (
-              <p className="text-[13px]" data-testid="start-plan-running">
-                Prism is planning the season. Refresh in a moment.
+            ) : pendingPlan ? (
+              <p className="flex items-center gap-2 text-[13px]" data-testid="start-plan-running">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-accent" aria-hidden />
+                {planned ? "Prism is revising the plan…" : "Prism is planning the season…"}
+                {episodes.length > PLAN_BATCH ? " Long seasons take a little longer." : ""} It appears here on
+                its own.
               </p>
             ) : (
-              <div className="space-y-3">
-                {plan?.status === "ready" && plan.result ? (
-                  <div className="space-y-2" data-testid="start-plan-ready">
-                    <PlanIdeas ideas={plan.result.ideas} />
-                    <ActionForm action={applySeasonPlan} successMessage="">
-                      <input type="hidden" name="projectSlug" value={slug} />
-                      <input type="hidden" name="proposalId" value={plan.id} />
-                      <Button type="submit" variant="primary" data-testid="start-plan-use">
-                        Use this plan
-                      </Button>
-                    </ActionForm>
-                  </div>
-                ) : (
-                  <p className="text-[13px] text-muted">
-                    Prism gives each episode a title and what happens in it, so the episodes tell one story.
-                    You can edit any of it on the Episodes page.
-                  </p>
-                )}
-                {plan?.status === "failed" ? (
-                  <p className="text-[13px] text-fail">
-                    The last plan failed{plan.error ? `: ${plan.error.message}` : ""}.
+              <div className="space-y-4">
+                {plan?.status === "failed" && plan.createdAt > lastEdit ? (
+                  <p className="text-[13px] text-fail" data-testid="start-plan-failed">
+                    The last request failed{plan.error ? `: ${plan.error.message}` : ""}.
                   </p>
                 ) : null}
+                <PlanEditor
+                  key={draft?.id ?? `own-${lastEdit}`}
+                  slug={slug}
+                  episodes={episodes}
+                  draft={draft}
+                  hadPlan={planned}
+                  refineQuote={refineQuote}
+                />
                 <Priced quote={planQuote}>
                   {(q) => (
                     <ActionForm action={planSeason} successMessage="" quiet>
@@ -255,10 +194,13 @@ export default async function StartPage({ params }: { params: Promise<{ project:
                       ) : null}
                       <Button
                         type="submit"
-                        variant={plan?.status === "ready" ? "secondary" : "primary"}
+                        variant={planned || draft ? "ghost" : "primary"}
                         data-testid="start-plan-go"
                       >
-                        {plan ? "Plan again" : `Plan ${episodes.length} episodes`} · {priceOf(q)}
+                        {planned || draft
+                          ? "Plan again from scratch"
+                          : `Plan ${episodes.length} episodes with Prism`}{" "}
+                        · {priceOf(q)}
                       </Button>
                     </ActionForm>
                   )}
@@ -343,7 +285,7 @@ export default async function StartPage({ params }: { params: Promise<{ project:
             <Later>Comes after {series ? "Episode 1 has" : "the film has"} a script.</Later>
           ) : proposal && (proposal.status === "queued" || proposal.status === "running") ? (
             <p className="text-[13px]" data-testid="start-analyze-running">
-              Prism is reading the script.{" "}
+              Prism is reading the script; this page updates on its own.{" "}
               <Link href={`${base}/story/${proposal.id}`} className="text-accent hover:underline">
                 Follow it
               </Link>
@@ -404,57 +346,114 @@ export default async function StartPage({ params }: { params: Promise<{ project:
   );
 }
 
-function PlanIdeas({ ideas }: { ideas: Array<{ title: string; detail: string }> }) {
-  return (
-    <ol className="space-y-1.5 text-[13px]">
-      {ideas.map((idea, i) => (
-        <li key={i}>
-          <span className="font-medium">
-            {i + 1}. {idea.title}
-          </span>{" "}
-          <span className="text-muted">{idea.detail}</span>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-/** The plan as the Episodes carry it, editable in place: each title and what happens in it. */
-function PlanEditor({ slug, episodes }: { slug: string; episodes: Episode[] }) {
+/**
+ * The plan, editable in place: each Episode's title and what happens in it. While Prism's newest plan is still to
+ * review, the fields hold Prism's version: save it (edited or not), refine it with a note, or keep the plan you had.
+ */
+function PlanEditor({
+  slug,
+  episodes,
+  draft,
+  hadPlan,
+  refineQuote,
+}: {
+  slug: string;
+  episodes: Episode[];
+  draft: WritingProposal | null;
+  hadPlan: boolean;
+  refineQuote: QuoteResult | null;
+}) {
+  const ideas = draft?.result?.ideas ?? [];
+  const titleOf = (e: Episode, i: number) =>
+    ideas[i]
+      ? ideas[i]!.title.replace(/^\s*(episode\s*\d+\s*[:.\-–]\s*)/i, "").slice(0, 120) || e.title
+      : e.title;
+  const synopsisOf = (e: Episode, i: number) => (ideas[i] ? ideas[i]!.detail.slice(0, 2000) : e.synopsis);
+  const q = refineQuote && refineQuote.ok ? refineQuote : null;
   return (
     <ActionForm
-      action={saveSeasonPlan}
-      successMessage="Plan saved"
-      className="space-y-2"
+      action={editSeasonPlan}
+      successMessage=""
+      className={cn("space-y-3", draft && "rounded-[3px] border border-accent/40 p-3")}
       data-testid="start-plan-editor"
+      data-source={draft ? "prism" : "episodes"}
     >
       <input type="hidden" name="projectSlug" value={slug} />
+      {draft ? <input type="hidden" name="proposalId" value={draft.id} /> : null}
+      {draft ? (
+        <p className="text-[13px]" data-testid="start-plan-draft-note">
+          <span className="font-medium">{hadPlan ? "Prism's revised plan." : "Prism's plan."}</span>{" "}
+          <span className="text-muted">
+            Edit anything, then save it
+            {hadPlan ? ", or keep the plan you had" : ""}. Nothing changes until you choose.
+          </span>
+        </p>
+      ) : (
+        <p className="text-[13px] text-muted">
+          {hadPlan
+            ? "Your plan. Edit any title or synopsis and save, or ask Prism to refine it."
+            : "Write the plan yourself, or let Prism plan it below and edit what it gives you."}
+        </p>
+      )}
       <ol className="space-y-2">
-        {episodes.map((e) => (
-          <li key={e.id} className="grid gap-1 sm:grid-cols-[2rem_1fr]" data-testid="start-plan-episode">
+        {episodes.map((e, i) => (
+          <li key={e.id} className="grid gap-1 sm:grid-cols-[2.5rem_1fr]" data-testid="start-plan-episode">
             <span className="pt-1 text-[12px] text-muted">{e.number}.</span>
             <div className="space-y-1">
               <input
                 name={`title_${e.id}`}
-                defaultValue={e.title}
+                defaultValue={titleOf(e, i)}
                 maxLength={120}
                 aria-label={`Episode ${e.number} title`}
                 className="font-medium"
               />
               <textarea
                 name={`synopsis_${e.id}`}
-                defaultValue={e.synopsis}
+                defaultValue={synopsisOf(e, i)}
                 rows={2}
                 maxLength={2000}
+                placeholder="What happens in this episode"
                 aria-label={`What happens in episode ${e.number}`}
               />
             </div>
           </li>
         ))}
       </ol>
-      <Button type="submit" data-testid="start-plan-save">
-        Save plan
-      </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="submit" name="intent" value="save" variant="primary" data-testid="start-plan-save">
+          {draft ? "Save this plan" : "Save plan"}
+        </Button>
+        {draft && hadPlan ? (
+          <Button type="submit" name="intent" value="keep" variant="ghost" data-testid="start-plan-keep">
+            Keep my plan
+          </Button>
+        ) : null}
+      </div>
+      {q ? (
+        <div className="space-y-2 border-t border-line pt-3" data-testid="start-plan-refine">
+          <input type="hidden" name="model" value={q.model} />
+          {q.paid ? <input type="hidden" name="confirmedTotalUsd" value={q.usd.toFixed(4)} /> : null}
+          <Field
+            label="Refine with Prism"
+            hint="Say what to change. The plan above is saved as it is, then Prism revises the whole of it for you to review."
+          >
+            <textarea
+              name="note"
+              rows={2}
+              maxLength={REFINE_NOTE_MAX}
+              placeholder="Make episode 3 darker, and bring in a rival halfway through the season."
+              data-testid="start-plan-note"
+            />
+          </Field>
+          <Button type="submit" name="intent" value="refine" data-testid="start-plan-refine-go">
+            Save and refine · {priceOf(q)}
+          </Button>
+        </div>
+      ) : refineQuote && !refineQuote.ok ? (
+        <p className="text-[13px] text-warn" data-testid="start-unavailable">
+          {refineQuote.reason}
+        </p>
+      ) : null}
     </ActionForm>
   );
 }
