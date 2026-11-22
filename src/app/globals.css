@@ -123,3 +123,22 @@ details > summary::-webkit-details-marker {
 [data-cut-filter="media_blocked"] [data-testid="cut-row"]:not([data-media-eligible="false"]) {
   display: none;
 }
+
+/* The Projects page's prompt card: the box itself is the field (the card's border shows focus). */
+.new-series-card textarea {
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  outline: none;
+}
+.new-series-card select {
+  width: auto;
+  height: 30px;
+  padding: 0 28px 0 12px;
+  border-radius: 9999px;
+  border-color: var(--line);
+  background-color: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 30px;
+}

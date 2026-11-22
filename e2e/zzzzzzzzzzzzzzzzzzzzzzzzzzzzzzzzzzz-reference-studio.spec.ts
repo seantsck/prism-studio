@@ -1117,9 +1117,15 @@ test("Q: a series starts from a prompt: premise → Episode 1 drafted by Prism (
   await page.goto("/");
   const premise =
     "A shy sushi apprentice in Osaka secretly enters a televised cooking contest under a false name.";
-  await page.locator('input[name="title"]').fill("Night Counter");
   await page.getByTestId("new-project-premise").fill(premise);
-  await page.getByRole("button", { name: "Create project" }).click();
+  await page.getByTestId("new-series-more").locator("summary").click();
+  await page.getByTestId("new-series-title").fill("Night Counter");
+  // this story walks the start page: Prism does not write Episode 1 straight away here
+  const toggle = page.getByTestId("new-series-draft-toggle");
+  if (await toggle.isChecked()) await page.getByTestId("new-series-draft").click();
+  await expect(toggle).not.toBeChecked();
+  await expect(page.getByTestId("new-series-create")).toHaveText("Create");
+  await page.getByTestId("new-series-create").click();
   await expect(page).toHaveURL(/\/projects\/night-counter\/start$/);
   await expect(page.getByRole("heading", { name: "Start your series" })).toBeVisible();
   await expect(page.getByTestId("start-premise")).toHaveAttribute("data-state", "done");
@@ -1225,8 +1231,10 @@ test("T: on the Projects page a project is archived, restored, and deleted only 
   page,
 }) => {
   await page.goto("/");
-  await page.locator('input[name="title"]').fill("Throwaway Pilot");
-  await page.getByRole("button", { name: "Create project" }).click();
+  // a title alone (no idea yet) makes an empty project, as before
+  await page.getByTestId("new-series-more").locator("summary").click();
+  await page.getByTestId("new-series-title").fill("Throwaway Pilot");
+  await page.getByTestId("new-series-create").click();
   await expect(page).toHaveURL(/\/projects\/throwaway-pilot$/);
   await page.goto("/");
   const row = page.locator('[data-testid="project-row"][data-slug="throwaway-pilot"]');
@@ -1266,4 +1274,39 @@ test("T: on the Projects page a project is archived, restored, and deleted only 
   await expect(page.locator('[data-testid="project-row"][data-slug="ojousama"]')).toHaveCount(1);
   await page.goto("/projects/throwaway-pilot");
   await expect(page.getByText(/not found|could not be found|404/i).first()).toBeVisible();
+});
+
+test("U: the Projects page: describe a series, Prism writes Episode 1 straight after (free here, price shown first)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "What's your series about?" })).toBeVisible();
+  const create = page.getByTestId("new-series-create");
+  await expect(create).toBeDisabled();
+  // an idea fills the box; it can be edited
+  await page.getByTestId("new-series-idea").first().click();
+  const premise = page.getByTestId("new-project-premise");
+  await expect(premise).not.toHaveValue("");
+  await premise.fill("A night-shift paramedic keeps getting calls from a number disconnected years ago.");
+  await page.getByTestId("new-series-type-short").click();
+  await expect(page.getByTestId("new-series-type-short")).toHaveAttribute("aria-checked", "true");
+  // the price is on the switch before anything runs; a free model drafts by default
+  await expect(page.getByTestId("new-series-draft")).toContainText(
+    /Prism writes Episode 1 next · free with /,
+  );
+  await expect(page.getByTestId("new-series-draft-toggle")).toBeChecked();
+  await expect(create).toHaveText("Create and write Episode 1");
+  await create.click();
+  // titled from the idea, and straight on Prism's draft of Episode 1
+  await expect(page).toHaveURL(
+    /\/projects\/a-night-shift-paramedic-keeps-getting-calls[^/]*\/episodes\/ep-1\/write\?session=/,
+    {
+      timeout: 30_000,
+    },
+  );
+  await page.goto("/");
+  const card = page
+    .locator('[data-testid="project-row"]')
+    .filter({ hasText: "A night-shift paramedic keeps getting calls" });
+  await expect(card).toContainText("Short");
 });

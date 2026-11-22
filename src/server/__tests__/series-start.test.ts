@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRepository } from "@/data/memory-repository";
 import { projectAreas } from "@/domain/production-checklist";
-import { episodeOneInstruction, PREMISE_MAX } from "@/domain/series-start";
+import { episodeOneInstruction, PREMISE_MAX, titleFromPremise } from "@/domain/series-start";
 import { LIMITS } from "@/domain/story/writing";
 import { FakeStoryProvider } from "@/story/providers/fake";
 import { createStoryRegistry } from "@/story/registry";
@@ -57,7 +57,7 @@ vi.mock("@/server/storage", () => {
 });
 
 import { createProject, startFromPremise } from "../actions";
-import { quoteAnalyzeEpisode, quoteWriteEpisode } from "../series-start";
+import { quoteAnalyzeEpisode, quoteNewSeriesDraft, quoteWriteEpisode } from "../series-start";
 import { analyzeStory } from "../story-actions";
 import { askPrism } from "../writing-actions";
 
@@ -233,5 +233,90 @@ describe("starting a series from a prompt", () => {
       ok: false,
       reason: "Episode 1 has no script yet.",
     });
+  });
+
+  it("an idea names the series when no title is given (first sentence, or its first six words)", () => {
+    expect(titleFromPremise("Two rival ramen shops go to war. Then love.")).toBe(
+      "Two rival ramen shops go to war",
+    );
+    expect(
+      titleFromPremise("A night-shift paramedic keeps getting calls from a number disconnected years ago."),
+    ).toBe("A night-shift paramedic keeps getting calls…");
+    expect(titleFromPremise("東京の小さなラーメン屋が二つ、跡継ぎ同士の恋で戦争になる。")).toBe(
+      "東京の小さなラーメン屋が二つ、跡継ぎ同士の恋で戦争になる",
+    );
+    expect(titleFromPremise("  ")).toBe("");
+  });
+
+  it("creates from the idea alone (titled from it); refuses when there is neither an idea nor a title", async () => {
+    expect(
+      await createProject(form({ premise: "Two rival ramen shops go to war. Then love." })),
+    ).toMatchObject({
+      ok: true,
+    });
+    const data = (await repo.loadProject("two-rival-ramen-shops-go-to-war"))!;
+    expect(data.project.title).toBe("Two rival ramen shops go to war");
+    expect(world.redirects.at(-1)).toBe("/projects/two-rival-ramen-shops-go-to-war/start");
+    expect(await createProject(form({ premise: " ", title: " " }))).toMatchObject({
+      ok: false,
+      error: "Describe your series, or give it a title.",
+    });
+  });
+
+  it("Prism writes Episode 1 straight after creating (free): the draft is queued and it opens on the Write page", async () => {
+    const q = quoteNewSeriesDraft();
+    if (!q.ok) throw new Error(q.reason);
+    expect(q.paid).toBe(false);
+    expect(
+      await createProject(
+        form({ premise: PREMISE, defaultLanguage: "ja", draftEpisode: "1", model: q.model }),
+      ),
+    ).toMatchObject({ ok: true });
+    expect(world.redirects.at(-1)).toMatch(/^\/projects\/in-tokyo[^/]*\/episodes\/ep-1\/write\?session=/);
+    const slug = world.redirects.at(-1)!.split("/")[2]!;
+    const data = (await repo.loadProject(slug))!;
+    const [session] = await repo.writing.listSessions(data.project.id, data.episodes[0]!.id);
+    const [proposal] = await repo.writing.listProposals(data.project.id, session!.id);
+    expect(proposal).toMatchObject({ mode: "continue", status: "queued", spendAuthorization: "free" });
+    expect(proposal!.instruction).toContain(PREMISE);
+  });
+
+  it("paid: the price shown before the project exists is a true ceiling, and the draft is accepted within it", async () => {
+    process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI = "true";
+    delete process.env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER;
+    const ceiling = quoteNewSeriesDraft();
+    if (!ceiling.ok) throw new Error(ceiling.reason);
+    expect(ceiling.paid).toBe(true);
+    // the longest premise the form takes, in a dense script, with every other field full: still within the ceiling
+    const longest = "東".repeat(PREMISE_MAX);
+    expect(
+      await createProject(
+        form({
+          premise: longest,
+          title: "長".repeat(500),
+          description: "説".repeat(5000),
+          genre: "g".repeat(500),
+          tone: "調".repeat(500),
+          draftEpisode: "1",
+          model: ceiling.model,
+          confirmedTotalUsd: ceiling.usd.toFixed(4),
+        }),
+      ),
+    ).toMatchObject({ ok: true });
+    expect(world.redirects.at(-1)).toMatch(/\/episodes\/ep-1\/write\?session=/);
+    const slug = world.redirects.at(-1)!.split("/")[2]!;
+    const data = (await repo.loadProject(slug))!;
+    const real = quoteWriteEpisode(data, data.episodes[0]!, data.bible.premise);
+    if (!real.ok) throw new Error(real.reason);
+    expect(real.usd).toBeLessThanOrEqual(ceiling.usd);
+    const [session] = await repo.writing.listSessions(data.project.id, data.episodes[0]!.id);
+    const [proposal] = await repo.writing.listProposals(data.project.id, session!.id);
+    expect(proposal).toMatchObject({ spendAuthorization: "confirmed", status: "queued" });
+    expect(proposal!.estimate.usd).toBe(real.usd);
+    // without the confirmation nothing is spent: the project is made and the start page opens instead
+    expect(
+      await createProject(form({ premise: "A quiet idea.", draftEpisode: "1", model: ceiling.model })),
+    ).toMatchObject({ ok: true });
+    expect(world.redirects.at(-1)).toBe("/projects/a-quiet-idea/start");
   });
 });
