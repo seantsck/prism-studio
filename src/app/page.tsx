@@ -1,12 +1,11 @@
 import Link from "next/link";
 import { ProjectActions } from "@/components/projects/project-actions";
-import { NewSeries, type DraftOffer } from "@/components/projects/new-series";
+import { NewSeries } from "@/components/projects/new-series";
 import { UserMenu } from "@/components/user-menu";
 import { PREMISE_MAX } from "@/domain/series-start";
 import type { Project } from "@/domain/schemas";
 import { requireUser } from "@/server/auth";
 import { getRepo } from "@/server/repo";
-import { quoteNewSeriesDraft } from "@/server/series-start";
 
 export const dynamic = "force-dynamic";
 
@@ -26,11 +25,6 @@ export default async function HomePage() {
   const archive = await repo.archivedProjectIds();
   const projects = all.filter((p) => !archive.ids.has(p.id));
   const archived = all.filter((p) => archive.ids.has(p.id));
-  const quote = quoteNewSeriesDraft();
-  const draft: DraftOffer | null = quote.ok
-    ? { model: quote.model, label: quote.label, paid: quote.paid, usd: quote.usd }
-    : null;
-
   return (
     <main className="relative min-h-screen overflow-hidden">
       {/* a projector's warm light falling on the box: the page's one flourish */}
@@ -51,11 +45,11 @@ export default async function HomePage() {
           What&apos;s your series about?
         </h1>
         <p className="mt-3 max-w-xl text-[14px] text-muted">
-          Describe it in a few lines. Prism drafts Episode 1, then turns it into your Bible, cast, places and
-          Shots, and you review every step.
+          Describe it in a few lines. Prism plans it, writes it, then turns it into your Bible, cast, places
+          and Shots. You see the price before anything runs and review every step.
         </p>
         <div className="mt-8 w-full text-left">
-          <NewSeries draft={draft} premiseMax={PREMISE_MAX} />
+          <NewSeries premiseMax={PREMISE_MAX} />
         </div>
       </section>
 

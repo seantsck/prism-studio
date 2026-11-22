@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { ActionForm } from "@/components/action-form";
 import { cn } from "@/lib/utils";
+import { DEFAULT_EPISODE_COUNT, EPISODE_COUNTS } from "@/domain/series-start";
 import { createProject } from "@/server/actions";
 
 const TYPES = [
@@ -31,47 +32,25 @@ const IDEAS = [
   "An heiress has thirty days to marry a stranger chosen by her late grandfather, or lose the family company.",
 ];
 
-export interface DraftOffer {
-  /** "provider/modelId" */
-  model: string;
-  label: string;
-  paid: boolean;
-  /** A ceiling for any premise the form accepts. */
-  usd: number;
-}
-
 /**
- * The Projects page's one big box: describe a series and create it. Title is optional (the idea names it), the format
- * and language are one tap, and Prism can write Episode 1 straight after, at the price shown before anything runs.
+ * The Projects page's one big box: describe a series and create it. Title is optional (the idea names it); the format,
+ * the number of Episodes and the language are one tap each. Writing happens on the next page, where every step shows
+ * its price before it runs.
  */
-export function NewSeries({ draft, premiseMax }: { draft: DraftOffer | null; premiseMax: number }) {
+export function NewSeries({ premiseMax }: { premiseMax: number }) {
   const [premise, setPremise] = useState("");
   const [title, setTitle] = useState("");
   const [type, setType] = useState<string>("series");
-  // a free model drafts by default; a paid one waits for the creator to turn it on
-  const [writeIt, setWriteIt] = useState(!!draft && !draft.paid);
+  const [count, setCount] = useState<number>(DEFAULT_EPISODE_COUNT);
   const box = useRef<HTMLTextAreaElement>(null);
   const put = (text: string) => {
     setPremise(text);
     box.current?.focus();
   };
-  const price = draft
-    ? draft.paid
-      ? `up to $${draft.usd < 0.01 ? draft.usd.toFixed(4) : draft.usd.toFixed(2)} with ${draft.label}`
-      : `free with ${draft.label}`
-    : null;
-  const drafting = !!draft && writeIt && premise.trim().length > 0;
-
   return (
     <ActionForm action={createProject} successMessage="" className="w-full" data-testid="new-series">
       <input type="hidden" name="projectType" value={type} />
-      {drafting ? (
-        <>
-          <input type="hidden" name="draftEpisode" value="1" />
-          <input type="hidden" name="model" value={draft.model} />
-          {draft.paid ? <input type="hidden" name="confirmedTotalUsd" value={draft.usd.toFixed(4)} /> : null}
-        </>
-      ) : null}
+      {type === "series" ? <input type="hidden" name="episodeCount" value={count} /> : null}
 
       <div className="new-series-card rounded-2xl border border-line2 bg-panel/90 shadow-[0_24px_80px_-32px_rgba(214,162,74,0.35)] backdrop-blur transition-colors focus-within:border-accent/60">
         <label htmlFor="premise" className="sr-only">
@@ -122,44 +101,36 @@ export function NewSeries({ draft, premiseMax }: { draft: DraftOffer | null; pre
           </select>
         </div>
         <div className="flex flex-wrap items-center gap-3 px-4 pb-4 pt-3">
-          {draft ? (
-            <label
-              className="flex cursor-pointer items-center gap-2 rounded-full px-2 py-1 text-[12px] text-muted hover:text-fg"
-              data-testid="new-series-draft"
-            >
-              <span
-                className={cn(
-                  "relative inline-block h-4 w-7 rounded-full transition-colors",
-                  writeIt ? "bg-accent" : "bg-line2",
-                )}
-                aria-hidden
-              >
-                <span
+          {type === "series" ? (
+            <div className="flex items-center gap-1" role="radiogroup" aria-label="Episodes">
+              {EPISODE_COUNTS.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  role="radio"
+                  aria-checked={count === n}
+                  onClick={() => setCount(n)}
                   className={cn(
-                    "absolute top-0.5 h-3 w-3 rounded-full bg-bg transition-[left]",
-                    writeIt ? "left-3.5" : "left-0.5",
+                    "h-7 min-w-7 rounded-full px-2 text-[12px] transition-colors",
+                    count === n ? "bg-fg text-bg" : "text-muted hover:text-fg",
                   )}
-                />
-              </span>
-              <input
-                type="checkbox"
-                className="sr-only"
-                checked={writeIt}
-                onChange={(e) => setWriteIt(e.target.checked)}
-                data-testid="new-series-draft-toggle"
-              />
-              <span>
-                Prism writes Episode 1 next <span className="text-faint">· {price}</span>
-              </span>
-            </label>
-          ) : null}
+                  data-testid={`new-series-episodes-${n}`}
+                >
+                  {n}
+                </button>
+              ))}
+              <span className="ml-1 text-[12px] text-muted">episodes</span>
+            </div>
+          ) : (
+            <span className="text-[12px] text-muted">One screenplay</span>
+          )}
           <button
             type="submit"
             className="ml-auto inline-flex h-9 items-center rounded-full bg-accent px-5 text-[13px] font-semibold text-accentfg transition-[filter] hover:brightness-110 disabled:opacity-40"
             disabled={!premise.trim() && !title.trim()}
             data-testid="new-series-create"
           >
-            {drafting ? "Create and write Episode 1" : "Create"}
+            Create
           </button>
         </div>
       </div>

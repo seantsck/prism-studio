@@ -11,7 +11,7 @@ import { sourceFingerprint } from "@/domain/story/source";
 import {
   applyAlternative,
   canonical,
-  estimateWritingInputTokens,
+  longFormPlan,
   LIMITS,
   lineOfOffset,
   looksLikeBrainstorm,
@@ -20,19 +20,17 @@ import {
   SCOPE_KINDS,
   WRITING_PRESETS,
   WRITING_SCHEMA_VERSION,
-  writingOutputTokens,
   type ScopeKind,
   type WritingMode,
   type WritingPreset,
   type WritingScope,
 } from "@/domain/story/writing";
-import { estimateUsd } from "@/story/provider";
-import { buildWritingContext } from "@/story/writing-context";
-import { WRITING_INSTRUCTIONS, WRITING_PROMPT_VERSION, writingInput } from "@/story/writing-prompt";
+import { WRITING_PROMPT_VERSION } from "@/story/writing-prompt";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { getRepo, requireProjectFresh } from "./repo";
 import { actorId, syncEpisodeScript } from "./script-sync";
 import { getStoryRegistry, getWritingRepo } from "./story";
+import { priceWriting } from "./writing-price";
 
 /**
  * Phase 5B-S2: the AI writing assistant. Prism PROPOSES; the creator decides what becomes canon.
@@ -177,7 +175,8 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
 
   const scope = parent ? parent.scope : resolveScope(form, data, episode, text);
   const targetText = parent ? parent.targetText : text.slice(scope.start, scope.end);
-  if (!targetText.trim() && mode !== "continue")
+  // continuing, or planning (a brainstorm), can start from nothing; everything else works on existing text
+  if (!targetText.trim() && mode !== "continue" && mode !== "brainstorm")
     throw new UserFacingError("There is no text there to work on.");
   const draftText =
     parent && parentAlt != null && parent.mode !== "brainstorm"
@@ -197,36 +196,28 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
           ),
         );
 
-  const context = buildWritingContext({
+  // price it; nothing silently spends. A whole Episode or film ("length=whole") is written in parts by the worker.
+  const { registry, model } = chooseModel(form);
+  const whole = str(form, "length") === "whole";
+  if (whole && (mode !== "continue" || scope.kind !== "episode" || parent))
+    throw new UserFacingError("A whole Episode is written from the start of an Episode.");
+  const longForm = whole ? longFormPlan(data.project.projectType, model.maxOutputTokens || 32_000) : null;
+  const { context, inputTokens, maxOutputTokens, usd, tooLong } = priceWriting({
     data,
     episode,
     text,
     scope,
-    instruction,
-    conversation: conversationOf(turns),
-  });
-
-  // price it; nothing silently spends
-  const { registry, model } = chooseModel(form);
-  const promptText = writingInput({
     mode,
     instruction,
-    count,
-    scopeKind: scope.kind,
-    context,
+    count: whole ? 1 : count,
     targetText,
     draftText,
+    conversation: conversationOf(turns),
+    model,
+    longForm,
   });
-  const inputTokens = estimateWritingInputTokens(WRITING_INSTRUCTIONS, promptText);
-  const maxOutputTokens = writingOutputTokens(
-    mode,
-    count,
-    targetText.length,
-    model.maxOutputTokens || 32_000,
-  );
-  if (model.paid && inputTokens + maxOutputTokens > model.contextTokens)
+  if (tooLong)
     throw new UserFacingError("This request is too long for the model. Choose a Scene or a shorter passage.");
-  const usd = estimateUsd(model, inputTokens, maxOutputTokens);
   let confirmedUsd: number | null = null;
   let spendAuthorization: WritingProposal["spendAuthorization"] = "free";
   let reserveUsd: number | null = null;
@@ -267,7 +258,7 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
         mode,
         scope,
         instruction,
-        alternativesRequested: count,
+        alternativesRequested: whole ? 1 : count,
         baseFingerprint: sourceFingerprint(text),
         baseRevisionId:
           latest && sourceFingerprint(canonical(latest.text)) === sourceFingerprint(text) ? latest.id : null,
@@ -294,7 +285,7 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
     throw err;
   });
   refresh(slug);
-  if (!str(form, "sessionId"))
+  if (!str(form, "sessionId") && str(form, "noRedirect") !== "1")
     redirect(
       `/projects/${slug}/episodes/${episode.slug}/write?session=${session.id}${scope.sceneId ? `&scene=${scope.sceneId}` : ""}`,
     );

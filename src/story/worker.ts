@@ -7,9 +7,18 @@ import type { ShotListProposal, ShotListWorkerStore } from "@/data/shot-list-rep
 import type { WritingProposal, WritingWorkerStore } from "@/data/writing-repository";
 import { validateShotDirection } from "@/domain/story/shot-direction";
 import { validateShotPlan } from "@/domain/story/shot-list";
-import { validateWriting } from "@/domain/story/writing";
-import { actualUsd, writingOperation, type StoryModel } from "./provider";
+import {
+  LIMITS,
+  LONG_FORM_TAIL_CHARS,
+  longFormPartInstruction,
+  validateWriting,
+  type LongFormPlan,
+} from "@/domain/story/writing";
+import { actualUsd, writingOperation, type StoryIntelligenceProvider, type StoryModel } from "./provider";
 import type { StoryRegistry } from "./registry";
+
+/** The lease of a writing request: long enough for a whole film written in parts. */
+export const WRITING_LEASE_MS = 30 * 60_000;
 
 /**
  * Phase 5B-S1: the Story Intelligence worker. It is the ONLY place a provider is called (and the only process that
@@ -202,7 +211,9 @@ export class StoryWorker {
     await store.expireAbandoned(this.now());
     let processed = 0;
     for (let i = 0; i < limit; i++) {
-      const row = await store.claim(this.deps.workerId, this.deps.leaseMs ?? 600_000, this.now());
+      // a whole film is written in several parts: its lease covers all of them (never shorter than the usual one)
+      const lease = Math.max(this.deps.leaseMs ?? 600_000, WRITING_LEASE_MS);
+      const row = await store.claim(this.deps.workerId, lease, this.now());
       if (!row) break;
       processed++;
       await this.write(store, row);
@@ -224,6 +235,7 @@ export class StoryWorker {
     if (!model || !provider) return fail("model_unavailable", "That model is not available on the worker.");
     const refusal = this.spendRefusal(model, row);
     if (refusal) return fail(...refusal);
+    if (row.context.longForm) return this.writeLong(store, row, model, provider, row.context.longForm);
     const result = await provider.write({
       model,
       operation: writingOperation(row.mode, row.draftText != null),
@@ -264,6 +276,113 @@ export class StoryWorker {
       usage: result.usage,
       actualUsd: usd,
       providerCalls: result.providerCalls,
+      now: this.now(),
+    });
+  }
+
+  /**
+   * A whole Episode or film: the parts in order, each continuing from the tail of what is written so far, then ONE
+   * proposal with the whole text for the creator to review. Spend is re-checked after every part against the
+   * confirmation; a part that fails ends the request (the parts already paid for are recorded with their usage).
+   */
+  private async writeLong(
+    store: WritingWorkerStore,
+    row: WritingProposal,
+    model: StoryModel,
+    provider: StoryIntelligenceProvider,
+    plan: LongFormPlan,
+  ) {
+    const context = { ...row.context, longForm: undefined };
+    let text = row.targetText.trimEnd();
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let unknownUsage = false;
+    let calls = 0;
+    const facts: string[] = [];
+    const usage = () => ({
+      inputTokens: unknownUsage ? null : inputTokens,
+      outputTokens: unknownUsage ? null : outputTokens,
+    });
+    for (let part = 0; part < plan.parts; part++) {
+      const tail = text.slice(-LONG_FORM_TAIL_CHARS);
+      const result = await provider.write({
+        model,
+        operation: writingOperation("continue", false),
+        mode: "continue",
+        scopeKind: "episode",
+        instruction: longFormPartInstruction(row.instruction, plan, part),
+        count: 1,
+        targetText: tail,
+        draftText: null,
+        context,
+        maxOutputTokens: plan.partTokens,
+        validate: (raw) =>
+          validateWriting(raw, { mode: "continue", scopeKind: "episode", count: 1, targetText: tail }),
+      });
+      calls += result.providerCalls;
+      if (result.usage?.inputTokens == null || result.usage?.outputTokens == null) unknownUsage = true;
+      else {
+        inputTokens += result.usage.inputTokens;
+        outputTokens += result.usage.outputTokens;
+      }
+      if (!result.ok) {
+        // nothing paid yet and the provider says try again: the whole request waits (it is re-sent from part one)
+        if (result.retryable && part === 0)
+          return store.retryLater(
+            row.id,
+            this.deps.workerId,
+            new Date(Date.parse(this.now()) + 60_000).toISOString(),
+            calls,
+          );
+        return store.fail(row.id, this.deps.workerId, {
+          error: {
+            code: result.code,
+            message:
+              part === 0 ? result.message : `Part ${part + 1} of ${plan.parts} failed: ${result.message}`,
+          },
+          usage: usage(),
+          actualUsd: actualUsd(model, usage()),
+          providerCalls: calls,
+          now: this.now(),
+        });
+      }
+      const alt = result.result.alternatives[0]!;
+      text = text ? `${text}\n\n${alt.text.trim()}` : alt.text.trim();
+      for (const f of alt.newCharacterFacts) if (!facts.includes(f)) facts.push(f);
+      // never past what the creator confirmed (the ceiling covers every part; this is the belt and braces)
+      const spent = actualUsd(model, usage());
+      if (
+        model.paid &&
+        spent != null &&
+        row.confirmedUsd != null &&
+        spent > row.confirmedUsd + 1e-9 &&
+        part < plan.parts - 1
+      )
+        return store.fail(row.id, this.deps.workerId, {
+          error: { code: "spend_ceiling", message: "Stopped before going over the confirmed amount." },
+          usage: usage(),
+          actualUsd: spent,
+          providerCalls: calls,
+          now: this.now(),
+        });
+    }
+    const whole = plan.kind === "film" ? "film" : plan.kind === "short" ? "short film" : "episode";
+    return store.complete(row.id, this.deps.workerId, {
+      result: {
+        message: `Prism wrote the whole ${whole} in ${plan.parts} parts. Read it, then accept it or ask for changes.`,
+        alternatives: [
+          {
+            label: "A",
+            text,
+            explanation: `The whole ${whole}, written in ${plan.parts} parts.`,
+            newCharacterFacts: facts.slice(0, LIMITS.facts),
+          },
+        ],
+        ideas: [],
+      },
+      usage: usage(),
+      actualUsd: actualUsd(model, usage()),
+      providerCalls: calls,
       now: this.now(),
     });
   }

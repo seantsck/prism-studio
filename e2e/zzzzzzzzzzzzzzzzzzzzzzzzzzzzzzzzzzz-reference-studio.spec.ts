@@ -1111,40 +1111,63 @@ test("P: the Production checklist lists what each person, outfit, place and Shot
   );
 });
 
-test("Q: a series starts from a prompt: premise → Episode 1 drafted by Prism (free here, price on the button) → next steps", async ({
+test("Q: a series from a prompt: the season planned, then every episode written, each a proposal to review (free here)", async ({
   page,
 }) => {
+  test.setTimeout(120_000);
   await page.goto("/");
   const premise =
     "A shy sushi apprentice in Osaka secretly enters a televised cooking contest under a false name.";
   await page.getByTestId("new-project-premise").fill(premise);
+  await page.getByTestId("new-series-episodes-6").click();
   await page.getByTestId("new-series-more").locator("summary").click();
   await page.getByTestId("new-series-title").fill("Night Counter");
-  // this story walks the start page: Prism does not write Episode 1 straight away here
-  const toggle = page.getByTestId("new-series-draft-toggle");
-  if (await toggle.isChecked()) await page.getByTestId("new-series-draft").click();
-  await expect(toggle).not.toBeChecked();
-  await expect(page.getByTestId("new-series-create")).toHaveText("Create");
   await page.getByTestId("new-series-create").click();
   await expect(page).toHaveURL(/\/projects\/night-counter\/start$/);
   await expect(page.getByRole("heading", { name: "Start your series" })).toBeVisible();
   await expect(page.getByTestId("start-premise")).toHaveAttribute("data-state", "done");
   await expect(page.getByTestId("start-premise-text")).toHaveText(premise);
-  await expect(page.getByTestId("start-write")).toHaveAttribute("data-state", "now");
-  await expect(page.getByTestId("start-analyze")).toHaveAttribute("data-state", "later");
+  await expect(page.getByTestId("start-plan")).toHaveAttribute("data-state", "now");
+  await expect(page.getByTestId("start-plan")).toContainText("Plan the season (6 episodes)");
+  await expect(page.getByTestId("start-write")).toHaveAttribute("data-state", "later");
   await expect(page.getByRole("navigation").getByRole("link", { name: "Start from a prompt" })).toBeVisible();
-  // the price is on the button before anything runs
-  const write = page.getByTestId("start-write-go");
-  await expect(write).toHaveText(/^Write Episode 1 · free with /);
-  await write.click();
-  await expect(page).toHaveURL(/\/projects\/night-counter\/episodes\/ep-1\/write\?session=/);
-  // back on the start page the draft is one click away, and Home points here until Episode 1 has a script
-  await page.goto("/projects/night-counter/start");
-  await expect(page.getByTestId("start-open-draft")).toBeVisible();
-  await page.goto("/projects/night-counter");
-  await expect(page.locator('[data-testid="home-area"][data-area="story"]')).toContainText(
-    "Write Episode 1 from your premise",
+
+  // plan the season: the price is on the button; the plan comes back to use with one click
+  const planGo = page.getByTestId("start-plan-go");
+  await expect(planGo).toHaveText(/^Plan 6 episodes · free with /);
+  await planGo.click();
+  await expect(async () => {
+    await page.reload();
+    await expect(page.getByTestId("start-plan-ready")).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 30_000 });
+  await expect(page.getByTestId("start-plan-ready").locator("li")).toHaveCount(6);
+  await page.getByTestId("start-plan-use").click();
+  await expect(page.getByTestId("start-plan")).toHaveAttribute("data-state", "done", { timeout: 30_000 });
+  await expect(page.getByTestId("start-plan-done").locator("li")).toHaveCount(6);
+
+  // write all 6: the writer and the scope are chosen, then a confirmation names the price before anything runs
+  const write = page.getByTestId("write-it");
+  await expect(write.locator('[data-testid="write-it-writer"][data-value="recommended"]')).toHaveAttribute(
+    "aria-checked",
+    "true",
   );
+  await write.getByTestId("write-it-scope-all").click();
+  await expect(write.getByTestId("write-it-price")).toHaveText(/^free with /);
+  await write.getByTestId("write-it-open").click();
+  const confirm = page.getByTestId("write-it-confirm");
+  await expect(confirm).toContainText("Write all 6 episodes?");
+  await expect(confirm).toContainText("Nothing goes into a script until you accept it.");
+  await confirm.getByTestId("write-it-confirm-go").click();
+  await expect(page.getByTestId("start-writing-row")).toHaveCount(6, { timeout: 30_000 });
+  // each episode becomes ready to review on its own Write page
+  await expect(async () => {
+    await page.reload();
+    await expect(page.locator('[data-testid="start-writing-row"][data-state="ready"]')).toHaveCount(6, {
+      timeout: 1000,
+    });
+  }).toPass({ timeout: 60_000 });
+  await page.getByTestId("start-writing-review").first().click();
+  await expect(page).toHaveURL(/\/projects\/night-counter\/episodes\/ep-1\/write\?session=/);
 });
 
 test("R: a take is archived out of the Studio and restored (delete offered); a set view is refused", async ({
@@ -1276,9 +1299,10 @@ test("T: on the Projects page a project is archived, restored, and deleted only 
   await expect(page.getByText(/not found|could not be found|404/i).first()).toBeVisible();
 });
 
-test("U: the Projects page: describe a series, Prism writes Episode 1 straight after (free here, price shown first)", async ({
+test("U: a film from the Projects page: written whole, with the writer and the price confirmed first (free here)", async ({
   page,
 }) => {
+  test.setTimeout(120_000);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "What's your series about?" })).toBeVisible();
   const create = page.getByTestId("new-series-create");
@@ -1288,25 +1312,37 @@ test("U: the Projects page: describe a series, Prism writes Episode 1 straight a
   const premise = page.getByTestId("new-project-premise");
   await expect(premise).not.toHaveValue("");
   await premise.fill("A night-shift paramedic keeps getting calls from a number disconnected years ago.");
-  await page.getByTestId("new-series-type-short").click();
-  await expect(page.getByTestId("new-series-type-short")).toHaveAttribute("aria-checked", "true");
-  // the price is on the switch before anything runs; a free model drafts by default
-  await expect(page.getByTestId("new-series-draft")).toContainText(
-    /Prism writes Episode 1 next · free with /,
-  );
-  await expect(page.getByTestId("new-series-draft-toggle")).toBeChecked();
-  await expect(create).toHaveText("Create and write Episode 1");
+  await page.getByTestId("new-series-type-film").click();
+  await expect(page.getByTestId("new-series-type-film")).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("new-series-episodes-8")).toHaveCount(0); // a film is one screenplay
+  await expect(create).toHaveText("Create");
   await create.click();
-  // titled from the idea, and straight on Prism's draft of Episode 1
-  await expect(page).toHaveURL(
-    /\/projects\/a-night-shift-paramedic-keeps-getting-calls[^/]*\/episodes\/ep-1\/write\?session=/,
-    {
-      timeout: 30_000,
-    },
-  );
+  // titled from the idea; a film has no season to plan: straight to writing it
+  await expect(page).toHaveURL(/\/projects\/a-night-shift-paramedic-keeps-getting-calls[^/]*\/start$/);
+  await expect(page.getByRole("heading", { name: "Start your film" })).toBeVisible();
+  await expect(page.getByTestId("start-plan")).toHaveCount(0);
+  await expect(page.getByTestId("start-write")).toHaveAttribute("data-state", "now");
+  const write = page.getByTestId("write-it");
+  await expect(write.getByTestId("write-it-scope-all")).toHaveCount(0);
+  await write.getByTestId("write-it-open").click();
+  const confirm = page.getByTestId("write-it-confirm");
+  await expect(confirm).toContainText("Write the whole film?");
+  await expect(confirm.getByTestId("write-it-confirm-price")).toHaveText("free");
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirm).toHaveCount(0); // nothing ran
+  await expect(page.getByTestId("start-writing-row")).toHaveCount(0);
+  await write.getByTestId("write-it-open").click();
+  await confirm.getByTestId("write-it-confirm-go").click();
+  await expect(async () => {
+    await page.reload();
+    await expect(page.locator('[data-testid="start-writing-row"][data-state="ready"]')).toHaveCount(1, {
+      timeout: 1000,
+    });
+  }).toPass({ timeout: 60_000 });
   await page.goto("/");
-  const card = page
-    .locator('[data-testid="project-row"]')
-    .filter({ hasText: "A night-shift paramedic keeps getting calls" });
-  await expect(card).toContainText("Short");
+  await expect(
+    page
+      .locator('[data-testid="project-row"]')
+      .filter({ hasText: "A night-shift paramedic keeps getting calls" }),
+  ).toContainText("Film");
 });
