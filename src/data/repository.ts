@@ -35,6 +35,30 @@ export interface Repository {
   activeProjectWork(projectId: string): Promise<string[]>;
   /** Deletes one of the owner's projects and everything in it. Irreversible; callers confirm first. */
   deleteProject(projectId: string): Promise<void>;
+  /**
+   * The owner's character library: which Characters (in which of their projects) are saved, newest first.
+   * `available: false` when this database cannot record it yet (migration 0062 not applied).
+   */
+  libraryEntries(): Promise<{ entries: LibraryEntry[]; available: boolean }>;
+  /** Saves one of the owner's Characters to their library, or takes it out (idempotent either way). */
+  setInLibrary(projectId: string, characterId: string, saved: boolean): Promise<void>;
+}
+
+/** One Character in the owner's library: it lives in its own project and is copied into others. */
+export interface LibraryEntry {
+  characterId: string;
+  projectId: string;
+  savedAt: string;
+}
+
+/** This database cannot record the character library yet (migration 0062 is not applied). */
+export class CharacterLibraryUnavailableError extends Error {
+  constructor() {
+    super(
+      "The character library needs a one-time database update (migration 0062) that has not been applied yet.",
+    );
+    this.name = "CharacterLibraryUnavailableError";
+  }
 }
 
 /** This database cannot record archived projects yet (migration 0060 is not applied). */

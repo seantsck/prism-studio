@@ -14,11 +14,14 @@ export function ProjectActions({
   title,
   archived,
   archiveAvailable,
+  libraryNames = [],
 }: {
   slug: string;
   title: string;
   archived: boolean;
   archiveAvailable: boolean;
+  /** Characters of this project saved in the library (they leave it if the project is deleted). */
+  libraryNames?: string[];
 }) {
   const [confirming, setConfirming] = useState(false);
   const [typed, setTyped] = useState("");
@@ -72,6 +75,13 @@ export function ProjectActions({
             This deletes <span className="font-medium">{title}</span> and everything in it: episodes, scripts,
             characters, places, Shots, pictures and takes. It can&apos;t be undone.
           </p>
+          {libraryNames.length ? (
+            <p className="text-warn" data-testid="project-delete-library">
+              {libraryNames.join(", ")} {libraryNames.length === 1 ? "leaves" : "leave"} your library too
+              (copies already added to other projects stay). Archive it instead to keep{" "}
+              {libraryNames.length === 1 ? "it" : "them"}.
+            </p>
+          ) : null}
           <label className="block text-muted">
             Type the title to confirm
             <input

@@ -13,7 +13,13 @@ import {
   type ProjectData,
   type Shot,
 } from "@/domain/schemas";
-import { activeWorkLines, ProjectArchiveUnavailableError, type Repository } from "./repository";
+import {
+  activeWorkLines,
+  CharacterLibraryUnavailableError,
+  ProjectArchiveUnavailableError,
+  type LibraryEntry,
+  type Repository,
+} from "./repository";
 import {
   COLLECTIONS,
   flatFromRow,
@@ -97,6 +103,7 @@ async function insertRows(db: PoolClient, table: string, rows: Row[]): Promise<v
 
 /** Postgres: a column this database does not have yet (an unapplied migration). */
 const UNDEFINED_COLUMN = "42703";
+const UNDEFINED_TABLE = "42P01";
 
 /** Number of connections used in parallel to load one project (each is its own RLS transaction). */
 const LOAD_PARALLELISM = 5;
@@ -354,6 +361,60 @@ abstract class PostgresRepositoryBase implements Repository {
       ]);
       if (r.rowCount === 0) throw new Error(`Project ${projectId} not found for the current user`);
     });
+  }
+
+  async libraryEntries(): Promise<{ entries: LibraryEntry[]; available: boolean }> {
+    try {
+      const rows = await this.rows(
+        `select l.character_id, c.project_id, l.saved_at
+           from character_library l
+           join characters c on c.id = l.character_id
+           join projects p on p.id = c.project_id and p.user_id = $1
+          where l.user_id = $1
+          order by l.saved_at desc`,
+        [this.ownerUserId],
+      );
+      return {
+        entries: rows.map((r) => ({
+          characterId: String(r.character_id),
+          projectId: String(r.project_id),
+          savedAt: r.saved_at instanceof Date ? r.saved_at.toISOString() : String(r.saved_at),
+        })),
+        available: true,
+      };
+    } catch (err) {
+      // migration 0062 not applied yet: no library, and it says so
+      if ((err as { code?: string }).code === UNDEFINED_TABLE) return { entries: [], available: false };
+      throw err;
+    }
+  }
+
+  async setInLibrary(projectId: string, characterId: string, saved: boolean): Promise<void> {
+    try {
+      await this.tx(async (c) => {
+        await this.assertOwns(c, projectId);
+        const owned = await c.query("select 1 from characters where id = $1 and project_id = $2", [
+          characterId,
+          projectId,
+        ]);
+        if (owned.rowCount === 0)
+          throw new Error(`Character ${characterId} not found in project ${projectId}`);
+        if (saved)
+          await c.query(
+            `insert into character_library (user_id, character_id) values ($1, $2)
+             on conflict (user_id, character_id) do nothing`,
+            [this.ownerUserId, characterId],
+          );
+        else
+          await c.query("delete from character_library where user_id = $1 and character_id = $2", [
+            this.ownerUserId,
+            characterId,
+          ]);
+      });
+    } catch (err) {
+      if ((err as { code?: string }).code === UNDEFINED_TABLE) throw new CharacterLibraryUnavailableError();
+      throw err;
+    }
   }
 
   async createProject(project: Project, bible: ProjectBible): Promise<void> {

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ProjectActions } from "@/components/projects/project-actions";
+import { loadLibrary } from "@/server/character-library";
 import { NewSeries } from "@/components/projects/new-series";
 import { UserMenu } from "@/components/user-menu";
 import { PREMISE_MAX } from "@/domain/series-start";
@@ -23,6 +24,10 @@ export default async function HomePage() {
   const repo = await getRepo();
   const all = [...(await repo.listProjects())].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const archive = await repo.archivedProjectIds();
+  // which of each project's Characters are in the library (deleting the project takes them out)
+  const library = await loadLibrary();
+  const libraryNamesOf = (projectId: string) =>
+    library.characters.filter((c) => c.projectId === projectId).map((c) => c.name);
   const projects = all.filter((p) => !archive.ids.has(p.id));
   const archived = all.filter((p) => archive.ids.has(p.id));
   return (
@@ -63,7 +68,12 @@ export default async function HomePage() {
         ) : (
           <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {projects.map((p) => (
-              <ProjectCard key={p.id} project={p} archiveAvailable={archive.available} />
+              <ProjectCard
+                key={p.id}
+                project={p}
+                archiveAvailable={archive.available}
+                libraryNames={libraryNamesOf(p.id)}
+              />
             ))}
           </ul>
         )}
@@ -75,7 +85,13 @@ export default async function HomePage() {
             </summary>
             <ul className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {archived.map((p) => (
-                <ProjectCard key={p.id} project={p} archived archiveAvailable={archive.available} />
+                <ProjectCard
+                  key={p.id}
+                  project={p}
+                  archived
+                  archiveAvailable={archive.available}
+                  libraryNames={libraryNamesOf(p.id)}
+                />
               ))}
             </ul>
           </details>
@@ -89,10 +105,12 @@ function ProjectCard({
   project: p,
   archived = false,
   archiveAvailable,
+  libraryNames,
 }: {
   project: Project;
   archived?: boolean;
   archiveAvailable: boolean;
+  libraryNames: string[];
 }) {
   return (
     <li
@@ -110,7 +128,13 @@ function ProjectCard({
           {TYPE_LABEL[p.projectType]} · started {day(p.createdAt)}
         </div>
       </Link>
-      <ProjectActions slug={p.slug} title={p.title} archived={archived} archiveAvailable={archiveAvailable} />
+      <ProjectActions
+        slug={p.slug}
+        title={p.title}
+        archived={archived}
+        archiveAvailable={archiveAvailable}
+        libraryNames={libraryNames}
+      />
     </li>
   );
 }

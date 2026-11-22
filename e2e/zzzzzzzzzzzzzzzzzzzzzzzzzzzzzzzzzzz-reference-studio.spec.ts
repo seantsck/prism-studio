@@ -1447,3 +1447,40 @@ test("V: the Bible drafted with Prism, edited and applied where ticked; a draft 
   await expect(panel.getByTestId("bible-ai-draft")).toBeVisible();
   await expect(page.locator('input[name="tone"]')).toHaveValue(toneBefore);
 });
+
+test("W: a character saved to the library is added to another project as its own copy, pictures included", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  // Yumeko, in the seeded project: save her to the library from her page
+  await page.goto(`${P}/characters`);
+  await page.locator(`a[href^="${P}/characters/"]`).filter({ hasText: "Yumeko" }).first().click();
+  await expect(page.getByRole("heading", { name: "Yumeko" })).toBeVisible();
+  const toggle = page.getByTestId("library-toggle");
+  await expect(toggle).toHaveAttribute("data-saved", "0");
+  await toggle.getByTestId("library-toggle-go").click();
+  await expect(page.getByTestId("library-toggle")).toHaveAttribute("data-saved", "1", { timeout: 30_000 });
+  // her own project does not offer her
+  await page.goto(`${P}/characters`);
+  await expect(page.getByTestId("library-panel").getByTestId("library-character")).toHaveCount(0);
+
+  // the series made in story Q: she is offered, and added as a copy with her pictures
+  await page.goto("/projects/night-counter/characters");
+  const offered = page.getByTestId("library-character").filter({ hasText: "Yumeko" });
+  await expect(offered).toHaveCount(1);
+  await expect(offered).toContainText("picture");
+  await offered.getByTestId("library-add").click();
+  await expect(
+    page.locator('a[href^="/projects/night-counter/characters/"]').filter({ hasText: "Yumeko" }),
+  ).toHaveCount(1, { timeout: 30_000 });
+  await page.locator('a[href^="/projects/night-counter/characters/"]').filter({ hasText: "Yumeko" }).click();
+  await expect(page.getByRole("heading", { name: "Yumeko" })).toBeVisible();
+  // the copy is this project's own: not the library entry (saving it would be a second, separate entry)
+  await expect(page.getByTestId("library-toggle")).toHaveAttribute("data-saved", "0");
+
+  // deleting the seeded project would take her out of the library: the confirmation says so
+  await page.goto("/");
+  const row = page.locator(`[data-testid="project-row"][data-slug="${P.split("/").pop()}"]`);
+  await row.getByTestId("project-delete-open").click();
+  await expect(row.getByTestId("project-delete-library")).toContainText("Yumeko leaves your library too");
+});

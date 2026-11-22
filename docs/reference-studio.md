@@ -235,6 +235,21 @@ so the confirmed amount is what each request is accepted at: a whole Episode is 
 episodes" is the sum of each Episode's own price, and each request still stays within the server's per-request limit
 (`PRISM_STUDIO_STORY_AI_MAX_USD`). With no real writer switched on, the page says so instead of offering anything.
 
+## The character library
+
+A Character can be used in any of the creator's projects. On a Character's page, **Save to library** puts it in the
+account's library (`character_library`, migration 0062: which Characters are saved, nothing else); the Characters page
+of every other project shows **From your library** with each saved Character (its canonical picture, its project, how
+many pictures and Looks travel with it) and **Add to this project**. Adding makes an independent copy
+(`planCharacterCopy`, `src/domain/character-library.ts`; `copyIntoProject`, `src/server/character-library.ts`): the
+Character, its identity references (canonical, angles, expressions, cutout), its Looks (an episode-specific Look
+becomes project-wide) and voice profiles, with new ids, and a copy of every picture and sample they use in the target
+project's own storage (`<project>/<asset>/<file>`, so Storage RLS applies as for any upload; each copy notes
+`metadata.copiedFrom`). Archived pictures stay behind; a name already used in the target gets "(2)". A copy that fails
+part-way removes what it wrote. Copies never change each other or the original. A library entry lives as long as its
+Character: deleting the project it lives in takes it out of the library (the delete confirmation names it; archiving
+keeps it). Until 0062 is applied the library says it needs the migration and nothing else changes.
+
 ## Test models and real models
 
 A deployment can switch on free **test models** ("Mock Image 1"). A test model draws a coloured pattern, never a
