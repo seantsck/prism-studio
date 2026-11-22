@@ -13,18 +13,26 @@ import { subjectImageState } from "@/server/subject-images";
 import { LocationLibraryPanel, LocationLibraryToggle } from "@/components/locations/location-library";
 import { loadLocationLibrary } from "@/server/character-library";
 import { getRepo } from "@/server/repo";
+import { UseInProject } from "@/components/library/use-in-project";
 
 export default async function LocationsPage({
   params,
   searchParams,
 }: {
   params: Promise<{ project: string }>;
-  searchParams: Promise<{ open?: string }>;
+  searchParams: Promise<{ open?: string; new?: string }>;
 }) {
   const { project: slug } = await params;
-  const { open } = await searchParams;
+  const { open, new: isNew } = await searchParams;
   const data = await requireProject(slug);
   const library = await loadLocationLibrary();
+  const inLibrary = data.project.purpose === "library";
+  const projects = inLibrary
+    ? (await (await getRepo()).listProjects())
+        .filter((p) => p.purpose !== "library")
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .map((p) => ({ slug: p.slug, title: p.title }))
+    : [];
   const saved = new Set(
     (await (await getRepo()).locationLibraryEntries()).entries
       .filter((e) => e.projectId === data.project.id)
@@ -296,12 +304,14 @@ export default async function LocationsPage({
           ))}
         </div>
         <div className="space-y-4">
-          <LocationLibraryPanel
-            slug={slug}
-            projectId={data.project.id}
-            locations={library.locations}
-            available={library.available}
-          />
+          {inLibrary ? null : (
+            <LocationLibraryPanel
+              slug={slug}
+              projectId={data.project.id}
+              locations={library.locations}
+              available={library.available}
+            />
+          )}
         </div>
       </div>
     </div>

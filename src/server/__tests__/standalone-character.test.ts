@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRepository } from "@/data/memory-repository";
-import { locationNameFromPrompt, nameFromPrompt } from "@/domain/standalone-character";
+import { locationNameFromPrompt, nameFromPrompt, photoCountNote } from "@/domain/standalone-character";
 
 /**
  * A character made on its own (the home page's "Create a character"), through the REAL actions and loaders in memory
@@ -31,6 +31,7 @@ import {
   createStandaloneLocation,
 } from "../library-actions";
 import { loadLibrary, loadLocationLibrary } from "../character-library";
+import { createProject } from "../actions";
 
 let repo: MemoryRepository;
 beforeEach(() => {
@@ -61,7 +62,8 @@ describe("a character made on its own", () => {
       error: "Describe your character first.",
     });
     const prompt = "A sharp detective named Aiko Mori, early 30s, short black bob, long charcoal coat.";
-    expect(await createStandaloneCharacter(form({ prompt }))).toEqual({ ok: true });
+    const made = await createStandaloneCharacter(form({ prompt }));
+    expect(made).toMatchObject({ ok: true, created: { slug: "your-library" } });
     const studio = (await repo.listProjects()).filter((p) => p.purpose === "library");
     expect(studio).toHaveLength(1);
     expect(studio[0]).toMatchObject({ title: "Your library", slug: "your-library" });
@@ -69,13 +71,16 @@ describe("a character made on its own", () => {
     expect(data.episodes).toEqual([]);
     const aiko = data.characters.find((c) => c.name === "Aiko Mori")!;
     expect(aiko).toMatchObject({ description: prompt, physicalDescription: prompt });
-    expect(world.redirects.at(-1)).toBe(`/projects/your-library/characters/${aiko.id}`);
+    // it opens on its own page (the browser goes there after uploading any photos)
+    expect(made).toMatchObject({
+      created: { id: aiko.id, href: `/projects/your-library/characters/${aiko.id}?new=1` },
+    });
     expect((await loadLibrary()).characters).toEqual([
       expect.objectContaining({ name: "Aiko Mori", projectTitle: "Your library" }),
     ]);
 
     // a second one goes into the same project; a typed name wins
-    expect(await createStandaloneCharacter(form({ prompt: "A tall courier.", name: "Ren" }))).toEqual({
+    expect(await createStandaloneCharacter(form({ prompt: "A tall courier.", name: "Ren" }))).toMatchObject({
       ok: true,
     });
     expect((await repo.listProjects()).filter((p) => p.purpose === "library")).toHaveLength(1);
@@ -114,14 +119,17 @@ describe("a location made on its own", () => {
     });
     await createStandaloneCharacter(form({ prompt: "A courier named Ren." }));
     const prompt = "A ballroom called The Gilded Hall, crystal chandeliers, marble floor.";
-    expect(await createStandaloneLocation(form({ prompt }))).toEqual({ ok: true });
+    const made = await createStandaloneLocation(form({ prompt }));
+    expect(made).toMatchObject({ ok: true });
     const studio = (await repo.listProjects()).filter((p) => p.purpose === "library");
     expect(studio).toHaveLength(1);
     const hall = (await repo.loadProject(studio[0]!.slug))!.locations.find(
       (l) => l.name === "The Gilded Hall",
     )!;
     expect(hall).toMatchObject({ description: prompt, locked: false });
-    expect(world.redirects.at(-1)).toBe(`/projects/your-library/locations?open=${hall.id}`);
+    expect(made).toMatchObject({
+      created: { href: `/projects/your-library/locations?open=${hall.id}&new=1` },
+    });
     const lib = await loadLocationLibrary();
     expect(lib.locations).toEqual([
       expect.objectContaining({ name: "The Gilded Hall", projectTitle: "Your library" }),
@@ -135,5 +143,46 @@ describe("a location made on its own", () => {
     });
     const copy = (await repo.loadProject("ojousama"))!.locations.find((l) => l.description === prompt)!;
     expect(copy.id).not.toBe(hall.id);
+  });
+});
+
+describe("a new project started with library characters and locations", () => {
+  it("copies them in and names them in the premise", async () => {
+    const takumi = (await createStandaloneCharacter(form({ prompt: "Takumi, late 20s.", name: "Takumi" })))
+      .created!;
+    const sean = (await createStandaloneCharacter(form({ prompt: "Sean, early 30s.", name: "Sean" })))
+      .created!;
+    const hall = (await createStandaloneLocation(form({ prompt: "A ballroom.", name: "The Gilded Hall" })))
+      .created!;
+    const f = form({ title: "Takumi Rising", premise: "A courier in Osaka is pulled into a family feud." });
+    f.append("cast", takumi.id);
+    f.append("cast", sean.id);
+    f.append("cast", "not-in-the-library");
+    f.append("place", hall.id);
+    await createProject(f);
+    expect(world.redirects.at(-1)).toBe("/projects/takumi-rising/start");
+    const data = (await repo.loadProject("takumi-rising"))!;
+    expect(data.characters.map((c) => c.name).sort()).toEqual(["Sean", "Takumi"]);
+    expect(data.characters.every((c) => c.role === "")).toBe(true);
+    expect(data.locations.map((l) => l.name)).toEqual(["The Gilded Hall"]);
+    expect(data.bible?.premise).toBe(
+      "A courier in Osaka is pulled into a family feud.\n\nStarring: Takumi, Sean. Set in: The Gilded Hall.",
+    );
+    // the originals stay in the library, in no project
+    expect((await loadLibrary()).characters.filter((c) => c.projectSlug === "your-library")).toHaveLength(2);
+  });
+
+  it("says how many photos are best", () => {
+    expect(photoCountNote("character", 0).tone).toBe("muted");
+    expect(photoCountNote("character", 2)).toEqual({
+      tone: "warn",
+      text: "2 chosen: 4 or more give a steadier likeness.",
+    });
+    expect(photoCountNote("character", 6).tone).toBe("pass");
+    expect(photoCountNote("character", 10)).toEqual({
+      tone: "warn",
+      text: "10 chosen: 8 good ones beat more.",
+    });
+    expect(photoCountNote("location", 3).tone).toBe("pass");
   });
 });

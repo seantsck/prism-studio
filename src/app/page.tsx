@@ -4,15 +4,20 @@ import { loadLibrary, loadLocationLibrary } from "@/server/character-library";
 import { purgeExpiredProjects } from "@/server/trash";
 import { TrashedProjectActions } from "@/components/projects/project-actions";
 import { trashDaysLeft } from "@/domain/trash";
-import { NewSeries } from "@/components/projects/new-series";
+import { NewSeries, type SeriesCast } from "@/components/projects/new-series";
+import { singleUploadLimit } from "@/lib/upload-policy";
 import { NewCharacter, NewLocation } from "@/components/projects/new-character";
 import { UserMenu } from "@/components/user-menu";
+import { RotatingWord } from "@/components/projects/rotating-word";
 import { PREMISE_MAX } from "@/domain/series-start";
 import type { Project } from "@/domain/schemas";
 import { requireUser } from "@/server/auth";
 import { getRepo } from "@/server/repo";
 
 export const dynamic = "force-dynamic";
+
+/** The heading's changing word: what a creator might start from. */
+const HEADING_WORDS = ["series", "story", "scene", "film", "movie", "character", "location"] as const;
 
 const TYPE_LABEL: Record<Project["projectType"], string> = { series: "Series", film: "Film", short: "Short" };
 
@@ -24,8 +29,15 @@ const day = (iso: string) =>
  * with smaller boxes beside it to create a character or a location on its own; then every project as a card with
  * Archive and Delete, and the library's characters and locations.
  */
-export default async function HomePage() {
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ cast?: string | string[]; place?: string | string[] }>;
+}) {
   const user = await requireUser();
+  const wanted = await searchParams;
+  const ids = (v: string | string[] | undefined) => (Array.isArray(v) ? v : v ? [v] : []);
+  const maxUploadBytes = singleUploadLimit(process.env);
   const repo = await getRepo();
   // the account's own characters project (purpose `library`) is not one of their projects: its Characters show below
   const all = [...(await repo.listProjects())]
@@ -39,6 +51,17 @@ export default async function HomePage() {
   // which of each project's Characters are in the library (deleting the project takes them out)
   const library = await loadLibrary();
   const places = await loadLocationLibrary();
+  // "Start a new project with …" from the library: who and where the new series starts with
+  const cast: SeriesCast[] = [
+    ...ids(wanted.cast).flatMap((id) => {
+      const c = library.characters.find((x) => x.characterId === id);
+      return c ? [{ kind: "cast" as const, id, name: c.name, thumbUrl: c.thumbUrl }] : [];
+    }),
+    ...ids(wanted.place).flatMap((id) => {
+      const l = places.locations.find((x) => x.locationId === id);
+      return l ? [{ kind: "place" as const, id, name: l.name, thumbUrl: l.thumbUrl }] : [];
+    }),
+  ];
   const libraryNamesOf = (projectId: string) =>
     library.characters.filter((c) => c.projectId === projectId).map((c) => c.name);
   const projects = all.filter((p) => !archive.ids.has(p.id));
@@ -58,22 +81,24 @@ export default async function HomePage() {
         </div>
       </header>
 
-      <section className="relative mx-auto grid max-w-6xl gap-8 px-6 pb-16 pt-10 sm:pt-14 lg:grid-cols-[300px_minmax(0,1fr)] lg:items-start lg:gap-10">
-        <div className="order-2 space-y-4 lg:order-1 lg:pt-[10.75rem]" data-testid="home-create-boxes">
-          <NewCharacter />
-          <NewLocation />
-        </div>
-        <div className="order-1 flex flex-col items-center text-center lg:order-2">
+      <section className="relative mx-auto grid max-w-[1320px] gap-6 px-6 pb-16 pt-10 sm:grid-cols-2 sm:pt-14 xl:grid-cols-[270px_minmax(0,1fr)_270px] xl:items-start xl:gap-8">
+        <div className="flex flex-col items-center text-center sm:col-span-2 xl:order-2 xl:col-span-1">
           <h1 className="text-balance text-[34px] font-semibold leading-[1.1] tracking-tight sm:text-[44px]">
-            What&apos;s your series about?
+            What&apos;s your <RotatingWord words={HEADING_WORDS} /> about?
           </h1>
           <p className="mt-3 max-w-xl text-[14px] text-muted">
             Describe it in a few lines. Prism plans it, writes it, then turns it into your Bible, cast, places
             and Shots. You see the price before anything runs and review every step.
           </p>
-          <div className="mt-8 w-full max-w-3xl text-left">
-            <NewSeries premiseMax={PREMISE_MAX} />
+          <div className="mt-8 w-full max-w-3xl text-left" id="new-series">
+            <NewSeries premiseMax={PREMISE_MAX} cast={cast} />
           </div>
+        </div>
+        <div className="xl:order-1 xl:pt-[10.75rem]" data-testid="home-create-character">
+          <NewCharacter maxUploadBytes={maxUploadBytes} />
+        </div>
+        <div className="xl:order-3 xl:pt-[10.75rem]" data-testid="home-create-location">
+          <NewLocation maxUploadBytes={maxUploadBytes} />
         </div>
       </section>
 

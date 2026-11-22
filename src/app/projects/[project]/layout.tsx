@@ -41,6 +41,17 @@ const AREAS = [
   },
 ] as const;
 
+const LIBRARY_AREAS = [
+  {
+    title: "Your library",
+    items: [
+      ["/characters", "Characters"],
+      ["/locations", "Locations"],
+      ["/studio", "Reference Studio"],
+    ],
+  },
+] as const;
+
 const MORE = [
   ["/checklist", "Production checklist"],
   ["/breakdown", "Breakdown"],
@@ -72,6 +83,10 @@ export default async function ProjectLayout({
     (data.trashedLocations?.length ?? 0) -
     purged;
 
+  // the account's library (Characters and Locations made on their own) is not a story: no story, shots or tools
+  const isLibrary = data.project.purpose === "library";
+  const nav = isLibrary ? LIBRARY_AREAS : AREAS;
+
   return (
     <div className="flex min-h-screen">
       <aside className="sticky top-0 flex h-screen w-52 shrink-0 flex-col border-r border-line bg-panel">
@@ -83,14 +98,22 @@ export default async function ProjectLayout({
             {data.project.title}
           </div>
           <div className="mt-0.5 text-[11px] text-muted">
-            {data.project.projectType} · {data.project.defaultLanguage}
+            {isLibrary
+              ? "Not part of any project"
+              : `${data.project.projectType} · ${data.project.defaultLanguage}`}
           </div>
         </div>
         <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
-          <NavLink href={base} exact>
-            Home
-          </NavLink>
-          {AREAS.map((area) => (
+          {isLibrary ? (
+            <NavLink href="/" exact>
+              All projects
+            </NavLink>
+          ) : (
+            <NavLink href={base} exact>
+              Home
+            </NavLink>
+          )}
+          {nav.map((area) => (
             <div key={area.title} className="pt-2">
               <div className="px-2.5 pb-0.5 text-[11px] text-faint">{area.title}</div>
               {area.items.map(([href, label]) => (
@@ -100,7 +123,7 @@ export default async function ProjectLayout({
               ))}
             </div>
           ))}
-          <MoreTools base={base} items={MORE} />
+          {isLibrary ? null : <MoreTools base={base} items={MORE} />}
           <div className="pt-2">
             <NavLink href={`${base}/trash`}>
               Trash{trashed ? <span className="ml-1 text-faint">({trashed})</span> : null}

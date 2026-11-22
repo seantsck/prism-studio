@@ -63,12 +63,14 @@ export default async function CharactersPage({ params }: { params: Promise<{ pro
               </Button>
             </ActionForm>
           </Panel>
-          <LibraryPanel
-            slug={slug}
-            projectId={data.project.id}
-            characters={library.characters}
-            available={library.available}
-          />
+          {data.project.purpose === "library" ? null : (
+            <LibraryPanel
+              slug={slug}
+              projectId={data.project.id}
+              characters={library.characters}
+              available={library.available}
+            />
+          )}
         </div>
       </div>
     </div>

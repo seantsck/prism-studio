@@ -26,6 +26,7 @@ import { VisualBiblePanel } from "@/components/images/visual-bible-panel";
 import { subjectImageState } from "@/server/subject-images";
 import { ArchiveButton, ArchivedPanel, DeleteButton, DeleteSubjectButton } from "@/components/studio/archive";
 import { LibraryToggle } from "@/components/characters/library";
+import { UseInProject } from "@/components/library/use-in-project";
 import { referenceStudioState } from "@/server/reference-studio";
 import Link from "next/link";
 
@@ -33,10 +34,13 @@ const join = (xs: string[]) => xs.join("\n");
 
 export default async function CharacterPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ project: string; id: string }>;
+  searchParams: Promise<{ new?: string }>;
 }) {
   const { project: slug, id } = await params;
+  const fresh = (await searchParams).new === "1";
   const data = await requireProject(slug);
   const c = data.characters.find((x) => x.id === id);
   if (!c) notFound();
@@ -62,21 +66,26 @@ export default async function CharacterPage({
   // every picture of this Character (their photos, Look pictures, finished takes), each with Archive, and the archive
   const pictures = await referenceStudioState(data, `character:${c.id}`);
   const archiveSubject = { kind: "character" as const, id: c.id, name: c.name };
-  const library = await (await getRepo()).libraryEntries();
+  const repo = await getRepo();
+  const library = await repo.libraryEntries();
+  const saved = library.entries.some((e) => e.characterId === c.id);
+  // made on its own (the account's library, in no story): it has no role here, and joins projects from this page
+  const inLibrary = data.project.purpose === "library";
+  const projects = inLibrary
+    ? (await repo.listProjects())
+        .filter((p) => p.purpose !== "library")
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .map((p) => ({ slug: p.slug, title: p.title }))
+    : [];
 
   return (
     <div>
       <PageHeader
         title={c.name}
-        subtitle={c.role}
+        subtitle={inLibrary ? "In your library · not part of any project" : c.role}
         actions={
           <div className="flex items-center gap-3">
-            <LibraryToggle
-              slug={slug}
-              characterId={c.id}
-              saved={library.entries.some((e) => e.characterId === c.id)}
-              available={library.available}
-            />
+            <LibraryToggle slug={slug} characterId={c.id} saved={saved} available={library.available} />
             <Badge tone={identityLocked ? "pass" : "warn"}>
               {identityLocked ? "Identity locked" : "Identity open"}
             </Badge>
@@ -85,6 +94,18 @@ export default async function CharacterPage({
         }
       />
       <div className="grid gap-4 p-6 xl:grid-cols-2">
+        {inLibrary ? (
+          <div className="xl:col-span-2">
+            <UseInProject
+              kind="character"
+              id={c.id}
+              name={c.name}
+              projects={projects}
+              saved={saved}
+              fresh={fresh}
+            />
+          </div>
+        ) : null}
         <Panel
           title={`Pictures (${pictures.images.length})`}
           className="xl:col-span-2"
@@ -158,14 +179,24 @@ export default async function CharacterPage({
           <ActionForm action={saveCharacter} className="space-y-3">
             {hidden}
             <input type="hidden" name="id" value={c.id} />
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Name">
-                <input name="name" defaultValue={c.name} />
-              </Field>
-              <Field label="Role">
-                <input name="role" defaultValue={c.role} />
-              </Field>
-            </div>
+            {inLibrary ? (
+              <>
+                {/* the role is set per project, on each project's copy */}
+                <input type="hidden" name="role" value={c.role} />
+                <Field label="Name">
+                  <input name="name" defaultValue={c.name} />
+                </Field>
+              </>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Name">
+                  <input name="name" defaultValue={c.name} />
+                </Field>
+                <Field label="Role" hint="In this project, e.g. Lead — heiress">
+                  <input name="role" defaultValue={c.role} />
+                </Field>
+              </div>
+            )}
             <Field label="Description">
               <textarea name="description" rows={2} defaultValue={c.description} />
             </Field>
@@ -181,9 +212,13 @@ export default async function CharacterPage({
             <Field label="Signature behavior">
               <input name="signatureBehavior" defaultValue={c.signatureBehavior} />
             </Field>
-            <Field label="Relationship notes">
-              <textarea name="relationshipNotes" rows={2} defaultValue={c.relationshipNotes} />
-            </Field>
+            {inLibrary ? (
+              <input type="hidden" name="relationshipNotes" value={c.relationshipNotes} />
+            ) : (
+              <Field label="Relationship notes">
+                <textarea name="relationshipNotes" rows={2} defaultValue={c.relationshipNotes} />
+              </Field>
+            )}
             <Field label="Continuity rules" hint="One per line">
               <textarea name="continuityRules" rows={3} defaultValue={join(c.continuityRules)} />
             </Field>

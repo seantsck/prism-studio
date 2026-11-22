@@ -37,7 +37,16 @@ const IDEAS = [
  * the number of Episodes and the language are one tap each. Writing happens on the next page, where every step shows
  * its price before it runs.
  */
-export function NewSeries({ premiseMax }: { premiseMax: number }) {
+/** A library Character (`cast`) or Location (`place`) the new project starts with. */
+export interface SeriesCast {
+  kind: "cast" | "place";
+  id: string;
+  name: string;
+  thumbUrl: string | null;
+}
+
+export function NewSeries({ premiseMax, cast = [] }: { premiseMax: number; cast?: SeriesCast[] }) {
+  const [starring, setStarring] = useState(cast);
   const [premise, setPremise] = useState("");
   const [title, setTitle] = useState("");
   const [type, setType] = useState<string>("series");
@@ -52,6 +61,42 @@ export function NewSeries({ premiseMax }: { premiseMax: number }) {
       <input type="hidden" name="projectType" value={type} />
       {type === "series" ? <input type="hidden" name="episodeCount" value={count} /> : null}
 
+      {starring.map((c) => (
+        <input key={`${c.kind}-${c.id}`} type="hidden" name={c.kind} value={c.id} />
+      ))}
+      {starring.length ? (
+        <div className="mb-3 flex flex-wrap items-center gap-2" data-testid="new-series-cast">
+          <span className="text-[12px] text-muted">Starting with</span>
+          {starring.map((c) => (
+            <span
+              key={`${c.kind}-${c.id}`}
+              className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 py-0.5 pl-0.5 pr-2 text-[12px]"
+              data-testid="new-series-cast-member"
+              data-name={c.name}
+            >
+              {c.thumbUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={c.thumbUrl} alt="" className="h-5 w-5 rounded-full object-cover" />
+              ) : (
+                <span className="h-5 w-5 rounded-full bg-panel2" aria-hidden />
+              )}
+              {c.name}
+              <button
+                type="button"
+                onClick={() => setStarring((list) => list.filter((x) => x !== c))}
+                className="text-faint hover:text-fg"
+                aria-label={`Leave out ${c.name}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          <span className="w-full text-[11.5px] text-faint">
+            They are added to the new project, and your description is saved with their names so the story is
+            about them.
+          </span>
+        </div>
+      ) : null}
       <div className="new-series-card rounded-2xl border border-line2 bg-panel/90 shadow-[0_24px_80px_-32px_rgba(214,162,74,0.35)] backdrop-blur transition-colors focus-within:border-accent/60">
         <label htmlFor="new-series-title" className="sr-only">
           Title
