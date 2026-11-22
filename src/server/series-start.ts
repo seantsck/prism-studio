@@ -1,7 +1,9 @@
 import "server-only";
 import { BIBLE_AI_FIELDS, bibleDraftInstruction, bibleRefineInstruction } from "@/domain/bible-ai";
+import { characterAiFields, characterFillInstruction } from "@/domain/character-ai";
 import type { Episode, ProjectData } from "@/domain/schemas";
 import {
+  emptyEpisodeOne,
   REFINE_NOTE_MAX,
   seasonPlanInstruction,
   seasonRefineInstruction,
@@ -257,3 +259,62 @@ export function quoteBible(
   if (refused || p.tooLong) return { ok: false, reason: refused ?? "The Bible is too long for the model." };
   return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd: p.usd };
 }
+
+/**
+ * Filling in a Character's sheet with Prism (or revising Prism's draft with a note): one brainstorm, an idea per field,
+ * priced for the longest sheet and note that can be sent (a ceiling for whatever is written or typed), kept
+ * with Episode 1 like the Bible's. A project with no Episode (the account's library) gets an empty Episode 1 when the
+ * request is made; it is priced here as that empty Episode.
+ */
+export function quoteCharacterFill(
+  data: ProjectData,
+  characterId: string,
+  writer?: string | null,
+  opts: { refine?: boolean } = {},
+): QuoteResult {
+  const r = resolveWriter(writer);
+  if (!r) return { ok: false, reason: WRITING_AI_OFF };
+  const character = data.characters.find((c) => c.id === characterId);
+  if (!character) return { ok: false, reason: "That character is not in this project." };
+  const episode =
+    [...data.episodes].sort((a, b) => a.number - b.number)[0] ??
+    emptyEpisodeOne(data.project.id, new Date().toISOString());
+  const text = canonical(episode.scriptText);
+  const inStory = data.project.purpose !== "library";
+  const p = priceWriting({
+    data,
+    episode,
+    text,
+    scope: scopeOf(text, "episode", { start: 0, end: text.length }, null),
+    mode: "brainstorm",
+    // the longest sheet and note that can be sent: a ceiling for whatever is written or typed
+    instruction: characterFillInstruction(
+      data,
+      { ...character, ...CHARACTER_SHEET_CEILING },
+      { note: "あ".repeat(REFINE_NOTE_MAX), revise: opts.refine },
+    ),
+    count: characterAiFields(inStory).length,
+    targetText: text,
+    draftText: null,
+    conversation: [],
+    model: r.model,
+    withPlan: false,
+    withBible: inStory,
+    bibleText: null,
+  });
+  const refused = over(r.model, p.usd, "Filling in the character");
+  if (refused || p.tooLong)
+    return { ok: false, reason: refused ?? "The episode script is too long to send." };
+  return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd: p.usd };
+}
+
+const CHARACTER_SHEET_CEILING = {
+  description: "あ".repeat(1200),
+  role: "あ".repeat(120),
+  personality: "あ".repeat(1200),
+  behaviorNotes: "あ".repeat(1200),
+  physicalDescription: "あ".repeat(1200),
+  signatureBehavior: "あ".repeat(1200),
+  relationshipNotes: "あ".repeat(1200),
+  continuityRules: ["あ".repeat(1200)],
+};

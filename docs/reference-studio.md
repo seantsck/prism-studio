@@ -306,6 +306,22 @@ target project's own storage (archived and trashed pictures stay behind; a faile
 trashed Location is out of the library until restored; deleting its project takes it out. Until 0066 is applied the
 library says it needs the migration and nothing else changes.
 
+## Filling in a Character with Prism, and the reference plan
+
+A Character's page opens with **Fill in the sheet with Prism** (`src/domain/character-ai.ts`,
+`src/server/character-ai-actions.ts`): from what is already written, an optional note and, in a story, the Bible and
+the cast, Prism proposes every field: description, personality, behavior notes, a precise physical description for
+pictures, a signature habit and continuity rules, plus the role and relationships in a story (never for a Character
+made on its own: a role belongs to each project's copy). It is an ordinary writing request (a brainstorm, one idea per
+field, kept with Episode 1 like the Bible's; the library project gets an empty Episode 1 for it), priced before it runs
+(`quoteCharacterFill`), and reviewed field by field beside the sheet: edit, tick, apply; refine the draft with a note,
+or discard it. When most of the sheet is empty the panel says so and its button is the page's main action.
+
+Under it, **References: how many, and the price** (`src/domain/generation/reference-plan.ts`): 4 to 8 photos when the
+character has a real face (with the count so far), then the six views, each ticked once it is in the set, and the price
+of the views still to make with GPT Image 2.5 Flare (the first from the photos or the description, each further one
+from it). The picture list appears once there is a picture.
+
 ## Prices
 
 Every paid step shows the creator ONE exact price before it runs, and that is what they are charged: Prism's own

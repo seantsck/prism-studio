@@ -1738,3 +1738,42 @@ test("ZB: a character made with photos opens on its own page, in no project, the
   await page.goto("/projects/takumi-rising/bible");
   await expect(page.locator('textarea[name="premise"]')).toHaveValue(/Starring: Takumi\./);
 });
+
+test("ZC: a new character's page starts with Fill in with Prism and the reference plan, then applies what Prism wrote", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  const box = page.getByTestId("new-character");
+  await box
+    .getByTestId("new-character-prompt")
+    .fill("Japanese man in his mid-30s, jet-black hair swept back, tailored navy suit.");
+  await box.getByTestId("new-character-name").fill("Kenji");
+  await box.getByTestId("new-character-create").click();
+  await expect(page.getByRole("heading", { name: "Kenji", exact: true })).toBeVisible({ timeout: 60_000 });
+
+  // the empty picture list is not shown; the next steps are: fill in the sheet, then the references and their price
+  await expect(page.getByTestId("character-pictures")).toHaveCount(0);
+  const ai = page.getByTestId("character-ai");
+  await expect(ai).toContainText("Most of Kenji's sheet is empty.");
+  // a character made on its own is never given a role
+  await expect(ai).not.toContainText("role and relationships");
+  const plan = page.getByTestId("reference-plan");
+  await expect(plan.getByTestId("reference-plan-photos")).toHaveText("You have 0 photos.");
+  await expect(plan.getByTestId("reference-plan-views").locator("li")).toHaveCount(6);
+  await expect(plan.getByTestId("reference-plan-total")).toContainText("6 to make: about");
+
+  await ai.getByTestId("character-ai-note").fill("Raised in Kyoto.");
+  await ai.getByTestId("character-ai-fill").click();
+  // Prism's sheet appears on its own, field by field, ticked where it differs
+  const review = page.getByTestId("character-ai-review");
+  await expect(review).toBeVisible({ timeout: 60_000 });
+  await expect(review.locator('[data-testid="character-ai-field"][data-field="role"]')).toHaveCount(0);
+  const personality = review.locator('[data-testid="character-ai-field"][data-field="personality"]');
+  await personality.getByTestId("character-ai-text").fill("Polite in public, ruthless in private.");
+  await review.getByTestId("character-ai-apply").click();
+  await expect(page.getByTestId("character-ai-review")).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.locator('textarea[name="personality"]')).toHaveValue(
+    "Polite in public, ruthless in private.",
+  );
+});

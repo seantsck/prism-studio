@@ -1,4 +1,5 @@
 import { BIBLE_AI_FIELDS, isBibleRequest } from "@/domain/bible-ai";
+import { CHARACTER_AI_FIELDS, isCharacterRequest } from "@/domain/character-ai";
 import type { WritingResult } from "@/domain/story/writing";
 import type { WritingRequest } from "../provider";
 
@@ -128,6 +129,23 @@ export function fakeWriting(req: WritingRequest): WritingResult {
         : `Test ${f.label.toLowerCase()} for ${req.context.project || "this project"}.`,
     }));
     return { message: "Here is a test Bible (a placeholder from the test writer).", alternatives: [], ideas };
+  }
+
+  // a character sheet: one idea per field the instruction lists, named as asked (a test pattern, never a real sheet)
+  if (req.mode === "brainstorm" && isCharacterRequest(req.instruction)) {
+    const name = /character sheet for (.+?) \[character /.exec(req.instruction)?.[1] ?? "them";
+    const keys = [...req.instruction.matchAll(/^- (\w+): /gm)].map((m) => m[1]!);
+    const ideas = CHARACTER_AI_FIELDS.filter((f) => keys.includes(f.key)).map((f) => ({
+      title: f.key,
+      detail: f.list
+        ? [`Test ${f.label.toLowerCase()} one for ${name}.`, `Test ${f.label.toLowerCase()} two.`].join("\n")
+        : `Test ${f.label.toLowerCase()} for ${name}.`,
+    }));
+    return {
+      message: `Here is a test sheet for ${name} (a placeholder from the test writer).`,
+      alternatives: [],
+      ideas,
+    };
   }
 
   if (req.mode === "brainstorm") {
