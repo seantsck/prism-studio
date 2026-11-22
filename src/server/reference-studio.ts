@@ -340,6 +340,10 @@ export async function referenceStudioState(
   subjectParam: string | undefined,
 ): Promise<StudioState> {
   // a picture in the Trash is out of the Studio, as if deleted (the server loaders set it apart already)
+  const trashedIds = new Set([
+    ...(loaded.trashedAssets ?? []).map((a) => a.id),
+    ...loaded.assets.filter(isTrashed).map((a) => a.id),
+  ]);
   const data = loaded.assets.some(isTrashed)
     ? { ...loaded, assets: loaded.assets.filter((a) => !isTrashed(a)) }
     : loaded;
@@ -637,7 +641,11 @@ export async function referenceStudioState(
         actualUsd: bills(v) ? actualOf(v) : null,
         inputs: sent.map((id) => ({
           assetId: id,
-          label: labelOf.get(id) ?? assets.get(id)?.name ?? "an earlier image",
+          // a picture deleted since (or in the Trash) is named so: the take still records that it was sent
+          label:
+            labelOf.get(id) ??
+            assets.get(id)?.name ??
+            (trashedIds.has(id) ? "In the Trash" : "Picture deleted"),
           url: assetUrl(assets.get(id)),
         })),
         prompt: v.attempt.prompt,
@@ -672,15 +680,8 @@ export async function referenceStudioState(
     .filter((a) => archiveOf(a)?.subject === key && stored(a))
     .map((a) => {
       const takeNumber = takeOf.get(a.id) ?? null;
-      const sentTo = everyAttempt
-        .filter((v) => v.attempt.inputAssetIds.includes(a.id))
-        .map((v) => v.attempt.attemptNumber)
-        .sort((x, y) => x - y);
       const usage = findAssetUsage(data, a.id);
-      const keptBecause =
-        sentTo.length > 0
-          ? `Sent to take${sentTo.length === 1 ? "" : "s"} ${sentTo.map((n) => `#${n}`).join(", ")}: kept so ${sentTo.length === 1 ? "that take's" : "their"} record stays complete.`
-          : usage.inUse
+      const keptBecause = usage.inUse
             ? `Still used: ${usage.direct
                 .slice(0, 2)
                 .map((u) => u.label)

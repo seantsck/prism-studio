@@ -1167,16 +1167,14 @@ describe("archive and delete", () => {
       deletable: true,
       keptBecause: null,
     });
-    // the photo it started from can be archived, but not deleted: that take's record names it
+    // the photo it started from can be archived, and deleted too: the take keeps its record, naming it "Picture deleted"
     expect(await act(archiveStudioImage, yumeko.id, photo)).toEqual({ ok: true });
     expect((await stateOf(yumeko.id)).archived.find((a) => a.assetId === photo)).toMatchObject({
-      deletable: false,
-      keptBecause: `Sent to take #${n}: kept so that take's record stays complete.`,
+      deletable: true,
+      keptBecause: null,
     });
-    expect(await act(moveToTrash, yumeko.id, photo)).toMatchObject({
-      ok: false,
-      error: expect.stringContaining(`image attempt ${n} input`),
-    });
+    expect(await act(moveToTrash, yumeko.id, photo)).toEqual({ ok: true });
+    expect(await deleteFromTrash(form({ assetId: photo, confirm: "1" }))).toEqual({ ok: true });
     // the take's own picture goes to the Trash, then is deleted for good: the take stays in the history, with its
     // cost, and no picture
     expect(await act(moveToTrash, yumeko.id, out)).toEqual({ ok: true });
@@ -1283,18 +1281,32 @@ describe("archive and delete", () => {
       ),
     });
     expect((await data()).assets.some((a) => a.id === photo)).toBe(true);
-    // a photo a take was made from: its record keeps it, and its photo slot stays as it was
+    // a photo a take was made from can go too: the take still lists it as an input, "In the Trash", then "Picture
+    // deleted"
     const start = await upload(yumeko.id, "from.png");
     expect(await startSubjectImage(form(make(yumeko.id, { startAssetId: [start] })))).toEqual({ ok: true });
     await work();
-    const before = (await data()).identityRefs.filter((r) => r.assetId === start);
-    expect(await act(moveToTrash, yumeko.id, start)).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("can't be moved to the Trash"),
+    const takeOf = async () =>
+      (await stateOf(yumeko.id)).takes.find((t) => t.inputs.some((i) => i.assetId === start))!;
+    expect((await takeOf()).inputs.find((i) => i.assetId === start)!.label).not.toMatch(/deleted|Trash/);
+    expect(await act(moveToTrash, yumeko.id, start)).toEqual({ ok: true });
+    const inTrash = await referenceStudioState(
+      {
+        ...(await data()),
+        assets: (await data()).assets.filter((a) => a.id !== start),
+        trashedAssets: [(await data()).assets.find((a) => a.id === start)!],
+      },
+      `character:${yumeko.id}`,
+    );
+    expect(inTrash.takes.flatMap((t) => t.inputs).find((i) => i.assetId === start)).toMatchObject({
+      label: "In the Trash",
+      url: null,
     });
-    const after = await data();
-    expect(after.assets.some((a) => a.id === start)).toBe(true);
-    expect(after.identityRefs.filter((r) => r.assetId === start)).toEqual(before);
+    expect(await deleteFromTrash(form({ assetId: start, confirm: "1" }))).toEqual({ ok: true });
+    expect((await takeOf()).inputs.find((i) => i.assetId === start)).toMatchObject({
+      label: "Picture deleted",
+      url: null,
+    });
     // the take's own picture can go: the take stays in the history with its cost
     const [take] = await attempts(yumeko.id);
     const out = take!.outputs[0]!.asset.id;
