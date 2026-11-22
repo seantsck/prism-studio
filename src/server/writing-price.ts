@@ -1,3 +1,4 @@
+import { bibleAsText } from "@/domain/bible-ai";
 import type { Episode, ProjectData } from "@/domain/schemas";
 import {
   estimateWritingInputTokens,
@@ -28,6 +29,12 @@ export interface WritingPrice {
   tooLong: boolean;
 }
 
+/** The Bible's fields that have something in them, or null when none does. */
+function filled(bible: ProjectData["bible"]): Record<string, string> | null {
+  const entries = Object.entries(bibleAsText(bible)).filter(([, v]) => v.trim());
+  return entries.length ? Object.fromEntries(entries) : null;
+}
+
 export function priceWriting(args: {
   data: ProjectData;
   episode: Episode;
@@ -43,6 +50,8 @@ export function priceWriting(args: {
   longForm?: LongFormPlan | null;
   /** Send the season's current plan (refining a plan, writing from one). */
   withPlan?: boolean;
+  /** Send the project Bible as it stands (refining it). */
+  withBible?: boolean;
 }): WritingPrice {
   const built = buildWritingContext({
     data: args.data,
@@ -63,6 +72,10 @@ export function priceWriting(args: {
       ? { seasonPlan: plan.slice(0, LIMITS.ideas) }
       : {}),
     ...(args.mode === "brainstorm" && args.count > MAX_RECORDED_COUNT ? { ideaCount: args.count } : {}),
+    // refining the Bible sends all of it; writing a whole Episode or film sends what it has (its look, rules, canon)
+    ...(args.withBible || (args.longForm && filled(args.data.bible))
+      ? { bible: args.withBible ? bibleAsText(args.data.bible) : filled(args.data.bible)! }
+      : {}),
   };
   const promptText = writingInput({
     mode: args.mode,

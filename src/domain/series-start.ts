@@ -91,6 +91,7 @@ export function wholeScriptInstruction(data: ProjectData, episode: Episode): str
     ...head,
     "Standard screenplay format: scene headings (INT./EXT. PLACE - TIME), short action lines, CHARACTER NAMES in capitals above their dialogue.",
     "Introduce each main character with a short visual description the first time they appear.",
+    "When the context has the project Bible (bible), follow it: its canon facts, continuity rules, tone and dialogue language strategy.",
     `Dialogue in the project's language (${language}); everything else in English.`,
     "",
     `Premise: ${data.bible.premise.trim().slice(0, PREMISE_MAX)}`,

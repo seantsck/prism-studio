@@ -1,4 +1,5 @@
 import "server-only";
+import { BIBLE_AI_FIELDS, bibleDraftInstruction, bibleRefineInstruction } from "@/domain/bible-ai";
 import type { Episode, ProjectData } from "@/domain/schemas";
 import {
   REFINE_NOTE_MAX,
@@ -183,4 +184,41 @@ export function quoteAnalyzeEpisode(episode: Episode, writer?: string | null): Q
   const refused = over(r.model, usd, "Analysing the script");
   if (refused) return { ok: false, reason: refused };
   return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd };
+}
+
+/**
+ * Drafting the Bible (from the premise and the plan) or refining it (the current Bible and a note, priced for the
+ * longest note in the densest script, a ceiling for whatever is typed): one brainstorm on Episode 1, an idea per field.
+ */
+export function quoteBible(
+  data: ProjectData,
+  writer?: string | null,
+  opts: { refine?: boolean } = {},
+): QuoteResult {
+  const r = resolveWriter(writer);
+  if (!r) return { ok: false, reason: WRITING_AI_OFF };
+  const episode = [...data.episodes].sort((a, b) => a.number - b.number)[0];
+  if (!episode)
+    return { ok: false, reason: "Add an Episode first: Prism's Bible requests are kept with Episode 1." };
+  const text = canonical(episode.scriptText);
+  const p = priceWriting({
+    data,
+    episode,
+    text,
+    scope: scopeOf(text, "episode", { start: 0, end: text.length }, null),
+    mode: "brainstorm",
+    instruction: opts.refine
+      ? bibleRefineInstruction(data, "あ".repeat(REFINE_NOTE_MAX))
+      : bibleDraftInstruction(data),
+    count: BIBLE_AI_FIELDS.length,
+    targetText: text,
+    draftText: null,
+    conversation: [],
+    model: r.model,
+    withPlan: true,
+    withBible: opts.refine,
+  });
+  const refused = over(r.model, p.usd, opts.refine ? "Refining the Bible" : "Drafting the Bible");
+  if (refused || p.tooLong) return { ok: false, reason: refused ?? "The Bible is too long for the model." };
+  return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd: p.usd };
 }
