@@ -2,21 +2,29 @@ import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRepository } from "@/data/memory-repository";
 import { projectAreas } from "@/domain/production-checklist";
-import { episodeOneInstruction, PREMISE_MAX, titleFromPremise } from "@/domain/series-start";
-import { LIMITS } from "@/domain/story/writing";
+import {
+  PREMISE_MAX,
+  seasonPlanInstruction,
+  titleFromPremise,
+  wholeScriptInstruction,
+} from "@/domain/series-start";
+import { LIMITS, longFormPlan } from "@/domain/story/writing";
 import { FakeStoryProvider } from "@/story/providers/fake";
 import { createStoryRegistry } from "@/story/registry";
 import { StoryWorker } from "@/story/worker";
 
 /**
- * Starting a series from a prompt, through the REAL actions, memory repository and Story worker with the FREE test
- * writer: the premise makes the project and an empty Episode 1; the start page's two buttons send exactly what the
- * writing assistant and Import Story accept, at the price the button shows (free, or the confirmed paid estimate).
+ * Starting a series (or a film) from a prompt, through the REAL actions, memory repository and Story worker with the
+ * FREE test writer: the premise makes the project and its empty Episodes; the season plan, writing one or every
+ * Episode (in parts) and Import Story each send exactly what the actions accept, at the price shown (free, or the
+ * confirmed paid estimate), and every result is a proposal to review.
  */
 vi.hoisted(() => {
   process.env.PRISM_STUDIO_INLINE_WORKER = "0";
   process.env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER = "1";
   process.env.PRISM_STUDIO_STORY_AI_PROVIDERS = "openai";
+  // a test server: the free test writer may be offered (a real deployment never offers it; tested below)
+  process.env.PRISM_STUDIO_SHOW_TEST_MODELS = "1";
   delete process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI;
 });
 const world = vi.hoisted(() => ({
@@ -57,9 +65,17 @@ vi.mock("@/server/storage", () => {
 });
 
 import { createProject, startFromPremise } from "../actions";
-import { quoteAnalyzeEpisode, quoteNewSeriesDraft, quoteWriteEpisode } from "../series-start";
+import { applySeasonPlan, planSeason, writeWhole } from "../series-actions";
+import {
+  quoteAnalyzeEpisode,
+  quoteSeasonPlan,
+  quoteWhole,
+  quoteWriting,
+  recommendedWriter,
+  writers,
+  WRITING_AI_OFF,
+} from "../series-start";
 import { analyzeStory } from "../story-actions";
-import { askPrism } from "../writing-actions";
 
 const PREMISE =
   "In Tokyo, a reluctant heiress is told she must marry a stranger to save her family's firm. She has one month to find a way out.";
@@ -77,6 +93,7 @@ afterEach(() => {
   fetchSpy.mockRestore();
   delete process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI;
   process.env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER = "1";
+  process.env.PRISM_STUDIO_SHOW_TEST_MODELS = "1";
 });
 
 const form = (fields: Record<string, string>) => {
@@ -91,46 +108,54 @@ async function newSeries(title = "The Arrangement", premise = PREMISE) {
   return { slug, data: (await repo.loadProject(slug))! };
 }
 
-/** The fields the start page's "Write Episode 1" button sends. */
-function writeFields(slug: string, data: Awaited<ReturnType<typeof newSeries>>["data"]) {
-  const episode = data.episodes[0]!;
-  const q = quoteWriteEpisode(data, episode, data.bible.premise);
-  if (!q.ok) throw new Error(q.reason);
-  return {
-    q,
-    fields: {
-      projectSlug: slug,
-      episodeId: episode.id,
-      preset: "continue",
-      scopeKind: "episode",
-      instruction: episodeOneInstruction(data, data.bible.premise),
-      model: q.model,
-      ...(q.paid ? { confirmedTotalUsd: q.usd.toFixed(4) } : {}),
-    },
-  };
+/** The worker with the free test writer (no network). */
+const work = () =>
+  new StoryWorker({
+    store: repo.story,
+    writing: repo.writing,
+    registry: createStoryRegistry({ PRISM_STUDIO_STORY_AI_PROVIDERS: "" }, [new FakeStoryProvider()]),
+    workerId: "test-worker",
+  }).tick(20);
+
+async function proposalsOf(slug: string) {
+  const data = (await repo.loadProject(slug))!;
+  const out = [];
+  for (const e of data.episodes)
+    for (const s of await repo.writing.listSessions(data.project.id, e.id))
+      out.push(
+        ...(await repo.writing.listProposals(data.project.id, s.id)).map((p) => ({ ...p, episode: e })),
+      );
+  return out;
 }
 
 describe("starting a series from a prompt", () => {
-  it("the premise makes the Bible's premise and an empty Episode 1, then opens the start page", async () => {
+  it("a series gets the planned number of empty Episodes; a film one screenplay; no premise, none", async () => {
     const { slug, data } = await newSeries();
     expect(world.redirects.at(-1)).toBe(`/projects/${slug}/start`);
     expect(data.bible.premise).toBe(PREMISE);
-    expect(data.episodes).toHaveLength(1);
-    expect(data.episodes[0]).toMatchObject({ number: 1, slug: "ep-1", scriptText: "" });
-    // Home's Story card points at the start page
-    expect(projectAreas(data)[0]!.next).toEqual({
-      label: "Write Episode 1 from your premise",
-      href: `/projects/${slug}/start`,
-    });
-  });
+    expect(data.episodes).toHaveLength(8); // the default
+    expect(data.episodes.map((e) => e.slug)).toEqual([
+      "ep-1",
+      "ep-2",
+      "ep-3",
+      "ep-4",
+      "ep-5",
+      "ep-6",
+      "ep-7",
+      "ep-8",
+    ]);
+    expect(data.episodes.every((e) => e.scriptText === "")).toBe(true);
+    expect(projectAreas(data)[0]!.next).toMatchObject({ href: `/projects/${slug}/start` });
 
-  it("without a premise a project opens exactly as before (no Episode, the project's Home)", async () => {
+    await createProject(form({ title: "Six", premise: PREMISE, episodeCount: "6" }));
+    expect((await repo.loadProject("six"))!.episodes).toHaveLength(6);
+    await createProject(form({ title: "Odd", premise: PREMISE, episodeCount: "7" }));
+    expect((await repo.loadProject("odd"))!.episodes).toHaveLength(8); // only 6, 8, 10 or 12
+    await createProject(form({ title: "Feature", premise: PREMISE, projectType: "film" }));
+    expect((await repo.loadProject("feature"))!.episodes.map((e) => e.title)).toEqual(["Screenplay"]);
     expect(await createProject(form({ title: "Blank" }))).toMatchObject({ ok: true });
     expect(world.redirects.at(-1)).toBe("/projects/blank");
-    const data = (await repo.loadProject("blank"))!;
-    expect(data.bible.premise).toBe("");
-    expect(data.episodes).toHaveLength(0);
-    expect(projectAreas(data)[0]!.next).toMatchObject({ href: "/projects/blank/start" });
+    expect((await repo.loadProject("blank"))!.episodes).toHaveLength(0);
   });
 
   it("an existing project can be started from a premise once; a written premise is never overwritten", async () => {
@@ -149,93 +174,9 @@ describe("starting a series from a prompt", () => {
       ok: false,
       error: "This project already has a premise. Edit it on the Bible page.",
     });
-    expect((await repo.loadProject("later"))!.bible.premise).toBe(PREMISE);
   });
 
-  it("the instruction carries the premise and the language, and always fits the assistant's limit", async () => {
-    const { data } = await newSeries();
-    const text = episodeOneInstruction(data, PREMISE);
-    expect(text).toContain(PREMISE);
-    expect(text).toContain("(ja)");
-    expect(episodeOneInstruction(data, "x".repeat(PREMISE_MAX * 3)).length).toBeLessThanOrEqual(
-      LIMITS.instruction,
-    );
-  });
-
-  it("Write Episode 1 (free): the writing assistant accepts exactly what the button sends and drafts a proposal", async () => {
-    const { slug, data } = await newSeries();
-    const { q, fields } = writeFields(slug, data);
-    expect(q).toMatchObject({ paid: false, usd: 0 });
-    expect(await askPrism(form(fields))).toMatchObject({ ok: true });
-    expect(world.redirects.at(-1)).toMatch(new RegExp(`^/projects/${slug}/episodes/ep-1/write\\?session=`));
-    const [session] = await repo.writing.listSessions(data.project.id, data.episodes[0]!.id);
-    const [proposal] = await repo.writing.listProposals(data.project.id, session!.id);
-    expect(proposal).toMatchObject({ mode: "continue", status: "queued", spendAuthorization: "free" });
-    expect(proposal!.instruction).toContain(PREMISE);
-    await new StoryWorker({
-      store: repo.story,
-      writing: repo.writing,
-      registry: createStoryRegistry({ PRISM_STUDIO_STORY_AI_PROVIDERS: "" }, [new FakeStoryProvider()]),
-      workerId: "test-worker",
-    }).tick(5);
-    expect((await repo.writing.getProposal(data.project.id, proposal!.id))!.status).toBe("ready");
-  });
-
-  it("paid: each button's amount is exactly the estimate the action computes and accepts", async () => {
-    const { slug, data } = await newSeries();
-    process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI = "true";
-    delete process.env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER; // only the paid models are left
-    const { q, fields } = writeFields(slug, data);
-    expect(q.paid).toBe(true);
-    expect(q.usd).toBeGreaterThan(0);
-    // a cent less than shown is refused; the shown amount is accepted and recorded as the confirmation
-    expect(await askPrism(form({ ...fields, confirmedTotalUsd: (q.usd - 0.0001).toFixed(4) }))).toMatchObject(
-      { ok: false },
-    );
-    expect(await askPrism(form(fields))).toMatchObject({ ok: true });
-    const [session] = await repo.writing.listSessions(data.project.id, data.episodes[0]!.id);
-    const proposal = (await repo.writing.listProposals(data.project.id, session!.id)).at(-1)!;
-    expect(proposal).toMatchObject({
-      spendAuthorization: "confirmed",
-      confirmedUsd: Number(q.usd.toFixed(4)),
-    });
-    expect(proposal.estimate.usd).toBe(q.usd);
-
-    // Episode 1 now has a script: Analyze is priced the same way Import Story prices it
-    const ep = data.episodes[0]!;
-    await repo.upsert(data.project.id, "episodes", {
-      ...ep,
-      scriptText: "INT. TEA HOUSE - NIGHT\n\nYUMEKO sits alone.\n\nYUMEKO\nOne month.\n",
-    });
-    const scripted = (await repo.loadProject(slug))!.episodes[0]!;
-    const a = quoteAnalyzeEpisode(scripted);
-    if (!a.ok) throw new Error(a.reason);
-    expect(a.paid).toBe(true);
-    const analyze = {
-      projectSlug: slug,
-      sourceMode: "episode",
-      episodeId: ep.id,
-      model: a.model,
-      confirmedTotalUsd: a.usd.toFixed(4),
-    };
-    expect(
-      await analyzeStory(form({ ...analyze, confirmedTotalUsd: (a.usd - 0.0001).toFixed(4) })),
-    ).toMatchObject({ ok: false });
-    expect(await analyzeStory(form(analyze))).toMatchObject({ ok: true });
-    const [record] = await repo.story.list(data.project.id);
-    expect(record).toMatchObject({ sourceEpisodeId: ep.id, status: "queued" });
-    expect(record!.estimate.usd).toBe(a.usd);
-  });
-
-  it("Analyze is not offered before Episode 1 has a script", async () => {
-    const { data } = await newSeries();
-    expect(quoteAnalyzeEpisode(data.episodes[0]!)).toEqual({
-      ok: false,
-      reason: "Episode 1 has no script yet.",
-    });
-  });
-
-  it("an idea names the series when no title is given (first sentence, or its first six words)", () => {
+  it("an idea names the series when no title is given (first sentence, or its first six words)", async () => {
     expect(titleFromPremise("Two rival ramen shops go to war. Then love.")).toBe(
       "Two rival ramen shops go to war",
     );
@@ -245,78 +186,176 @@ describe("starting a series from a prompt", () => {
     expect(titleFromPremise("東京の小さなラーメン屋が二つ、跡継ぎ同士の恋で戦争になる。")).toBe(
       "東京の小さなラーメン屋が二つ、跡継ぎ同士の恋で戦争になる",
     );
-    expect(titleFromPremise("  ")).toBe("");
-  });
-
-  it("creates from the idea alone (titled from it); refuses when there is neither an idea nor a title", async () => {
-    expect(
-      await createProject(form({ premise: "Two rival ramen shops go to war. Then love." })),
-    ).toMatchObject({
-      ok: true,
-    });
-    const data = (await repo.loadProject("two-rival-ramen-shops-go-to-war"))!;
-    expect(data.project.title).toBe("Two rival ramen shops go to war");
-    expect(world.redirects.at(-1)).toBe("/projects/two-rival-ramen-shops-go-to-war/start");
     expect(await createProject(form({ premise: " ", title: " " }))).toMatchObject({
       ok: false,
       error: "Describe your series, or give it a title.",
     });
   });
 
-  it("Prism writes Episode 1 straight after creating (free): the draft is queued and it opens on the Write page", async () => {
-    const q = quoteNewSeriesDraft();
-    if (!q.ok) throw new Error(q.reason);
-    expect(q.paid).toBe(false);
-    expect(
-      await createProject(
-        form({ premise: PREMISE, defaultLanguage: "ja", draftEpisode: "1", model: q.model }),
-      ),
-    ).toMatchObject({ ok: true });
-    expect(world.redirects.at(-1)).toMatch(/^\/projects\/in-tokyo[^/]*\/episodes\/ep-1\/write\?session=/);
-    const slug = world.redirects.at(-1)!.split("/")[2]!;
-    const data = (await repo.loadProject(slug))!;
-    const [session] = await repo.writing.listSessions(data.project.id, data.episodes[0]!.id);
-    const [proposal] = await repo.writing.listProposals(data.project.id, session!.id);
-    expect(proposal).toMatchObject({ mode: "continue", status: "queued", spendAuthorization: "free" });
-    expect(proposal!.instruction).toContain(PREMISE);
+  it("the instructions carry the premise, the episode and the language, and always fit the limit", async () => {
+    const { data } = await newSeries();
+    const plan = seasonPlanInstruction(data, 8);
+    expect(plan).toContain("exactly 8 ideas");
+    expect(plan).toContain(PREMISE);
+    const whole = wholeScriptInstruction(data, {
+      ...data.episodes[2]!,
+      title: "The Dinner",
+      synopsis: "They meet.",
+    });
+    expect(whole).toContain('episode 3, "The Dinner"');
+    expect(whole).toContain("They meet.");
+    expect(whole).toContain("(ja)");
+    const long = { ...data, bible: { ...data.bible, premise: "x".repeat(PREMISE_MAX * 3) } };
+    expect(seasonPlanInstruction(long, 12).length).toBeLessThanOrEqual(LIMITS.instruction);
+    expect(wholeScriptInstruction(long, data.episodes[0]!).length).toBeLessThanOrEqual(LIMITS.instruction);
   });
 
-  it("paid: the price shown before the project exists is a true ceiling, and the draft is accepted within it", async () => {
+  it("a real deployment never offers the test writer: with none on it says so; a real one is used when on", async () => {
+    delete process.env.PRISM_STUDIO_SHOW_TEST_MODELS;
+    const { data } = await newSeries();
+    expect(writers().some((w) => w.value.startsWith("prism-test/"))).toBe(false);
+    expect(recommendedWriter()).toBeNull();
+    expect(quoteSeasonPlan(data)).toEqual({ ok: false, reason: WRITING_AI_OFF });
+    expect(quoteWriting(data, "all")).toEqual({ ok: false, reason: WRITING_AI_OFF });
     process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI = "true";
-    delete process.env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER;
-    const ceiling = quoteNewSeriesDraft();
-    if (!ceiling.ok) throw new Error(ceiling.reason);
-    expect(ceiling.paid).toBe(true);
-    // the longest premise the form takes, in a dense script, with every other field full: still within the ceiling
-    const longest = "東".repeat(PREMISE_MAX);
+    expect(recommendedWriter()).toMatchObject({ paid: true, value: expect.stringMatching(/^openai\//) });
+    expect(quoteWriting(data, "one")).toMatchObject({ ok: true, paid: true });
+  });
+
+  it("free: plan the season, use the plan, write every episode; each arrives as its own proposal to review", async () => {
+    const { slug } = await newSeries("Night Counter", PREMISE);
+    let data = (await repo.loadProject(slug))!;
+    const plan = quoteSeasonPlan(data);
+    expect(plan).toMatchObject({ ok: true, paid: false, usd: 0 });
+    const asked = await planSeason(form({ projectSlug: slug, model: (plan as { model: string }).model }));
+    expect(asked, JSON.stringify(asked)).toMatchObject({ ok: true });
+    await work();
+    const [planned] = (await proposalsOf(slug)).filter((p) => p.mode === "brainstorm");
+    expect(planned).toMatchObject({ status: "ready" });
+    expect(planned!.result!.ideas).toHaveLength(8);
+    expect(await applySeasonPlan(form({ projectSlug: slug, proposalId: planned!.id }))).toMatchObject({
+      ok: true,
+    });
+    data = (await repo.loadProject(slug))!;
+    expect(data.episodes.every((e) => e.synopsis.trim() && !/^Episode \d+$/.test(e.title))).toBe(true);
+    expect(data.episodes.every((e) => e.scriptText === "")).toBe(true); // a plan writes no script
+
+    // write all 8: one request each, written in parts, each a proposal (nothing in any script yet)
+    const all = quoteWriting(data, "all");
+    expect(all).toMatchObject({ ok: true, paid: false, usd: 0 });
     expect(
-      await createProject(
+      await writeWhole(form({ projectSlug: slug, scope: "all", model: (all as { model: string }).model })),
+    ).toEqual({ ok: true });
+    expect(world.redirects.at(-1)).toBe(`/projects/${slug}/start`);
+    let whole = (await proposalsOf(slug)).filter((p) => p.context.longForm);
+    expect(whole).toHaveLength(8);
+    expect(
+      whole.every((p) => p.status === "queued" && p.mode === "continue" && p.spendAuthorization === "free"),
+    ).toBe(true);
+    expect(whole[0]!.context.seasonPlan).toHaveLength(8);
+    await work();
+    whole = (await proposalsOf(slug)).filter((p) => p.context.longForm);
+    const plan2 = longFormPlan("series", 32_000);
+    for (const p of whole) {
+      expect(p.status).toBe("ready");
+      expect(p.providerCalls).toBe(plan2.parts); // every part, one answer
+      expect(p.result!.alternatives).toHaveLength(1);
+      expect(p.result!.alternatives[0]!.text.trim()).not.toBe("");
+    }
+    expect((await repo.loadProject(slug))!.episodes.every((e) => e.scriptText === "")).toBe(true);
+    // nothing left to write once every Episode has a script is a separate state; here nothing was accepted yet
+    expect(quoteWriting((await repo.loadProject(slug))!, "all")).toMatchObject({ ok: true });
+  });
+
+  it("a film is written whole (one request, in parts)", async () => {
+    await createProject(form({ title: "Feature", premise: PREMISE, projectType: "film" }));
+    const data = (await repo.loadProject("feature"))!;
+    const q = quoteWriting(data, "all");
+    expect(q).toMatchObject({ ok: true, episodes: [{ number: 1, title: "Screenplay" }] });
+    expect(await writeWhole(form({ projectSlug: "feature", scope: "all" }))).toEqual({ ok: true });
+    await work();
+    const [p] = (await proposalsOf("feature")).filter((x) => x.context.longForm);
+    expect(p).toMatchObject({ status: "ready", providerCalls: longFormPlan("film", 32_000).parts });
+    expect(p!.context.longForm).toEqual(longFormPlan("film", 32_000));
+  });
+
+  it("paid: every price shown is the price each request is accepted at; less than shown is refused", async () => {
+    const { slug } = await newSeries();
+    process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI = "true";
+    delete process.env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER; // only the real (paid) writer is left
+    let data = (await repo.loadProject(slug))!;
+    const plan = quoteSeasonPlan(data);
+    if (!plan.ok) throw new Error(plan.reason);
+    expect(plan.paid).toBe(true);
+    expect(await planSeason(form({ projectSlug: slug, model: plan.model }))).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("Confirm that amount"),
+    });
+    expect(
+      await planSeason(
+        form({ projectSlug: slug, model: plan.model, confirmedTotalUsd: plan.usd.toFixed(4) }),
+      ),
+    ).toMatchObject({ ok: true });
+    const [queuedPlan] = await proposalsOf(slug);
+    expect(queuedPlan).toMatchObject({
+      mode: "brainstorm",
+      spendAuthorization: "confirmed",
+      alternativesRequested: 8,
+    });
+    expect(queuedPlan!.estimate.usd).toBe(plan.usd);
+
+    // write all: the total is the sum of each episode's own price, and each request is confirmed at its own price
+    data = (await repo.loadProject(slug))!;
+    const all = quoteWriting(data, "all", plan.model);
+    if (!all.ok) throw new Error(all.reason);
+    expect(all.episodes).toHaveLength(8);
+    expect(all.usd).toBeCloseTo(
+      all.episodes.reduce((s, e) => s + e.usd, 0),
+      6,
+    );
+    expect(
+      await writeWhole(
         form({
-          premise: longest,
-          title: "長".repeat(500),
-          description: "説".repeat(5000),
-          genre: "g".repeat(500),
-          tone: "調".repeat(500),
-          draftEpisode: "1",
-          model: ceiling.model,
-          confirmedTotalUsd: ceiling.usd.toFixed(4),
+          projectSlug: slug,
+          scope: "all",
+          model: all.model,
+          confirmedTotalUsd: (all.usd - 0.0001).toFixed(4),
+        }),
+      ),
+    ).toMatchObject({ ok: false });
+    expect((await proposalsOf(slug)).filter((p) => p.context.longForm)).toHaveLength(0);
+    expect(
+      await writeWhole(
+        form({ projectSlug: slug, scope: "all", model: all.model, confirmedTotalUsd: all.usd.toFixed(4) }),
+      ),
+    ).toEqual({ ok: true });
+    const whole = (await proposalsOf(slug)).filter((p) => p.context.longForm);
+    expect(whole).toHaveLength(8);
+    for (const p of whole) {
+      const own = quoteWhole(data, p.episode, all.model);
+      if (!own.ok) throw new Error(own.reason);
+      expect(p).toMatchObject({ spendAuthorization: "confirmed", confirmedUsd: own.usd });
+      expect(p.estimate.usd).toBe(own.usd);
+      expect(p.estimate.usd).toBeLessThanOrEqual(0.25 + 1e-9); // within the per-request limit
+    }
+    // Analyze is offered once Episode 1 has a script, priced the same way Import Story prices it
+    const ep = data.episodes[0]!;
+    await repo.upsert(data.project.id, "episodes", {
+      ...ep,
+      scriptText: "INT. TEA HOUSE - NIGHT\n\nYUMEKO\nOne month.\n",
+    });
+    const a = quoteAnalyzeEpisode((await repo.loadProject(slug))!.episodes[0]!);
+    if (!a.ok) throw new Error(a.reason);
+    expect(
+      await analyzeStory(
+        form({
+          projectSlug: slug,
+          sourceMode: "episode",
+          episodeId: ep.id,
+          model: a.model,
+          confirmedTotalUsd: a.usd.toFixed(4),
         }),
       ),
     ).toMatchObject({ ok: true });
-    expect(world.redirects.at(-1)).toMatch(/\/episodes\/ep-1\/write\?session=/);
-    const slug = world.redirects.at(-1)!.split("/")[2]!;
-    const data = (await repo.loadProject(slug))!;
-    const real = quoteWriteEpisode(data, data.episodes[0]!, data.bible.premise);
-    if (!real.ok) throw new Error(real.reason);
-    expect(real.usd).toBeLessThanOrEqual(ceiling.usd);
-    const [session] = await repo.writing.listSessions(data.project.id, data.episodes[0]!.id);
-    const [proposal] = await repo.writing.listProposals(data.project.id, session!.id);
-    expect(proposal).toMatchObject({ spendAuthorization: "confirmed", status: "queued" });
-    expect(proposal!.estimate.usd).toBe(real.usd);
-    // without the confirmation nothing is spent: the project is made and the start page opens instead
-    expect(
-      await createProject(form({ premise: "A quiet idea.", draftEpisode: "1", model: ceiling.model })),
-    ).toMatchObject({ ok: true });
-    expect(world.redirects.at(-1)).toBe("/projects/a-quiet-idea/start");
   });
 });

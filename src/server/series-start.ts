@@ -1,111 +1,170 @@
 import "server-only";
 import type { Episode, ProjectData } from "@/domain/schemas";
+import { seasonPlanInstruction, wholeScriptInstruction } from "@/domain/series-start";
 import { estimateInputTokens, normalizeSourceText } from "@/domain/story/source";
-import { canonical, estimateWritingInputTokens, scopeOf, writingOutputTokens } from "@/domain/story/writing";
-import { estimateUsd } from "@/story/provider";
-import { buildWritingContext } from "@/story/writing-context";
-import { WRITING_INSTRUCTIONS, writingInput } from "@/story/writing-prompt";
-import {
-  episodeOneInstruction,
-  freshProjectData,
-  NEW_PROJECT_LIMITS,
-  newProjectRecords,
-  PREMISE_MAX,
-  TITLE_MAX,
-} from "@/domain/series-start";
+import { canonical, longFormPlan, scopeOf } from "@/domain/story/writing";
+import { estimateUsd, type StoryModel } from "@/story/provider";
+import { FAKE_STORY_PROVIDER_ID } from "@/story/providers/fake";
 import { getStoryRegistry } from "./story";
+import { priceWriting } from "./writing-price";
 
 /**
- * Starting a series from a prompt: the premise → Episode 1's screenplay (the existing writing assistant, "Continue" on
- * the empty Episode) → a Production Proposal (the existing Import Story) → the creator reviews and applies it. These are
- * the prices of the two AI steps, worked out exactly as the actions that run them work them out, so the amount on each
- * button is the amount they will accept. Nothing here queues or spends.
+ * Starting a series (or a film) from a prompt: plan the season, write one or every Episode (or the whole film), turn the
+ * script into a Production Proposal. These are the writers on offer and the prices of those steps, worked out with the
+ * same function the writing action uses, so the amount a creator confirms is the amount it accepts. Nothing here queues
+ * or spends.
  */
 
-export interface StepQuote {
+export interface Writer {
+  /** "provider/modelId" */
+  value: string;
+  label: string;
+  paid: boolean;
+  available: boolean;
+  reason: string | null;
+}
+
+/** Shown when no real writing model is switched on. */
+export const WRITING_AI_OFF = "Prism's writing AI is switched off on this server.";
+
+/**
+ * The writers these steps offer: REAL ones only. The free test writer returns a placeholder, so it is listed only on a
+ * test server (PRISM_STUDIO_SHOW_TEST_MODELS=1).
+ */
+export function writers(): Writer[] {
+  const tests = process.env.PRISM_STUDIO_SHOW_TEST_MODELS === "1";
+  return getStoryRegistry()
+    .models()
+    .filter((m) => tests || m.provider !== FAKE_STORY_PROVIDER_ID)
+    .map((m) => ({
+      value: `${m.provider}/${m.modelId}`,
+      label: m.label,
+      paid: m.paid,
+      available: m.available,
+      reason: m.available ? null : m.reason,
+    }));
+}
+
+/** "Recommended by Prism": a free writer on a test server, else the first real one switched on. */
+export function recommendedWriter(): Writer | null {
+  const usable = writers().filter((w) => w.available);
+  return usable.find((w) => !w.paid) ?? usable[0] ?? null;
+}
+
+/** The model a step uses: the one named (when it is offered and switched on), else the recommended one. */
+export function resolveWriter(
+  value: string | null | undefined,
+): { model: StoryModel; writer: Writer } | null {
+  const offered = writers().filter((w) => w.available);
+  const writer = (value && offered.find((w) => w.value === value)) || recommendedWriter();
+  if (!writer) return null;
+  const [provider, ...rest] = writer.value.split("/");
+  const model = getStoryRegistry().model(provider!, rest.join("/"));
+  return model ? { model, writer } : null;
+}
+
+export interface Quote {
   ok: true;
-  /** "provider/modelId", sent with the request so it is priced with the same model. */
   model: string;
   label: string;
   paid: boolean;
   usd: number;
 }
-export type StepQuoteResult = StepQuote | { ok: false; reason: string };
+export type QuoteResult = Quote | { ok: false; reason: string };
 
-function firstAvailable() {
-  const registry = getStoryRegistry();
-  // a free model first, as Import Story suggests; the creator can still choose another on those pages
-  const models = registry.models();
-  const listed = models.find((m) => m.available && !m.paid) ?? models.find((m) => m.available);
-  if (!listed) return { registry, model: null, reason: "Prism AI is not set up on this server." };
-  return { registry, model: registry.model(listed.provider, listed.modelId)!, reason: null };
-}
+const over = (model: StoryModel, usd: number, what: string): string | null => {
+  const max = getStoryRegistry().spend.maxUsd;
+  return model.paid && usd > max
+    ? `${what} would cost up to $${usd.toFixed(4)}, over this server's limit of $${max.toFixed(2)} per request.`
+    : null;
+};
 
-export function quoteWriteEpisode(data: ProjectData, episode: Episode, premise: string): StepQuoteResult {
-  const { registry, model, reason } = firstAvailable();
-  if (!model) return { ok: false, reason: reason! };
+/** The season plan: one brainstorm on Episode 1, an idea per Episode. */
+export function quoteSeasonPlan(data: ProjectData, writer?: string | null): QuoteResult {
+  const r = resolveWriter(writer);
+  if (!r) return { ok: false, reason: WRITING_AI_OFF };
+  const episode = [...data.episodes].sort((a, b) => a.number - b.number)[0];
+  if (!episode) return { ok: false, reason: "This project has no Episode yet." };
   const text = canonical(episode.scriptText);
-  const scope = scopeOf(text, "episode", { start: 0, end: text.length }, null);
-  const instruction = episodeOneInstruction(data, premise);
-  const context = buildWritingContext({ data, episode, text, scope, instruction, conversation: [] });
-  const promptText = writingInput({
-    mode: "continue",
-    instruction,
-    count: 1,
-    scopeKind: scope.kind,
-    context,
-    targetText: text.slice(scope.start, scope.end),
+  const p = priceWriting({
+    data,
+    episode,
+    text,
+    scope: scopeOf(text, "episode", { start: 0, end: text.length }, null),
+    mode: "brainstorm",
+    instruction: seasonPlanInstruction(data, data.episodes.length),
+    count: data.episodes.length,
+    targetText: text,
     draftText: null,
+    conversation: [],
+    model: r.model,
   });
-  const inputTokens = estimateWritingInputTokens(WRITING_INSTRUCTIONS, promptText);
-  const maxOutputTokens = writingOutputTokens(
-    "continue",
-    1,
-    scope.end - scope.start,
-    model.maxOutputTokens || 32_000,
-  );
-  if (model.paid && inputTokens + maxOutputTokens > model.contextTokens)
-    return { ok: false, reason: "The request is too long for the model." };
-  const usd = estimateUsd(model, inputTokens, maxOutputTokens);
-  if (model.paid && usd > registry.spend.maxUsd)
-    return { ok: false, reason: `It would cost up to $${usd.toFixed(4)}, over this server's limit.` };
-  return { ok: true, model: `${model.provider}/${model.modelId}`, label: model.label, paid: model.paid, usd };
+  const refused = over(r.model, p.usd, "Planning the season");
+  if (refused || p.tooLong) return { ok: false, reason: refused ?? "The plan is too long for the model." };
+  return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd: p.usd };
 }
 
-export function quoteAnalyzeEpisode(episode: Episode): StepQuoteResult {
-  const { registry, model, reason } = firstAvailable();
-  if (!model) return { ok: false, reason: reason! };
+/** One whole Episode (or the whole film), written in parts. */
+export function quoteWhole(data: ProjectData, episode: Episode, writer?: string | null): QuoteResult {
+  const r = resolveWriter(writer);
+  if (!r) return { ok: false, reason: WRITING_AI_OFF };
+  const text = canonical(episode.scriptText);
+  const p = priceWriting({
+    data,
+    episode,
+    text,
+    scope: scopeOf(text, "episode", { start: 0, end: text.length }, null),
+    mode: "continue",
+    instruction: wholeScriptInstruction(data, episode),
+    count: 1,
+    targetText: text,
+    draftText: null,
+    conversation: [],
+    model: r.model,
+    longForm: longFormPlan(data.project.projectType, r.model.maxOutputTokens || 32_000),
+  });
+  const refused = over(r.model, p.usd, `Writing "${episode.title}"`);
+  if (refused || p.tooLong) return { ok: false, reason: refused ?? "The script is too long for the model." };
+  return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd: p.usd };
+}
+
+/** The Episodes "write it" would write: the first unwritten one, or every unwritten one (a film has one). */
+export function episodesToWrite(data: ProjectData, scope: "one" | "all"): Episode[] {
+  const empty = [...data.episodes].sort((a, b) => a.number - b.number).filter((e) => !e.scriptText.trim());
+  return scope === "one" || data.project.projectType !== "series" ? empty.slice(0, 1) : empty;
+}
+
+export type WritingQuote =
+  | (Quote & { episodes: Array<{ id: string; number: number; title: string; usd: number }> })
+  | { ok: false; reason: string };
+
+/** The total for writing those Episodes (each its own request, each within the per-request limit). */
+export function quoteWriting(data: ProjectData, scope: "one" | "all", writer?: string | null): WritingQuote {
+  const targets = episodesToWrite(data, scope);
+  if (targets.length === 0) return { ok: false, reason: "Every Episode already has a script." };
+  const priced: Array<{ id: string; number: number; title: string; usd: number }> = [];
+  let first: Quote | null = null;
+  for (const e of targets) {
+    const q = quoteWhole(data, e, writer);
+    if (!q.ok) return q;
+    first ??= q;
+    priced.push({ id: e.id, number: e.number, title: e.title, usd: q.usd });
+  }
+  const total = Math.round(priced.reduce((s, e) => s + e.usd, 0) * 10000) / 10000;
+  return { ...first!, usd: total, episodes: priced };
+}
+
+/** Turning an Episode's script into a Production Proposal (Import Story). */
+export function quoteAnalyzeEpisode(episode: Episode, writer?: string | null): QuoteResult {
+  const r = resolveWriter(writer);
+  if (!r) return { ok: false, reason: WRITING_AI_OFF };
   const text = normalizeSourceText(episode.scriptText);
   if (!text) return { ok: false, reason: "Episode 1 has no script yet." };
   const inputTokens = estimateInputTokens(text);
-  if (inputTokens + model.maxOutputTokens > model.contextTokens)
+  if (inputTokens + r.model.maxOutputTokens > r.model.contextTokens)
     return { ok: false, reason: "The script is too long to analyse in one go." };
-  const usd = estimateUsd(model, inputTokens);
-  if (model.paid && usd > registry.spend.maxUsd)
-    return { ok: false, reason: `It would cost up to $${usd.toFixed(4)}, over this server's limit.` };
-  return { ok: true, model: `${model.provider}/${model.modelId}`, label: model.label, paid: model.paid, usd };
-}
-
-/**
- * The price of "Prism writes Episode 1" BEFORE the project exists: the same request priced for the longest new project
- * the form accepts (every field at its limit, in the densest script), so it is a true ceiling for whatever is typed. The
- * real request is priced again when it is made and accepted only within this confirmation.
- */
-export function quoteNewSeriesDraft(): StepQuoteResult {
-  const dense = (n: number) => "あ".repeat(n);
-  const records = newProjectRecords({
-    id: "00000000-0000-4000-8000-000000000000",
-    userId: "00000000-0000-4000-8000-000000000001",
-    title: dense(TITLE_MAX),
-    slug: "ceiling",
-    projectType: "series",
-    description: dense(NEW_PROJECT_LIMITS.description),
-    genre: dense(NEW_PROJECT_LIMITS.genre),
-    tone: dense(NEW_PROJECT_LIMITS.tone),
-    defaultLanguage: "x".repeat(NEW_PROJECT_LIMITS.language),
-    premise: dense(PREMISE_MAX),
-    now: new Date(0).toISOString(),
-  });
-  const data = freshProjectData(records);
-  return quoteWriteEpisode(data, records.episodeOne!, records.bible.premise);
+  const usd = estimateUsd(r.model, inputTokens);
+  const refused = over(r.model, usd, "Analysing the script");
+  if (refused) return { ok: false, reason: refused };
+  return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd };
 }

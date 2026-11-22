@@ -1,4 +1,4 @@
-import { escapeBlock, MODE_TASK, type WritingMode } from "@/domain/story/writing";
+import { escapeBlock, MODE_TASK, type LongFormPlan, type WritingMode } from "@/domain/story/writing";
 
 /**
  * Phase 5B-S2: the writing assistant's instructions. The model is a SCREENWRITING ASSISTANT that proposes text; the
@@ -58,6 +58,10 @@ export interface WritingContext {
   after: string;
   /** The recent turns of this writing session, so the creator need not restate the Scene. */
   conversation: Array<{ instruction: string; reply: string; chosen: string | null }>;
+  /** A whole Episode or film written in parts (the worker runs the parts). Absent = one answer. */
+  longForm?: LongFormPlan;
+  /** A season's plan, so each Episode written from it stays consistent with the others. */
+  seasonPlan?: Array<{ episode: number; title: string; synopsis: string }>;
 }
 
 export interface WritingPromptInput {

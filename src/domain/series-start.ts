@@ -18,17 +18,52 @@ import { LIMITS } from "@/domain/story/writing";
 /** The longest premise kept (the rest of the writing instruction must still fit the assistant's limit). */
 export const PREMISE_MAX = 3000;
 
-/** What the writing assistant is asked to write for Episode 1. */
-export function episodeOneInstruction(data: ProjectData, premise: string): string {
-  const language = data.project.defaultLanguage;
+/** How many Episodes a new series can be planned with. */
+export const EPISODE_COUNTS = [6, 8, 10, 12] as const;
+export const DEFAULT_EPISODE_COUNT = 8;
+
+const kindOf = (data: ProjectData) =>
+  data.project.projectType === "film"
+    ? "film"
+    : data.project.projectType === "short"
+      ? "short film"
+      : "series";
+
+/** What Prism is asked to plan a season from: one idea per Episode, in order (a brainstorm: nothing is written). */
+export function seasonPlanInstruction(data: ProjectData, episodes: number): string {
   return [
-    `Write the complete screenplay of Episode 1 of this ${data.project.projectType} from the premise below.`,
-    "Standard screenplay format: scene headings (INT./EXT. PLACE - TIME), short action lines, CHARACTER NAMES in capitals above their dialogue.",
-    "Introduce the main characters with a short visual description the first time each appears.",
-    `Dialogue in the project's language (${language}); everything else in English.`,
-    "Keep it compact: about five short scenes (around five pages), ending on a hook for the next episode.",
+    `Plan season 1 of this series from its premise: give exactly ${episodes} ideas, one per episode, in order.`,
+    "Each idea's title is that episode's title (no number). Its detail is 2 to 4 sentences: what happens in the",
+    "episode, how it ends, and the hook into the next one. Together they tell one story with a clear arc and a",
+    "satisfying season ending.",
     "",
-    `Premise: ${premise.trim().slice(0, PREMISE_MAX)}`,
+    `Premise: ${data.bible.premise.trim().slice(0, PREMISE_MAX)}`,
+  ]
+    .join("\n")
+    .slice(0, LIMITS.instruction);
+}
+
+/** What Prism is asked to write for a whole Episode (from its planned synopsis) or a whole film. */
+export function wholeScriptInstruction(data: ProjectData, episode: Episode): string {
+  const language = data.project.defaultLanguage;
+  const kind = kindOf(data);
+  const head =
+    kind === "series"
+      ? [
+          `Write the complete screenplay of episode ${episode.number}, "${episode.title}", of this series.`,
+          episode.synopsis.trim()
+            ? `What happens in this episode: ${episode.synopsis.trim()}`
+            : "Follow the premise; this episode sets up the series.",
+          "Keep it consistent with the season plan in the context (who knows what, where each story stands).",
+        ]
+      : [`Write the complete screenplay of this ${kind}, from its opening to its ending.`];
+  return [
+    ...head,
+    "Standard screenplay format: scene headings (INT./EXT. PLACE - TIME), short action lines, CHARACTER NAMES in capitals above their dialogue.",
+    "Introduce each main character with a short visual description the first time they appear.",
+    `Dialogue in the project's language (${language}); everything else in English.`,
+    "",
+    `Premise: ${data.bible.premise.trim().slice(0, PREMISE_MAX)}`,
   ]
     .join("\n")
     .slice(0, LIMITS.instruction);
@@ -67,6 +102,8 @@ export interface NewProjectInput {
   tone?: string;
   defaultLanguage?: string;
   premise?: string;
+  /** A series started from a premise gets this many (empty) Episodes; anything else one. */
+  episodeCount?: number;
   now: string;
 }
 
@@ -78,7 +115,7 @@ export interface NewProjectInput {
 export function newProjectRecords(input: NewProjectInput): {
   project: Project;
   bible: ProjectBible;
-  episodeOne: Episode | null;
+  episodes: Episode[];
 } {
   const projectType = (PROJECT_TYPES as readonly string[]).includes(input.projectType ?? "")
     ? input.projectType
@@ -121,25 +158,38 @@ export function newProjectRecords(input: NewProjectInput): {
     ],
     updatedAt: input.now,
   });
-  const episodeOne = premise ? emptyEpisodeOne(input.id, input.now) : null;
-  return { project, bible, episodeOne };
+  const count =
+    project.projectType === "series"
+      ? (EPISODE_COUNTS as readonly number[]).includes(input.episodeCount ?? 0)
+        ? input.episodeCount!
+        : DEFAULT_EPISODE_COUNT
+      : 1;
+  const episodes = premise
+    ? Array.from({ length: count }, (_, i) =>
+        emptyEpisode(input.id, input.now, i + 1, project.projectType === "series" ? undefined : "Screenplay"),
+      )
+    : [];
+  return { project, bible, episodes };
 }
 
-/** An empty Episode 1, waiting for the writing assistant. */
-export function emptyEpisodeOne(projectId: string, now: string, id: string = crypto.randomUUID()): Episode {
+/** An empty Episode, waiting for its script. */
+export function emptyEpisode(projectId: string, now: string, number = 1, title?: string): Episode {
   return episodeSchema.parse({
-    id,
+    id: crypto.randomUUID(),
     projectId,
-    number: 1,
-    slug: "ep-1",
-    title: "Episode 1",
+    number,
+    slug: `ep-${number}`,
+    title: title ?? `Episode ${number}`,
     synopsis: "",
     scriptText: "",
-    order: 0,
+    order: number - 1,
     createdAt: now,
     updatedAt: now,
   });
 }
+
+/** An empty Episode 1 (an existing project started from a premise). */
+export const emptyEpisodeOne = (projectId: string, now: string) => emptyEpisode(projectId, now, 1);
 
 /** The project as the app loads it, straight after creation (for pricing its first AI step). */
 export function freshProjectData(records: ReturnType<typeof newProjectRecords>): ProjectData {
@@ -153,7 +203,7 @@ export function freshProjectData(records: ReturnType<typeof newProjectRecords>):
     voiceProfiles: [],
     locations: [],
     props: [],
-    episodes: records.episodeOne ? [records.episodeOne] : [],
+    episodes: records.episodes,
     scenes: [],
     shots: [],
     dialogueLines: [],

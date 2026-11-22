@@ -178,37 +178,27 @@ lock) and the first next steps. Any area can be worked on first.
 
 ### Starting from a prompt
 
-The New project form takes an optional **Describe your series**. With it, the premise goes into the Bible, an empty
-Episode 1 is added, and the project opens on `/projects/<project>/start` (also in the sidebar, and where Home's Story
-card points until Episode 1 has a script). An existing project without a premise can be started there too (a written
-premise is never overwritten). The page is four steps, each marked done / now / later:
+The Projects page opens on one box: describe the series, pick Series / Film / Short (a series also picks 6 · 8 · 10 ·
+12 episodes) and the language; the title is optional (`titleFromPremise`). The project is created with the premise in
+its Bible and its Episodes empty (a film or short has one, "Screenplay"), and opens on `/projects/<project>/start`:
 
-1. **Describe your series**: the premise.
-2. **Write Episode 1**: the existing writing assistant, Continue on the empty Episode, asked for a short screenplay
-   from the premise (`episodeOneInstruction`). It opens on the Write page as a proposal; Accept puts it in the script.
-   Writing it by hand works just as well.
-3. **Turn it into a Bible, cast, places and Shots**: the existing Import Story on Episode 1's script. The proposal
-   (characters with their written looks, locations, Shots) is reviewed and applied on its page; nothing changes before.
-4. **Carry on in any order** from Home.
+1. **Describe it**: the premise (an existing project without one can add it here; a written one is never overwritten).
+2. **Plan the season** (series only): one brainstorm request on Episode 1, an idea per Episode (title + what happens).
+   **Use this plan** writes each idea into its Episode's title and synopsis (no script). Edit them on the Episodes page.
+3. **Write it** (`WriteIt`): choose the writer (**Recommended by Prism**, or a named model; the free test writer is
+   listed only on a test server, `PRISM_STUDIO_SHOW_TEST_MODELS=1`) and, for a series, **Episode N only** or **All N
+   episodes**; a film is written whole. **Write…** opens a confirmation with the writer and the most it can cost;
+   nothing runs before **Write** there. Each Episode (or the film) is ONE writing request (`length=whole`) that the
+   Story worker writes in parts (`longFormPlan`: a series episode 2 × 8 000 tokens, a short 2 × 6 000, a film
+   4 × 10 000), each part continuing from the tail of the text so far (`LONG_FORM_TAIL_CHARS`), into one proposal to
+   review and accept on its Write page. Writing leases last 30 minutes (`WRITING_LEASE_MS`).
+4. **Turn it into a Bible, cast, places and Shots**: Import Story on Episode 1 (or the film).
+5. **Carry on in any order** from Home.
 
-Steps 2 and 3 name their price on the button before anything runs ("free with …" or "up to $X with …"), worked out by
-`src/server/series-start.ts` exactly as `askPrism` / `analyzeStory` work it out; a paid button sends that amount as the
-confirmation, so the action accepts nothing more. A free model is offered first, as on Import Story.
-
-`/projects/<project>/checklist` (under More tools, and "All" on Home): for one Episode (by default the one with the most Shots),
-everything its frames need, in the order it has to happen.
-
-- **Next steps**, numbered, each with the button that opens the screen that fixes it, already set up: add photos of a
-  person (until they have 4), make their missing views (the Studio opens on them with the first missing view's preset),
-  make each outfit's picture (the Studio opens with Wardrobe reference and that Look), make a picture of each place,
-  choose a missing outfit or location on a Shot, and make the frame of each Shot that has everything.
-- **People**: photos, the six views, their outfits, and **Approve**, which locks their reference images and the Looks
-  this Episode uses in one act (unlocked on their Character page).
-- **Shots**, each with a light: green (everything it needs), amber (can be made, could be better), red (a person in it
-  has no face yet), and what is missing.
-
-It reads what exists and changes nothing except through Approve. Code: `src/domain/production-checklist.ts`,
-`src/app/projects/[project]/checklist/page.tsx`, `approveCharacter` in `src/server/visual-bible-actions.ts`.
+Every price is worked out by `priceWriting` (`src/server/writing-price.ts`), the same function the writing action uses,
+so the confirmed amount is what each request is accepted at: a whole Episode is priced as a ceiling for every part; "all
+episodes" is the sum of each Episode's own price, and each request still stays within the server's per-request limit
+(`PRISM_STUDIO_STORY_AI_MAX_USD`). With no real writer switched on, the page says so instead of offering anything.
 
 ## Test models and real models
 

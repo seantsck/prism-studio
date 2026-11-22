@@ -97,9 +97,10 @@ export interface WritingScope {
 export const LIMITS = {
   instruction: 4000,
   alternatives: 5,
-  ideas: 10,
-  /** One alternative's text. */
-  text: 60_000,
+  /** A season plan has one idea per Episode (up to 12). */
+  ideas: 12,
+  /** One alternative's text (a whole episode or film written in parts fits; the database allows 400 000). */
+  text: 400_000,
   message: 2000,
   explanation: 1200,
   label: 40,
@@ -375,3 +376,57 @@ export function estimateWritingInputTokens(...parts: string[]): number {
 
 /** Content blocks are delimited with <<< >>>; content can never close a block early. */
 export const escapeBlock = (s: string) => s.replace(/<<</g, "‹‹‹").replace(/>>>/g, "›››");
+
+// ───────────────────────── a whole episode or film, written in parts ─────────────────────────
+
+/**
+ * A whole Episode (or a whole film) is longer than one answer, so the worker writes it in PARTS: each part continues
+ * from the end of the last, and the creator reviews the whole result as one proposal. The plan is frozen on the
+ * proposal (its context) and priced up front as a ceiling for every part.
+ */
+export interface LongFormPlan {
+  kind: "episode" | "film" | "short";
+  parts: number;
+  /** Output budget of each part (never above the model's maximum). */
+  partTokens: number;
+}
+
+/** How much of the text written so far each later part is shown (its tail), in characters. */
+export const LONG_FORM_TAIL_CHARS = 24_000;
+
+export function longFormPlan(projectType: string, modelMaxOutputTokens: number): LongFormPlan {
+  const cap = (n: number) => Math.min(n, modelMaxOutputTokens || n);
+  if (projectType === "film") return { kind: "film", parts: 4, partTokens: cap(10_000) };
+  if (projectType === "short") return { kind: "short", parts: 2, partTokens: cap(6_000) };
+  return { kind: "episode", parts: 2, partTokens: cap(8_000) };
+}
+
+/**
+ * The ceiling for a request written in parts: every part sends the same frozen request plus (after the first) at most
+ * the tail of what was written so far, priced as the densest script (1.5 tokens a character); every part may use its
+ * whole output budget.
+ */
+export function longFormTokens(baseInputTokens: number, plan: LongFormPlan) {
+  const tail = Math.ceil(LONG_FORM_TAIL_CHARS * 1.5);
+  return {
+    inputTokens: plan.parts * baseInputTokens + (plan.parts - 1) * tail,
+    maxOutputTokens: plan.parts * plan.partTokens,
+  };
+}
+
+/** What each part is asked, on top of the creator's instruction. */
+export function longFormPartInstruction(instruction: string, plan: LongFormPlan, part: number): string {
+  const whole = plan.kind === "film" ? "film" : plan.kind === "short" ? "short film" : "episode";
+  const lines = [
+    `This is part ${part + 1} of ${plan.parts} of the whole ${whole}. Write about ${Math.round(100 / plan.parts)}% of it and stop at the end of a scene.`,
+    part === 0
+      ? "Start at the very beginning."
+      : "The TARGET is the end of what is written so far: continue exactly where it ends. Do not repeat or rewrite any of it.",
+    part === plan.parts - 1
+      ? `This is the last part: bring the ${whole} to its ending.`
+      : `Do not end the ${whole} yet.`,
+    "",
+    instruction,
+  ];
+  return lines.join("\n").slice(0, LIMITS.instruction);
+}
