@@ -201,15 +201,15 @@ function Detail({
             generation history or derived media are never deleted silently.)
           </p>
         ) : (
-          <ActionForm
-            action={deleteAsset}
-            confirmMessage={`Delete "${asset.name}"? This removes the stored file.`}
-          >
+          <ActionForm action={deleteAsset} successMessage="Moved to the Trash">
             <input type="hidden" name="projectSlug" value={data.project.slug} />
             <input type="hidden" name="assetId" value={asset.id} />
-            <Button type="submit" variant="danger">
+            <Button type="submit" variant="danger" data-testid="asset-delete">
               Delete asset
             </Button>
+            <p className="mt-1 text-[11px] text-muted">
+              It goes to the Trash for 30 days, where you can restore it.
+            </p>
           </ActionForm>
         )}
       </Panel>

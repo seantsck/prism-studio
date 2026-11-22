@@ -1,6 +1,7 @@
 import "server-only";
 import type { SubjectAttemptView } from "@/data/generation-repository";
 import { archiveOf, isArchived } from "@/domain/archive";
+import { isTrashed } from "@/domain/trash";
 import { findAssetUsage } from "@/domain/asset-usage";
 import { catalogModel } from "@/domain/generation/models/catalog";
 import {
@@ -335,9 +336,13 @@ export function parseSubjectParam(
 }
 
 export async function referenceStudioState(
-  data: ProjectData,
+  loaded: ProjectData,
   subjectParam: string | undefined,
 ): Promise<StudioState> {
+  // a picture in the Trash is out of the Studio, as if deleted (the server loaders set it apart already)
+  const data = loaded.assets.some(isTrashed)
+    ? { ...loaded, assets: loaded.assets.filter((a) => !isTrashed(a)) }
+    : loaded;
   const repo = await getGenerationRepo({ startInlineWorker: false });
   const registry = getRegistry();
   const { models, testModels } = studioModels();
@@ -358,8 +363,12 @@ export async function referenceStudioState(
   const all = testModels
     ? everyAttempt
     : everyAttempt.filter((v) => !madeByTestModel(v) || v.outputs.some((o) => inVisualBible.has(o.asset.id)));
+  // a take whose picture is archived, or in the Trash (not among the project's assets), is not a finished picture here
   const finished = (v: SubjectAttemptView) =>
-    v.attempt.status === "succeeded" && !!primaryOf(v) && !isArchived(assets.get(primaryOf(v)!.asset.id));
+    v.attempt.status === "succeeded" &&
+    !!primaryOf(v) &&
+    assets.has(primaryOf(v)!.asset.id) &&
+    !isArchived(assets.get(primaryOf(v)!.asset.id));
 
   const characterImages = (id: string) => {
     const ids = new Set<string>();
@@ -566,8 +575,9 @@ export async function referenceStudioState(
     const out = primaryOf(v);
     return !!out && isArchived(assets.get(out.asset.id));
   };
-  // a take whose picture was deleted leaves the list (its cost still counts in what was spent)
-  const deletedOutput = (v: SubjectAttemptView) => v.attempt.status === "succeeded" && !primaryOf(v);
+  // a take whose picture was deleted (or is in the Trash) leaves the list (its cost still counts in what was spent)
+  const deletedOutput = (v: SubjectAttemptView) =>
+    v.attempt.status === "succeeded" && (!primaryOf(v) || !assets.has(primaryOf(v)!.asset.id));
   const takes: StudioTake[] = own
     .filter((v) => !archivedOutput(v) && !deletedOutput(v))
     .map((v) => {

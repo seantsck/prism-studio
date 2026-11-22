@@ -24,7 +24,7 @@ import { ActionForm } from "@/components/action-form";
 import { SubjectImagePanel } from "@/components/images/subject-image-panel";
 import { VisualBiblePanel } from "@/components/images/visual-bible-panel";
 import { subjectImageState } from "@/server/subject-images";
-import { ArchiveButton, ArchivedPanel } from "@/components/studio/archive";
+import { ArchiveButton, ArchivedPanel, DeleteButton } from "@/components/studio/archive";
 import { LibraryToggle } from "@/components/characters/library";
 import { referenceStudioState } from "@/server/reference-studio";
 import Link from "next/link";
@@ -123,7 +123,10 @@ export default async function CharacterPage({
                       {i.roles.length > 0 ? i.roles.join(", ") : i.originLabel}
                       {i.rejected ? " · rejected" : ""}
                     </div>
-                    <ArchiveButton slug={slug} subject={archiveSubject} assetId={i.assetId} />
+                    <div className="flex flex-wrap gap-1">
+                      <ArchiveButton slug={slug} subject={archiveSubject} assetId={i.assetId} />
+                      <DeleteButton slug={slug} subject={archiveSubject} assetId={i.assetId} />
+                    </div>
                   </li>
                 ))}
               </ul>

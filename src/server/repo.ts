@@ -8,6 +8,7 @@ import { persistenceMode } from "@/lib/supabase/config";
 import { audioMixFingerprint } from "@/domain/previs/audio-mix";
 import { performanceAudioPlanForShot } from "@/domain/previs/audio-mix-shot";
 import type { ProjectData } from "@/domain/schemas";
+import { splitTrashed } from "@/domain/trash";
 import { UserFacingError } from "./action-result";
 import { requireUser } from "./auth";
 import { getPool } from "./db";
@@ -84,9 +85,15 @@ async function withCharacterContinuity(data: ProjectData): Promise<ProjectData> 
   return { ...data, characterContinuityLocks: locks, shotCharacterContinuitySelections: selections };
 }
 
+/** Trashed assets leave every view: they are set apart as `trashedAssets` (the Trash page reads them there). */
+function withTrashSetApart(data: ProjectData): ProjectData {
+  const { live, trashed } = splitTrashed(data.assets);
+  return trashed.length ? { ...data, assets: live, trashedAssets: trashed } : data;
+}
+
 async function withAttachments(data: ProjectData): Promise<ProjectData> {
   return withCharacterContinuity(
-    await withLocationViews(await withProductionFrames(await withSpatialReferences(data))),
+    await withLocationViews(await withProductionFrames(await withSpatialReferences(withTrashSetApart(data)))),
   );
 }
 

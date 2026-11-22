@@ -12,15 +12,14 @@ import {
 import { hasStoredImage } from "@/domain/generation/subject-image";
 import type { Asset, ProjectData } from "@/domain/schemas";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
-import { assetDeletionRefusal } from "./asset-deletion";
 import { requireUser } from "./auth";
-import { discardUpload } from "./ingest-upload";
+import { liftPointers, restorePointers } from "./picture-pointers";
 import { getRepo, requireProjectFresh } from "./repo";
 
 /**
  * The Reference Studio's archive. Archive hides a picture from the Studio and stops it being sent (its plain pointers
- * are lifted out and remembered); Restore puts every pointer back; Delete permanently is offered only from the archive,
- * and only when nothing in the project or in any generation's record depends on the picture.
+ * are lifted out and remembered); Restore puts every pointer back. Deleting a picture moves it to the Trash
+ * (src/server/trash-actions.ts).
  */
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
@@ -58,16 +57,7 @@ async function archive_impl(form: FormData) {
     metadata: { ...asset.metadata, archived: record },
     updatedAt: record.at,
   });
-  for (const p of plan.lift) {
-    if (p.kind === "identity_ref") await repo.remove(data.project.id, "identityRefs", p.refId);
-    else {
-      const location = data.locations.find((l) => l.id === p.locationId)!;
-      await repo.upsert(data.project.id, "locations", {
-        ...location,
-        referenceAssetIds: location.referenceAssetIds.filter((id) => id !== asset.id),
-      });
-    }
-  }
+  await liftPointers(repo, data, asset.id, plan.lift);
   refresh(slug);
 }
 
@@ -75,45 +65,10 @@ async function restore_impl(form: FormData) {
   const { data, asset, repo, slug } = await load(form);
   const record = archiveOf(asset);
   if (!record) throw new UserFacingError("That picture is not archived.");
-  for (const p of record.restore) {
-    if (p.kind === "identity_ref") {
-      if (!data.characters.some((c) => c.id === p.characterId)) continue; // the character is gone: nothing to restore to
-      if (data.identityRefs.some((r) => r.id === p.refId)) continue;
-      await repo.upsert(data.project.id, "identityRefs", {
-        id: p.refId,
-        characterId: p.characterId,
-        slot: p.slot,
-        assetId: asset.id,
-        label: p.label,
-        metadata: p.metadata,
-        locked: false,
-      });
-    } else {
-      const location = data.locations.find((l) => l.id === p.locationId);
-      if (!location || location.referenceAssetIds.includes(asset.id)) continue;
-      if (location.locked)
-        throw new UserFacingError(`"${location.name}" is locked. Unlock it before restoring its reference.`);
-      await repo.upsert(data.project.id, "locations", {
-        ...location,
-        referenceAssetIds: [...location.referenceAssetIds, asset.id],
-      });
-    }
-  }
+  await restorePointers(repo, data, asset.id, record.restore);
   const { archived: _archived, ...metadata } = asset.metadata as Asset["metadata"] & { archived?: unknown };
   void _archived;
   await repo.upsert(data.project.id, "assets", { ...asset, metadata, updatedAt: now() });
-  refresh(slug);
-}
-
-async function deleteArchived_impl(form: FormData) {
-  const { data, asset, repo, slug } = await load(form);
-  if (!archiveOf(asset))
-    throw new UserFacingError("Archive the picture first; a picture is deleted only from the archive.");
-  if (str(form, "confirm") !== "1") throw new UserFacingError("Confirm that you want to delete it for good.");
-  const refusal = await assetDeletionRefusal(data, asset);
-  if (refusal) throw new UserFacingError(refusal);
-  await repo.remove(data.project.id, "assets", asset.id);
-  await discardUpload(asset);
   refresh(slug);
 }
 
@@ -123,8 +78,4 @@ export async function archiveStudioImage(form: FormData): Promise<ActionResult> 
 
 export async function restoreStudioImage(form: FormData): Promise<ActionResult> {
   return runAction(() => restore_impl(form), { name: "restoreStudioImage" });
-}
-
-export async function deleteArchivedImage(form: FormData): Promise<ActionResult> {
-  return runAction(() => deleteArchived_impl(form), { name: "deleteArchivedImage" });
 }

@@ -79,6 +79,7 @@ vi.mock("@/server/ingest-upload", () => ({
 }));
 
 import { deleteAsset } from "../actions";
+import { deleteFromTrash } from "../trash-actions";
 import { createLocationViewFromReference } from "../location-view-actions";
 import {
   saveAsCharacterReference,
@@ -138,6 +139,8 @@ async function generated(subjectKind: "character" | "location", subjectId: strin
 }
 
 const del = (assetId: string) => deleteAsset(form({ assetId }));
+/** Delete goes to the Trash; this removes it from there for good (as 30 days, or "Delete now", would). */
+const purge = (assetId: string) => deleteFromTrash(form({ assetId, confirm: "1" }));
 const refused = { ok: false, error: expect.stringContaining("in use") };
 
 async function unlockLocation(id: string) {
@@ -151,6 +154,7 @@ describe("0051 shared-database compatibility gate — asset usage", () => {
     const yumeko = (await data()).characters.find((c) => c.name === "Yumeko")!;
     const { attemptId, assetId } = await generated("character", yumeko.id);
     expect(await del(assetId)).toMatchObject({ ok: true });
+    expect(await purge(assetId)).toMatchObject({ ok: true });
     expect((await data()).assets.some((a) => a.id === assetId)).toBe(false);
     const kept = await repo.generation.getSubjectImageAttempt(attemptId);
     expect(kept).not.toBeNull();
@@ -237,6 +241,7 @@ describe("0051 shared-database compatibility gate — asset usage", () => {
       referenceAssetIds: l1.referenceAssetIds.filter((x) => x !== used.assetId),
     });
     expect(await del(used.assetId)).toMatchObject({ ok: true });
+    expect(await purge(used.assetId)).toMatchObject({ ok: true });
     expect((await repo.generation.getSubjectImageAttempt(used.attemptId))!.attempt.outputAssetId).toBeNull();
   });
 

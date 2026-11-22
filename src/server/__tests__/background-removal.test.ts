@@ -103,6 +103,7 @@ vi.mock("@/server/ingest-upload", () => ({
 }));
 
 import { deleteAsset } from "../actions";
+import { deleteFromTrash } from "../trash-actions";
 import {
   removeBackground,
   saveAsCharacterReference,
@@ -336,6 +337,7 @@ describe("5B-I3 Remove Background — Yumeko portrait acceptance", () => {
     const d = await data();
     await repo.remove(d.project.id, "identityRefs", d.identityRefs.find((r) => r.assetId === out.id)!.id);
     expect(await deleteAsset(form({ assetId: out.id }))).toMatchObject({ ok: true });
+    expect(await deleteFromTrash(form({ assetId: out.id, confirm: "1" }))).toMatchObject({ ok: true });
     const kept = (await repo.generation.getSubjectImageAttempt(view.attempt.id))!;
     expect(kept.attempt).toMatchObject({ status: "succeeded", outputAssetId: null });
     expect(kept.attempt.modelSettings).toMatchObject({ purpose: "background_removal" });

@@ -235,6 +235,19 @@ so the confirmed amount is what each request is accepted at: a whole Episode is 
 episodes" is the sum of each Episode's own price, and each request still stays within the server's per-request limit
 (`PRISM_STUDIO_STORY_AI_MAX_USD`). With no real writer switched on, the page says so instead of offering anything.
 
+## The Trash
+
+**Delete** on a picture (the character page, the Reference Studio, a take on the stage, the archive) or on a file in the
+Assets library moves it to the project's **Trash** (sidebar, with a count) instead of removing it
+(`src/domain/trash.ts`, `src/server/trash.ts`, `src/server/trash-actions.ts`). It is refused, with what to change first,
+unless it could be deleted (`removalPlan`: the archive's blockers, then `assetDeletionRefusal`), so removing it later
+never orphans anything. A trashed asset keeps its row and bytes with `metadata.trashed = { at, subject, restore }`: its
+plain pointers (a photo slot, a location reference) are lifted and remembered, and the server loaders set it apart
+(`ProjectData.trashedAssets`), so every view behaves as if it were deleted. In the Trash: **Restore** (pointers put
+back; an archived picture goes back to the archive), **Delete now** and **Empty trash** (confirmed; each item is checked
+again). After `TRASH_DAYS` (30) an item is deleted for good the next time its project or the Trash is opened
+(`purgeExpiredTrash`, in the owner's own request: no privileged worker). No migration.
+
 ## The character library
 
 A Character can be used in any of the creator's projects. On a Character's page, **Save to library** puts it in the
@@ -374,8 +387,8 @@ Start from, out of the subject's count, and never sent with anything. Nothing is
   with no view or role), a Location's reference photo.
 - Refused, with what to change first: a view of the reference set or the canonical identity, a Look's picture, a
   Location's designation, a locked reference, a use in a Shot (frames, continuity locks…).
-- **Archived (N)**, under Start from: each archived picture with **Restore**, and **Delete permanently** (confirmed,
-  can't be undone) only when nothing depends on it. Deleting a take's picture keeps the take in the history, with its
+- **Archived (N)**, under Start from: each archived picture with **Restore**, and **Delete** (to the Trash: see
+  "The Trash") only when nothing depends on it. Deleting a take's picture keeps the take in the history, with its
   cost, and no picture (it leaves the takes list; Spent is unchanged). A picture that was SENT to a take (a photo, or
   an earlier take) can't be deleted, so that take's record stays complete; the reason is shown in place of the button.
 
