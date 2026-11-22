@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { planCharacterCopy, type CharacterCopyPlan } from "@/domain/character-library";
+import { planLocationCopy, type LocationCopyPlan } from "@/domain/location-library";
 import type { Asset, ProjectData } from "@/domain/schemas";
 import { canonicalRefOf } from "@/domain/visual-bible";
 import { buildObjectPath } from "@/lib/storage-paths";
@@ -64,6 +65,43 @@ export async function loadLibrary(): Promise<{ characters: LibraryCharacter[]; a
   return { characters, available };
 }
 
+/** Copies pictures' bytes into the target project's own storage and returns the new asset rows (and what to undo). */
+async function copyPictures(
+  target: ProjectData,
+  pairs: ReadonlyArray<{ from: Asset; to: Asset }>,
+  userId: string | null,
+  who: string,
+  written: string[],
+): Promise<Asset[]> {
+  const storage = await getUploadStorage();
+  const out: Asset[] = [];
+  for (const { from, to } of pairs) {
+    if (!from.objectPath) {
+      out.push({ ...to, createdBy: userId });
+      continue;
+    }
+    const bytes = await (await storageForAsset(from))?.get(from.objectPath);
+    if (!bytes) throw new UserFacingError(`A picture of ${who} could not be read to copy.`);
+    const objectPath = buildObjectPath(
+      target.project.id,
+      to.id,
+      from.originalFilename || from.name || "file",
+    );
+    await storage.put(objectPath, bytes, from.mime ?? "application/octet-stream");
+    written.push(objectPath);
+    out.push({
+      ...to,
+      createdBy: userId,
+      storageProvider: storage.name,
+      bucket: storage.bucket,
+      objectPath,
+      byteSize: bytes.length,
+      checksum: checksum(bytes),
+    });
+  }
+  return out;
+}
+
 /**
  * Copies a library Character into `target`: the pictures' bytes into the target's own storage, then the records. If
  * anything fails part-way, what was already written is removed again, so a failed copy leaves nothing behind.
@@ -79,37 +117,10 @@ export async function copyIntoProject(
   const plan = planCharacterCopy(source, characterId, target, randomUUID, now);
   const repo = await getRepo();
   const storage = await getUploadStorage();
-  const written: { paths: string[]; assets: string[]; character: boolean } = {
-    paths: [],
-    assets: [],
-    character: false,
-  };
+  const paths: string[] = [];
+  const written = { assets: [] as string[], character: false };
   try {
-    const assets: Asset[] = [];
-    for (const { from, to } of plan.assets) {
-      if (!from.objectPath) {
-        assets.push({ ...to, createdBy: userId });
-        continue;
-      }
-      const bytes = await (await storageForAsset(from))?.get(from.objectPath);
-      if (!bytes) throw new UserFacingError(`A picture of ${plan.character.name} could not be read to copy.`);
-      const objectPath = buildObjectPath(
-        target.project.id,
-        to.id,
-        from.originalFilename || from.name || "file",
-      );
-      await storage.put(objectPath, bytes, from.mime ?? "application/octet-stream");
-      written.paths.push(objectPath);
-      assets.push({
-        ...to,
-        createdBy: userId,
-        storageProvider: storage.name,
-        bucket: storage.bucket,
-        objectPath,
-        byteSize: bytes.length,
-        checksum: checksum(bytes),
-      });
-    }
+    const assets = await copyPictures(target, plan.assets, userId, plan.character.name, paths);
     if (assets.length) await repo.upsertMany(target.project.id, "assets", assets);
     written.assets = assets.map((a) => a.id);
     await repo.upsert(target.project.id, "characters", plan.character);
@@ -141,7 +152,78 @@ export async function copyIntoProject(
     }
     for (const id of written.assets)
       await repo.remove(target.project.id, "assets", id).catch(() => undefined);
-    for (const p of written.paths) await storage.remove(p).catch(() => undefined);
+    for (const p of paths) await storage.remove(p).catch(() => undefined);
     throw err;
   }
+}
+
+/** Copies a library Location into `target` the same way (pictures first; undone on failure). */
+export async function copyLocationIntoProject(
+  target: ProjectData,
+  source: ProjectData,
+  locationId: string,
+  userId: string | null,
+): Promise<LocationCopyPlan> {
+  const plan = planLocationCopy(source, locationId, target, randomUUID, new Date().toISOString());
+  const repo = await getRepo();
+  const storage = await getUploadStorage();
+  const paths: string[] = [];
+  let assetIds: string[] = [];
+  try {
+    const assets = await copyPictures(target, plan.assets, userId, plan.location.name, paths);
+    if (assets.length) await repo.upsertMany(target.project.id, "assets", assets);
+    assetIds = assets.map((a) => a.id);
+    await repo.upsert(target.project.id, "locations", plan.location);
+    return plan;
+  } catch (err) {
+    await repo.remove(target.project.id, "locations", plan.location.id).catch(() => undefined);
+    for (const id of assetIds) await repo.remove(target.project.id, "assets", id).catch(() => undefined);
+    for (const p of paths) await storage.remove(p).catch(() => undefined);
+    throw err;
+  }
+}
+
+/** One Location in the library, as the library panels show it. */
+export interface LibraryLocation {
+  locationId: string;
+  name: string;
+  description: string;
+  projectId: string;
+  projectSlug: string;
+  projectTitle: string;
+  thumbUrl: string | null;
+  pictures: number;
+  savedAt: string;
+}
+
+/** The owner's location library (`available: false` until migration 0066 is applied). */
+export async function loadLocationLibrary(): Promise<{ locations: LibraryLocation[]; available: boolean }> {
+  const repo = await getRepo();
+  const { entries, available } = await repo.locationLibraryEntries();
+  if (!entries.length) return { locations: [], available };
+  const slugs = new Map((await repo.listProjects()).map((p) => [p.id, p.slug]));
+  const loaded = new Map<string, ProjectData | null>();
+  const locations: LibraryLocation[] = [];
+  for (const e of entries) {
+    const slug = slugs.get(e.projectId);
+    if (!slug) continue;
+    if (!loaded.has(e.projectId)) loaded.set(e.projectId, await repo.loadProject(slug));
+    const data = loaded.get(e.projectId);
+    const l = data?.locations.find((x) => x.id === e.locationId);
+    if (!data || !l || l.trashedAt) continue;
+    const plan = planLocationCopy(data, l.id, data, randomUUID, e.savedAt);
+    const thumbId = l.visualBible?.canonicalAssetId ?? l.referenceAssetIds[0] ?? null;
+    locations.push({
+      locationId: l.id,
+      name: l.name,
+      description: l.description,
+      projectId: data.project.id,
+      projectSlug: slug,
+      projectTitle: data.project.title,
+      thumbUrl: assetUrl(data.assets.find((a) => a.id === thumbId)),
+      pictures: plan.assets.filter((a) => a.from.objectPath).length,
+      savedAt: e.savedAt,
+    });
+  }
+  return { locations, available };
 }

@@ -8,12 +8,11 @@ const FILE = "0065_character_studio_project.sql";
 const code = readFileSync(`${DIR}/${FILE}`, "utf8").replace(/--.*$/gm, "");
 
 describe("migration 0065: a project of purpose `library`", () => {
-  it("is the latest migration, follows 0064, and leaves 0064 byte-for-byte unchanged (as applied)", () => {
+  it("follows 0064, and leaves 0064 byte-for-byte unchanged (as applied)", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe(FILE);
-    expect(files.at(-2)).toBe("0064_character_location_trash.sql");
+    expect(files[files.indexOf(FILE) - 1]).toBe("0064_character_location_trash.sql");
     expect(checksumOf(readFileSync(`${DIR}/0064_character_location_trash.sql`, "utf8"))).toBe(
       "ee10d2d219157e4e33f8a82a4df35b85ffdf4874252a2c18dd104aae3908ab95",
     );

@@ -53,6 +53,10 @@ export interface Repository {
   libraryEntries(): Promise<{ entries: LibraryEntry[]; available: boolean }>;
   /** Saves one of the owner's Characters to their library, or takes it out (idempotent either way). */
   setInLibrary(projectId: string, characterId: string, saved: boolean): Promise<void>;
+  /** The owner's location library (`available: false` until migration 0066 is applied), newest first. */
+  locationLibraryEntries(): Promise<{ entries: LocationLibraryEntry[]; available: boolean }>;
+  /** Saves one of the owner's Locations to their library, or takes it out (idempotent either way). */
+  setLocationInLibrary(projectId: string, locationId: string, saved: boolean): Promise<void>;
 }
 
 /** This database cannot put projects in the Trash yet (migration 0063 is not applied). */
@@ -70,6 +74,23 @@ export interface LibraryEntry {
   characterId: string;
   projectId: string;
   savedAt: string;
+}
+
+/** One Location in the owner's library: it lives in its own project and is copied into others. */
+export interface LocationLibraryEntry {
+  locationId: string;
+  projectId: string;
+  savedAt: string;
+}
+
+/** This database cannot record the location library yet (migration 0066 is not applied). */
+export class LocationLibraryUnavailableError extends Error {
+  constructor() {
+    super(
+      "The location library needs a one-time database update (migration 0066) that has not been applied yet.",
+    );
+    this.name = "LocationLibraryUnavailableError";
+  }
 }
 
 /** This database cannot record the character library yet (migration 0062 is not applied). */

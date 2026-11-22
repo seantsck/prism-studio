@@ -1624,7 +1624,7 @@ test("Y: a character is deleted to the Trash, restored, then deleted for good; o
   await expect(page.getByRole("heading", { name: "Yumeko" })).toBeVisible();
 });
 
-test("Z: a character created on its own from the home page is in Your characters, not a project, and joins any project", async ({
+test("Z: a character created on its own from the home page is in Your library, not a project, and joins any project", async ({
   page,
 }) => {
   await page.goto("/");
@@ -1639,9 +1639,9 @@ test("Z: a character created on its own from the home page is in Your characters
   // home: under Your characters, and the characters project is not among Your projects
   await page.goto("/");
   await expect(page.locator('[data-testid="home-character"][data-name="Aiko Mori"]')).toBeVisible();
-  await expect(
-    page.locator('[data-testid="project-row"]').filter({ hasText: "Your characters" }),
-  ).toHaveCount(0);
+  await expect(page.locator('[data-testid="project-row"]').filter({ hasText: "Your library" })).toHaveCount(
+    0,
+  );
   // any project adds her
   await page.goto("/projects/night-counter/characters");
   const offered = page.getByTestId("library-character").filter({ hasText: "Aiko Mori" });
@@ -1649,4 +1649,37 @@ test("Z: a character created on its own from the home page is in Your characters
   await expect(
     page.locator('a[href^="/projects/night-counter/characters/"]').filter({ hasText: "Aiko Mori" }),
   ).toHaveCount(1, { timeout: 30_000 });
+});
+
+test("ZA: a location created on its own from the home page is in Your locations and joins any project", async ({
+  page,
+}) => {
+  await page.goto("/");
+  // the character and location boxes sit beside the series box
+  await expect(page.getByTestId("home-create-boxes").getByTestId("new-character")).toBeVisible();
+  const box = page.getByTestId("new-location");
+  await box
+    .getByTestId("new-location-prompt")
+    .fill("A ballroom called The Gilded Hall, crystal chandeliers, black-and-white marble floor.");
+  await box.getByTestId("new-location-create").click();
+  // it opens on the library's Locations page, expanded and saved
+  const row = page.locator('[data-testid="location-row"][data-name="The Gilded Hall"]');
+  await expect(row).toHaveAttribute("open", "", { timeout: 30_000 });
+  await expect(row.getByTestId("location-library-toggle")).toHaveAttribute("data-saved", "1");
+  await page.goto("/");
+  await expect(page.locator('[data-testid="home-location"][data-name="The Gilded Hall"]')).toBeVisible();
+  // any project adds a copy from its Locations page
+  await page.goto("/projects/night-counter/locations");
+  const offered = page.getByTestId("library-location").filter({ hasText: "The Gilded Hall" });
+  await offered.getByTestId("library-location-add").click();
+  await expect(page.locator('[data-testid="location-row"][data-name="The Gilded Hall"]')).toHaveCount(1, {
+    timeout: 30_000,
+  });
+  // a project's own location goes into the library from its row
+  const own = page.locator('[data-testid="location-row"]').first();
+  await own.locator(":scope > summary").click();
+  await own.getByTestId("location-library-toggle-go").click();
+  await expect(own.getByTestId("location-library-toggle")).toHaveAttribute("data-saved", "1", {
+    timeout: 30_000,
+  });
 });

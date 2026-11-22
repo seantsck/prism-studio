@@ -10,10 +10,26 @@ import { checkLocationViewImage } from "@/domain/location-view";
 import { SubjectImagePanel } from "@/components/images/subject-image-panel";
 import { LocationVisualBiblePanel } from "@/components/images/location-visual-bible-panel";
 import { subjectImageState } from "@/server/subject-images";
+import { LocationLibraryPanel, LocationLibraryToggle } from "@/components/locations/location-library";
+import { loadLocationLibrary } from "@/server/character-library";
+import { getRepo } from "@/server/repo";
 
-export default async function LocationsPage({ params }: { params: Promise<{ project: string }> }) {
+export default async function LocationsPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ project: string }>;
+  searchParams: Promise<{ open?: string }>;
+}) {
   const { project: slug } = await params;
+  const { open } = await searchParams;
   const data = await requireProject(slug);
+  const library = await loadLocationLibrary();
+  const saved = new Set(
+    (await (await getRepo()).locationLibraryEntries()).entries
+      .filter((e) => e.projectId === data.project.id)
+      .map((e) => e.locationId),
+  );
   const hidden = <input type="hidden" name="projectSlug" value={slug} />;
   const named = (xs: Array<{ name: string; description: string }>) =>
     xs.map((x) => (x.description ? `${x.name}: ${x.description}` : x.name)).join("\n");
@@ -37,221 +53,256 @@ export default async function LocationsPage({ params }: { params: Promise<{ proj
         title="Locations & sets"
         subtitle="Zones and entrances give shots a spatial vocabulary. Each Location can have one optional 3D Set, shared by every Shot set there."
       />
-      <div className="space-y-3 p-6">
-        {[...data.locations, null].map((l) => (
-          <details
-            key={l?.id ?? "new"}
-            className={l ? "border border-line bg-panel" : "border border-dashed border-line2"}
-          >
-            <summary className="flex items-center justify-between px-4 py-2.5">
-              <span className={l ? "font-medium" : "text-muted"}>{l ? l.name : "+ New location"}</span>
-              {l ? (
-                <span className="flex items-center gap-1.5">
-                  <Badge>{l.zones.length} zones</Badge>
-                  <Badge>{l.entrances.length} entrances</Badge>
-                  <Badge tone={l.locked ? "pass" : "warn"}>{l.locked ? "locked" : "open"}</Badge>
-                </span>
-              ) : null}
-            </summary>
-            <div className="border-t border-line p-4">
-              {l ? (
-                <div className="mb-4">
-                  <LocationVisualBiblePanel
-                    data={data}
-                    locationId={l.id}
-                    slug={slug}
-                    sources={images.get(l.id)?.sources ?? []}
-                    models={images.get(l.id)?.models ?? []}
-                  />
-                </div>
-              ) : null}
-              <ActionForm action={saveLocation} className="grid max-w-4xl grid-cols-2 gap-3">
-                {hidden}
-                {l ? <input type="hidden" name="id" value={l.id} /> : null}
-                <Field label="Name" className="col-span-2">
-                  <input name="name" defaultValue={l?.name ?? ""} required disabled={l?.locked} />
-                </Field>
-                <Field label="Description" className="col-span-2">
-                  <textarea
-                    name="description"
-                    rows={2}
-                    defaultValue={l?.description ?? ""}
-                    disabled={l?.locked}
-                  />
-                </Field>
-                <Field label="Geography" className="col-span-2">
-                  <textarea
-                    name="geography"
-                    rows={2}
-                    defaultValue={l?.geography ?? ""}
-                    disabled={l?.locked}
-                  />
-                </Field>
-                <Field label="Zones" hint="name: description — one per line">
-                  <textarea name="zones" rows={4} defaultValue={named(l?.zones ?? [])} disabled={l?.locked} />
-                </Field>
-                <Field label="Entrances / exits" hint="name: description — one per line">
-                  <textarea
-                    name="entrances"
-                    rows={4}
-                    defaultValue={named(l?.entrances ?? [])}
-                    disabled={l?.locked}
-                  />
-                </Field>
-                <Field label="Lighting">
-                  <textarea name="lighting" rows={2} defaultValue={l?.lighting ?? ""} disabled={l?.locked} />
-                </Field>
-                <Field label="Recurring props" hint="One per line">
-                  <textarea
-                    name="recurringProps"
-                    rows={2}
-                    defaultValue={(l?.recurringProps ?? []).join("\n")}
-                    disabled={l?.locked}
-                  />
-                </Field>
-                {!l?.locked ? (
-                  <div className="col-span-2">
-                    <Button type="submit" variant="primary">
-                      {l ? "Save location" : "Create location"}
-                    </Button>
+      <div className="grid gap-6 p-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="min-w-0 space-y-3">
+          {[...data.locations, null].map((l) => (
+            <details
+              key={l?.id ?? "new"}
+              id={l ? `location-${l.id}` : undefined}
+              open={l ? l.id === open : undefined}
+              data-testid={l ? "location-row" : undefined}
+              data-name={l?.name}
+              className={l ? "border border-line bg-panel" : "border border-dashed border-line2"}
+            >
+              <summary className="flex items-center justify-between px-4 py-2.5">
+                <span className={l ? "font-medium" : "text-muted"}>{l ? l.name : "+ New location"}</span>
+                {l ? (
+                  <span className="flex items-center gap-1.5">
+                    <Badge>{l.zones.length} zones</Badge>
+                    <Badge>{l.entrances.length} entrances</Badge>
+                    <Badge tone={l.locked ? "pass" : "warn"}>{l.locked ? "locked" : "open"}</Badge>
+                  </span>
+                ) : null}
+              </summary>
+              <div className="border-t border-line p-4">
+                {l ? (
+                  <div className="mb-4 flex justify-end">
+                    <LocationLibraryToggle
+                      slug={slug}
+                      locationId={l.id}
+                      saved={saved.has(l.id)}
+                      available={library.available}
+                    />
                   </div>
                 ) : null}
-              </ActionForm>
-              {l ? (
-                <ActionForm action={setLocationLocked} className="mt-3">
+                {l ? (
+                  <div className="mb-4">
+                    <LocationVisualBiblePanel
+                      data={data}
+                      locationId={l.id}
+                      slug={slug}
+                      sources={images.get(l.id)?.sources ?? []}
+                      models={images.get(l.id)?.models ?? []}
+                    />
+                  </div>
+                ) : null}
+                <ActionForm action={saveLocation} className="grid max-w-4xl grid-cols-2 gap-3">
                   {hidden}
-                  <input type="hidden" name="id" value={l.id} />
-                  <input type="hidden" name="locked" value={String(!l.locked)} />
-                  <Button type="submit">{l.locked ? "Unlock location" : "Lock location"}</Button>
+                  {l ? <input type="hidden" name="id" value={l.id} /> : null}
+                  <Field label="Name" className="col-span-2">
+                    <input name="name" defaultValue={l?.name ?? ""} required disabled={l?.locked} />
+                  </Field>
+                  <Field label="Description" className="col-span-2">
+                    <textarea
+                      name="description"
+                      rows={2}
+                      defaultValue={l?.description ?? ""}
+                      disabled={l?.locked}
+                    />
+                  </Field>
+                  <Field label="Geography" className="col-span-2">
+                    <textarea
+                      name="geography"
+                      rows={2}
+                      defaultValue={l?.geography ?? ""}
+                      disabled={l?.locked}
+                    />
+                  </Field>
+                  <Field label="Zones" hint="name: description — one per line">
+                    <textarea
+                      name="zones"
+                      rows={4}
+                      defaultValue={named(l?.zones ?? [])}
+                      disabled={l?.locked}
+                    />
+                  </Field>
+                  <Field label="Entrances / exits" hint="name: description — one per line">
+                    <textarea
+                      name="entrances"
+                      rows={4}
+                      defaultValue={named(l?.entrances ?? [])}
+                      disabled={l?.locked}
+                    />
+                  </Field>
+                  <Field label="Lighting">
+                    <textarea
+                      name="lighting"
+                      rows={2}
+                      defaultValue={l?.lighting ?? ""}
+                      disabled={l?.locked}
+                    />
+                  </Field>
+                  <Field label="Recurring props" hint="One per line">
+                    <textarea
+                      name="recurringProps"
+                      rows={2}
+                      defaultValue={(l?.recurringProps ?? []).join("\n")}
+                      disabled={l?.locked}
+                    />
+                  </Field>
+                  {!l?.locked ? (
+                    <div className="col-span-2">
+                      <Button type="submit" variant="primary">
+                        {l ? "Save location" : "Create location"}
+                      </Button>
+                    </div>
+                  ) : null}
                 </ActionForm>
-              ) : null}
-              {l ? (
-                <Panel title="Location Views" className="mt-4 max-w-4xl">
-                  <div data-testid={`location-views-${l.id}`} className="space-y-3">
-                    <p className="text-muted">
-                      Canonical viewpoints of this place (Doorway, Window side, Reverse...). Each is one image
-                      plus a description of the viewpoint, kept unchanged once saved; a revised view is a new
-                      one. A Shot set here can choose a view, and Prism gives that same image to its image
-                      generations.
-                    </p>
-                    {viewsOf(l.id).length > 0 ? (
-                      <div className="space-y-1.5">
-                        {viewsOf(l.id).map((v) => (
-                          <LocationViewCard key={v.id} view={v} asset={assets.get(v.assetId)} />
-                        ))}
-                      </div>
-                    ) : (
-                      <p data-testid="location-views-empty" className="text-[12px] text-faint">
-                        No Location Views yet.
+                {l ? (
+                  <ActionForm action={setLocationLocked} className="mt-3">
+                    {hidden}
+                    <input type="hidden" name="id" value={l.id} />
+                    <input type="hidden" name="locked" value={String(!l.locked)} />
+                    <Button type="submit">{l.locked ? "Unlock location" : "Lock location"}</Button>
+                  </ActionForm>
+                ) : null}
+                {l ? (
+                  <Panel title="Location Views" className="mt-4 max-w-4xl">
+                    <div data-testid={`location-views-${l.id}`} className="space-y-3">
+                      <p className="text-muted">
+                        Canonical viewpoints of this place (Doorway, Window side, Reverse...). Each is one
+                        image plus a description of the viewpoint, kept unchanged once saved; a revised view
+                        is a new one. A Shot set here can choose a view, and Prism gives that same image to
+                        its image generations.
                       </p>
-                    )}
-                    <details data-testid="lv-upload" className="border border-line">
-                      <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[12px] font-medium">
-                        Upload Location View
-                      </summary>
-                      <ActionForm
-                        action={uploadLocationView}
-                        resetOnSuccess
-                        successMessage="Location View saved"
-                        className="grid grid-cols-2 items-end gap-2 border-t border-line p-2.5"
-                      >
-                        {hidden}
-                        <input type="hidden" name="locationId" value={l.id} />
-                        <Field
-                          label="Image"
-                          hint="PNG, JPEG or WebP; any shape (it is never cropped)"
-                          className="col-span-2"
-                        >
-                          <input
-                            data-testid="lv-upload-file"
-                            type="file"
-                            name="file"
-                            accept="image/png,image/jpeg,image/webp"
-                            required
-                            className="!p-0.5"
-                          />
-                        </Field>
-                        <LocationViewSpecFields location={l} testIdPrefix="lv-upload" />
-                        <div className="col-span-2">
-                          <Button data-testid="lv-upload-submit" size="sm" type="submit">
-                            Create Location View
-                          </Button>
+                      {viewsOf(l.id).length > 0 ? (
+                        <div className="space-y-1.5">
+                          {viewsOf(l.id).map((v) => (
+                            <LocationViewCard key={v.id} view={v} asset={assets.get(v.assetId)} />
+                          ))}
                         </div>
-                      </ActionForm>
-                    </details>
-                    {l.referenceAssetIds.some((id) => checkLocationViewImage(assets.get(id) ?? null).ok) ? (
-                      <details data-testid="lv-from-reference" className="border border-line">
+                      ) : (
+                        <p data-testid="location-views-empty" className="text-[12px] text-faint">
+                          No Location Views yet.
+                        </p>
+                      )}
+                      <details data-testid="lv-upload" className="border border-line">
                         <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[12px] font-medium">
-                          Use existing Location reference
+                          Upload Location View
                         </summary>
                         <ActionForm
-                          action={createLocationViewFromReference}
+                          action={uploadLocationView}
                           resetOnSuccess
                           successMessage="Location View saved"
                           className="grid grid-cols-2 items-end gap-2 border-t border-line p-2.5"
                         >
                           {hidden}
                           <input type="hidden" name="locationId" value={l.id} />
-                          <Field label="Reference image" className="col-span-2">
-                            <select data-testid="lv-reference-asset" name="assetId" required>
-                              {l.referenceAssetIds
-                                .filter((id) => checkLocationViewImage(assets.get(id) ?? null).ok)
-                                .map((id) => (
-                                  <option key={id} value={id}>
-                                    {assets.get(id)?.name ?? id}
-                                  </option>
-                                ))}
-                            </select>
+                          <Field
+                            label="Image"
+                            hint="PNG, JPEG or WebP; any shape (it is never cropped)"
+                            className="col-span-2"
+                          >
+                            <input
+                              data-testid="lv-upload-file"
+                              type="file"
+                              name="file"
+                              accept="image/png,image/jpeg,image/webp"
+                              required
+                              className="!p-0.5"
+                            />
                           </Field>
-                          <LocationViewSpecFields location={l} testIdPrefix="lv-reference" />
-                          <div className="col-span-2 text-[11px] text-muted">
-                            The reference stays in this Location&apos;s references; the view reuses its image.
-                          </div>
+                          <LocationViewSpecFields location={l} testIdPrefix="lv-upload" />
                           <div className="col-span-2">
-                            <Button data-testid="lv-reference-submit" size="sm" type="submit">
+                            <Button data-testid="lv-upload-submit" size="sm" type="submit">
                               Create Location View
                             </Button>
                           </div>
                         </ActionForm>
                       </details>
-                    ) : null}
+                      {l.referenceAssetIds.some((id) => checkLocationViewImage(assets.get(id) ?? null).ok) ? (
+                        <details data-testid="lv-from-reference" className="border border-line">
+                          <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[12px] font-medium">
+                            Use existing Location reference
+                          </summary>
+                          <ActionForm
+                            action={createLocationViewFromReference}
+                            resetOnSuccess
+                            successMessage="Location View saved"
+                            className="grid grid-cols-2 items-end gap-2 border-t border-line p-2.5"
+                          >
+                            {hidden}
+                            <input type="hidden" name="locationId" value={l.id} />
+                            <Field label="Reference image" className="col-span-2">
+                              <select data-testid="lv-reference-asset" name="assetId" required>
+                                {l.referenceAssetIds
+                                  .filter((id) => checkLocationViewImage(assets.get(id) ?? null).ok)
+                                  .map((id) => (
+                                    <option key={id} value={id}>
+                                      {assets.get(id)?.name ?? id}
+                                    </option>
+                                  ))}
+                              </select>
+                            </Field>
+                            <LocationViewSpecFields location={l} testIdPrefix="lv-reference" />
+                            <div className="col-span-2 text-[11px] text-muted">
+                              The reference stays in this Location&apos;s references; the view reuses its
+                              image.
+                            </div>
+                            <div className="col-span-2">
+                              <Button data-testid="lv-reference-submit" size="sm" type="submit">
+                                Create Location View
+                              </Button>
+                            </div>
+                          </ActionForm>
+                        </details>
+                      ) : null}
+                    </div>
+                  </Panel>
+                ) : null}
+                {l ? (
+                  <div className="mt-4 max-w-4xl" data-testid={`location-images-${l.id}`}>
+                    <SubjectImagePanel
+                      projectSlug={slug}
+                      subject={{ kind: "location", id: l.id }}
+                      attempts={images.get(l.id)?.attempts ?? []}
+                      models={images.get(l.id)?.models ?? []}
+                      sources={images.get(l.id)?.sources ?? []}
+                    />
                   </div>
-                </Panel>
-              ) : null}
-              {l ? (
-                <div className="mt-4 max-w-4xl" data-testid={`location-images-${l.id}`}>
-                  <SubjectImagePanel
-                    projectSlug={slug}
-                    subject={{ kind: "location", id: l.id }}
-                    attempts={images.get(l.id)?.attempts ?? []}
-                    models={images.get(l.id)?.models ?? []}
-                    sources={images.get(l.id)?.sources ?? []}
-                  />
-                </div>
-              ) : null}
-              {l ? (
-                <Panel title="3D Set" className="mt-4 max-w-4xl">
-                  <p className="text-muted">
-                    A persistent virtual set for this location: block characters, place the production camera,
-                    and render a master frame for any shot set here.
-                  </p>
-                  <Link
-                    href={`/projects/${slug}/locations/${l.id}/3d`}
-                    className="mt-2 inline-flex h-7 items-center rounded border border-accent bg-accent px-3 text-xs text-accentfg"
-                    data-testid={`open-3d-set-${l.id}`}
-                  >
-                    Open 3D Set
-                  </Link>
-                </Panel>
-              ) : null}
-              {l ? (
-                <div className="mt-4 flex max-w-4xl justify-end">
-                  <DeleteSubjectButton slug={slug} kind="location" id={l.id} name={l.name} />
-                </div>
-              ) : null}
-            </div>
-          </details>
-        ))}
+                ) : null}
+                {l ? (
+                  <Panel title="3D Set" className="mt-4 max-w-4xl">
+                    <p className="text-muted">
+                      A persistent virtual set for this location: block characters, place the production
+                      camera, and render a master frame for any shot set here.
+                    </p>
+                    <Link
+                      href={`/projects/${slug}/locations/${l.id}/3d`}
+                      className="mt-2 inline-flex h-7 items-center rounded border border-accent bg-accent px-3 text-xs text-accentfg"
+                      data-testid={`open-3d-set-${l.id}`}
+                    >
+                      Open 3D Set
+                    </Link>
+                  </Panel>
+                ) : null}
+                {l ? (
+                  <div className="mt-4 flex max-w-4xl justify-end">
+                    <DeleteSubjectButton slug={slug} kind="location" id={l.id} name={l.name} />
+                  </div>
+                ) : null}
+              </div>
+            </details>
+          ))}
+        </div>
+        <div className="space-y-4">
+          <LocationLibraryPanel
+            slug={slug}
+            projectId={data.project.id}
+            locations={library.locations}
+            available={library.available}
+          />
+        </div>
       </div>
     </div>
   );

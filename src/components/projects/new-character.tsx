@@ -1,50 +1,104 @@
 import { ActionForm } from "@/components/action-form";
-import { Button } from "@/components/ui";
-import { CHARACTER_NAME_MAX, CHARACTER_PROMPT_MAX } from "@/domain/standalone-character";
-import { createStandaloneCharacter } from "@/server/library-actions";
+import type { ActionResult } from "@/server/action-result";
+import {
+  CHARACTER_NAME_MAX,
+  CHARACTER_PROMPT_MAX,
+  LOCATION_NAME_MAX,
+  LOCATION_PROMPT_MAX,
+} from "@/domain/standalone-character";
+import { createStandaloneCharacter, createStandaloneLocation } from "@/server/library-actions";
 
 /**
- * Create a character on its own, outside any story: a description (and a name, or one taken from the description).
- * It opens on its page, ready for pictures in the Reference Studio, and is in the library for any project to add.
+ * The home page's smaller boxes beside the series box: make a character or a location on its own, outside any story.
+ * Each goes into the library (ready to add to any project) and opens on its page, ready for pictures.
  */
-export function NewCharacter() {
+function SubjectBox({
+  kind,
+  title,
+  hint,
+  placeholder,
+  namePlaceholder,
+  action,
+  promptMax,
+  nameMax,
+}: {
+  kind: "character" | "location";
+  title: string;
+  hint: string;
+  placeholder: string;
+  namePlaceholder: string;
+  action: (form: FormData) => Promise<ActionResult>;
+  promptMax: number;
+  nameMax: number;
+}) {
   return (
-    <ActionForm
-      action={createStandaloneCharacter}
-      successMessage=""
-      className="mb-5 rounded-xl border border-line bg-panel p-4"
-      data-testid="new-character"
-    >
-      <label className="block text-[13px] font-medium" htmlFor="new-character-prompt">
-        Create a character
-      </label>
-      <p className="mt-0.5 text-[12px] text-muted">
-        Describe who they are and how they look. They go into your library, ready to add to any project, and
-        you can make their pictures in the Reference Studio.
-      </p>
-      <textarea
-        id="new-character-prompt"
-        name="prompt"
-        rows={3}
-        required
-        maxLength={CHARACTER_PROMPT_MAX}
-        placeholder="A sharp-witted detective named Aiko Mori, early 30s, short black bob, long charcoal coat, always carrying a battered notebook."
-        className="mt-2 w-full"
-        data-testid="new-character-prompt"
-      />
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <input
-          name="name"
-          maxLength={CHARACTER_NAME_MAX}
-          placeholder="Name (optional)"
-          aria-label="Name (optional)"
-          className="w-48"
-          data-testid="new-character-name"
+    <ActionForm action={action} successMessage="" className="w-full" data-testid={`new-${kind}`}>
+      <div className="new-subject-card rounded-xl border border-line2 bg-panel/90 backdrop-blur transition-colors focus-within:border-accent/60">
+        <label
+          htmlFor={`new-${kind}-prompt`}
+          className="block px-4 pt-3 text-[14px] font-semibold tracking-tight"
+        >
+          {title}
+        </label>
+        <p className="px-4 pt-0.5 text-[11.5px] leading-snug text-muted">{hint}</p>
+        <textarea
+          id={`new-${kind}-prompt`}
+          name="prompt"
+          rows={3}
+          required
+          maxLength={promptMax}
+          placeholder={placeholder}
+          className="block w-full resize-none text-[13.5px] leading-relaxed placeholder:text-faint"
+          data-testid={`new-${kind}-prompt`}
         />
-        <Button type="submit" variant="primary" data-testid="new-character-create">
-          Create character
-        </Button>
+        <div className="flex items-center gap-2 px-3 pb-3 pt-1">
+          <input
+            name="name"
+            maxLength={nameMax}
+            placeholder={namePlaceholder}
+            aria-label={namePlaceholder}
+            className="min-w-0 flex-1 text-[12px] placeholder:text-faint"
+            data-testid={`new-${kind}-name`}
+          />
+          <button
+            type="submit"
+            className="inline-flex h-8 shrink-0 items-center rounded-full bg-accent px-4 text-[12.5px] font-semibold text-accentfg transition-[filter] hover:brightness-110 disabled:opacity-40"
+            data-testid={`new-${kind}-create`}
+          >
+            Create
+          </button>
+        </div>
       </div>
     </ActionForm>
+  );
+}
+
+export function NewCharacter() {
+  return (
+    <SubjectBox
+      kind="character"
+      title="Create a character"
+      hint="Who they are and how they look. Their role is set in each project you add them to."
+      placeholder="A woman in her early 30s, short black bob, long charcoal coat, sharp eyes, always carrying a battered notebook."
+      namePlaceholder="Name (optional)"
+      action={createStandaloneCharacter}
+      promptMax={CHARACTER_PROMPT_MAX}
+      nameMax={CHARACTER_NAME_MAX}
+    />
+  );
+}
+
+export function NewLocation() {
+  return (
+    <SubjectBox
+      kind="location"
+      title="Create a location"
+      hint="What the place looks and feels like. Use it in any project."
+      placeholder="A rain-soaked alley in Shinjuku at night, neon signs reflected in puddles, steam rising from a ramen stall."
+      namePlaceholder="Name (optional)"
+      action={createStandaloneLocation}
+      promptMax={LOCATION_PROMPT_MAX}
+      nameMax={LOCATION_NAME_MAX}
+    />
   );
 }

@@ -150,6 +150,21 @@ details > summary::-webkit-details-marker {
   outline: none;
   padding: 18px 20px 0;
 }
+/* the smaller Create a character / Create a location boxes beside it */
+.new-subject-card textarea {
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  outline: none;
+  padding: 6px 16px;
+}
+.new-subject-card input {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 9999px;
+  border-color: var(--line);
+  background: transparent;
+}
 .new-series-card input.new-series-count {
   width: 3.25rem;
   height: 28px;
