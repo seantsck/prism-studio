@@ -39,7 +39,7 @@ export async function loadLibrary(): Promise<{ characters: LibraryCharacter[]; a
     if (!loaded.has(e.projectId)) loaded.set(e.projectId, await repo.loadProject(slug));
     const data = loaded.get(e.projectId);
     const c = data?.characters.find((x) => x.id === e.characterId);
-    if (!data || !c) continue;
+    if (!data || !c || c.trashedAt) continue; // a Character in the Trash is out of the library until restored
     const plan = planCharacterCopy(data, c.id, data, randomUUID, e.savedAt);
     const canonical = canonicalRefOf(data, c.id);
     const thumb =

@@ -36,6 +36,8 @@ On the Projects page each project has **Archive** (or **Restore**) and **Deleteâ
 - **Episode length** is `episodes.target_minutes` (migration `0061_episode_length.sql`; nullable integer, 1â€“600). It is an
   optional column (`CollectionSpec.optional`): an Episode that has none stored is written without it, so every write
   works before `0061` is applied; setting a length before then fails with a message naming the migration.
+- **Delete character / location** sets `characters.trashed_at` / `locations.trashed_at` (migration
+  `0064_character_location_trash.sql`, optional columns written only when set); see docs/reference-studio.md.
 - **Delete project** sets `projects.trashed_at` (migration `0063_project_trash.sql`): the project goes to the Trash on
   the Projects page, out of `listProjects` and not openable (`loadProject` returns null unless `includeTrashed`), for
   30 days; **Restore** clears it; **Delete now** (exact title typed) or 30 days later (`purgeExpiredProjects`, when the

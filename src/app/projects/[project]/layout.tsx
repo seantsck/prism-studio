@@ -66,7 +66,11 @@ export default async function ProjectLayout({
   const base = `/projects/${slug}`;
   // anything 30 days in the Trash is deleted for good when the project is opened (in the owner's own request)
   const purged = await purgeExpiredTrash(data);
-  const trashed = (data.trashedAssets?.length ?? 0) - purged;
+  const trashed =
+    (data.trashedAssets?.length ?? 0) +
+    (data.trashedCharacters?.length ?? 0) +
+    (data.trashedLocations?.length ?? 0) -
+    purged;
 
   return (
     <div className="flex min-h-screen">

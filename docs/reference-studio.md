@@ -248,6 +248,18 @@ back; an archived picture goes back to the archive), **Delete now** and **Empty 
 again). After `TRASH_DAYS` (30) an item is deleted for good the next time its project or the Trash is opened
 (`purgeExpiredTrash`, in the owner's own request: no privileged worker). No migration.
 
+### Characters and Locations in the Trash
+
+**Delete character** (a Character's page) and **Delete location** (each Location) move it to the Trash after the
+browser's confirmation (migration 0064: `characters.trashed_at`, `locations.trashed_at`; `src/domain/subject-trash.ts`).
+Refused, with where, while the story uses it (`characterUsage`: a Shot's cast, a Scene, a line of dialogue, a take;
+`locationUsage`: a Scene, a Shot's set) or while a Location is locked. Nothing else changes: its references, Looks,
+voices, views, locks and generation history stay untouched and the loaders hide it (`setTrashedSubjectsApart`, with
+what hangs off a trashed Character), so Restore brings it back exactly; a library Character in the Trash is out of the
+library until restored. **Delete now**, **Empty trash** or 30 days later delete it for good (a Character's references,
+Looks and voices first, then the row and the database's own keys), re-checking that the story does not use it. Before
+0064 is applied, Delete says the migration is needed.
+
 ## The character library
 
 A Character can be used in any of the creator's projects. On a Character's page, **Save to library** puts it in the

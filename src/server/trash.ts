@@ -1,5 +1,6 @@
 import "server-only";
 import { archiveOf, type ArchiveSubject } from "@/domain/archive";
+import { characterUsage, inUseRefusal, locationUsage } from "@/domain/subject-trash";
 import type { Asset, Project, ProjectData } from "@/domain/schemas";
 import { trashedAssetsOf, trashExpired, trashOf, type TrashRecord } from "@/domain/trash";
 import { assetDeletionRefusal } from "./asset-deletion";
@@ -57,12 +58,13 @@ export async function purgeTrashed(
  * owner's own request, so it needs no privileged worker. Best-effort: a failure never stops the page.
  */
 export async function purgeExpiredTrash(data: ProjectData, now = new Date().toISOString()): Promise<number> {
+  const subjects = await purgeExpiredSubjects(data, now);
   const expired = trashedAssetsOf(data).filter((a) => trashExpired(trashOf(a)!.at, now));
-  if (!expired.length) return 0;
+  if (!expired.length) return subjects;
   try {
-    return (await purgeTrashed(data, expired)).removed;
+    return subjects + (await purgeTrashed(data, expired)).removed;
   } catch {
-    return 0;
+    return subjects;
   }
 }
 
@@ -92,6 +94,85 @@ export async function purgeExpiredProjects(now = new Date().toISOString()): Prom
       if (trashExpired(t.trashedAt, now) && !(await deleteProjectForGood(t.project))) n++;
   } catch {
     // best effort: the page never fails for it
+  }
+  return n;
+}
+
+// ───────── Characters and Locations (migration 0064) ─────────
+
+export type TrashSubjectKind = "character" | "location";
+
+const UNDEFINED_COLUMN = "42703";
+const NEEDS_0064 =
+  "Deleting characters and locations (to the Trash) needs a one-time database update (migration 0064) that has not been applied yet.";
+
+/** Stamps (or clears) a Character's or Location's place in the Trash; nothing else about it changes. */
+export async function setSubjectTrashed(
+  data: ProjectData,
+  kind: TrashSubjectKind,
+  id: string,
+  trashedAt: string | null,
+): Promise<void> {
+  const repo = await getRepo();
+  try {
+    if (kind === "character") {
+      const c = [...data.characters, ...(data.trashedCharacters ?? [])].find((x) => x.id === id)!;
+      await repo.upsert(data.project.id, "characters", { ...c, trashedAt });
+    } else {
+      const l = [...data.locations, ...(data.trashedLocations ?? [])].find((x) => x.id === id)!;
+      await repo.upsert(data.project.id, "locations", { ...l, trashedAt });
+    }
+  } catch (err) {
+    if ((err as { code?: string }).code === UNDEFINED_COLUMN) throw new Error(NEEDS_0064, { cause: err });
+    throw err;
+  }
+}
+
+export const needsMigration0064 = (err: unknown) => err instanceof Error && err.message === NEEDS_0064;
+
+/**
+ * Deletes a trashed Character or Location for good (what hangs off a Character first: its references, Looks and
+ * voices; the database's own keys take the rest). Refused, and kept in the Trash, while the story uses it again.
+ */
+export async function deleteSubjectForGood(
+  slug: string,
+  kind: TrashSubjectKind,
+  id: string,
+): Promise<string | null> {
+  const repo = await getRepo();
+  const all = await repo.loadProject(slug); // everything, trashed or not
+  if (!all) return "That project no longer exists.";
+  const usage = kind === "character" ? characterUsage(all, id) : locationUsage(all, id);
+  const name = (kind === "character" ? all.characters : all.locations).find((x) => x.id === id)?.name ?? "It";
+  if (usage.length) return inUseRefusal(name, usage);
+  if (kind === "character") {
+    for (const v of all.voiceProfiles.filter((x) => x.characterId === id))
+      await repo.remove(all.project.id, "voiceProfiles", v.id);
+    for (const l of all.looks.filter((x) => x.characterId === id))
+      await repo.remove(all.project.id, "looks", l.id);
+    for (const r of all.identityRefs.filter((x) => x.characterId === id))
+      await repo.remove(all.project.id, "identityRefs", r.id);
+    await repo.remove(all.project.id, "characters", id);
+  } else await repo.remove(all.project.id, "locations", id);
+  return null;
+}
+
+/** Deletes for good the project's Characters and Locations 30 days in the Trash (best effort, in the owner's request). */
+export async function purgeExpiredSubjects(
+  data: ProjectData,
+  now = new Date().toISOString(),
+): Promise<number> {
+  let n = 0;
+  const due = [
+    ...(data.trashedCharacters ?? []).map((c) => ["character", c] as const),
+    ...(data.trashedLocations ?? []).map((l) => ["location", l] as const),
+  ].filter(([, x]) => x.trashedAt && trashExpired(x.trashedAt, now));
+  for (const [kind, x] of due) {
+    try {
+      if (!(await deleteSubjectForGood(data.project.slug, kind, x.id))) n++;
+    } catch {
+      // best effort: the page never fails for it
+    }
   }
   return n;
 }
