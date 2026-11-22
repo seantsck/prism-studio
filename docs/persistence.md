@@ -29,6 +29,10 @@ scenes, shots, dialogueLines, actionBlocks, directions, takes, frames, attempts,
 
 On the Projects page each project has **Archive** (or **Restore**) and **Delete…**.
 
+- **Character library** is `character_library` (migration `0062_character_library.sql`): one row per saved Character
+  (`user_id`, `character_id`, `saved_at`; unique per user and Character), owner-only RLS (the saver, for a Character
+  in a project they own), cascading from the Character (so from its project). `libraryEntries()` reads it
+  defensively (undefined table → `available: false`).
 - **Episode length** is `episodes.target_minutes` (migration `0061_episode_length.sql`; nullable integer, 1–600). It is an
   optional column (`CollectionSpec.optional`): an Episode that has none stored is written without it, so every write
   works before `0061` is applied; setting a length before then fails with a message naming the migration.

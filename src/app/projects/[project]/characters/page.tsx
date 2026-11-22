@@ -3,10 +3,15 @@ import { Badge, Button, Field, PageHeader, Panel } from "@/components/ui";
 import { saveCharacter } from "@/server/actions";
 import { requireProject } from "@/server/repo";
 import { ActionForm } from "@/components/action-form";
+import { LibraryPanel } from "@/components/characters/library";
+import { loadLibrary } from "@/server/character-library";
+
+export const dynamic = "force-dynamic";
 
 export default async function CharactersPage({ params }: { params: Promise<{ project: string }> }) {
   const { project: slug } = await params;
   const data = await requireProject(slug);
+  const library = await loadLibrary();
 
   return (
     <div>
@@ -40,23 +45,31 @@ export default async function CharactersPage({ params }: { params: Promise<{ pro
             );
           })}
         </div>
-        <Panel title="New character">
-          <ActionForm action={saveCharacter} className="space-y-3">
-            <input type="hidden" name="projectSlug" value={slug} />
-            <Field label="Name">
-              <input name="name" required />
-            </Field>
-            <Field label="Role">
-              <input name="role" />
-            </Field>
-            <Field label="Description">
-              <textarea name="description" rows={3} />
-            </Field>
-            <Button type="submit" variant="primary">
-              Create
-            </Button>
-          </ActionForm>
-        </Panel>
+        <div className="space-y-4">
+          <Panel title="New character">
+            <ActionForm action={saveCharacter} className="space-y-3">
+              <input type="hidden" name="projectSlug" value={slug} />
+              <Field label="Name">
+                <input name="name" required />
+              </Field>
+              <Field label="Role">
+                <input name="role" />
+              </Field>
+              <Field label="Description">
+                <textarea name="description" rows={3} />
+              </Field>
+              <Button type="submit" variant="primary">
+                Create
+              </Button>
+            </ActionForm>
+          </Panel>
+          <LibraryPanel
+            slug={slug}
+            projectId={data.project.id}
+            characters={library.characters}
+            available={library.available}
+          />
+        </div>
       </div>
     </div>
   );

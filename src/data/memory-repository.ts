@@ -1,6 +1,6 @@
 import type { SettlementTable } from "@/domain/continuity/sequence-automation";
 import type { IdentityRef } from "@/domain/schemas";
-import { activeWorkLines } from "./repository";
+import { activeWorkLines, type LibraryEntry } from "./repository";
 import { LOCAL_USER_ID, buildSeedProject } from "./seed";
 import { MemoryCandidateService } from "./candidates-memory";
 import { MemoryCharacterContinuityService } from "./character-continuity-memory";
@@ -251,6 +251,30 @@ export class MemoryRepository implements Repository {
     if (!this.projects.has(projectId)) throw new Error(`Project ${projectId} not found`);
     this.projects.delete(projectId);
     this.archived.delete(projectId);
+    // its Characters leave the library with it (as the database's cascade does)
+    for (const [id, e] of this.library) if (e.projectId === projectId) this.library.delete(id);
+  }
+
+  private library = new Map<string, LibraryEntry>();
+
+  async libraryEntries(): Promise<{ entries: LibraryEntry[]; available: boolean }> {
+    // an entry whose Character is gone is gone too (the database cascades the delete)
+    const live = [...this.library.values()].filter((e) =>
+      this.projects.get(e.projectId)?.characters.some((c) => c.id === e.characterId),
+    );
+    return {
+      entries: live.sort((a, b) => b.savedAt.localeCompare(a.savedAt)).map((e) => ({ ...e })),
+      available: true,
+    };
+  }
+
+  async setInLibrary(projectId: string, characterId: string, saved: boolean): Promise<void> {
+    const data = this.projects.get(projectId);
+    if (!data || !data.characters.some((c) => c.id === characterId))
+      throw new Error(`Character ${characterId} not found in project ${projectId}`);
+    if (!saved) this.library.delete(characterId);
+    else if (!this.library.has(characterId))
+      this.library.set(characterId, { characterId, projectId, savedAt: new Date().toISOString() });
   }
 
   async listProjects(): Promise<Project[]> {

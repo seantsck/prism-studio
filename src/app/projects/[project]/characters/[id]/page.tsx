@@ -19,12 +19,13 @@ import {
   uploadLookReference,
 } from "@/server/actions";
 import { createCharacterContinuityLock } from "@/server/character-continuity-actions";
-import { requireProject } from "@/server/repo";
+import { getRepo, requireProject } from "@/server/repo";
 import { ActionForm } from "@/components/action-form";
 import { SubjectImagePanel } from "@/components/images/subject-image-panel";
 import { VisualBiblePanel } from "@/components/images/visual-bible-panel";
 import { subjectImageState } from "@/server/subject-images";
 import { ArchiveButton, ArchivedPanel } from "@/components/studio/archive";
+import { LibraryToggle } from "@/components/characters/library";
 import { referenceStudioState } from "@/server/reference-studio";
 import Link from "next/link";
 
@@ -61,6 +62,7 @@ export default async function CharacterPage({
   // every picture of this Character (their photos, Look pictures, finished takes), each with Archive, and the archive
   const pictures = await referenceStudioState(data, `character:${c.id}`);
   const archiveSubject = { kind: "character" as const, id: c.id, name: c.name };
+  const library = await (await getRepo()).libraryEntries();
 
   return (
     <div>
@@ -68,9 +70,17 @@ export default async function CharacterPage({
         title={c.name}
         subtitle={c.role}
         actions={
-          <Badge tone={identityLocked ? "pass" : "warn"}>
-            {identityLocked ? "Identity locked" : "Identity open"}
-          </Badge>
+          <div className="flex items-center gap-3">
+            <LibraryToggle
+              slug={slug}
+              characterId={c.id}
+              saved={library.entries.some((e) => e.characterId === c.id)}
+              available={library.available}
+            />
+            <Badge tone={identityLocked ? "pass" : "warn"}>
+              {identityLocked ? "Identity locked" : "Identity open"}
+            </Badge>
+          </div>
         }
       />
       <div className="grid gap-4 p-6 xl:grid-cols-2">
