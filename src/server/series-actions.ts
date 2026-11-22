@@ -20,7 +20,7 @@ import {
 import { bibleSchema } from "@/domain/schemas";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { getRepo, requireProjectFresh } from "./repo";
-import { quoteBible, quoteSeasonPlan, quoteWriting, resolveWriter } from "./series-start";
+import { episodesToWrite, quoteBible, quoteSeasonPlan, quoteWriting, resolveWriter } from "./series-start";
 import { getWritingRepo } from "./story";
 import { askPrism } from "./writing-actions";
 
@@ -308,7 +308,14 @@ async function reviewBible_impl(form: FormData) {
 async function writeWhole_impl(form: FormData) {
   const slug = str(form, "projectSlug");
   const data = await requireProjectFresh(slug);
-  const scope = str(form, "scope") === "all" ? "all" : "one";
+  // the episodes picked (ids), else "all" or "one"
+  const picked = str(form, "episodeIds")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const scope = picked.length ? picked : str(form, "scope") === "all" ? "all" : "one";
+  if (picked.length && episodesToWrite(data, picked).length !== new Set(picked).size)
+    throw new UserFacingError("One of the episodes picked has a script already, or is not in this project.");
   const writer = resolveWriter(str(form, "model"));
   if (!writer) throw new UserFacingError("Prism's writing AI is switched off on this server.");
   const q = quoteWriting(data, scope, writer.writer.value);

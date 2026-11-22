@@ -159,10 +159,17 @@ export function quoteWhole(data: ProjectData, episode: Episode, writer?: string 
   return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd: p.usd };
 }
 
-/** The Episodes "write it" would write: the first unwritten one, or every unwritten one (a film has one). */
-export function episodesToWrite(data: ProjectData, scope: "one" | "all"): Episode[] {
+/** Which Episodes to write: the first unwritten one, every unwritten one, or the unwritten ones picked (by id). */
+export type WriteScope = "one" | "all" | readonly string[];
+
+/** The Episodes "write it" would write, in order (a film has one; a written Episode is never picked). */
+export function episodesToWrite(data: ProjectData, scope: WriteScope): Episode[] {
   const empty = [...data.episodes].sort((a, b) => a.number - b.number).filter((e) => !e.scriptText.trim());
-  return scope === "one" || data.project.projectType !== "series" ? empty.slice(0, 1) : empty;
+  if (data.project.projectType !== "series") return empty.slice(0, 1);
+  if (scope === "one") return empty.slice(0, 1);
+  if (scope === "all") return empty;
+  const picked = new Set(scope);
+  return empty.filter((e) => picked.has(e.id));
 }
 
 export type WritingQuote =
@@ -170,9 +177,14 @@ export type WritingQuote =
   | { ok: false; reason: string };
 
 /** The total for writing those Episodes (each its own request, each within the per-request limit). */
-export function quoteWriting(data: ProjectData, scope: "one" | "all", writer?: string | null): WritingQuote {
+export function quoteWriting(data: ProjectData, scope: WriteScope, writer?: string | null): WritingQuote {
   const targets = episodesToWrite(data, scope);
-  if (targets.length === 0) return { ok: false, reason: "Every Episode already has a script." };
+  if (targets.length === 0)
+    return {
+      ok: false,
+      reason:
+        typeof scope === "string" ? "Every Episode already has a script." : "Pick at least one episode.",
+    };
   const priced: Array<{ id: string; number: number; title: string; usd: number }> = [];
   let first: Quote | null = null;
   for (const e of targets) {
