@@ -1634,7 +1634,9 @@ test("Z: a character created on its own from the home page is in Your library, n
     .fill("A sharp detective named Aiko Mori, early 30s, short black bob, long charcoal coat.");
   await box.getByTestId("new-character-create").click();
   // it opens on its page, ready for pictures
-  await expect(page.getByRole("heading", { name: "Aiko Mori" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Aiko Mori", exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
   await expect(page.getByTestId("library-toggle")).toHaveAttribute("data-saved", "1");
   // home: under Your characters, and the characters project is not among Your projects
   await page.goto("/");
@@ -1656,7 +1658,7 @@ test("ZA: a location created on its own from the home page is in Your locations 
 }) => {
   await page.goto("/");
   // the character and location boxes sit beside the series box
-  await expect(page.getByTestId("home-create-boxes").getByTestId("new-character")).toBeVisible();
+  await expect(page.getByTestId("home-create-character").getByTestId("new-character")).toBeVisible();
   const box = page.getByTestId("new-location");
   await box
     .getByTestId("new-location-prompt")
@@ -1682,4 +1684,55 @@ test("ZA: a location created on its own from the home page is in Your locations 
   await expect(own.getByTestId("location-library-toggle")).toHaveAttribute("data-saved", "1", {
     timeout: 30_000,
   });
+});
+
+test("ZB: a character made with photos opens on its own page, in no project, then starts a new project or joins one", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  // the heading's word changes in place; its accessible name stays the same
+  await expect(page.getByRole("heading", { name: "What's your series about?" })).toBeVisible();
+  const box = page.getByTestId("new-character");
+  await box.getByTestId("new-character-prompt").fill("Takumi, late 20s, lean, short black hair swept back.");
+  await box.getByTestId("new-character-name").fill("Takumi");
+  await box.getByTestId("new-character-photos").setInputFiles([
+    { name: "takumi-front.png", mimeType: "image/png", buffer: Buffer.from(portraitFixturePng(768, 1024)) },
+    { name: "takumi-side.png", mimeType: "image/png", buffer: Buffer.from(portraitFixturePng(800, 1000)) },
+  ]);
+  // the advice says how many are best
+  await expect(box.getByTestId("new-character-photo-note")).toContainText("2 chosen: 4 or more", {
+    timeout: 30_000,
+  });
+  await box.getByTestId("new-character-create").click();
+
+  // its own page: no project, both photos, and the next step
+  await expect(page.getByRole("heading", { name: "Takumi", exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText("Not part of any project", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("character-picture")).toHaveCount(2);
+  const use = page.getByTestId("use-in-project");
+  await expect(use).toContainText("Takumi is ready");
+
+  // add to an existing project: the copy opens there
+  await use.getByTestId("use-in-project-select").selectOption("ojousama");
+  await use.getByTestId("use-in-project-add").click();
+  await expect(page).toHaveURL(/\/projects\/ojousama\/characters\//, { timeout: 30_000 });
+  // this story already has a Takumi of its own, so the copy is told apart
+  await expect(page.getByRole("heading", { name: "Takumi (2)", exact: true })).toBeVisible();
+
+  // or start a new project with him
+  await page.goto("/");
+  await page.locator('[data-testid="home-character"][data-name="Takumi"]').click();
+  await page.getByTestId("use-in-new-project").click();
+  await expect(page.locator('[data-testid="new-series-cast-member"][data-name="Takumi"]')).toBeVisible();
+  await page.getByTestId("new-series-title").fill("Takumi Rising");
+  await page.locator("#premise").fill("A courier in Osaka is pulled into a family feud.");
+  await page.getByTestId("new-series-create").click();
+  await expect(page).toHaveURL(/\/projects\/takumi-rising\/start/, { timeout: 30_000 });
+  await page.goto("/projects/takumi-rising/characters");
+  await expect(
+    page.locator('a[href^="/projects/takumi-rising/characters/"]').filter({ hasText: "Takumi" }),
+  ).toHaveCount(1);
+  await page.goto("/projects/takumi-rising/bible");
+  await expect(page.locator('textarea[name="premise"]')).toHaveValue(/Starring: Takumi\./);
 });

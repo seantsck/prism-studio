@@ -63,6 +63,8 @@ async function addFromLibrary_impl(form: FormData) {
   if (!source) throw new UserFacingError("The project that character lives in is not available.");
   const plan = await copyIntoProject(target, source, characterId, await actorId());
   revalidatePath(`/projects/${slug}`, "layout");
+  // from the library's own page ("Add to a project"): open the copy in that project
+  if (str(form, "open") === "1") redirect(`/projects/${slug}/characters/${plan.character.id}`);
   // placeholders (a slot with no stored picture yet) are copied too, but are not pictures
   const pictures = plan.assets.filter((a) => a.from.objectPath).length;
   return {
@@ -140,7 +142,11 @@ async function createStandaloneCharacter_impl(form: FormData) {
     if (!(err instanceof CharacterLibraryUnavailableError)) throw err;
   }
   revalidatePath("/", "layout");
-  redirect(`/projects/${studio.slug}/characters/${character.id}`);
+  return {
+    slug: studio.slug,
+    id: character.id,
+    href: `/projects/${studio.slug}/characters/${character.id}?new=1`,
+  };
 }
 
 async function setLocationInLibrary_impl(form: FormData) {
@@ -178,6 +184,7 @@ async function addLocationFromLibrary_impl(form: FormData) {
   if (!source) throw new UserFacingError("The project that location lives in is not available.");
   const plan = await copyLocationIntoProject(target, source, locationId, await actorId());
   revalidatePath(`/projects/${slug}`, "layout");
+  if (str(form, "open") === "1") redirect(`/projects/${slug}/locations?open=${plan.location.id}`);
   const pictures = plan.assets.filter((a) => a.from.objectPath).length;
   return {
     ok: true as const,
@@ -213,11 +220,24 @@ async function createStandaloneLocation_impl(form: FormData) {
     if (!(err instanceof LocationLibraryUnavailableError)) throw err;
   }
   revalidatePath("/", "layout");
-  redirect(`/projects/${studio.slug}/locations?open=${location.id}`);
+  return {
+    slug: studio.slug,
+    id: location.id,
+    href: `/projects/${studio.slug}/locations?open=${location.id}&new=1`,
+  };
 }
 
-export async function createStandaloneLocation(form: FormData): Promise<ActionResult> {
-  return runAction(() => createStandaloneLocation_impl(form), { name: "createStandaloneLocation" });
+export async function createStandaloneLocation(
+  form: FormData,
+): Promise<ActionResult & { created?: Created }> {
+  let created: Created | undefined;
+  const result = await runAction(
+    async () => {
+      created = await createStandaloneLocation_impl(form);
+    },
+    { name: "createStandaloneLocation" },
+  );
+  return result.ok ? { ...result, created } : result;
 }
 
 export async function setLocationInLibrary(form: FormData): Promise<ActionResult> {
@@ -228,8 +248,20 @@ export async function addLocationFromLibrary(form: FormData): Promise<ActionResu
   return runAction(() => addLocationFromLibrary_impl(form), { name: "addLocationFromLibrary" });
 }
 
-export async function createStandaloneCharacter(form: FormData): Promise<ActionResult> {
-  return runAction(() => createStandaloneCharacter_impl(form), { name: "createStandaloneCharacter" });
+/** What was made: the browser then uploads the chosen photos to it (one request each) and opens `href`. */
+export type Created = { slug: string; id: string; href: string };
+
+export async function createStandaloneCharacter(
+  form: FormData,
+): Promise<ActionResult & { created?: Created }> {
+  let created: Created | undefined;
+  const result = await runAction(
+    async () => {
+      created = await createStandaloneCharacter_impl(form);
+    },
+    { name: "createStandaloneCharacter" },
+  );
+  return result.ok ? { ...result, created } : result;
 }
 
 export async function setCharacterInLibrary(form: FormData): Promise<ActionResult> {

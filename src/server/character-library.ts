@@ -227,3 +227,53 @@ export async function loadLocationLibrary(): Promise<{ locations: LibraryLocatio
   }
   return { locations, available };
 }
+
+/**
+ * Copies library Characters and Locations into a project just made from the home page ("Start a new project with
+ * …"). Only entries actually in the owner's library are copied; one that fails is skipped (its copy undoes itself) so
+ * the new project still opens. Returns the names copied, in order.
+ */
+export async function copyLibraryIntoNewProject(
+  targetSlug: string,
+  characterIds: string[],
+  locationIds: string[],
+  userId: string | null,
+): Promise<{ characters: string[]; locations: string[] }> {
+  const out = { characters: [] as string[], locations: [] as string[] };
+  if (!characterIds.length && !locationIds.length) return out;
+  const repo = await getRepo();
+  const slugs = new Map((await repo.listProjects()).map((p) => [p.id, p.slug]));
+  const sources = new Map<string, ProjectData | null>();
+  const source = async (projectId: string) => {
+    if (!sources.has(projectId)) {
+      const slug = slugs.get(projectId);
+      sources.set(projectId, slug ? await repo.loadProject(slug) : null);
+    }
+    return sources.get(projectId) ?? null;
+  };
+  const characters = characterIds.length ? (await repo.libraryEntries()).entries : [];
+  for (const id of characterIds) {
+    const entry = characters.find((e) => e.characterId === id);
+    const from = entry ? await source(entry.projectId) : null;
+    const target = await repo.loadProject(targetSlug);
+    if (!from || !target) continue;
+    try {
+      out.characters.push((await copyIntoProject(target, from, id, userId)).character.name);
+    } catch (err) {
+      console.error("[library] could not copy a character into a new project", err);
+    }
+  }
+  const locations = locationIds.length ? (await repo.locationLibraryEntries()).entries : [];
+  for (const id of locationIds) {
+    const entry = locations.find((e) => e.locationId === id);
+    const from = entry ? await source(entry.projectId) : null;
+    const target = await repo.loadProject(targetSlug);
+    if (!from || !target) continue;
+    try {
+      out.locations.push((await copyLocationIntoProject(target, from, id, userId)).location.name);
+    } catch (err) {
+      console.error("[library] could not copy a location into a new project", err);
+    }
+  }
+  return out;
+}

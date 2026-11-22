@@ -130,7 +130,7 @@ async function encodeCopy(
   }
 }
 
-type Prepared =
+export type Prepared =
   | {
       ok: true;
       file: File;
@@ -141,7 +141,7 @@ type Prepared =
   | { ok: false; message: string };
 
 /** Reads one chosen file and settles what will be sent for it. Nothing leaves the browser here. */
-async function prepare(file: File, maxUploadBytes: number): Promise<Prepared> {
+export async function preparePhoto(file: File, maxUploadBytes: number): Promise<Prepared> {
   const mime = file.type.toLowerCase();
   let orientation: number | null = null;
   if (isJpeg(mime)) {
@@ -289,7 +289,7 @@ export function usePhotoUpload({
     void (async () => {
       // one at a time: a phone photograph is large once opened
       for (const [at, item] of fresh.entries()) {
-        const result = await prepare(taken[at]!, maxUploadBytes);
+        const result = await preparePhoto(taken[at]!, maxUploadBytes);
         if (!alive.current) return;
         if (!result.ok) {
           patch(item.id, { state: "refused", message: result.message });

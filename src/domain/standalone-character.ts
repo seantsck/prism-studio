@@ -48,3 +48,37 @@ export function locationNameFromPrompt(prompt: string): string {
   const name = words ? words[0]!.toUpperCase() + words.slice(1) : "";
   return (name || "New location").slice(0, LOCATION_NAME_MAX);
 }
+
+/** Photos chosen in a create box at once (each uploads on its own). */
+export const CREATE_PHOTOS_MAX = 12;
+
+/**
+ * How many photos to give, shown where they are chosen. A character's likeness comes from the creator's own photos
+ * (see REFERENCE_SET_GUIDANCE in the Reference Studio): 4 to 8 good ones; past that, more pictures blur it.
+ */
+export const PHOTO_ADVICE = {
+  character: {
+    best: [4, 8] as const,
+    text: "Best likeness: 4 to 8 photos. Face large, sharp and evenly lit; front, 3/4 and side; one full body. No sunglasses, filters or group shots. More than 8 blurs the likeness.",
+  },
+  location: {
+    best: [3, 6] as const,
+    text: "3 to 6 photos: a wide view, the reverse angle and a few details, all at the same time of day.",
+  },
+} as const;
+
+/** What the count of chosen photos means, beside the advice. */
+export function photoCountNote(
+  kind: "character" | "location",
+  count: number,
+): { tone: "pass" | "warn" | "muted"; text: string } {
+  const [low, high] = PHOTO_ADVICE[kind].best;
+  if (count === 0) return { tone: "muted", text: "Optional: you can add photos later too." };
+  if (count < low)
+    return {
+      tone: "warn",
+      text: `${count} chosen: ${low} or more give a steadier ${kind === "character" ? "likeness" : "place"}.`,
+    };
+  if (count > high) return { tone: "warn", text: `${count} chosen: ${high} good ones beat more.` };
+  return { tone: "pass", text: `${count} chosen: a good set.` };
+}

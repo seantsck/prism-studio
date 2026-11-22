@@ -278,12 +278,22 @@ keeps it). Until 0062 is applied the library says it needs the migration and not
 A library copy is **generic**: its role ("Lead — heiress") and relationship notes are cleared, because a role
 belongs to a project, not to the actor; each project sets its own on the copy.
 
-**Create a character** and **Create a location** (home page, the two smaller boxes left of the series box; below it on
-a phone) make a Character or a Location outside any story from a description and an optional name (else taken from
-"…named X…"/"…called X…", or the first words: `nameFromPrompt`, `locationNameFromPrompt`). Both live in the account's
-one project of purpose `library` ("Your library", migration 0065; made the first time, never listed among projects),
-go straight into the library and open ready for pictures (a Character on its page, a Location expanded on that
-project's Locations page, `?open=<id>`). Before 0065 is applied, creating one says the migration is needed.
+**Create a character** (home page, left of the series box) and **Create a location** (right of it; both below it on
+narrower screens) make a Character or a Location outside any story from a description, an optional name (else taken
+from "…named X…"/"…called X…", or the first words: `nameFromPrompt`, `locationNameFromPrompt`) and optional photos. The
+box says how many photos are best (`PHOTO_ADVICE`: 4 to 8 for a character, the Reference Studio's own guidance; 3 to 6
+for a location) and what the count chosen means. The record is created first; then the browser uploads each photo on
+its own request through the Reference Studio's upload (`uploadReferencePhoto`, as an extra reference; a large phone
+photo is sent as an upright, smaller copy, recorded as such), because a hosted request carries only a few megabytes.
+
+Both live in the account's one project of purpose `library` ("Your library", migration 0065; made the first time, never
+listed among projects). That project is shown as what it is: its sidebar says "Not part of any project" and offers only
+Characters, Locations, the Reference Studio and the Trash; its Characters have no role field (a role belongs to each
+project's copy). A new Character opens on its own page with **Use in a project**: **Start a new project with X** (the
+home page's series box, starting with them: `?cast=<id>` / `?place=<id>`), or **Add to** one of the creator's projects
+(a copy, which opens there). A project started with library Characters or Locations gets a copy of each, and its premise
+ends with "Starring: … Set in: …" so the story Prism writes is about them (the story's cast is matched to them by
+name). A name the target already uses gets "(2)". Before 0065 is applied, creating one says the migration is needed.
 
 ## The location library
 

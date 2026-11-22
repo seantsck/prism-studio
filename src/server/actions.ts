@@ -47,7 +47,8 @@ import { nextTakeNumber, selectTake as selectTakeDomain } from "@/domain/takes";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { ProjectArchiveUnavailableError, ProjectTrashUnavailableError } from "@/data/repository";
 import { getRepo, requireProjectFresh } from "./repo";
-import { recordCreatorEdit, syncEpisodeScript } from "./script-sync";
+import { actorId, recordCreatorEdit, syncEpisodeScript } from "./script-sync";
+import { copyLibraryIntoNewProject, loadLibrary, loadLocationLibrary } from "./character-library";
 import { deleteProjectForGood, moveAssetToTrash } from "./trash";
 import { isTrashed } from "@/domain/trash";
 import { discardUpload, hasFile, ingestUpload } from "./ingest-upload";
@@ -83,6 +84,17 @@ function refresh(slug: string) {
 
 // ───────────────────────── Projects & bible ─────────────────────────
 
+/** The names of library Characters and Locations, by id (ids not in the library are left out). */
+async function libraryNames(characterIds: string[], locationIds: string[]) {
+  const [characters, locations] = await Promise.all([loadLibrary(), loadLocationLibrary()]);
+  return {
+    characters: characterIds.flatMap(
+      (id) => characters.characters.find((c) => c.characterId === id)?.name ?? [],
+    ),
+    locations: locationIds.flatMap((id) => locations.locations.find((l) => l.locationId === id)?.name ?? []),
+  };
+}
+
 async function createProject_impl(form: FormData) {
   // Starting from a prompt: the premise seeds the Bible, the Episodes wait (empty) for Prism to plan and write them,
   // and the creator lands on the guided start page, where every AI step shows its price before it runs. Without a
@@ -113,8 +125,22 @@ async function createProject_impl(form: FormData) {
     episodeCount: Number(str(form, "episodeCount")) || undefined,
     now: now(),
   });
+  // "Start a new project with …" from the library: the chosen Characters and Locations are in the story from the start
+  const cast = form.getAll("cast").map(String).filter(Boolean).slice(0, 20);
+  const places = form.getAll("place").map(String).filter(Boolean).slice(0, 20);
+  if (premise && (cast.length || places.length)) {
+    const names = await libraryNames(cast, places);
+    const lines = [
+      names.characters.length ? `Starring: ${names.characters.join(", ")}.` : "",
+      names.locations.length ? `Set in: ${names.locations.join(", ")}.` : "",
+    ].filter(Boolean);
+    // the Bible's premise names them, so the story Prism writes is about them (its cast matches them by name)
+    const tail = lines.join(" ").slice(0, 400);
+    if (tail) records.bible.premise = `${premise.slice(0, PREMISE_MAX - tail.length - 2)}\n\n${tail}`;
+  }
   await repo.createProject(records.project, records.bible);
   if (records.episodes.length) await repo.upsertMany(id, "episodes", records.episodes);
+  if (cast.length || places.length) await copyLibraryIntoNewProject(slug, cast, places, await actorId());
   revalidatePath("/");
   redirect(premise ? `/projects/${slug}/start` : `/projects/${slug}`);
 }
