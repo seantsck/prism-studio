@@ -203,7 +203,9 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
   const whole = str(form, "length") === "whole";
   if (whole && (mode !== "continue" || scope.kind !== "episode" || parent))
     throw new UserFacingError("A whole Episode is written from the start of an Episode.");
-  const longForm = whole ? longFormPlan(data.project.projectType, model.maxOutputTokens || 32_000) : null;
+  const longForm = whole
+    ? longFormPlan(data.project.projectType, model.maxOutputTokens || 32_000, episode.targetMinutes)
+    : null;
   const { context, inputTokens, maxOutputTokens, usd, tooLong } = priceWriting({
     data,
     episode,

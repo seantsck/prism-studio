@@ -20,7 +20,7 @@ export type WriterQuote =
       ok: true;
       paid: boolean;
       label: string;
-      episodes: Array<{ id: string; number: number; title: string; usd: number }>;
+      episodes: Array<{ id: string; number: number; title: string; usd: number; minutes: number | null }>;
     }
   | { ok: false; reason: string };
 
@@ -153,6 +153,7 @@ export function WriteIt({
                   />
                   <span className="min-w-0 truncate">
                     {e.number}. {e.title}
+                    {e.minutes ? <span className="text-faint"> · {e.minutes} min</span> : null}
                   </span>
                 </label>
               </li>

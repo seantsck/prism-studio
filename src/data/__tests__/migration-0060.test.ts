@@ -12,12 +12,11 @@ const sql = readFileSync(`${DIR}/${FILE}`, "utf8");
 const code = sql.replace(/--.*$/gm, "");
 
 describe("migration 0060: archived projects", () => {
-  it("is the latest migration, follows 0059, and leaves 0059 byte-for-byte unchanged", () => {
+  it("follows 0059, and leaves 0059 byte-for-byte unchanged", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe(FILE);
-    expect(files.at(-2)).toBe("0059_episode_renders.sql");
+    expect(files[files.indexOf(FILE) - 1]).toBe("0059_episode_renders.sql");
     expect(checksumOf(readFileSync(`${DIR}/0059_episode_renders.sql`, "utf8"))).toBe(
       "453367af9af3f9f15ffcc3a61ffaff9bd6e2dd4d15bd62cd8a791b3949b661d6",
     );

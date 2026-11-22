@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import {
+  MAX_MINUTES,
   REFINE_NOTE_MAX,
   seasonPlanInstruction,
   seasonRefineInstruction,
@@ -17,7 +18,7 @@ import {
   isBibleRequest,
   parseBibleIdeas,
 } from "@/domain/bible-ai";
-import { bibleSchema } from "@/domain/schemas";
+import { bibleSchema, type Episode } from "@/domain/schemas";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { getRepo, requireProjectFresh } from "./repo";
 import { episodesToWrite, quoteBible, quoteSeasonPlan, quoteWriting, resolveWriter } from "./series-start";
@@ -182,18 +183,66 @@ async function applySeasonPlan_impl(form: FormData) {
 /** The titles and synopses typed in a plan editor, written to the Episodes (`touchAll`: stamp each even if unchanged). */
 async function writePlan(form: FormData, slug: string, touchAll: boolean): Promise<number> {
   const data = await requireProjectFresh(slug);
-  const repo = await getRepo();
   const now = new Date().toISOString();
   let changed = 0;
   for (const e of data.episodes) {
     if (!form.has(`title_${e.id}`)) continue;
     const title = str(form, `title_${e.id}`).slice(0, 120) || e.title;
     const synopsis = str(form, `synopsis_${e.id}`).slice(0, 2000);
-    if (!touchAll && title === e.title && synopsis === e.synopsis) continue;
-    await repo.upsert(data.project.id, "episodes", { ...e, title, synopsis, updatedAt: now });
+    const targetMinutes = form.has(`minutes_${e.id}`)
+      ? minutesOf(str(form, `minutes_${e.id}`), e.targetMinutes)
+      : e.targetMinutes;
+    if (
+      !touchAll &&
+      title === e.title &&
+      synopsis === e.synopsis &&
+      (targetMinutes ?? null) === (e.targetMinutes ?? null)
+    )
+      continue;
+    await saveEpisode(data.project.id, { ...e, title, synopsis, targetMinutes, updatedAt: now });
     changed++;
   }
   return changed;
+}
+
+/**
+ * A typed length in minutes: a whole number from 1 to 600, or blank for none. Blank leaves an Episode that has never
+ * stored a length (the column may not be there yet) as it is.
+ */
+function minutesOf(typed: string, current: number | null | undefined): number | null | undefined {
+  if (!typed) return current === undefined ? undefined : null;
+  const n = Number(typed);
+  if (!Number.isInteger(n) || n < 1 || n > MAX_MINUTES)
+    throw new UserFacingError(`An episode's length is a whole number of minutes from 1 to ${MAX_MINUTES}.`);
+  return n;
+}
+
+/** Writes an Episode; a length before migration 0061 is applied says so (nothing else fails without it). */
+async function saveEpisode(projectId: string, episode: Episode) {
+  try {
+    await (await getRepo()).upsert(projectId, "episodes", episode);
+  } catch (err) {
+    if ((err as { code?: string }).code === "42703")
+      throw new UserFacingError(
+        "Episode lengths need a one-time database update (migration 0061) that has not been applied yet.",
+      );
+    throw err;
+  }
+}
+
+/** A film's (or short's) length: the minutes of its one screenplay. */
+async function setRuntime_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const data = await requireProjectFresh(slug);
+  const episode = data.episodes.find((e) => e.id === str(form, "episodeId"));
+  if (!episode) throw new UserFacingError("That screenplay is not in this project.");
+  const targetMinutes = minutesOf(str(form, "minutes"), episode.targetMinutes);
+  await saveEpisode(data.project.id, { ...episode, targetMinutes, updatedAt: new Date().toISOString() });
+  revalidatePath(`/projects/${slug}`, "layout");
+  return {
+    ok: true as const,
+    message: targetMinutes ? `Length set to ${targetMinutes} minutes.` : "Length cleared.",
+  };
 }
 
 /**
@@ -364,6 +413,10 @@ export async function editSeasonPlan(form: FormData): Promise<ActionResult> {
 
 export async function reviewBible(form: FormData): Promise<ActionResult> {
   return runAction(() => reviewBible_impl(form), { name: "reviewBible" });
+}
+
+export async function setRuntime(form: FormData): Promise<ActionResult> {
+  return runAction(() => setRuntime_impl(form), { name: "setRuntime" });
 }
 
 export async function writeWhole(form: FormData): Promise<ActionResult> {

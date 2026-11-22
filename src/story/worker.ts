@@ -21,8 +21,8 @@ import {
 import { actualUsd, writingOperation, type StoryIntelligenceProvider, type StoryModel } from "./provider";
 import type { StoryRegistry } from "./registry";
 
-/** The lease of a writing request: long enough for a whole film written in parts. */
-export const WRITING_LEASE_MS = 30 * 60_000;
+/** The lease of a writing request: long enough for a whole film written in up to MAX_LONG_FORM_PARTS parts. */
+export const WRITING_LEASE_MS = 60 * 60_000;
 
 /**
  * Phase 5B-S1: the Story Intelligence worker. It is the ONLY place a provider is called (and the only process that

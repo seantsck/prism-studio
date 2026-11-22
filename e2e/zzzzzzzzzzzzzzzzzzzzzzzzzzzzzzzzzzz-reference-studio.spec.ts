@@ -1170,6 +1170,17 @@ test("Q: a series from a prompt: the season planned, edited and refined without 
   await expect(editor).toHaveAttribute("data-source", "episodes", { timeout: 30_000 });
   await expect(editor.getByLabel("Episode 2 title")).toHaveValue("The Tasting");
   await expect(editor.getByLabel("Episode 3 title")).toHaveValue("The Rival");
+  // each episode's length: one value for all, then one changed by hand
+  await editor.getByTestId("start-plan-all-minutes-input").fill("24");
+  await editor.getByTestId("start-plan-all-minutes-go").click();
+  await expect(editor.getByLabel("Episode 6 length in minutes")).toHaveValue("24");
+  await editor.getByLabel("Episode 3 length in minutes").fill("45");
+  await editor.getByTestId("start-plan-save").click();
+  await expect(page.getByTestId("start-write")).toContainText("45 min", { timeout: 30_000 });
+  await page.reload();
+  await expect(page.getByTestId("start-plan-editor").getByLabel("Episode 3 length in minutes")).toHaveValue(
+    "45",
+  );
 
   // write all 6: the writer and the episodes are chosen (every one is ticked to start with), then a confirmation
   // names the price before anything runs
@@ -1359,6 +1370,12 @@ test("U: a film from the Projects page: written whole, with the writer and the p
   await expect(page.getByTestId("start-write")).toHaveAttribute("data-state", "now");
   const write = page.getByTestId("write-it");
   await expect(write.getByTestId("write-it-episodes")).toHaveCount(0);
+  // its length, set before it is written
+  await page.getByTestId("start-runtime-input").fill("90");
+  await page.getByTestId("start-runtime-save").click();
+  await expect(page.getByTestId("start-runtime")).toContainText("Length saved", { timeout: 30_000 });
+  await page.reload();
+  await expect(page.getByTestId("start-runtime-input")).toHaveValue("90");
   await write.getByTestId("write-it-open").click();
   const confirm = page.getByTestId("write-it-confirm");
   await expect(confirm).toContainText("Write the whole film?");

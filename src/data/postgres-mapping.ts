@@ -44,6 +44,8 @@ export interface CollectionSpec {
   projectScoped: boolean;
   /** Domain keys that do not exist as columns (or are stored in join tables). */
   virtual: string[];
+  /** Columns added by a later migration: written only when the entity has them (so writes work before it is applied). */
+  optional?: string[];
 }
 
 const spec = (
@@ -57,6 +59,7 @@ const spec = (
   numeric: [],
   projectScoped: true,
   virtual: [],
+  optional: [],
   ...o,
 });
 
@@ -71,7 +74,7 @@ export const COLLECTIONS: Record<CollectionName, CollectionSpec> = {
     virtual: ["set3d"],
   }),
   props: spec("props", propSchema),
-  episodes: spec("episodes", episodeSchema),
+  episodes: spec("episodes", episodeSchema, { optional: ["targetMinutes"] }),
   scenes: spec("scenes", sceneSchema, { virtual: ["scriptRange", "characterIds", "propIds"] }),
   shots: spec("shots", shotSchema, { virtual: ["*"] }),
   dialogueLines: spec("dialogue_lines", dialogueLineSchema),
@@ -96,6 +99,8 @@ export function flatToRow(item: object, s: CollectionSpec): Row {
   const row: Row = {};
   for (const [key, value] of Object.entries(item)) {
     if (s.virtual.includes(key)) continue;
+    // an optional column that is absent from the entity is not written (the stored value, or the default, stands)
+    if (value === undefined && s.optional?.includes(key)) continue;
     row[toSnake(key)] =
       s.json.includes(key) && value !== null && value !== undefined ? JSON.stringify(value) : value;
   }

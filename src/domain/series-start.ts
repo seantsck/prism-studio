@@ -26,6 +26,8 @@ export const DEFAULT_EPISODE_COUNT = 8;
  * Episodes planned before it), so the ceiling is the per-request spend limit, not one answer's length.
  */
 export const MAX_EPISODES = 500;
+/** The longest an Episode (or film) can be set to run, in minutes. */
+export const MAX_MINUTES = 600;
 /** The longest note a creator gives Prism to refine a plan. */
 export const REFINE_NOTE_MAX = 600;
 
@@ -54,6 +56,7 @@ export function seasonPlanInstruction(data: ProjectData, episodes: number): stri
     "Each idea's title is that episode's title (no number). Its detail is 2 to 4 sentences: what happens in the",
     "episode, how it ends, and the hook into the next one. Together they tell one story with a clear arc and a",
     "satisfying season ending.",
+    runtimesLine(data.episodes),
     "",
     `Premise: ${data.bible.premise.trim().slice(0, PREMISE_MAX)}`,
   ]
@@ -71,11 +74,37 @@ export function seasonRefineInstruction(data: ProjectData, episodes: number, not
     "Keep what the note does not ask to change. Each idea's title is that episode's title (no number); its detail is 2 to 4 sentences: what happens, how it ends, and the hook into the next one.",
     "",
     `Creator's note: ${note.trim().slice(0, REFINE_NOTE_MAX)}`,
+    runtimesLine(data.episodes),
     "",
     `Premise: ${data.bible.premise.trim().slice(0, PREMISE_MAX)}`,
   ]
     .join("\n")
     .slice(0, LIMITS.instruction);
+}
+
+/** How long a script should run: about a page a minute, in scenes sized to it. */
+export function lengthLine(minutes: number): string {
+  const scenes = Math.max(2, Math.round(minutes / 2.5));
+  return `It runs about ${minutes} minutes on screen: about ${minutes} screenplay pages (a page a minute), in roughly ${Math.max(2, scenes - 2)} to ${scenes + 2} scenes. Pace the story to fill that length, no shorter and no longer.`;
+}
+
+/** The runtimes of a season, compressed: "episodes 1–10: 24 minutes; episode 11: 45 minutes". Empty when none is set. */
+export function runtimesLine(
+  episodes: ReadonlyArray<{ number: number; targetMinutes?: number | null }>,
+): string {
+  const runs: Array<{ from: number; to: number; minutes: number }> = [];
+  for (const e of [...episodes].sort((a, b) => a.number - b.number)) {
+    if (!e.targetMinutes) continue;
+    const last = runs.at(-1);
+    if (last && last.minutes === e.targetMinutes && last.to === e.number - 1) last.to = e.number;
+    else runs.push({ from: e.number, to: e.number, minutes: e.targetMinutes });
+  }
+  if (!runs.length) return "";
+  const parts = runs.map((r) =>
+    r.from === r.to ? `episode ${r.from}: ${r.minutes} min` : `episodes ${r.from}–${r.to}: ${r.minutes} min`,
+  );
+  const line = `Runtimes (pace what happens in each episode to fit): ${parts.join("; ")}.`;
+  return line.length > 1200 ? `${line.slice(0, 1190)}…` : line;
 }
 
 /** What Prism is asked to write for a whole Episode (from its planned synopsis) or a whole film. */
@@ -94,6 +123,7 @@ export function wholeScriptInstruction(data: ProjectData, episode: Episode): str
       : [`Write the complete screenplay of this ${kind}, from its opening to its ending.`];
   return [
     ...head,
+    ...(episode.targetMinutes ? [lengthLine(episode.targetMinutes)] : []),
     "Standard screenplay format: scene headings (INT./EXT. PLACE - TIME), short action lines, CHARACTER NAMES in capitals above their dialogue.",
     "Introduce each main character with a short visual description the first time they appear.",
     "When the context has the project Bible (bible), follow it: its canon facts, continuity rules, tone and dialogue language strategy.",

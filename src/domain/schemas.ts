@@ -315,6 +315,11 @@ export const episodeSchema = z.object({
   synopsis: text,
   scriptText: text,
   order: z.number().int(),
+  /**
+   * The length the creator wants, in minutes on screen (migration 0061). Absent (undefined) = not stored (no length,
+   * or the column is not there yet): never written. null = no length.
+   */
+  targetMinutes: z.number().int().min(1).max(600).nullable().optional(),
   createdAt: iso,
   updatedAt: iso,
 });
