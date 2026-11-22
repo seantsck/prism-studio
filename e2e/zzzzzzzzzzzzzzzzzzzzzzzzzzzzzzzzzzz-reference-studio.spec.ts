@@ -1490,6 +1490,12 @@ test("W: a character saved to the library is added to another project as its own
   await expect(toggle).toHaveAttribute("data-saved", "0");
   await toggle.getByTestId("library-toggle-go").click();
   await expect(page.getByTestId("library-toggle")).toHaveAttribute("data-saved", "1", { timeout: 30_000 });
+  // the home page lists her under Your characters, linking to her page
+  await page.goto("/");
+  const card = page.locator('[data-testid="home-character"][data-name="Yumeko"]');
+  await expect(card).toBeVisible();
+  await card.getByRole("link").click();
+  await expect(page.getByRole("heading", { name: "Yumeko" })).toBeVisible();
   // her own project does not offer her
   await page.goto(`${P}/characters`);
   await expect(page.getByTestId("library-panel").getByTestId("library-character")).toHaveCount(0);
