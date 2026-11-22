@@ -5,6 +5,7 @@ import { purgeExpiredProjects } from "@/server/trash";
 import { TrashedProjectActions } from "@/components/projects/project-actions";
 import { trashDaysLeft } from "@/domain/trash";
 import { NewSeries } from "@/components/projects/new-series";
+import { NewCharacter } from "@/components/projects/new-character";
 import { UserMenu } from "@/components/user-menu";
 import { PREMISE_MAX } from "@/domain/series-start";
 import type { Project } from "@/domain/schemas";
@@ -25,10 +26,14 @@ const day = (iso: string) =>
 export default async function HomePage() {
   const user = await requireUser();
   const repo = await getRepo();
-  const all = [...(await repo.listProjects())].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // the account's own characters project (purpose `library`) is not one of their projects: its Characters show below
+  const all = [...(await repo.listProjects())]
+    .filter((p) => p.purpose !== "library")
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   // projects 30 days in the Trash are deleted for good when this page is opened (in the owner's own request)
   await purgeExpiredProjects();
-  const trash = await repo.trashedProjects();
+  const trashed = await repo.trashedProjects();
+  const trash = { ...trashed, projects: trashed.projects.filter((t) => t.project.purpose !== "library") };
   const archive = await repo.archivedProjectIds();
   // which of each project's Characters are in the library (deleting the project takes them out)
   const library = await loadLibrary();
@@ -143,6 +148,7 @@ export default async function HomePage() {
           <h2 className="text-[15px] font-semibold tracking-tight">Your characters</h2>
           <span className="text-[12px] text-muted">{library.characters.length}</span>
         </div>
+        <NewCharacter />
         {!library.available ? (
           <p className="py-6 text-center text-[13px] text-muted">
             Your character library needs a one-time database update (migration 0062).

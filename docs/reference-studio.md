@@ -275,6 +275,13 @@ part-way removes what it wrote. Copies never change each other or the original. 
 Character: deleting the project it lives in takes it out of the library (the delete confirmation names it; archiving
 keeps it). Until 0062 is applied the library says it needs the migration and nothing else changes.
 
+
+**Create a character** (home page, under Your characters) makes a Character outside any story from a description
+and an optional name (else taken from "…named X…", or the first words: `nameFromPrompt`). It lives in the account's one
+project of purpose `library` ("Your characters", migration 0065; made the first time, never listed among projects),
+with the description as its appearance, goes straight into the library and opens on its page, ready for pictures in
+the Reference Studio. Any project adds a copy from "From your library". Before 0065 is applied, creating one says the
+migration is needed.
 ## Test models and real models
 
 A deployment can switch on free **test models** ("Mock Image 1"). A test model draws a coloured pattern, never a

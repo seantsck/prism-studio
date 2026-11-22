@@ -118,9 +118,10 @@ export const projectSchema = z.object({
    * Explicit owner classification, never inferred from the slug: production (default), benchmark (a model or
    * provider benchmark / synthetic fixture) or test (infrastructure / UI test project). Reviews and winners of
    * non-production projects persist and work normally, but their records are excluded from production
-   * model-performance aggregates and routing recommendations (see domain/generation/performance).
+   * model-performance aggregates and routing recommendations (see domain/generation/performance). `library` (0065):
+   * the account's own Characters made outside any story (one such project per account, never listed among projects).
    */
-  purpose: z.enum(["production", "benchmark", "test"]).default("production"),
+  purpose: z.enum(["production", "benchmark", "test", "library"]).default("production"),
   createdAt: iso,
   updatedAt: iso,
 });

@@ -1623,3 +1623,30 @@ test("Y: a character is deleted to the Trash, restored, then deleted for good; o
   await expect(page.getByTestId("subject-delete")).toContainText("can't be deleted yet: it is still used in");
   await expect(page.getByRole("heading", { name: "Yumeko" })).toBeVisible();
 });
+
+test("Z: a character created on its own from the home page is in Your characters, not a project, and joins any project", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const box = page.getByTestId("new-character");
+  await box
+    .getByTestId("new-character-prompt")
+    .fill("A sharp detective named Aiko Mori, early 30s, short black bob, long charcoal coat.");
+  await box.getByTestId("new-character-create").click();
+  // it opens on its page, ready for pictures
+  await expect(page.getByRole("heading", { name: "Aiko Mori" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("library-toggle")).toHaveAttribute("data-saved", "1");
+  // home: under Your characters, and the characters project is not among Your projects
+  await page.goto("/");
+  await expect(page.locator('[data-testid="home-character"][data-name="Aiko Mori"]')).toBeVisible();
+  await expect(
+    page.locator('[data-testid="project-row"]').filter({ hasText: "Your characters" }),
+  ).toHaveCount(0);
+  // any project adds her
+  await page.goto("/projects/night-counter/characters");
+  const offered = page.getByTestId("library-character").filter({ hasText: "Aiko Mori" });
+  await offered.getByTestId("library-add").click();
+  await expect(
+    page.locator('a[href^="/projects/night-counter/characters/"]').filter({ hasText: "Aiko Mori" }),
+  ).toHaveCount(1, { timeout: 30_000 });
+});

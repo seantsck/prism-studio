@@ -1,6 +1,16 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { characterSchema, projectSchema, type Project } from "@/domain/schemas";
+import { newProjectRecords } from "@/domain/series-start";
+import {
+  CHARACTER_NAME_MAX,
+  CHARACTER_PROMPT_MAX,
+  CHARACTER_STUDIO_TITLE,
+  nameFromPrompt,
+} from "@/domain/standalone-character";
 import { CharacterLibraryUnavailableError } from "@/data/repository";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { copyIntoProject } from "./character-library";
@@ -55,6 +65,82 @@ async function addFromLibrary_impl(form: FormData) {
     ok: true as const,
     message: `${plan.character.name} added${pictures ? ` with ${pictures} picture${pictures === 1 ? "" : "s"}` : ""}.`,
   };
+}
+
+/** The account's own project for Characters made outside any story (purpose `library`), made the first time. */
+async function characterStudio(): Promise<Project> {
+  const repo = await getRepo();
+  const all = await repo.listProjects();
+  const found = all.find((p) => p.purpose === "library");
+  if (found) return found;
+  const taken = new Set([
+    ...all.map((p) => p.slug),
+    ...(await repo.trashedProjects()).projects.map((t) => t.project.slug),
+  ]);
+  let slug = "your-characters";
+  while (taken.has(slug)) slug = `your-characters-${randomUUID().slice(0, 4)}`;
+  const records = newProjectRecords({
+    id: randomUUID(),
+    userId: repo.currentUserId(),
+    title: CHARACTER_STUDIO_TITLE,
+    slug,
+    projectType: "film",
+    description: "Characters made on their own, ready to add to any project.",
+    now: new Date().toISOString(),
+  });
+  const project = projectSchema.parse({ ...records.project, purpose: "library" });
+  try {
+    await repo.createProject(project, records.bible);
+  } catch (err) {
+    // 23514: the purpose check does not allow `library` yet
+    if ((err as { code?: string }).code === "23514")
+      throw new UserFacingError(
+        "Creating characters on their own needs a one-time database update (migration 0065) that has not been applied yet.",
+      );
+    throw err;
+  }
+  return project;
+}
+
+/**
+ * Create a character from a description, outside any story: it is made in the account's own characters project, put
+ * in the library (so any project can add it), and opened, ready for pictures in the Reference Studio.
+ */
+async function createStandaloneCharacter_impl(form: FormData) {
+  const prompt = str(form, "prompt").slice(0, CHARACTER_PROMPT_MAX);
+  if (!prompt) throw new UserFacingError("Describe your character first.");
+  const name = (str(form, "name") || nameFromPrompt(prompt)).slice(0, CHARACTER_NAME_MAX);
+  const studio = await characterStudio();
+  const repo = await getRepo();
+  const now = new Date().toISOString();
+  const character = characterSchema.parse({
+    id: randomUUID(),
+    projectId: studio.id,
+    name,
+    role: "",
+    description: prompt,
+    personality: "",
+    behaviorNotes: "",
+    // what the Reference Studio makes pictures from
+    physicalDescription: prompt,
+    continuityRules: [],
+    signatureBehavior: "",
+    relationshipNotes: "",
+    createdAt: now,
+    updatedAt: now,
+  });
+  await repo.upsert(studio.id, "characters", character);
+  try {
+    await repo.setInLibrary(studio.id, character.id, true);
+  } catch (err) {
+    if (!(err instanceof CharacterLibraryUnavailableError)) throw err;
+  }
+  revalidatePath("/", "layout");
+  redirect(`/projects/${studio.slug}/characters/${character.id}`);
+}
+
+export async function createStandaloneCharacter(form: FormData): Promise<ActionResult> {
+  return runAction(() => createStandaloneCharacter_impl(form), { name: "createStandaloneCharacter" });
 }
 
 export async function setCharacterInLibrary(form: FormData): Promise<ActionResult> {
