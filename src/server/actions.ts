@@ -48,7 +48,8 @@ import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { ProjectArchiveUnavailableError } from "@/data/repository";
 import { getRepo, requireProjectFresh } from "./repo";
 import { recordCreatorEdit, syncEpisodeScript } from "./script-sync";
-import { assetDeletionRefusal } from "./asset-deletion";
+import { moveAssetToTrash } from "./trash";
+import { isTrashed } from "@/domain/trash";
 import { discardUpload, hasFile, ingestUpload } from "./ingest-upload";
 
 // ───────────────────────── helpers ─────────────────────────
@@ -1071,13 +1072,12 @@ async function updateAsset_impl(form: FormData) {
 
 /** Refuses when anything references the asset; nothing is ever silently orphaned. */
 async function deleteAsset_impl(form: FormData) {
-  const { data, repo, slug } = await load(form);
+  const { data, slug } = await load(form);
   const asset = data.assets.find((a) => a.id === str(form, "assetId"));
   if (!asset) throw new UserFacingError("That asset no longer exists.");
-  const refusal = await assetDeletionRefusal(data, asset);
-  if (refusal) throw new UserFacingError(refusal);
-  await repo.remove(data.project.id, "assets", asset.id);
-  await discardUpload(asset);
+  if (isTrashed(asset)) throw new UserFacingError("That asset is already in the Trash.");
+  // to the Trash (30 days, restorable), refused unless it could be deleted
+  await moveAssetToTrash(data, asset, null);
   refresh(slug);
 }
 

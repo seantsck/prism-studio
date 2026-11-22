@@ -18,7 +18,9 @@ export interface CharacterCopyPlan {
   assets: Array<{ from: Asset; to: Asset }>;
 }
 
-const isArchivedAsset = (a: Asset) => !!(a.metadata as { archived?: unknown }).archived;
+const isArchivedAsset = (a: Asset) =>
+  !!(a.metadata as { archived?: unknown; trashed?: unknown }).archived ||
+  !!(a.metadata as { trashed?: unknown }).trashed;
 
 /** A name the target project does not use yet: the same name, else "Name (2)", "Name (3)" … */
 export function freeCharacterName(name: string, taken: ReadonlyArray<{ name: string }>): string {

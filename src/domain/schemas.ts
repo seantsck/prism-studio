@@ -726,6 +726,11 @@ export interface ProjectData extends Collections {
   project: Project;
   bible: ProjectBible;
   /**
+   * The project's assets in the Trash (src/domain/trash.ts), set apart by the server loaders: every view reads `assets`
+   * without them. Absent = none (or not loaded through the server loaders).
+   */
+  trashedAssets?: Asset[];
+  /**
    * Per-shot 3D set snapshot (Phase 2F), attached by the server loaders for shots that have a production camera.
    * Never persisted here and absent for projects without 3D sets.
    */

@@ -89,12 +89,10 @@ vi.mock("@/server/storage", () => ({
   }),
 }));
 
-import {
-  archiveStudioImage,
-  deleteArchivedImage,
-  deleteStudioImage,
-  restoreStudioImage,
-} from "../archive-actions";
+import { archiveStudioImage, restoreStudioImage } from "../archive-actions";
+import { deleteFromTrash, emptyTrash, moveToTrash, restoreFromTrash } from "../trash-actions";
+import { purgeExpiredTrash } from "../trash";
+import { trashOf } from "@/domain/trash";
 import { referenceStudioState } from "../reference-studio";
 import { quoteReferenceImage, reviewReferenceImage, uploadReferencePhoto } from "../reference-studio-actions";
 import { replaceLookReference, saveAsCharacterReference, startSubjectImage } from "../subject-image-actions";
@@ -1175,12 +1173,14 @@ describe("archive and delete", () => {
       deletable: false,
       keptBecause: `Sent to take #${n}: kept so that take's record stays complete.`,
     });
-    expect(await act(deleteArchivedImage, yumeko.id, photo, { confirm: "1" })).toMatchObject({
+    expect(await act(moveToTrash, yumeko.id, photo)).toMatchObject({
       ok: false,
       error: expect.stringContaining(`image attempt ${n} input`),
     });
-    // the take's own picture is deleted for good: the take stays in the history, with its cost, and no picture
-    expect(await act(deleteArchivedImage, yumeko.id, out, { confirm: "1" })).toEqual({ ok: true });
+    // the take's own picture goes to the Trash, then is deleted for good: the take stays in the history, with its
+    // cost, and no picture
+    expect(await act(moveToTrash, yumeko.id, out)).toEqual({ ok: true });
+    expect(await deleteFromTrash(form({ assetId: out, confirm: "1" }))).toEqual({ ok: true });
     expect((await data()).assets.some((a) => a.id === out)).toBe(false);
     const kept = await repo.generation.getSubjectImageAttempt(take!.attempt.id);
     expect(kept!.attempt).toMatchObject({ status: "succeeded", outputAssetId: null });
@@ -1190,54 +1190,96 @@ describe("archive and delete", () => {
     expect(state.spent).toEqual(spent);
   });
 
-  it("a photo nothing depends on is deleted for good, only from the archive and only once confirmed", async () => {
+  it("an archived photo goes to the Trash, and is deleted for good from there only once confirmed", async () => {
     const yumeko = await yumekoOf();
     const photo = await upload(yumeko.id, "mistake.png");
     const path = (await data()).assets.find((a) => a.id === photo)!.objectPath!;
-    expect(world.stored.has(path)).toBe(true);
-    expect(await act(deleteArchivedImage, yumeko.id, photo, { confirm: "1" })).toMatchObject({
-      ok: false,
-      error: "Archive the picture first; a picture is deleted only from the archive.",
-    });
     await act(archiveStudioImage, yumeko.id, photo);
-    expect(await act(deleteArchivedImage, yumeko.id, photo)).toMatchObject({
+    expect(await act(moveToTrash, yumeko.id, photo)).toEqual({ ok: true });
+    expect((await stateOf(yumeko.id)).archived).toEqual([]);
+    expect(trashOf((await data()).assets.find((a) => a.id === photo)!)).toMatchObject({ restore: [] });
+    expect(world.stored.has(path)).toBe(true); // kept while it is in the Trash
+    expect(await deleteFromTrash(form({ assetId: photo }))).toMatchObject({
       ok: false,
       error: "Confirm that you want to delete it for good.",
     });
-    expect(await act(deleteArchivedImage, yumeko.id, photo, { confirm: "1" })).toEqual({ ok: true });
+    expect(await deleteFromTrash(form({ assetId: photo, confirm: "1" }))).toEqual({ ok: true });
     expect((await data()).assets.some((a) => a.id === photo)).toBe(false);
     expect(world.stored.has(path)).toBe(false);
-    expect((await stateOf(yumeko.id)).archived).toEqual([]);
+    // restored from the Trash, an archived picture goes back to the archive
+    const again = await upload(yumeko.id, "again.png");
+    await act(archiveStudioImage, yumeko.id, again);
+    await act(moveToTrash, yumeko.id, again);
+    expect(await restoreFromTrash(form({ assetId: again }))).toEqual({ ok: true });
+    expect((await stateOf(yumeko.id)).archived.map((x) => x.assetId)).toEqual([again]);
   });
 
-  it("a picture is deleted straight from where it is shown, once confirmed: its photo slot goes with it", async () => {
+  it("Delete moves a picture to the Trash (its photo slot with it); Restore puts both back as they were", async () => {
     const yumeko = await yumekoOf();
     const photo = await upload(yumeko.id, "oops.png");
     const path = (await data()).assets.find((a) => a.id === photo)!.objectPath!;
-    expect((await data()).identityRefs.some((r) => r.assetId === photo)).toBe(true);
-    expect(await act(deleteStudioImage, yumeko.id, photo)).toMatchObject({
-      ok: false,
-      error: "Confirm that you want to delete it for good.",
-    });
-    expect(await act(deleteStudioImage, yumeko.id, photo, { confirm: "1" })).toEqual({ ok: true });
-    const d = await data();
-    expect(d.assets.some((a) => a.id === photo)).toBe(false);
+    const ref = (await data()).identityRefs.find((r) => r.assetId === photo)!;
+    expect(await act(moveToTrash, yumeko.id, photo)).toEqual({ ok: true });
+    let d = await data();
     expect(d.identityRefs.some((r) => r.assetId === photo)).toBe(false);
-    expect(world.stored.has(path)).toBe(false);
-    const state = await stateOf(yumeko.id);
+    expect(trashOf(d.assets.find((a) => a.id === photo)!)).toMatchObject({
+      subject: `character:${yumeko.id}`,
+      restore: [expect.objectContaining({ kind: "identity_ref", refId: ref.id })],
+    });
+    expect(world.stored.has(path)).toBe(true);
+    // gone from every view (the loader sets it apart), but not gone
+    let state = await stateOf(yumeko.id);
     expect(state.images.some((i) => i.assetId === photo)).toBe(false);
     expect(state.archived).toEqual([]);
+    expect(await act(moveToTrash, yumeko.id, photo)).toMatchObject({ ok: false });
+    expect(await restoreFromTrash(form({ assetId: photo }))).toEqual({ ok: true });
+    d = await data();
+    expect(d.identityRefs.find((r) => r.assetId === photo)).toEqual(ref);
+    expect(trashOf(d.assets.find((a) => a.id === photo)!)).toBeNull();
+    state = await stateOf(yumeko.id);
+    expect(state.images.some((i) => i.assetId === photo)).toBe(true);
   });
 
-  it("deleting straight away refuses what archiving or the archive would, and changes nothing", async () => {
+  it("after 30 days in the Trash a picture is deleted for good; before that it stays; Empty trash does all", async () => {
+    const yumeko = await yumekoOf();
+    const old = await upload(yumeko.id, "old.png");
+    const recent = await upload(yumeko.id, "recent.png");
+    await act(moveToTrash, yumeko.id, old);
+    await act(moveToTrash, yumeko.id, recent);
+    const d = await data();
+    const day = 24 * 60 * 60 * 1000;
+    const backdate = async (id: string, days: number) => {
+      const a = (await data()).assets.find((x) => x.id === id)!;
+      const t = trashOf(a)!;
+      await repo.upsert(d.project.id, "assets", {
+        ...a,
+        metadata: { ...a.metadata, trashed: { ...t, at: new Date(Date.now() - days * day).toISOString() } },
+      });
+    };
+    await backdate(old, 31);
+    await backdate(recent, 29);
+    const oldPath = d.assets.find((a) => a.id === old)!.objectPath!;
+    expect(await purgeExpiredTrash(await data())).toBe(1);
+    expect((await data()).assets.some((a) => a.id === old)).toBe(false);
+    expect(world.stored.has(oldPath)).toBe(false);
+    expect((await data()).assets.some((a) => a.id === recent)).toBe(true);
+    expect(await emptyTrash(form({}))).toMatchObject({
+      ok: false,
+      error: "Confirm that you want to empty the Trash.",
+    });
+    expect(await emptyTrash(form({ confirm: "1" }))).toMatchObject({ ok: true, message: "1 deleted." });
+    expect((await data()).assets.some((a) => a.id === recent)).toBe(false);
+  });
+
+  it("Delete refuses what could not be deleted (with what to change first), and changes nothing", async () => {
     const yumeko = await yumekoOf();
     // a view of the reference set: refused with what to change first
     const photo = await upload(yumeko.id, "view.png");
     await addToReferenceSet(form({ characterId: yumeko.id, view: "half_body", assetId: photo }));
-    expect(await act(deleteStudioImage, yumeko.id, photo, { confirm: "1" })).toMatchObject({
+    expect(await act(moveToTrash, yumeko.id, photo)).toMatchObject({
       ok: false,
       error: expect.stringMatching(
-        /^This picture can't be deleted yet: .*take it out of the reference set first/,
+        /^This picture can't be moved to the Trash yet: .*take it out of the reference set first/,
       ),
     });
     expect((await data()).assets.some((a) => a.id === photo)).toBe(true);
@@ -1246,9 +1288,9 @@ describe("archive and delete", () => {
     expect(await startSubjectImage(form(make(yumeko.id, { startAssetId: [start] })))).toEqual({ ok: true });
     await work();
     const before = (await data()).identityRefs.filter((r) => r.assetId === start);
-    expect(await act(deleteStudioImage, yumeko.id, start, { confirm: "1" })).toMatchObject({
+    expect(await act(moveToTrash, yumeko.id, start)).toMatchObject({
       ok: false,
-      error: expect.stringContaining("This picture can't be deleted"),
+      error: expect.stringContaining("can't be moved to the Trash"),
     });
     const after = await data();
     expect(after.assets.some((a) => a.id === start)).toBe(true);
@@ -1256,7 +1298,10 @@ describe("archive and delete", () => {
     // the take's own picture can go: the take stays in the history with its cost
     const [take] = await attempts(yumeko.id);
     const out = take!.outputs[0]!.asset.id;
-    expect(await act(deleteStudioImage, yumeko.id, out, { confirm: "1" })).toEqual({ ok: true });
+    expect(await act(moveToTrash, yumeko.id, out)).toEqual({ ok: true });
+    // in the Trash, the take is out of the takes (its picture is not among the project's)
+    expect((await stateOf(yumeko.id)).takes.some((t) => t.attemptId === take!.attempt.id)).toBe(false);
+    expect(await deleteFromTrash(form({ assetId: out, confirm: "1" }))).toEqual({ ok: true });
     expect((await repo.generation.getSubjectImageAttempt(take!.attempt.id))!.attempt).toMatchObject({
       status: "succeeded",
       outputAssetId: null,

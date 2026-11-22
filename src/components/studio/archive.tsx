@@ -1,14 +1,9 @@
 "use client";
 
-import { useState } from "react";
 import { ActionForm } from "@/components/action-form";
 import { Button } from "@/components/ui";
-import {
-  archiveStudioImage,
-  deleteArchivedImage,
-  deleteStudioImage,
-  restoreStudioImage,
-} from "@/server/archive-actions";
+import { archiveStudioImage, restoreStudioImage } from "@/server/archive-actions";
+import { moveToTrash } from "@/server/trash-actions";
 import type { StudioArchivedImage } from "@/server/reference-studio";
 
 type Subject = { kind: "character" | "location"; id: string; name: string };
@@ -55,7 +50,7 @@ export function ArchiveButton({
   );
 }
 
-/** This subject's archive: restore any picture, or delete one for good when nothing depends on it. */
+/** This subject's archive: restore any picture, or delete one (to the Trash) when nothing depends on it. */
 export function ArchivedPanel({
   slug,
   subject,
@@ -96,25 +91,16 @@ export function ArchivedPanel({
                   </Button>
                 </ActionForm>
                 {a.deletable ? (
-                  <ActionForm action={deleteArchivedImage} successMessage="Deleted" className="flex flex-col">
+                  <ActionForm action={moveToTrash} successMessage="Moved to the Trash">
                     <Hidden slug={slug} subject={subject} assetId={a.assetId} />
-                    <label className="flex items-center gap-1 text-[11px] text-muted">
-                      <input
-                        type="checkbox"
-                        name="confirm"
-                        value="1"
-                        required
-                        data-testid="studio-delete-confirm"
-                      />
-                      Delete it for good (this can&apos;t be undone)
-                    </label>
                     <Button
                       type="submit"
                       variant="ghost"
-                      className="mt-1 text-fail"
+                      className="text-fail"
+                      title="It stays in the Trash for 30 days, then it is deleted for good."
                       data-testid="studio-delete"
                     >
-                      Delete permanently
+                      Delete
                     </Button>
                   </ActionForm>
                 ) : null}
@@ -133,8 +119,9 @@ export function ArchivedPanel({
 }
 
 /**
- * Delete one picture for good, from where it is shown: "Delete…" asks for a confirmation first. A picture with a job
- * (a view of the reference set, a Look's picture, a Shot, a generation's record) is refused with what to change first.
+ * Delete one picture (or take) from where it is shown: it goes to the Trash for 30 days, where it can be restored. A
+ * picture with a job (a view of the reference set, a Look's picture, a Shot, a generation's record) is refused with
+ * what to change first.
  */
 export function DeleteButton({
   slug,
@@ -147,37 +134,18 @@ export function DeleteButton({
   assetId: string;
   what?: string;
 }) {
-  const [confirming, setConfirming] = useState(false);
-  if (!confirming)
-    return (
+  return (
+    <ActionForm action={moveToTrash} successMessage="Moved to the Trash" className="inline-flex flex-col">
+      <Hidden slug={slug} subject={subject} assetId={assetId} />
       <Button
-        type="button"
+        type="submit"
         variant="ghost"
         className="text-fail"
-        onClick={() => setConfirming(true)}
-        data-testid="picture-delete-open"
+        title={`Move this ${what} to the Trash. You can restore it for 30 days.`}
+        data-testid="picture-delete"
       >
-        Delete…
+        Delete
       </Button>
-    );
-  return (
-    <ActionForm
-      action={deleteStudioImage}
-      successMessage="Deleted"
-      className="flex flex-col gap-1 rounded-[3px] border border-fail/50 p-1.5 text-[11px]"
-      data-testid="picture-delete-confirm"
-    >
-      <Hidden slug={slug} subject={subject} assetId={assetId} />
-      <input type="hidden" name="confirm" value="1" />
-      <span>Delete this {what} for good? This can&apos;t be undone.</span>
-      <span className="flex gap-1">
-        <Button type="submit" variant="ghost" className="text-fail" data-testid="picture-delete">
-          Delete
-        </Button>
-        <Button type="button" variant="ghost" onClick={() => setConfirming(false)}>
-          Cancel
-        </Button>
-      </span>
     </ActionForm>
   );
 }

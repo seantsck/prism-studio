@@ -4,6 +4,7 @@ import { MoreTools, NavLink } from "@/components/nav";
 import { UserMenu } from "@/components/user-menu";
 import { getCurrentUser } from "@/server/auth";
 import { loadProjectCached } from "@/server/repo";
+import { purgeExpiredTrash } from "@/server/trash";
 
 export const dynamic = "force-dynamic";
 
@@ -63,6 +64,9 @@ export default async function ProjectLayout({
   const [data, user] = await Promise.all([loadProjectCached(slug), getCurrentUser()]);
   if (!data) notFound();
   const base = `/projects/${slug}`;
+  // anything 30 days in the Trash is deleted for good when the project is opened (in the owner's own request)
+  const purged = await purgeExpiredTrash(data);
+  const trashed = (data.trashedAssets?.length ?? 0) - purged;
 
   return (
     <div className="flex min-h-screen">
@@ -93,6 +97,11 @@ export default async function ProjectLayout({
             </div>
           ))}
           <MoreTools base={base} items={MORE} />
+          <div className="pt-2">
+            <NavLink href={`${base}/trash`}>
+              Trash{trashed ? <span className="ml-1 text-faint">({trashed})</span> : null}
+            </NavLink>
+          </div>
         </nav>
         <div className="border-t border-line px-4 py-2">{user ? <UserMenu user={user} /> : null}</div>
       </aside>
