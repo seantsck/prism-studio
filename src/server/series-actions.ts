@@ -8,9 +8,17 @@ import {
   seasonRefineInstruction,
   wholeScriptInstruction,
 } from "@/domain/series-start";
+import {
+  BIBLE_AI_FIELDS,
+  bibleDraftInstruction,
+  bibleRefineInstruction,
+  isBibleRequest,
+  parseBibleIdeas,
+} from "@/domain/bible-ai";
+import { bibleSchema } from "@/domain/schemas";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { getRepo, requireProjectFresh } from "./repo";
-import { quoteSeasonPlan, quoteWriting, resolveWriter } from "./series-start";
+import { quoteBible, quoteSeasonPlan, quoteWriting, resolveWriter } from "./series-start";
 import { getWritingRepo } from "./story";
 import { askPrism } from "./writing-actions";
 
@@ -72,6 +80,57 @@ async function planSeason_impl(form: FormData) {
     ok: true as const,
     message: refine ? "Prism is revising the plan…" : "Prism is planning the season…",
   };
+}
+
+/**
+ * Draft the Bible with Prism (from the premise and the plan), or, with a note, refine it (Prism gets the Bible as it
+ * stands). Either is a brainstorm whose ideas are the Bible's fields, reviewed field by field before anything changes.
+ */
+async function draftBible_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const data = await requireProjectFresh(slug);
+  const refine = str(form, "refine") === "1";
+  const note = str(form, "note").slice(0, REFINE_NOTE_MAX);
+  if (refine && !note) throw new UserFacingError("Tell Prism what to change in the Bible.");
+  const q = quoteBible(data, str(form, "model"), { refine });
+  if (!q.ok) throw new UserFacingError(q.reason);
+  confirmed(form, q.usd, q.paid);
+  const first = [...data.episodes].sort((a, b) => a.number - b.number)[0]!;
+  await queue({
+    projectSlug: slug,
+    episodeId: first.id,
+    preset: "brainstorm",
+    scopeKind: "episode",
+    instruction: refine ? bibleRefineInstruction(data, note) : bibleDraftInstruction(data),
+    model: q.model,
+    withPlan: "1",
+    ...(refine ? { withBible: "1" } : {}),
+    ...(q.paid ? { confirmedTotalUsd: q.usd.toFixed(4) } : {}),
+  });
+  revalidatePath(`/projects/${slug}`, "layout");
+  return {
+    ok: true as const,
+    message: refine ? "Prism is revising the Bible…" : "Prism is drafting the Bible…",
+  };
+}
+
+/** Apply the fields of a Bible draft the creator ticked; everything else in the Bible stays as it is. */
+async function applyBibleDraft_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const data = await requireProjectFresh(slug);
+  const proposal = await (await getWritingRepo()).getProposal(data.project.id, str(form, "proposalId"));
+  if (!proposal || !isBibleRequest(proposal.instruction) || proposal.status !== "ready" || !proposal.result)
+    throw new UserFacingError("That Bible draft is not ready.");
+  const proposed = parseBibleIdeas(proposal.result.ideas);
+  const chosen = BIBLE_AI_FIELDS.filter(
+    (f) => str(form, `use_${f.key}`) === "1" && proposed[f.key] !== undefined,
+  );
+  if (chosen.length === 0) throw new UserFacingError("Tick the fields you want to use.");
+  const next = { ...data.bible, updatedAt: new Date().toISOString() };
+  for (const f of chosen) (next as Record<string, unknown>)[f.key] = proposed[f.key];
+  await (await getRepo()).saveBible(bibleSchema.parse(next));
+  revalidatePath(`/projects/${slug}`, "layout");
+  return { ok: true as const, message: `${chosen.length} field${chosen.length === 1 ? "" : "s"} applied.` };
 }
 
 /** Save the creator's own edits to the plan: each Episode's title and synopsis (scripts are untouched). */
@@ -147,6 +206,14 @@ async function writeWhole_impl(form: FormData) {
 
 export async function planSeason(form: FormData): Promise<ActionResult> {
   return runAction(() => planSeason_impl(form), { name: "planSeason" });
+}
+
+export async function draftBible(form: FormData): Promise<ActionResult> {
+  return runAction(() => draftBible_impl(form), { name: "draftBible" });
+}
+
+export async function applyBibleDraft(form: FormData): Promise<ActionResult> {
+  return runAction(() => applyBibleDraft_impl(form), { name: "applyBibleDraft" });
 }
 
 export async function saveSeasonPlan(form: FormData): Promise<ActionResult> {

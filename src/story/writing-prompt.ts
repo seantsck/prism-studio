@@ -62,6 +62,8 @@ export interface WritingContext {
   longForm?: LongFormPlan;
   /** A brainstorm asked for more ideas than the database records as requested (a season plan of 11+ episodes). */
   ideaCount?: number;
+  /** The project Bible as it stands, field by field (refining it). */
+  bible?: Record<string, string>;
   /** A season's plan, so each Episode written from it stays consistent with the others. */
   seasonPlan?: Array<{ episode: number; title: string; synopsis: string }>;
 }

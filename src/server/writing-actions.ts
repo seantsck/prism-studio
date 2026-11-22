@@ -217,6 +217,7 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
     model,
     longForm,
     withPlan: str(form, "withPlan") === "1",
+    withBible: str(form, "withBible") === "1",
   });
   if (tooLong)
     throw new UserFacingError("This request is too long for the model. Choose a Scene or a shorter passage.");

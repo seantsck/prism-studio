@@ -1,3 +1,4 @@
+import { BIBLE_AI_FIELDS, isBibleRequest } from "@/domain/bible-ai";
 import type { WritingResult } from "@/domain/story/writing";
 import type { WritingRequest } from "../provider";
 
@@ -117,6 +118,17 @@ export function fakeWriting(req: WritingRequest): WritingResult {
   const first = names[0] ?? present[0] ?? "She";
   const pair = (names.length ? names : present).slice(0, 2).join(" and ") || "the characters";
   const source = req.draftText ?? req.targetText;
+
+  // a Bible request: one idea per Bible field, named as asked (a test pattern, never a real Bible)
+  if (req.mode === "brainstorm" && isBibleRequest(req.instruction)) {
+    const ideas = BIBLE_AI_FIELDS.slice(0, req.count).map((f) => ({
+      title: f.key,
+      detail: f.list
+        ? [`Test ${f.label.toLowerCase()} one.`, `Test ${f.label.toLowerCase()} two.`].join("\n")
+        : `Test ${f.label.toLowerCase()} for ${req.context.project || "this project"}.`,
+    }));
+    return { message: "Here is a test Bible (a placeholder from the test writer).", alternatives: [], ideas };
+  }
 
   if (req.mode === "brainstorm") {
     const ideas = Array.from({ length: req.count }, (_, i) => {

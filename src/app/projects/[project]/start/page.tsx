@@ -96,6 +96,7 @@ export default async function StartPage({ params }: { params: Promise<{ project:
   const analyzeQuote = first && firstScripted && !applied ? quoteAnalyzeEpisode(first) : null;
 
   const written = episodes.length > 0 && scripted === episodes.length;
+  const bibleShaped = !!(data.bible.visualStyle.trim() && data.bible.tone.trim());
   const writeState: StepState = written
     ? "done"
     : premise && (kind !== "series" || planned)
@@ -266,6 +267,26 @@ export default async function StartPage({ params }: { params: Promise<{ project:
             )}
           </Step>
         ) : null}
+
+        <Step
+          n={next()}
+          state={bibleShaped ? "done" : premise ? "now" : "later"}
+          title="Shape the Bible (optional)"
+          testId="start-bible"
+        >
+          <p className="text-[13px] text-muted">
+            {bibleShaped
+              ? "Your Bible has its look, rules and canon. Prism follows it when it writes the episodes."
+              : "Prism can draft the look, tone, rules and canon from your premise and plan, and refine them with your notes. You review every field."}{" "}
+            <Link
+              href={`${base}/bible`}
+              className="text-accent hover:underline"
+              data-testid="start-bible-open"
+            >
+              {bibleShaped ? "Open the Bible" : "Shape it with Prism"}
+            </Link>
+          </p>
+        </Step>
 
         <Step
           n={next()}

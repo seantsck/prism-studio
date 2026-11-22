@@ -190,15 +190,23 @@ language. The project is created with the premise in its Bible and its Episodes 
    (`seasonPlan` in the context) and returns the whole revised plan, shown beside yours; nothing changes until **Use
    this plan**. Refining is priced as a ceiling for the longest note (`REFINE_NOTE_MAX`). A plan of more than 10
    episodes records 10 as requested (the database's limit) and carries its real count in its context (`ideaCount`).
-3. **Write it** (`WriteIt`): choose the writer (**Recommended by Prism**, or a named model; the free test writer is
+3. **Shape the Bible (optional)**: opens the Bible page, whose **Shape the Bible with Prism** panel drafts every
+   creative field (premise, genre, tone, visual style, color language, cinematography rules, dialogue language and
+   subtitle strategies, audio philosophy, canon facts, continuity rules; never the technical format or the house
+   guardrails) from the premise and the season plan, or refines the Bible as it stands with a note. A draft is a
+   brainstorm whose ideas are the fields (`src/domain/bible-ai.ts`, `parseBibleIdeas`); it is shown beside the current
+   Bible field by field, ticked where they differ, and only the ticked fields are applied (`applyBibleDraft`). The Bible
+   stays editable by hand below. Writing a whole Episode or film sends the Bible's filled fields (`bible` in the
+   context) and asks the writer to follow them.
+4. **Write it** (`WriteIt`): choose the writer (**Recommended by Prism**, or a named model; the free test writer is
    listed only on a test server, `PRISM_STUDIO_SHOW_TEST_MODELS=1`) and, for a series, **Episode N only** or **All N
    episodes**; a film is written whole. **Write…** opens a confirmation with the writer and the most it can cost;
    nothing runs before **Write** there. Each Episode (or the film) is ONE writing request (`length=whole`) that the
    Story worker writes in parts (`longFormPlan`: a series episode 2 × 8 000 tokens, a short 2 × 6 000, a film
    4 × 10 000), each part continuing from the tail of the text so far (`LONG_FORM_TAIL_CHARS`), into one proposal to
    review and accept on its Write page. Writing leases last 30 minutes (`WRITING_LEASE_MS`).
-4. **Turn it into a Bible, cast, places and Shots**: Import Story on Episode 1 (or the film).
-5. **Carry on in any order** from Home.
+5. **Turn it into a Bible, cast, places and Shots**: Import Story on Episode 1 (or the film).
+6. **Carry on in any order** from Home.
 
 Every price is worked out by `priceWriting` (`src/server/writing-price.ts`), the same function the writing action uses,
 so the confirmed amount is what each request is accepted at: a whole Episode is priced as a ceiling for every part; "all

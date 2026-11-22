@@ -65,9 +65,18 @@ vi.mock("@/server/storage", () => {
 });
 
 import { createProject, startFromPremise } from "../actions";
-import { applySeasonPlan, planSeason, saveSeasonPlan, writeWhole } from "../series-actions";
+import {
+  applyBibleDraft,
+  applySeasonPlan,
+  draftBible,
+  planSeason,
+  saveSeasonPlan,
+  writeWhole,
+} from "../series-actions";
+import { BIBLE_AI_FIELDS, parseBibleIdeas } from "@/domain/bible-ai";
 import {
   quoteAnalyzeEpisode,
+  quoteBible,
   quoteSeasonPlan,
   quoteWhole,
   quoteWriting,
@@ -454,5 +463,137 @@ describe("starting a series from a prompt", () => {
     const [p] = (await proposalsOf(slug)).filter((x) => x.mode === "brainstorm");
     expect(p).toMatchObject({ spendAuthorization: "confirmed" });
     expect(p!.estimate.usd).toBeLessThanOrEqual(q.usd);
+  });
+
+  it("a Bible draft's ideas are read as its fields: by name or label, list fields one item a line", () => {
+    expect(
+      parseBibleIdeas([
+        { title: "genre", detail: " Romantic comedy " },
+        { title: "Visual Style", detail: "Warm tungsten interiors." },
+        {
+          title: "cinematographyRules",
+          detail: "- Lock the camera at dinner\n2. Handheld only when she lies\n\n",
+        },
+        { title: "Something else", detail: "ignored" },
+        { title: "genre", detail: "a second genre is ignored" },
+      ]),
+    ).toEqual({
+      genre: "Romantic comedy",
+      visualStyle: "Warm tungsten interiors.",
+      cinematographyRules: ["Lock the camera at dinner", "Handheld only when she lies"],
+    });
+  });
+
+  it("the Bible is drafted and refined with Prism, reviewed field by field, applied only where ticked", async () => {
+    const { slug } = await newSeries();
+    let data = (await repo.loadProject(slug))!;
+    // a plan, so the draft has one to read
+    for (const e of data.episodes)
+      await repo.upsert(data.project.id, "episodes", { ...e, synopsis: `Plan ${e.number}.` });
+    expect(await draftBible(form({ projectSlug: slug }))).toMatchObject({
+      ok: true,
+      message: "Prism is drafting the Bible…",
+    });
+    const [draft] = (await proposalsOf(slug)).filter((p) =>
+      p.instruction.startsWith("Draft the project Bible"),
+    );
+    expect(draft).toMatchObject({ mode: "brainstorm", status: "queued", alternativesRequested: 10 });
+    expect(draft!.context.ideaCount).toBe(BIBLE_AI_FIELDS.length);
+    expect(draft!.context.seasonPlan).toHaveLength(8);
+    // the worker's answer: one idea per field
+    const claimed = (await repo.writing.claim("w", 60_000, new Date().toISOString()))!;
+    expect(claimed.id).toBe(draft!.id);
+    await repo.writing.complete(draft!.id, "w", {
+      result: {
+        message: "Here is a Bible.",
+        alternatives: [],
+        ideas: BIBLE_AI_FIELDS.map((f) => ({
+          title: f.key,
+          detail: f.list ? `First ${f.key}\nSecond ${f.key}` : `Prism ${f.label}`,
+        })),
+      },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      actualUsd: 0,
+      providerCalls: 1,
+      now: new Date().toISOString(),
+    });
+    expect(await applyBibleDraft(form({ projectSlug: slug, proposalId: draft!.id }))).toMatchObject({
+      ok: false,
+      error: "Tick the fields you want to use.",
+    });
+    const before = (await repo.loadProject(slug))!.bible;
+    expect(
+      await applyBibleDraft(
+        form({ projectSlug: slug, proposalId: draft!.id, use_genre: "1", use_cinematographyRules: "1" }),
+      ),
+    ).toMatchObject({ ok: true, message: "2 fields applied." });
+    data = (await repo.loadProject(slug))!;
+    expect(data.bible.genre).toBe("Prism Genre");
+    expect(data.bible.cinematographyRules).toEqual([
+      "First cinematographyRules",
+      "Second cinematographyRules",
+    ]);
+    // everything not ticked is as it was (the premise, the house guardrails, the format)
+    expect(data.bible.premise).toBe(before.premise);
+    expect(data.bible.tone).toBe(before.tone);
+    expect(data.bible.guardrails).toEqual(before.guardrails);
+    expect(data.bible.aspectRatio).toBe(before.aspectRatio);
+
+    // refine: a note is required; Prism gets the Bible as it stands
+    expect(await draftBible(form({ projectSlug: slug, refine: "1", note: "" }))).toMatchObject({
+      ok: false,
+      error: "Tell Prism what to change in the Bible.",
+    });
+    expect(await draftBible(form({ projectSlug: slug, refine: "1", note: "Warmer, please." }))).toMatchObject(
+      {
+        ok: true,
+        message: "Prism is revising the Bible…",
+      },
+    );
+    const refine = (await proposalsOf(slug)).find((p) =>
+      p.instruction.startsWith("Revise the project Bible"),
+    )!;
+    expect(refine.instruction).toContain("Creator's note: Warmer, please.");
+    expect(refine.context.bible).toMatchObject({ genre: "Prism Genre" });
+
+    // writing a whole Episode follows the Bible: what it has goes with the request
+    expect(await writeWhole(form({ projectSlug: slug, scope: "one" }))).toEqual({ ok: true });
+    const whole = (await proposalsOf(slug)).find((p) => p.context.longForm)!;
+    expect(whole.context.bible).toMatchObject({ genre: "Prism Genre" });
+    expect(whole.context.bible!.visualStyle).toBeUndefined(); // empty fields are not sent
+    expect(whole.instruction).toContain("follow it");
+  });
+
+  it("paid: drafting and refining the Bible are priced first and accepted within that price", async () => {
+    const { slug } = await newSeries();
+    process.env.PRISM_STUDIO_ALLOW_PAID_STORY_AI = "true";
+    delete process.env.PRISM_STUDIO_ENABLE_MOCK_PROVIDER;
+    const data = (await repo.loadProject(slug))!;
+    const d = quoteBible(data);
+    const r = quoteBible(data, null, { refine: true });
+    if (!d.ok || !r.ok) throw new Error("not priced");
+    expect(await draftBible(form({ projectSlug: slug, model: d.model }))).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("Confirm that amount"),
+    });
+    expect(
+      await draftBible(form({ projectSlug: slug, model: d.model, confirmedTotalUsd: d.usd.toFixed(4) })),
+    ).toMatchObject({ ok: true });
+    expect(
+      await draftBible(
+        form({
+          projectSlug: slug,
+          refine: "1",
+          note: "東".repeat(600),
+          model: r.model,
+          confirmedTotalUsd: r.usd.toFixed(4),
+        }),
+      ),
+    ).toMatchObject({ ok: true });
+    const asked = (await proposalsOf(slug)).filter((p) => p.mode === "brainstorm");
+    expect(asked).toHaveLength(2);
+    for (const p of asked) expect(p.spendAuthorization).toBe("confirmed");
+    const refined = asked.find((p) => p.instruction.startsWith("Revise"))!;
+    expect(refined.estimate.usd).toBeLessThanOrEqual(r.usd);
   });
 });

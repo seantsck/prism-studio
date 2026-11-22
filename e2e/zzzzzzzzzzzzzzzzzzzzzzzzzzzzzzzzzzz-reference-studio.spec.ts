@@ -1373,3 +1373,49 @@ test("U: a film from the Projects page: written whole, with the writer and the p
       .filter({ hasText: "A night-shift paramedic keeps getting calls" }),
   ).toContainText("Film");
 });
+
+test("V: the Bible drafted with Prism, reviewed field by field, applied where ticked, then refined (free here)", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  // the series made in story Q
+  await page.goto("/projects/night-counter/start");
+  await expect(page.getByTestId("start-bible")).toHaveAttribute("data-state", "now");
+  await page.getByTestId("start-bible-open").click();
+  await expect(page).toHaveURL(/\/projects\/night-counter\/bible$/);
+  const panel = page.getByTestId("bible-ai");
+  await expect(panel.getByTestId("bible-ai-draft")).toHaveText(/^Draft the Bible · free with /);
+  await panel.getByTestId("bible-ai-draft").click();
+  const review = page.getByTestId("bible-ai-review");
+  await expect(async () => {
+    await page.reload();
+    await expect(review).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 30_000 });
+  const fields = review.getByTestId("bible-ai-field");
+  await expect(fields).toHaveCount(11);
+  // keep only the genre: untick the rest
+  for (const f of await fields.all())
+    if ((await f.getAttribute("data-field")) !== "genre") {
+      const box = f.getByRole("checkbox");
+      if (await box.isChecked()) await box.uncheck();
+    }
+  const genreBefore = await page.locator('input[name="genre"]').inputValue();
+  const toneBefore = await page.locator('input[name="tone"]').inputValue();
+  await review.getByTestId("bible-ai-apply").click();
+  await expect(page.locator('input[name="genre"]')).toHaveValue("Test genre for Night Counter.", {
+    timeout: 30_000,
+  });
+  expect(genreBefore).not.toBe("Test genre for Night Counter.");
+  await expect(page.locator('input[name="tone"]')).toHaveValue(toneBefore); // not ticked: unchanged
+  await expect(review).toHaveCount(0); // applied: the draft is done
+
+  // refine with a note: a new version to review, nothing changed until it is applied
+  const refine = page.getByTestId("bible-ai-refine");
+  await refine.getByTestId("bible-ai-note").fill("Warmer, and mostly Japanese dialogue.");
+  await refine.getByTestId("bible-ai-refine-go").click();
+  await expect(async () => {
+    await page.reload();
+    await expect(page.getByTestId("bible-ai-review")).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 30_000 });
+  await expect(page.locator('input[name="tone"]')).toHaveValue(toneBefore);
+});
