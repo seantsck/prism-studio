@@ -27,22 +27,23 @@ export function ArchiveButton({
   subject,
   assetId,
   what = "picture",
+  label = "Archive",
 }: {
   slug: string;
   subject: Subject;
   assetId: string;
   what?: string;
+  label?: string;
 }) {
   return (
     <ActionForm action={archiveStudioImage} successMessage="Archived" className="inline-flex flex-col">
       <Hidden slug={slug} subject={subject} assetId={assetId} />
       <Button
         type="submit"
-        variant="ghost"
-        title={`Hide this ${what} from the Studio. It is kept, never sent, and can be restored from Archived.`}
+        title={`Hide this ${what}. It is kept, never sent, and can be restored or deleted from Archived.`}
         data-testid="studio-archive"
       >
-        Archive
+        {label}
       </Button>
     </ActionForm>
   );
