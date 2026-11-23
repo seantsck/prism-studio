@@ -28,8 +28,11 @@ import { ArchiveButton, ArchivedPanel, DeleteButton, DeleteSubjectButton } from 
 import { LibraryToggle } from "@/components/characters/library";
 import { UseInProject } from "@/components/library/use-in-project";
 import { CharacterAi } from "@/components/characters/character-ai";
-import { ReferencePlanPanel } from "@/components/characters/reference-plan";
-import { referencePlan } from "@/domain/generation/reference-plan";
+import { ReferenceViewsPanel, type ViewState } from "@/components/characters/reference-views";
+import { referenceSetViewOf } from "@/domain/generation/reference-studio";
+import { quoteReferenceViews } from "@/server/reference-views";
+import { getGenerationConfig } from "@/server/generation";
+import { randomUUID } from "node:crypto";
 import type { WritingProposal } from "@/data/writing-repository";
 import { characterSheetThin, isCharacterRequest } from "@/domain/character-ai";
 import { quoteCharacterFill } from "@/server/series-start";
@@ -75,6 +78,34 @@ export default async function CharacterPage({
   // every picture of this Character (their photos, Look pictures, finished takes), each with Archive, and the archive
   const pictures = await referenceStudioState(data, `character:${c.id}`);
   const ownPhotos = pictures.images.filter((i) => i.origin === "uploaded").length;
+  // each reference view: in the set, being made, made and waiting to be added, or still to make (and its price)
+  const IN_FLIGHT = new Set([
+    "queued",
+    "submitting",
+    "submitted",
+    "processing",
+    "ingesting",
+    "cancel_requested",
+  ]);
+  const viewStates: Record<string, ViewState> = {};
+  for (const v of pictures.referenceSet) viewStates[v.id] = v.assetId ? "in_set" : "missing";
+  for (const t of pictures.takes) {
+    const view = referenceSetViewOf(t.settings.intent);
+    if (!view || viewStates[view] === "in_set") continue;
+    if (IN_FLIGHT.has(t.status)) viewStates[view] = "making";
+    else if (t.status === "succeeded" && !t.rejected && t.asset && viewStates[view] !== "making")
+      viewStates[view] = "made";
+  }
+  const viewsQuote = await quoteReferenceViews(
+    data,
+    c,
+    new Set(
+      Object.entries(viewStates)
+        .filter(([, s]) => s !== "missing")
+        .map(([id]) => id),
+    ),
+    null,
+  );
   const archiveSubject = { kind: "character" as const, id: c.id, name: c.name };
   const repo = await getRepo();
   const library = await repo.libraryEntries();
@@ -129,14 +160,69 @@ export default async function CharacterPage({
           prominent={characterSheetThin(c)}
           filled={auto.filled}
         />
-        <ReferencePlanPanel
+        <Panel title="Character">
+          {/* keyed by the sheet's version: Prism's filled-in fields show here at once */}
+          <ActionForm key={c.updatedAt} action={saveCharacter} className="space-y-3">
+            {hidden}
+            <input type="hidden" name="id" value={c.id} />
+            {inLibrary ? (
+              <>
+                {/* the role is set per project, on each project's copy */}
+                <input type="hidden" name="role" value={c.role} />
+                <Field label="Name">
+                  <input name="name" defaultValue={c.name} />
+                </Field>
+              </>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Name">
+                  <input name="name" defaultValue={c.name} />
+                </Field>
+                <Field label="Role" hint="In this project, e.g. Lead — heiress">
+                  <input name="role" defaultValue={c.role} />
+                </Field>
+              </div>
+            )}
+            <Field label="Description">
+              <textarea name="description" rows={2} defaultValue={c.description} />
+            </Field>
+            <Field label="Personality">
+              <textarea name="personality" rows={2} defaultValue={c.personality} />
+            </Field>
+            <Field label="Behavior notes">
+              <textarea name="behaviorNotes" rows={2} defaultValue={c.behaviorNotes} />
+            </Field>
+            <Field label="Physical description">
+              <textarea name="physicalDescription" rows={2} defaultValue={c.physicalDescription} />
+            </Field>
+            <Field label="Signature behavior">
+              <input name="signatureBehavior" defaultValue={c.signatureBehavior} />
+            </Field>
+            {inLibrary ? (
+              <input type="hidden" name="relationshipNotes" value={c.relationshipNotes} />
+            ) : (
+              <Field label="Relationship notes">
+                <textarea name="relationshipNotes" rows={2} defaultValue={c.relationshipNotes} />
+              </Field>
+            )}
+            <Field label="Continuity rules" hint="One per line">
+              <textarea name="continuityRules" rows={3} defaultValue={join(c.continuityRules)} />
+            </Field>
+            <Button type="submit" variant="primary">
+              Save character
+            </Button>
+          </ActionForm>
+        </Panel>
+        <ReferenceViewsPanel
+          slug={slug}
+          characterId={c.id}
           name={c.name}
-          plan={referencePlan(
-            new Set(pictures.referenceSet.filter((v) => v.assetId).map((v) => v.id)),
-            ownPhotos,
-          )}
+          quote={viewsQuote}
+          states={viewStates}
           photos={ownPhotos}
           studioHref={`/projects/${slug}/studio?subject=character:${c.id}`}
+          batchId={randomUUID()}
+          atOnce={getGenerationConfig().limits.maxActivePerProject}
         />
         {inLibrary ? (
           <div className="xl:col-span-2">
@@ -222,62 +308,10 @@ export default async function CharacterPage({
             hostedMatting={images.hostedMatting}
           />
         </div>
-        <Panel title="Character">
-          {/* keyed by the sheet's version: Prism's filled-in fields show here at once */}
-          <ActionForm key={c.updatedAt} action={saveCharacter} className="space-y-3">
-            {hidden}
-            <input type="hidden" name="id" value={c.id} />
-            {inLibrary ? (
-              <>
-                {/* the role is set per project, on each project's copy */}
-                <input type="hidden" name="role" value={c.role} />
-                <Field label="Name">
-                  <input name="name" defaultValue={c.name} />
-                </Field>
-              </>
-            ) : (
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Name">
-                  <input name="name" defaultValue={c.name} />
-                </Field>
-                <Field label="Role" hint="In this project, e.g. Lead — heiress">
-                  <input name="role" defaultValue={c.role} />
-                </Field>
-              </div>
-            )}
-            <Field label="Description">
-              <textarea name="description" rows={2} defaultValue={c.description} />
-            </Field>
-            <Field label="Personality">
-              <textarea name="personality" rows={2} defaultValue={c.personality} />
-            </Field>
-            <Field label="Behavior notes">
-              <textarea name="behaviorNotes" rows={2} defaultValue={c.behaviorNotes} />
-            </Field>
-            <Field label="Physical description">
-              <textarea name="physicalDescription" rows={2} defaultValue={c.physicalDescription} />
-            </Field>
-            <Field label="Signature behavior">
-              <input name="signatureBehavior" defaultValue={c.signatureBehavior} />
-            </Field>
-            {inLibrary ? (
-              <input type="hidden" name="relationshipNotes" value={c.relationshipNotes} />
-            ) : (
-              <Field label="Relationship notes">
-                <textarea name="relationshipNotes" rows={2} defaultValue={c.relationshipNotes} />
-              </Field>
-            )}
-            <Field label="Continuity rules" hint="One per line">
-              <textarea name="continuityRules" rows={3} defaultValue={join(c.continuityRules)} />
-            </Field>
-            <Button type="submit" variant="primary">
-              Save character
-            </Button>
-          </ActionForm>
-        </Panel>
 
         <Panel
           title="Identity references"
+          className="xl:col-span-2"
           actions={
             <ActionForm action={setIdentityLocked}>
               {hidden}

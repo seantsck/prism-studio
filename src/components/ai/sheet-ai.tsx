@@ -123,8 +123,8 @@ export function SheetAi({
             {hidden}
             <input type="hidden" name="proposalId" value={latest!.id} />
             <p className="text-[13px] text-muted">
-              Prism&apos;s suggestion, beside yours. What you left empty is ticked; what you wrote stays as
-              you wrote it unless you tick Prism&apos;s version. Edit anything, then apply.
+              Prism also suggests new wording for what you wrote. Yours stays unless you tick Prism&apos;s
+              version (edit it first if you like) and apply.
             </p>
             <ul className="space-y-3">
               {offered.map((f) => {
