@@ -2,6 +2,7 @@ import "server-only";
 import { REFERENCE_SET_VIEWS } from "@/domain/generation/reference-studio";
 import { REFERENCE_PHOTOS_BEST, REFERENCE_PLAN_MODEL } from "@/domain/generation/reference-plan";
 import { referenceOrigin } from "@/domain/generation/reference-integrity";
+import { isOffered } from "@/domain/generation/models/offered";
 import type { Character, ProjectData } from "@/domain/schemas";
 import { prepareSubjectImage } from "@/generation/subject-submission";
 import { UserFacingError } from "./action-result";
@@ -99,15 +100,26 @@ async function prepareView(
   };
 }
 
+/** The model Prism suggests for reference views, as "provider/modelId". */
+export const SUGGESTED_VIEWS_MODEL = `${REFERENCE_PLAN_MODEL.provider}/${REFERENCE_PLAN_MODEL.modelId}`;
+
+/** "provider/modelId" → the registry's model (null when it is not a model of this deployment). */
+function modelOf(model: string) {
+  const at = model.indexOf("/");
+  if (at <= 0 || !isOffered(model.slice(0, at), model.slice(at + 1))) return null;
+  return getRegistry().model(model.slice(0, at), model.slice(at + 1)) ?? null;
+}
+
 export async function quoteReferenceViews(
   data: ProjectData,
   character: Character,
   done: ReadonlySet<string>,
   userId: string | null,
+  /** the engine the creator chose ("provider/modelId"); Prism's suggestion when not given */
+  model: string = SUGGESTED_VIEWS_MODEL,
 ): Promise<ViewsQuote> {
-  const model = `${REFERENCE_PLAN_MODEL.provider}/${REFERENCE_PLAN_MODEL.modelId}`;
   const registry = getRegistry();
-  const m = registry.model(REFERENCE_PLAN_MODEL.provider, REFERENCE_PLAN_MODEL.modelId);
+  const m = modelOf(model);
   const { photos, front } = await startingImages(data, character);
   const views: ViewQuote[] = [];
   for (const v of REFERENCE_SET_VIEWS) {
@@ -156,12 +168,13 @@ export async function prepareReferenceView(
   viewId: string,
   userId: string | null,
   key: string,
+  model: string = SUGGESTED_VIEWS_MODEL,
 ) {
   const v = REFERENCE_SET_VIEWS.find((x) => x.id === viewId);
   if (!v) throw new UserFacingError("Choose one of the reference views.");
+  if (!modelOf(model)) throw new UserFacingError("Choose an engine for the views.");
   const { photos, front } = await startingImages(data, character);
   const start = photos.length ? photos : v.id !== "front" && front ? [front] : [];
-  const model = `${REFERENCE_PLAN_MODEL.provider}/${REFERENCE_PLAN_MODEL.modelId}`;
   const { prepared, registry, req } = await prepareView(data, character, v.intent, start, model, userId, key);
   const m = registry.model(req.provider, req.modelId);
   return { view: v, prepared, paid: !!m && registry.billsMoney(m) };

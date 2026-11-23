@@ -54,6 +54,7 @@ export function CharacterAi({
   return (
     <SheetAi
       testId="character-ai"
+      title="1. Fill in the sheet with Prism"
       anchorId="character-ai"
       prompt={character.description}
       name={character.name}

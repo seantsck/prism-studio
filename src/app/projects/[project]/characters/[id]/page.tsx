@@ -33,7 +33,7 @@ import { PART_SIZE_HINT, PART_SIZE_LABEL, partSizeOf } from "@/domain/character-
 import { PART_SIZES } from "@/domain/schemas";
 import { ReferenceViewsPanel, type ViewState } from "@/components/characters/reference-views";
 import { referenceSetViewOf } from "@/domain/generation/reference-studio";
-import { quoteReferenceViews } from "@/server/reference-views";
+import { quoteReferenceViews, SUGGESTED_VIEWS_MODEL } from "@/server/reference-views";
 import { getGenerationConfig, getGenerationRepo } from "@/server/generation";
 import { randomUUID } from "node:crypto";
 import type { WritingProposal } from "@/data/writing-repository";
@@ -51,10 +51,11 @@ export default async function CharacterPage({
   searchParams,
 }: {
   params: Promise<{ project: string; id: string }>;
-  searchParams: Promise<{ new?: string }>;
+  searchParams: Promise<{ new?: string; engine?: string }>;
 }) {
   const { project: slug, id } = await params;
-  const fresh = (await searchParams).new === "1";
+  const query = await searchParams;
+  const fresh = query.new === "1";
   const data = await requireProject(slug);
   const found = data.characters.find((x) => x.id === id);
   if (!found) notFound();
@@ -113,6 +114,33 @@ export default async function CharacterPage({
   const viewFailures: Record<string, string> = {};
   for (const [view, t] of Object.entries(lastTry))
     if (t.error && viewStates[view] === "missing") viewFailures[view] = t.error;
+  // the picture each view has: the one in the set, else the newest finished take waiting to be added
+  const viewPictures: Record<string, { url: string | null; attemptId: string | null }> = {};
+  for (const v of pictures.referenceSet) if (v.assetId) viewPictures[v.id] = { url: v.url, attemptId: null };
+  const newestMade: Record<string, string> = {};
+  for (const t of pictures.takes) {
+    const view = referenceSetViewOf(t.settings.intent);
+    if (!view || viewStates[view] !== "made" || t.status !== "succeeded" || t.rejected || !t.asset) continue;
+    if (newestMade[view] && newestMade[view]! >= t.createdAt) continue;
+    newestMade[view] = t.createdAt;
+    viewPictures[view] = { url: t.asset.url, attemptId: t.attemptId };
+  }
+  // the engines that can make the views: they take the photos (or the front view), or, with neither, draw from words
+  const engines = pictures.models
+    .filter((m) => m.images || m.text)
+    .map((m) => ({
+      value: m.value,
+      label: m.label,
+      paid: m.paid,
+      available: m.available,
+      unavailable: m.unavailable,
+    }));
+  const usableEngines = engines.filter((e) => e.available);
+  const engine =
+    usableEngines.find((e) => e.value === query.engine)?.value ??
+    usableEngines.find((e) => e.value === SUGGESTED_VIEWS_MODEL)?.value ??
+    usableEngines[0]?.value ??
+    SUGGESTED_VIEWS_MODEL;
   const viewsQuote = await quoteReferenceViews(
     data,
     c,
@@ -122,6 +150,7 @@ export default async function CharacterPage({
         .map(([id]) => id),
     ),
     null,
+    engine,
   );
   // how many of the project's generation slots are busy (any subject): views that don't fit wait their turn
   const activeInProject = (await (await getGenerationRepo()).listActiveProjectJobs(data.project.id)).length;
@@ -193,7 +222,7 @@ export default async function CharacterPage({
               Date.parse(aiLast.decidedAt ?? aiLast.completedAt ?? aiLast.createdAt) + 2_000
           }
         />
-        <Panel title="Character">
+        <Panel title="2. Character">
           {/* keyed by the sheet's version: Prism's filled-in fields show here at once */}
           <ActionForm key={c.updatedAt} action={saveCharacter} className="space-y-3">
             {hidden}
@@ -269,6 +298,9 @@ export default async function CharacterPage({
           quote={viewsQuote}
           states={viewStates}
           failures={viewFailures}
+          pictures={viewPictures}
+          engines={engines}
+          suggestedEngine={SUGGESTED_VIEWS_MODEL}
           photos={ownPhotos}
           studioHref={`/projects/${slug}/studio?subject=character:${c.id}`}
           batchId={randomUUID()}

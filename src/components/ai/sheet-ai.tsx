@@ -48,7 +48,10 @@ export function SheetAi({
   fillButtonText,
   refineMode = false,
   editedHint,
+  title = "Fill in the sheet with Prism",
 }: {
+  /** the panel's title */
+  title?: string;
   /** "character-ai" / "location-ai": the prefix of every test id */
   testId: string;
   name: string;
@@ -93,10 +96,7 @@ export function SheetAi({
     : [];
   const reviewing = offered.length > 0;
   return (
-    <Panel
-      title="Fill in the sheet with Prism"
-      className={[prominent ? "border-accent/50" : "", className ?? ""].join(" ").trim()}
-    >
+    <Panel title={title} className={[prominent ? "border-accent/50" : "", className ?? ""].join(" ").trim()}>
       <div className="scroll-mt-4 space-y-3" data-testid={testId} id={anchorId}>
         <RefreshWhileActive active={pending} intervalMs={3000} />
         {prompt?.trim() ? (

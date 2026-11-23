@@ -1921,6 +1921,58 @@ test("ZE: a character's page makes the ticked reference views, one by one or all
   await expect(page.getByTestId("reference-views-waiting")).toHaveText("0 waiting", { timeout: 30_000 });
 });
 
+test("ZG: the views are made with the engine picked beside them, and what is added to the set fills the Visual Bible", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  await page.goto("/");
+  const box = page.getByTestId("new-character");
+  await box
+    .getByTestId("new-character-prompt")
+    .fill("A tall fisherman with a grey beard and a yellow raincoat.");
+  await box.getByTestId("new-character-name").fill("Isamu");
+  await box.getByTestId("new-character-fill").locator("input").uncheck();
+  await box.getByTestId("new-character-create").click();
+  await expect(page.getByRole("heading", { name: "Isamu", exact: true })).toBeVisible({ timeout: 60_000 });
+
+  // the panels are numbered in the order they are used
+  await expect(page.getByRole("heading", { name: "1. Fill in the sheet with Prism" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "2. Character", exact: true })).toBeVisible();
+  const plan = page.getByTestId("reference-plan");
+  await expect(plan).toContainText("3. Photos");
+  await expect(plan).toContainText("4. Six views");
+
+  // Prism's suggestion first; another engine re-prices every view before anything starts
+  const engine = page.getByTestId("reference-views-engine");
+  await expect(engine).toHaveValue("openai-image/gpt-image-2.5-flare");
+  await engine.selectOption("mock/mock-image-1");
+  await expect(page).toHaveURL(/engine=mock%2Fmock-image-1/);
+  await expect(page.getByTestId("reference-views-make")).toHaveText("Make 6 views · free", {
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("reference-views-total")).toContainText("Free with Mock Image 1");
+
+  // the front view, made with that engine, shows here and goes into the set in one click
+  await page.getByTestId("reference-views-select-all").click();
+  const front = page.locator('[data-testid="reference-view"][data-view="front"]');
+  await front.getByTestId("reference-view-pick").check();
+  await page.getByTestId("reference-views-make").click();
+  await expect(front).toHaveAttribute("data-state", "made", { timeout: 60_000 });
+  await expect(front.getByTestId("reference-view-picture")).toBeVisible();
+  // the Visual Bible sends its views here instead of making them on its own
+  await expect(page.getByTestId("vb-generate-three_quarter")).toHaveAttribute("href", "#reference-views");
+  await expect(page.getByTestId("vb-item-front")).toHaveAttribute("data-done", "false");
+  await front.getByTestId("reference-view-add-button").click();
+  await expect(front).toHaveAttribute("data-state", "in_set", { timeout: 30_000 });
+  // what is in the set is what the Visual Bible reads: the front reference, and the canonical identity
+  await expect(page.getByTestId("vb-item-front")).toHaveAttribute("data-done", "true");
+  await expect(page.getByTestId("vb-item-canonical")).toHaveAttribute("data-done", "true");
+  await expect(page.getByTestId("vb-canonical-image")).toBeVisible();
+  // the engine stays picked, and the other views are now made from the front view
+  await expect(engine).toHaveValue("mock/mock-image-1");
+  await expect(page.getByTestId("reference-views-start")).toContainText("made from the front view");
+});
+
 test("ZF: the size of part decides what Prism fills in, and marks the rest optional", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto("/");
