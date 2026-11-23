@@ -8,12 +8,11 @@ const FILE = "0066_location_library.sql";
 const code = readFileSync(`${DIR}/${FILE}`, "utf8").replace(/--.*$/gm, "").replace(/\s+/g, " ");
 
 describe("migration 0066: the location library", () => {
-  it("is the latest migration, follows 0065, and leaves 0065 byte-for-byte unchanged (as applied)", () => {
+  it("follows 0065, and leaves 0065 byte-for-byte unchanged (as applied)", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe(FILE);
-    expect(files.at(-2)).toBe("0065_character_studio_project.sql");
+    expect(files[files.indexOf(FILE) - 1]).toBe("0065_character_studio_project.sql");
     expect(checksumOf(readFileSync(`${DIR}/0065_character_studio_project.sql`, "utf8"))).toBe(
       "a42604678465fb067a27d1a661313f2725891547add7678fe2d32bf0e5ea4793",
     );

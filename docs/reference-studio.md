@@ -354,6 +354,15 @@ confirmation; every view is prepared before any starts. Views start from the cre
 front view once it exists, else from the description (the panel advises making the front view first). The project's
 limit on generations at once still applies: the first views start, the rest wait uncharged for the next press.
 
+**Size of part** (migration 0067, `characters.part_size`: lead, supporting, or minor part / extra; not chosen = lead).
+It is chosen on the Fill in panel (each size with its price) or in the Character form, and belongs to the project (a
+library copy starts without it). It decides what Prism fills in (`characterAiFields(inStory, size)`): a lead, every
+field; a supporting part, description, role, personality, physical description, relationships and continuity rules;
+a minor part, only the physical description and continuity rules, briefly. In the form every field says what Prism
+uses it for (`uses`, with a tip for the physical description and the continuity rules), and a field that does not
+matter for the size is marked optional and shown quieter. Before 0067 is applied, a chosen size is used for that
+request but not remembered (`saveCharacterWithSize` saves the rest and says so).
+
 ## Prices
 
 Every paid step shows the creator ONE exact price before it runs, and that is what they are charged: Prism's own

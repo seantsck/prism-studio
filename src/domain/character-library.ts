@@ -81,6 +81,7 @@ export function planCharacterCopy(
     role: "",
     relationshipNotes: "",
     trashedAt: undefined,
+    partSize: undefined,
     createdAt: now,
     updatedAt: now,
   };

@@ -48,6 +48,7 @@ import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { ProjectArchiveUnavailableError, ProjectTrashUnavailableError } from "@/data/repository";
 import { getRepo, requireProjectFresh } from "./repo";
 import { actorId, recordCreatorEdit, syncEpisodeScript } from "./script-sync";
+import { NEEDS_0067, partSizeFrom, saveCharacterWithSize } from "./part-size";
 import { copyLibraryIntoNewProject, loadLibrary, loadLocationLibrary } from "./character-library";
 import { deleteProjectForGood, moveAssetToTrash } from "./trash";
 import { isTrashed } from "@/domain/trash";
@@ -301,12 +302,15 @@ async function saveCharacter_impl(form: FormData) {
     continuityRules: lines(form, "continuityRules"),
     signatureBehavior: str(form, "signatureBehavior"),
     relationshipNotes: str(form, "relationshipNotes"),
+    // the size of part when the form has the choice; otherwise the stored one stands (an absent value is not written)
+    ...(form.has("partSize") ? { partSize: partSizeFrom(form) } : {}),
     createdAt: existing?.createdAt ?? now(),
     updatedAt: now(),
   });
-  await repo.upsert(data.project.id, "characters", character);
+  const { remembered } = await saveCharacterWithSize(data.project.id, character);
   refresh(slug);
   if (!existing) redirect(`/projects/${slug}/characters/${character.id}`);
+  if (!remembered) return { ok: true as const, message: `Saved. ${NEEDS_0067}` };
 }
 
 async function saveLook_impl(form: FormData) {

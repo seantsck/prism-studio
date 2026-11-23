@@ -61,6 +61,8 @@ import { createStandaloneCharacter, createStandaloneLocation } from "../library-
 import { quoteCharacterFill, quoteLocationFill, quoteNewFill } from "../series-start";
 import { fillLocation, reviewLocationFill } from "../location-ai-actions";
 import { autoFillCharacter, autoFillLocation } from "../sheet-autofill";
+import { saveCharacterWithSize } from "../part-size";
+import { fieldMatters } from "@/domain/character-ai";
 import { LOCATION_AI_FIELDS, isLocationRequest, namedLines, parseLocationIdeas } from "@/domain/location-ai";
 import type { Location } from "@/domain/schemas";
 import {
@@ -408,5 +410,87 @@ describe("Prism's answer fills in the empty fields at once", () => {
     );
     expect(closing).toMatchObject({ filled: [], proposalDone: true });
     expect((await repo.writing.getProposal(data.project.id, proposal.id))!.status).toBe("rejected");
+  });
+});
+
+describe("the size of part", () => {
+  it("decides what Prism fills in and its price; the choice is remembered", async () => {
+    expect(
+      await createProject(
+        form({ title: "Ojousama", premise: "An heiress must marry a stranger.", defaultLanguage: "ja" }),
+      ),
+    ).toMatchObject({ ok: true });
+    const slug = world.redirects.at(-1)!.split("/")[2]!;
+    let data = (await repo.loadProject(slug))!;
+    const now = new Date().toISOString();
+    const waiter = {
+      id: crypto.randomUUID(),
+      projectId: data.project.id,
+      name: "Waiter",
+      role: "",
+      description: "",
+      personality: "",
+      behaviorNotes: "",
+      physicalDescription: "A waiter in a white jacket.",
+      continuityRules: [],
+      signatureBehavior: "",
+      relationshipNotes: "",
+      createdAt: now,
+      updatedAt: now,
+    } as Character;
+    await repo.upsert(data.project.id, "characters", waiter);
+    data = (await repo.loadProject(slug))!;
+    const price = (size: "lead" | "supporting" | "minor") => {
+      const q = quoteCharacterFill(data, waiter.id, null, { size });
+      if (!q.ok) throw new Error(q.reason);
+      return q;
+    };
+    expect(price("minor").ok && price("lead").ok).toBe(true);
+    expect(characterAiFields(true, "minor").map((f) => f.key)).toEqual([
+      "physicalDescription",
+      "continuityRules",
+    ]);
+    expect(characterAiFields(true, "supporting").map((f) => f.key)).toEqual([
+      "description",
+      "role",
+      "personality",
+      "physicalDescription",
+      "relationshipNotes",
+      "continuityRules",
+    ]);
+    expect(characterAiFields(false, "supporting").map((f) => f.key)).not.toContain("role");
+    expect(fieldMatters("personality", "minor")).toBe(false);
+
+    expect(
+      await fillCharacter(form({ projectSlug: slug, characterId: waiter.id, partSize: "minor" })),
+    ).toMatchObject({ ok: true, message: "Prism is filling in Waiter…" });
+    const [asked] = (await proposalsOf(slug)).filter((p) => isCharacterRequest(p.instruction, waiter.id));
+    expect(asked!.alternativesRequested).toBe(2);
+    expect(asked!.instruction).toContain("This is a minor part or an extra");
+    expect(asked!.instruction).not.toContain("- personality: ");
+    expect((await repo.loadProject(slug))!.characters.find((c) => c.id === waiter.id)!.partSize).toBe(
+      "minor",
+    );
+  });
+
+  it("before migration 0067 the Character is saved without it, and says so", async () => {
+    const made = await createStandaloneCharacter(form({ prompt: TAKUMI, name: "Takumi" }));
+    const data = (await repo.loadProject(made.created!.slug))!;
+    const c = data.characters[0]!;
+    const upsert = repo.upsert.bind(repo);
+    const spy = vi.spyOn(repo, "upsert").mockImplementation(async (projectId, name, item) => {
+      if (name === "characters" && (item as Character).partSize !== undefined)
+        throw Object.assign(new Error('column "part_size" does not exist'), { code: "42703" });
+      return upsert(projectId, name, item as never);
+    });
+    expect(
+      await saveCharacterWithSize(data.project.id, { ...c, partSize: "supporting", personality: "Calm." }),
+    ).toEqual({
+      remembered: false,
+    });
+    spy.mockRestore();
+    const after = (await repo.loadProject(made.created!.slug))!.characters[0]!;
+    expect(after.personality).toBe("Calm.");
+    expect(after.partSize ?? null).toBeNull();
   });
 });

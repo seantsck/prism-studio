@@ -1,4 +1,4 @@
-import type { Character, ProjectData } from "./schemas";
+import type { Character, PartSize, ProjectData } from "./schemas";
 import { PREMISE_MAX, REFINE_NOTE_MAX } from "./series-start";
 import { LIMITS } from "./story/writing";
 
@@ -27,6 +27,10 @@ export interface CharacterAiField {
   /** Only in a story (not for a Character made on its own). */
   storyOnly: boolean;
   ask: string;
+  /** What Prism uses it for (shown under the field). */
+  uses: string;
+  /** A tip for writing it well, when there is one. */
+  tip?: string;
 }
 
 export const CHARACTER_AI_FIELDS: readonly CharacterAiField[] = [
@@ -36,6 +40,7 @@ export const CHARACTER_AI_FIELDS: readonly CharacterAiField[] = [
     list: false,
     storyOnly: false,
     ask: "who they are, in one or two sentences",
+    uses: "A short summary the story writer and planner read.",
   },
   {
     key: "role",
@@ -43,6 +48,7 @@ export const CHARACTER_AI_FIELDS: readonly CharacterAiField[] = [
     list: false,
     storyOnly: true,
     ask: 'their role in this story, a few words, like "Lead — heiress" or "Antagonist — fiancé candidate"',
+    uses: "Tells the story writer who this person is in this story.",
   },
   {
     key: "personality",
@@ -50,6 +56,7 @@ export const CHARACTER_AI_FIELDS: readonly CharacterAiField[] = [
     list: false,
     storyOnly: false,
     ask: "their personality: what drives them, what they hide, how they treat people (2 to 4 sentences)",
+    uses: "The script writer uses it so their lines sound like them; Shot direction uses it for how they act.",
   },
   {
     key: "behaviorNotes",
@@ -57,6 +64,7 @@ export const CHARACTER_AI_FIELDS: readonly CharacterAiField[] = [
     list: false,
     storyOnly: false,
     ask: "how they move, speak and react, for an actor and a director (2 to 4 sentences)",
+    uses: "Sent to the script writer as their voice and manner.",
   },
   {
     key: "physicalDescription",
@@ -64,6 +72,8 @@ export const CHARACTER_AI_FIELDS: readonly CharacterAiField[] = [
     list: false,
     storyOnly: false,
     ask: "a precise visual description used to make their pictures: age, height and build, face, eyes, hair, skin, usual wardrobe and accessories. Only what a camera sees; no story events",
+    uses: "Goes into every picture of them: reference views, the Visual Bible and Shot pictures.",
+    tip: "Only what a camera sees: age, build, face, hair, skin, clothes. No backstory.",
   },
   {
     key: "signatureBehavior",
@@ -71,6 +81,7 @@ export const CHARACTER_AI_FIELDS: readonly CharacterAiField[] = [
     list: false,
     storyOnly: false,
     ask: "one recognisable gesture or habit, one sentence",
+    uses: "A habit the writer and Shot direction bring back (the cufflinks).",
   },
   {
     key: "relationshipNotes",
@@ -78,6 +89,7 @@ export const CHARACTER_AI_FIELDS: readonly CharacterAiField[] = [
     list: false,
     storyOnly: true,
     ask: "how they relate to the other characters in this story, by name",
+    uses: "Keeps scenes between characters consistent for the writer.",
   },
   {
     key: "continuityRules",
@@ -85,12 +97,49 @@ export const CHARACTER_AI_FIELDS: readonly CharacterAiField[] = [
     list: true,
     storyOnly: false,
     ask: "3 to 6 visual rules that must stay the same in every picture and Shot, one per line",
+    uses: "Carried into Shot pictures once the character is locked; Shot direction reads them too.",
+    tip: "Visual things only (hair, accessories, clothes). Habits go in Signature behavior.",
   },
 ];
 
-/** The fields asked for this Character: a story's Character gets all of them; one made on its own, no role. */
-export const characterAiFields = (inStory: boolean) =>
-  CHARACTER_AI_FIELDS.filter((f) => inStory || !f.storyOnly);
+/** How big a part is, in words. */
+export const PART_SIZE_LABEL: Record<PartSize, string> = {
+  lead: "Lead",
+  supporting: "Supporting",
+  minor: "Minor part or extra",
+};
+export const PART_SIZE_HINT: Record<PartSize, string> = {
+  lead: "Every field: who they are, how they think, move, speak and look.",
+  supporting: "How they look, who they are, their personality and relationships.",
+  minor: "Only how they look and what must stay the same.",
+};
+
+/** The fields that matter for each size of part (a lead: all of them). */
+const PART_FIELDS: Record<PartSize, readonly CharacterAiKey[]> = {
+  lead: CHARACTER_AI_FIELDS.map((f) => f.key),
+  supporting: [
+    "description",
+    "role",
+    "personality",
+    "physicalDescription",
+    "relationshipNotes",
+    "continuityRules",
+  ],
+  minor: ["physicalDescription", "continuityRules"],
+};
+
+/** The size of part a Character has (not chosen: a lead). */
+export const partSizeOf = (c: Pick<Character, "partSize">): PartSize => c.partSize ?? "lead";
+
+/** Whether a field matters for this size of part (the page marks the others optional). */
+export const fieldMatters = (key: CharacterAiKey, size: PartSize) => PART_FIELDS[size].includes(key);
+
+/**
+ * The fields Prism is asked for: those that matter for the size of part; a Character made on its own never gets a
+ * role or relationships.
+ */
+export const characterAiFields = (inStory: boolean, size: PartSize = "lead") =>
+  CHARACTER_AI_FIELDS.filter((f) => (inStory || !f.storyOnly) && PART_FIELDS[size].includes(f.key));
 
 const MARK = (id: string) => `[character ${id}]`;
 
@@ -112,18 +161,24 @@ export function characterAsText(c: Character): Record<CharacterAiKey, string> {
 export function characterFillInstruction(
   data: ProjectData,
   c: Character,
-  opts: { note?: string; revise?: boolean } = {},
+  opts: { note?: string; revise?: boolean; size?: PartSize } = {},
 ): string {
   const note = opts.note?.trim() || undefined;
   const revise = !!opts.revise;
   const inStory = data.project.purpose !== "library";
-  const fields = characterAiFields(inStory);
+  const size = opts.size ?? partSizeOf(c);
+  const fields = characterAiFields(inStory, size);
   const sheet = characterAsText(c);
   const written = fields.filter((f) => sheet[f.key].trim());
   return [
     `${revise ? "Revise" : "Fill in"} the character sheet for ${c.name} ${MARK(c.id)}. Give exactly ${fields.length} ideas, one per field, in this order.`,
     "Each idea's title is exactly the field's name (as written below); its detail is that field's content. For a list field, put one item per line.",
     ...fields.map((f) => `- ${f.key}: ${f.ask}`),
+    size === "lead"
+      ? "This is a lead: give every field real depth."
+      : size === "supporting"
+        ? "This is a supporting part: keep each field short and useful (one or two sentences)."
+        : "This is a minor part or an extra: only how they look and what must stay the same, briefly.",
     inStory
       ? "Keep them true to this story: the Bible and the other characters are in the context."
       : "This character belongs to no story yet: keep them usable in any story, and invent no plot events.",
@@ -178,5 +233,9 @@ export function parseCharacterIdeas(
 }
 
 /** Whether a sheet is thin enough that filling it in is the obvious next step. */
-export const characterSheetThin = (c: Character) =>
-  !c.personality.trim() || !c.behaviorNotes.trim() || !c.signatureBehavior.trim();
+export const characterSheetThin = (c: Character) => {
+  const size = partSizeOf(c);
+  const sheet = characterAsText(c);
+  // what matters for this size of part, apart from a role / relationships (a library Character has neither)
+  return CHARACTER_AI_FIELDS.some((f) => !f.storyOnly && fieldMatters(f.key, size) && !sheet[f.key].trim());
+};
