@@ -410,6 +410,19 @@ shots, recommended before approving them; unlock at any time. A locked picture c
 **Looks** have their own page, under Characters in the sidebar (`/projects/<slug>/looks`): every character's Looks,
 edited, locked and given pictures there. The Character page lists its Looks and links to it.
 
+**Making the six views, safely.** While views are being made (or waiting), Make is greyed out, so one press never
+becomes several requests; **■ Stop** asks first, then asks every running view's generation to stop and drops the
+waiting ones (a view not yet sent is not charged; one the engine already took may still be charged by it). With no
+photos, a front view made together with others goes FIRST: the others wait for it ("waiting for the front view") and
+are made from that new front picture, so the faces match (`fromFront`); if the front fails, they are not started. Every
+view is asked for in a tall shape the engine offers (the preset's order: 2:3, 9:16 …), never the engine's first one
+(Seedream's is 21:9, which cut off the full body), and the full-body prompt insists on head-to-shoes framing. Every
+reference is on a plain, solid, pure white backdrop.
+
+**Choosing and locking each view.** Under a view, "Other takes" shows every other finished picture of it (any engine);
+clicking one uses it (asked first). **Lock** keeps a view's picture in place: it is not made again, and no new take,
+option or upload replaces it; locking the front view also locks the canonical (the same picture).
+
 **Merge into…** (src/domain/character-merge.ts, src/server/character-merge-actions.ts): when a Character is the same
 person as another one of its project, it is merged into that one. The one chosen is KEPT, with its place in the story
 (Shots, Scenes, lines, Continuity Locks); the merged one must not be used by the story (merge the other way) and must

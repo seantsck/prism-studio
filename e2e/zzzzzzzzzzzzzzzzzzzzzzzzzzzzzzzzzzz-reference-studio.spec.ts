@@ -293,7 +293,9 @@ test("C: a 3/4 view FROM the photo: what will be sent is shown, then a labelled 
   await expect(prompt).toContainText("The same person as in the identity reference image");
   await expect(prompt).toContainText("the reference image wins where they differ");
   await expect(prompt).toContainText("Three-quarter view");
-  await expect(prompt).toContainText("Background: one plain, solid, neutral light-grey colour");
+  await expect(prompt).toContainText(
+    "Background: plain, solid, pure white (#FFFFFF) seamless studio backdrop",
+  );
   // made from a photo: the photo's surroundings are not copied
   await expect(prompt).toContainText("Do not copy the surroundings of the reference images");
   // rules for the software, the story's canon and the film's night lighting are not image content
@@ -1896,33 +1898,37 @@ test("ZE: a character's page makes the ticked reference views, one by one or all
     "making",
     { timeout: 30_000 },
   );
-  // the summary says what is going on
   // the summary says what is going on, and the page keeps itself up to date
   await expect(page.getByTestId("reference-views-progress")).toBeVisible();
-  // the ticks are the creator's: the five unticked stay unticked while the page refreshes
-  await page.waitForTimeout(3500);
+  // while a view is being made nothing else can be started (no double requests), and it can be stopped
+  await expect(page.getByTestId("reference-views-make")).toBeDisabled();
+  await expect(page.getByTestId("reference-views-stop-button")).toBeVisible();
+  // this test server has no image provider: the try fails, and the ticks stay as the creator left them
+  await expect(page.locator('[data-testid="reference-view"][data-view="front"]')).toHaveAttribute(
+    "data-failed",
+    "1",
+    { timeout: 60_000 },
+  );
   await expect(
     page.locator('[data-testid="reference-view"][data-picked="1"]:not([data-view="front"])'),
   ).toHaveCount(0);
-  // all at once: more than the project runs at once (3), so what doesn't fit waits and starts on its own
+  // all at once with no photos: the front goes first, the others wait for it and are made from it
   await page.getByTestId("reference-views-select-all").click();
-  await expect(page.getByTestId("reference-views-make")).toHaveText(/Make [56] views/);
+  await expect(page.getByTestId("reference-views-make")).toHaveText(/Make 6 views/);
   await page.getByTestId("reference-views-make").click();
-  await expect(page.getByTestId("reference-views-note")).toContainText(/Making \d views/);
-  // this test server has no image provider, so each try fails quickly and frees its slot: every view gets its try,
-  // and none is left waiting or untried
-  await expect
-    .poll(
-      async () =>
-        page
-          .locator(
-            '[data-testid="reference-view"]:is([data-state="making"],[data-state="made"],[data-state="in_set"],[data-failed="1"])',
-          )
-          .count(),
-      { timeout: 60_000 },
-    )
-    .toBe(6);
-  await expect(page.getByTestId("reference-views-waiting")).toHaveText("0 waiting", { timeout: 30_000 });
+  await expect(page.getByTestId("reference-views-note")).toContainText("wait for it and are made from it");
+  await expect(page.locator('[data-testid="reference-view"][data-state="waiting"]')).toHaveCount(5);
+  await expect(page.locator('[data-testid="reference-view"][data-state="waiting"]').first()).toContainText(
+    "waiting for the front view",
+  );
+  // the front fails here, so the others are never started (and never charged)
+  await expect(page.getByTestId("reference-views-note")).toContainText("The front view did not finish", {
+    timeout: 60_000,
+  });
+  await expect(page.getByTestId("reference-views-waiting")).toHaveText("0 waiting");
+  await expect(
+    page.locator('[data-testid="reference-view"][data-failed="1"]:not([data-view="front"])'),
+  ).toHaveCount(0);
 });
 
 test("ZG: the views are made with the engine picked beside them, and what is added to the set fills the Visual Bible", async ({
@@ -2017,6 +2023,23 @@ test("ZG: the views are made with the engine picked beside them, and what is add
   expect(after).not.toBe(before);
   // the canonical follows the front view
   await expect(page.getByTestId("vb-canonical-image")).toHaveAttribute("src", after!);
+  // every take of a view is an option: the earlier front is one click away
+  const options = step4Front.getByTestId("reference-view-takes");
+  await expect(options.getByTestId("reference-view-take")).toHaveCount(1);
+  page.once("dialog", (d) => void d.accept());
+  await options.getByTestId("reference-view-take").click();
+  await expect
+    .poll(async () => step4Front.getByTestId("reference-view-picture").getAttribute("src"), {
+      timeout: 30_000,
+    })
+    .toBe(before);
+  // a view can be locked in place: it is not offered to make again, and its options are put away
+  await step4Front.getByTestId("reference-view-lock").click();
+  await expect(step4Front.getByTestId("reference-view-lock")).toHaveAttribute("data-locked", "1", {
+    timeout: 30_000,
+  });
+  await expect(step4Front.getByTestId("reference-view-pick")).toHaveCount(0);
+  await expect(step4Front.getByTestId("reference-view-takes")).toHaveCount(0);
 });
 
 test("ZF: the size of part decides what Prism fills in, and marks the rest optional", async ({ page }) => {

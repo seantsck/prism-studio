@@ -103,6 +103,7 @@ import {
   approveCharacter,
   saveCharacterAppearance,
   setCanonicalIdentity,
+  setViewLocked,
 } from "../visual-bible-actions";
 
 const sinkRoot = mkdtempSync(path.join(tmpdir(), "prism-studio-"));
@@ -1040,6 +1041,65 @@ describe("a Character's reference set", () => {
     const d2 = await data();
     await repo.upsert(d2.project.id, "identityRefs", { ...after, assetId: photo, locked: true });
     expect(await syncCanonicalToFront(await data(), yumeko.id)).toBe(false);
+  });
+
+  it("with no photos, a front view made with the others goes first; they wait for it and are made from it", async () => {
+    const sean = (await data()).characters.find((c) => c.name === "Sean")!;
+    const res = await makeReferenceViews(
+      form({
+        projectSlug: "ojousama",
+        characterId: sean.id,
+        views: "front,three_quarter",
+        batchId: "front-first",
+        model: "mock/mock-image-1",
+      }),
+    );
+    expect(res).toMatchObject({ ok: true, started: ["front"], waiting: ["three_quarter"] });
+    const afterFront = res.ok ? res.afterFront : undefined;
+    expect(afterFront).toBeTruthy();
+    const again = () =>
+      makeReferenceViews(
+        form({
+          projectSlug: "ojousama",
+          characterId: sean.id,
+          views: "three_quarter",
+          batchId: "front-first",
+          model: "mock/mock-image-1",
+          fromFront: afterFront!,
+        }),
+      );
+    // still being made: the others keep waiting, nothing starts
+    expect(await again()).toMatchObject({ ok: true, started: [], waiting: ["three_quarter"] });
+    await work();
+    expect(await again()).toMatchObject({ ok: true, started: ["three_quarter"], waiting: [] });
+    const made = await attempts(sean.id);
+    const front = made.find((v) => (v.attempt.modelSettings as { intent?: string }).intent === "portrait")!;
+    const tq = made.find((v) => (v.attempt.modelSettings as { intent?: string }).intent === "three_quarter")!;
+    // made from THAT front picture, not from the description
+    expect(tq.attempt.inputAssetIds).toEqual([front.outputs[0]!.asset.id]);
+    // a view is a tall picture, never the engine's first (wide) shape
+    expect((tq.attempt.modelSettings as { aspectRatio?: string }).aspectRatio).not.toBe("21:9");
+  });
+
+  it("a locked view is not made again", async () => {
+    const { yumeko, front } = await scene();
+    expect(await put(yumeko.id, "front", { attemptId: front.attempt.id })).toEqual({ ok: true });
+    expect(
+      await setViewLocked(
+        form({ projectSlug: "ojousama", characterId: yumeko.id, view: "front", locked: "true" }),
+      ),
+    ).toEqual({ ok: true });
+    expect(
+      await makeReferenceViews(
+        form({
+          projectSlug: "ojousama",
+          characterId: yumeko.id,
+          views: "front",
+          batchId: "x",
+          model: "mock/mock-image-1",
+        }),
+      ),
+    ).toMatchObject({ ok: false, error: expect.stringMatching(/front view is locked/) });
   });
 
   it("Studio takes alone are never added by themselves", async () => {

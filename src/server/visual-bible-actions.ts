@@ -249,6 +249,35 @@ export async function addViewsToReferenceSet(form: FormData): Promise<ActionResu
 }
 
 /**
+ * Lock (or unlock) one view of the reference set: a locked view keeps its picture (it is not made again, no new take or
+ * upload replaces it). Locking the front view also locks the canonical identity, which is the same picture.
+ */
+async function setViewLocked_impl(form: FormData) {
+  const { slug, data, character } = await loadCharacter(form);
+  const viewId = str(form, "view");
+  if (!isReferenceSetView(viewId)) throw new UserFacingError("Choose a view.");
+  const view = REFERENCE_SET_VIEWS.find((v) => v.id === viewId)!;
+  const locked = str(form, "locked") === "true";
+  const refs = data.identityRefs.filter((r) => r.characterId === character.id);
+  const slotRef =
+    view.slot === "additional"
+      ? refs.find((r) => r.slot === "additional" && (r.metadata as { view?: unknown }).view === viewId)
+      : refs.find((r) => r.slot === view.slot && visualRoleOf(r) === null);
+  if (!slotRef?.assetId) throw new UserFacingError(`There is no ${view.label.toLowerCase()} to lock yet.`);
+  const repo = await getRepo();
+  await repo.upsert(data.project.id, "identityRefs", { ...slotRef, locked });
+  if (view.canonical) {
+    const canonical = refs.find((r) => visualRoleOf(r) === "canonical");
+    if (canonical) await repo.upsert(data.project.id, "identityRefs", { ...canonical, locked });
+  }
+  refresh(slug);
+}
+
+export async function setViewLocked(form: FormData): Promise<ActionResult> {
+  return runAction(() => setViewLocked_impl(form), { name: "setViewLocked" });
+}
+
+/**
  * The Production checklist's "Approve": lock a Character's reference images and the Looks an Episode uses, in one act.
  * Locked references are what every Shot is made from; they are unlocked on the Character page.
  */

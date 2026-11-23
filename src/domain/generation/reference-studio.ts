@@ -266,7 +266,7 @@ export const EDIT_PRESETS: readonly EditPreset[] = [
     id: "clean_background",
     for: "character",
     label: "Clean studio background",
-    hint: "Plain light grey behind the person",
+    hint: "Plain white behind the person",
   },
   {
     id: "replace_background",
@@ -349,7 +349,7 @@ export function editInstruction(
       return {
         ok: true,
         instruction:
-          "Replace the background with a plain light-grey studio backdrop with soft even light. Keep the person, and the edge of their hair, exactly as they are.",
+          "Replace the background with a plain, solid white studio backdrop with soft even light. Keep the person, and the edge of their hair, exactly as they are.",
       };
     case "replace_background":
       return {
