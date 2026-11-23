@@ -6,6 +6,7 @@ import { TrashedProjectActions } from "@/components/projects/project-actions";
 import { trashDaysLeft } from "@/domain/trash";
 import { NewSeries, type SeriesCast } from "@/components/projects/new-series";
 import { singleUploadLimit } from "@/lib/upload-policy";
+import { quoteNewFill } from "@/server/series-start";
 import { NewCharacter, NewLocation } from "@/components/projects/new-character";
 import { UserMenu } from "@/components/user-menu";
 import { RotatingWord } from "@/components/projects/rotating-word";
@@ -95,10 +96,10 @@ export default async function HomePage({
           </div>
         </div>
         <div className="xl:order-1 xl:pt-[10.75rem]" data-testid="home-create-character">
-          <NewCharacter maxUploadBytes={maxUploadBytes} />
+          <NewCharacter maxUploadBytes={maxUploadBytes} fill={quoteNewFill("character")} />
         </div>
         <div className="xl:order-3 xl:pt-[10.75rem]" data-testid="home-create-location">
-          <NewLocation maxUploadBytes={maxUploadBytes} />
+          <NewLocation maxUploadBytes={maxUploadBytes} fill={quoteNewFill("location")} />
         </div>
       </section>
 

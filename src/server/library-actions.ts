@@ -18,6 +18,8 @@ import {
 import { CharacterLibraryUnavailableError, LocationLibraryUnavailableError } from "@/data/repository";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { copyIntoProject, copyLocationIntoProject } from "./character-library";
+import { fillCharacter } from "./character-ai-actions";
+import { fillLocation } from "./location-ai-actions";
 import { getRepo, requireProjectFresh } from "./repo";
 import { actorId } from "./script-sync";
 
@@ -141,8 +143,10 @@ async function createStandaloneCharacter_impl(form: FormData) {
   } catch (err) {
     if (!(err instanceof CharacterLibraryUnavailableError)) throw err;
   }
+  const filling = await fillAfterCreate(form, studio.slug, "character", character.id);
   revalidatePath("/", "layout");
   return {
+    filling,
     slug: studio.slug,
     id: character.id,
     href: `/projects/${studio.slug}/characters/${character.id}?new=1#character-ai`,
@@ -219,8 +223,10 @@ async function createStandaloneLocation_impl(form: FormData) {
   } catch (err) {
     if (!(err instanceof LocationLibraryUnavailableError)) throw err;
   }
+  const filling = await fillAfterCreate(form, studio.slug, "location", location.id);
   revalidatePath("/", "layout");
   return {
+    filling,
     slug: studio.slug,
     id: location.id,
     href: `/projects/${studio.slug}/locations?open=${location.id}&new=1#location-${location.id}`,
@@ -249,7 +255,29 @@ export async function addLocationFromLibrary(form: FormData): Promise<ActionResu
 }
 
 /** What was made: the browser then uploads the chosen photos to it (one request each) and opens `href`. */
-export type Created = { slug: string; id: string; href: string };
+/** `filling`: Prism is filling in the details (asked for, at the price shown, on the create box); else why not. */
+export type Created = { slug: string; id: string; href: string; filling: true | string | null };
+
+/**
+ * "Have Prism fill in the details" from the create box: the same request as the page's own Fill in button, confirmed
+ * at the price the box showed (the box prices the longest one it can make, so it covers this one). Creating never
+ * fails because of it: if the request is refused, the page still opens and says why on its Fill in panel.
+ */
+async function fillAfterCreate(
+  form: FormData,
+  slug: string,
+  kind: "character" | "location",
+  id: string,
+): Promise<true | string | null> {
+  if (str(form, "fill") !== "1") return null;
+  const f = new FormData();
+  f.set("projectSlug", slug);
+  f.set(kind === "character" ? "characterId" : "locationId", id);
+  f.set("model", str(form, "fillModel"));
+  if (str(form, "fillConfirmedUsd")) f.set("confirmedTotalUsd", str(form, "fillConfirmedUsd"));
+  const r = await (kind === "character" ? fillCharacter(f) : fillLocation(f));
+  return r.ok ? true : r.error;
+}
 
 export async function createStandaloneCharacter(
   form: FormData,

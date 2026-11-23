@@ -57,8 +57,8 @@ vi.mock("@/server/storage", () => {
 
 import { createProject } from "../actions";
 import { fillCharacter, reviewCharacterFill } from "../character-ai-actions";
-import { createStandaloneCharacter } from "../library-actions";
-import { quoteCharacterFill, quoteLocationFill } from "../series-start";
+import { createStandaloneCharacter, createStandaloneLocation } from "../library-actions";
+import { quoteCharacterFill, quoteLocationFill, quoteNewFill } from "../series-start";
 import { fillLocation, reviewLocationFill } from "../location-ai-actions";
 import { LOCATION_AI_FIELDS, isLocationRequest, namedLines, parseLocationIdeas } from "@/domain/location-ai";
 import type { Location } from "@/domain/schemas";
@@ -303,5 +303,38 @@ describe("filling in a Location with Prism", () => {
       { name: "A", description: "b: c" },
       { name: "D", description: "" },
     ]);
+  });
+});
+
+describe("Have Prism fill in the details, ticked on the create box", () => {
+  it("creates, then asks Prism at the price the box showed; unticked, it asks nothing", async () => {
+    const offer = quoteNewFill("character");
+    if (!offer.ok) throw new Error(offer.reason);
+    const made = await createStandaloneCharacter(
+      form({ prompt: TAKUMI, name: "Takumi", fill: "1", fillModel: offer.model }),
+    );
+    expect(made).toMatchObject({ ok: true, created: { filling: true } });
+    const { slug, id } = made.created!;
+    expect((await proposalsOf(slug)).filter((p) => isCharacterRequest(p.instruction, id))).toHaveLength(1);
+    // the box's price covers the request that was sent
+    const data = (await repo.loadProject(slug))!;
+    const actual = quoteCharacterFill(data, id);
+    expect(actual.ok && offer.usd >= actual.usd).toBe(true);
+
+    const plain = await createStandaloneCharacter(form({ prompt: "A courier named Ren." }));
+    expect(plain.created!.filling).toBeNull();
+    expect(
+      (await proposalsOf(slug)).filter((p) => isCharacterRequest(p.instruction, plain.created!.id)),
+    ).toHaveLength(0);
+
+    const loc = quoteNewFill("location");
+    if (!loc.ok) throw new Error(loc.reason);
+    const hall = await createStandaloneLocation(
+      form({ prompt: "A ballroom called The Gilded Hall.", fill: "1", fillModel: loc.model }),
+    );
+    expect(hall.created!.filling).toBe(true);
+    expect(
+      (await proposalsOf(slug)).filter((p) => isLocationRequest(p.instruction, hall.created!.id)),
+    ).toHaveLength(1);
   });
 });

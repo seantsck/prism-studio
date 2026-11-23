@@ -1749,12 +1749,19 @@ test("ZC: a new character's page starts with Fill in with Prism and the referenc
     .getByTestId("new-character-prompt")
     .fill("Japanese man in his mid-30s, jet-black hair swept back, tailored navy suit.");
   await box.getByTestId("new-character-name").fill("Kenji");
+  // the box offers Prism's details at their price before anything is made; unticked here, to press it on the page
+  await expect(box.getByTestId("new-character-fill-price")).toHaveText("· free");
+  await box.getByTestId("new-character-fill").locator("input").uncheck();
   await box.getByTestId("new-character-create").click();
   await expect(page.getByRole("heading", { name: "Kenji", exact: true })).toBeVisible({ timeout: 60_000 });
 
   // the empty picture list is not shown; the next steps are: fill in the sheet, then the references and their price
   await expect(page.getByTestId("character-pictures")).toHaveCount(0);
   const ai = page.getByTestId("character-ai");
+  // what was typed, whole, at the top
+  await expect(ai.getByTestId("character-ai-prompt")).toContainText(
+    "Japanese man in his mid-30s, jet-black hair swept back, tailored navy suit.",
+  );
   await expect(ai).toContainText("Most of Kenji's sheet is empty.");
   // a character made on its own is never given a role
   await expect(ai).not.toContainText("role and relationships");
@@ -1769,6 +1776,13 @@ test("ZC: a new character's page starts with Fill in with Prism and the referenc
   const review = page.getByTestId("character-ai-review");
   await expect(review).toBeVisible({ timeout: 60_000 });
   await expect(review.locator('[data-testid="character-ai-field"][data-field="role"]')).toHaveCount(0);
+  // what was written stays unless its box is ticked; what was empty is ticked
+  await expect(
+    review.locator('[data-testid="character-ai-field"][data-field="description"] input[type="checkbox"]'),
+  ).not.toBeChecked();
+  await expect(
+    review.locator('[data-testid="character-ai-field"][data-field="personality"] input[type="checkbox"]'),
+  ).toBeChecked();
   const personality = review.locator('[data-testid="character-ai-field"][data-field="personality"]');
   await personality.getByTestId("character-ai-text").fill("Polite in public, ruthless in private.");
   await review.getByTestId("character-ai-apply").click();
@@ -1787,11 +1801,14 @@ test("ZD: a new location opens on Fill in with Prism and its reference plan; Pri
   await box
     .getByTestId("new-location-prompt")
     .fill("A tea room called The Moss Pavilion, tatami floor, open to a moss garden.");
+  // left ticked: Prism fills in the details straight after it is made, at the price shown here
+  await expect(box.getByTestId("new-location-fill").locator("input")).toBeChecked();
+  await expect(box.getByTestId("new-location-fill-price")).toHaveText("· free");
   await box.getByTestId("new-location-create").click();
   const row = page.locator('[data-testid="location-row"][data-name="The Moss Pavilion"]');
   await expect(row).toHaveAttribute("open", "", { timeout: 60_000 });
   const ai = row.getByTestId("location-ai");
-  await expect(ai).toContainText("Most of The Moss Pavilion's sheet is empty.");
+  await expect(ai.getByTestId("location-ai-prompt")).toContainText("tatami floor, open to a moss garden");
   const plan = row.getByTestId("reference-plan");
   await expect(plan.getByTestId("reference-plan-views").locator("li")).toHaveCount(4);
   await expect(plan.getByTestId("reference-plan-total")).toContainText("4 to make: about");
@@ -1799,7 +1816,7 @@ test("ZD: a new location opens on Fill in with Prism and its reference plan; Pri
   // a library location offers its way into a project, like a library character
   await expect(row.getByTestId("use-in-project")).toContainText("The Moss Pavilion is ready");
 
-  await ai.getByTestId("location-ai-fill").click();
+  // no button to press: the suggestion appears on its own
   const review = row.getByTestId("location-ai-review");
   await expect(review).toBeVisible({ timeout: 60_000 });
   // only the zones: untick everything else
