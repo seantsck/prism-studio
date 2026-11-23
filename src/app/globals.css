@@ -73,8 +73,10 @@ select:focus {
   outline-offset: -1px;
 }
 
-input[type="checkbox"] {
+input[type="checkbox"],
+input[type="radio"] {
   width: auto;
+  padding: 0;
   accent-color: var(--accent);
 }
 

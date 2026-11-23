@@ -72,35 +72,48 @@ export function CharacterAi({
       fillButtonText={sizeQuotes ? "Fill in with Prism" : undefined}
       fillExtra={
         sizeQuotes ? (
-          <fieldset className="space-y-1" data-testid="character-ai-size">
-            <legend className="mb-1 text-[11px] text-muted">How big is the part?</legend>
-            {PART_SIZES.map((p) => {
-              const q = sizeQuotes[p];
-              return (
-                <label key={p} className="flex items-start gap-2 text-[12.5px]">
-                  <input
-                    type="radio"
-                    name="partSize"
-                    value={p}
-                    defaultChecked={partSizeOf(character) === p}
-                    className="mt-0.5"
-                    data-testid={`character-ai-size-${p}`}
-                  />
-                  <span>
-                    <span className="font-medium">{PART_SIZE_LABEL[p]}</span>
-                    <span className="text-muted" data-testid={`character-ai-size-price-${p}`}>
-                      {" "}
-                      · {q.ok ? (q.paid ? priceText(q.usd) : "free") : "unavailable"}
+          <fieldset className="pt-1" data-testid="character-ai-size">
+            <legend className="mb-1.5 text-[11px] text-muted">How big is the part?</legend>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {PART_SIZES.map((p) => {
+                const q = sizeQuotes[p];
+                return (
+                  <label
+                    key={p}
+                    className="cursor-pointer rounded-lg border border-line p-2.5 transition-colors hover:border-line2 has-[:checked]:bg-accent/10 has-[:checked]:ring-1 has-[:checked]:ring-accent has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-accent"
+                  >
+                    <input
+                      type="radio"
+                      name="partSize"
+                      value={p}
+                      defaultChecked={partSizeOf(character) === p}
+                      className="sr-only"
+                      data-testid={`character-ai-size-${p}`}
+                    />
+                    <span className="flex items-baseline justify-between gap-2">
+                      <span className="text-[13px] font-medium">{PART_SIZE_LABEL[p]}</span>
+                      <span
+                        className="shrink-0 text-[12px] text-muted"
+                        data-testid={`character-ai-size-price-${p}`}
+                      >
+                        {q.ok ? (q.paid ? priceText(q.usd) : "free") : "unavailable"}
+                      </span>
                     </span>
-                    <span className="block text-[11px] text-faint">{PART_SIZE_HINT[p]}</span>
-                  </span>
-                </label>
-              );
-            })}
+                    <span className="mt-1 block text-[11px] leading-snug text-faint">
+                      {PART_SIZE_HINT[p]}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
           </fieldset>
         ) : undefined
       }
-      intro={`Prism writes every field from what is already here${inStory ? ", the Bible and the rest of the cast" : ""}: personality, how they move and speak, a precise physical description for their pictures, a signature habit and the rules that keep them consistent${inStory ? ", plus their role and relationships in this story" : ""}.`}
+      intro={
+        sizeQuotes
+          ? `Prism fills in what the part needs, from what is already here${inStory ? ", the Bible and the rest of the cast" : ""}. Choose how big the part is: each size shows its price.`
+          : `Prism writes every field from what is already here${inStory ? ", the Bible and the rest of the cast" : ""}: personality, how they move and speak, a precise physical description for their pictures, a signature habit and the rules that keep them consistent${inStory ? ", plus their role and relationships in this story" : ""}.`
+      }
       notePlaceholder="Raised in Kyoto, studied in London; polite in public, ruthless in private."
       fill={fillCharacter}
       review={reviewCharacterFill}

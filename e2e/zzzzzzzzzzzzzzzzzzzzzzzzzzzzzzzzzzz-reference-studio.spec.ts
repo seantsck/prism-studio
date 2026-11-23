@@ -1908,7 +1908,8 @@ test("ZF: the size of part decides what Prism fills in, and marks the rest optio
   const ai = page.getByTestId("character-ai");
   await expect(ai.getByTestId("character-ai-size-lead")).toBeChecked();
   await expect(ai.getByTestId("character-ai-size-price-minor")).toContainText("free");
-  await ai.getByTestId("character-ai-size-minor").check();
+  await ai.getByText("Minor part or extra", { exact: true }).click();
+  await expect(ai.getByTestId("character-ai-size-minor")).toBeChecked();
   await ai.getByTestId("character-ai-fill").click();
   await expect(ai.getByTestId("character-ai-filled")).toContainText("Continuity rules", { timeout: 60_000 });
   await expect(ai.getByTestId("character-ai-filled")).not.toContainText("Personality");
