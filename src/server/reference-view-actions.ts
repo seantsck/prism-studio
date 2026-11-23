@@ -8,6 +8,7 @@ import { requireUser } from "./auth";
 import { getGenerationRepo } from "./generation";
 import { requireProjectFresh } from "./repo";
 import { prepareReferenceView } from "./reference-views";
+import { VIEWS_KEY_PREFIX } from "./auto-add-views";
 
 /**
  * Make one reference view, or several, from a Character's page (src/server/reference-views.ts). The
@@ -36,7 +37,14 @@ async function makeReferenceViews_impl(form: FormData) {
 
   const prepared: Awaited<ReturnType<typeof prepareReferenceView>>[] = [];
   for (const id of viewIds) {
-    const p = await prepareReferenceView(data, character, id, userId, `views-${batch}-${id}`, model);
+    const p = await prepareReferenceView(
+      data,
+      character,
+      id,
+      userId,
+      `${VIEWS_KEY_PREFIX}${batch}-${id}`,
+      model,
+    );
     if (!p.prepared.ok) throw new UserFacingError(`${p.view.label}: ${p.prepared.reasons[0]}`);
     prepared.push(p);
   }

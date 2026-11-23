@@ -26,6 +26,8 @@ export interface ChecklistView {
   pictureUrl?: string | null;
   /** the finished take waiting to be added ("made") */
   attemptId?: string | null;
+  /** a newer take of a view already in the set, to use instead of the picture in it */
+  newer?: { attemptId: string; url: string | null } | null;
 }
 
 /** An engine that can make the views ("provider/modelId"). */
@@ -122,7 +124,7 @@ export function ViewChecklist({
   useEffect(() => setWaitingState(readWaiting(characterId)), [characterId]);
   // a view that started elsewhere (another tab, the Reference Studio) is no longer waiting
   const stillMakeable = new Set(
-    views.filter((v) => v.state === "missing" || v.state === "made").map((v) => v.id),
+    views.filter((v) => v.state === "missing" || v.state === "made" || v.state === "in_set").map((v) => v.id),
   );
   const waitingLeft = stored?.items.filter((i) => stillMakeable.has(i.id)) ?? [];
   const waiting: Waiting | null = stored && waitingLeft.length ? { ...stored, items: waitingLeft } : null;
@@ -130,7 +132,10 @@ export function ViewChecklist({
   const waitingIds = new Set(waiting?.items.map((i) => i.id) ?? []);
   // a missing view, or a made one to try again (another take; the first stays until one is added to the set)
   const makeable = views.filter(
-    (v) => (v.state === "missing" || v.state === "made") && v.costUsd != null && !waitingIds.has(v.id),
+    (v) =>
+      (v.state === "missing" || v.state === "made" || v.state === "in_set") &&
+      v.costUsd != null &&
+      !waitingIds.has(v.id),
   );
   // a missing view starts ticked, a made one unticked; what the creator changed stays as they left it
   const [toggled, setToggled] = useState<Set<string>>(new Set());
@@ -297,8 +302,12 @@ export function ViewChecklist({
 
       <ul className="space-y-1" data-testid="reference-plan-views">
         {views.map((v) => {
-          const isWaiting = waitingIds.has(v.id) && (v.state === "missing" || v.state === "made");
-          const can = (v.state === "missing" || v.state === "made") && v.costUsd != null && !isWaiting;
+          const isWaiting =
+            waitingIds.has(v.id) && (v.state === "missing" || v.state === "made" || v.state === "in_set");
+          const can =
+            (v.state === "missing" || v.state === "made" || v.state === "in_set") &&
+            v.costUsd != null &&
+            !isWaiting;
           const picked = can && isPicked(v);
           return (
             <li
@@ -323,7 +332,7 @@ export function ViewChecklist({
                       type="checkbox"
                       checked={picked}
                       onChange={() => toggle(v.id)}
-                      aria-label={v.state === "made" ? `Make the ${v.label.toLowerCase()} again` : v.label}
+                      aria-label={v.state === "missing" ? v.label : `Make the ${v.label.toLowerCase()} again`}
                       data-testid="reference-view-pick"
                     />
                   ) : null}
@@ -341,8 +350,44 @@ export function ViewChecklist({
                     {v.label}
                   </span>
                 </label>
-                {v.state === "in_set" ? (
-                  <span className="text-[11.5px] text-faint">in the set</span>
+                {v.state === "in_set" && !isWaiting ? (
+                  <span className="flex items-center gap-2">
+                    {v.costUsd != null && picked ? (
+                      <span className="text-[11.5px] text-muted" data-testid="reference-view-price">
+                        again: {priceOf(v.costUsd)}
+                      </span>
+                    ) : null}
+                    {v.newer ? (
+                      <ActionForm
+                        action={addToReferenceSet}
+                        successMessage=""
+                        quiet
+                        className="flex items-center gap-1.5"
+                        confirmMessage={`Use the new take as the ${v.label.toLowerCase()}? The one in the set now stays in your pictures.`}
+                        data-testid="reference-view-use-newer"
+                      >
+                        {v.newer.url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={v.newer.url}
+                            alt={`New take: ${v.label}`}
+                            className="h-10 w-8 rounded-[2px] border border-accent/60 object-cover"
+                          />
+                        ) : null}
+                        <input type="hidden" name="projectSlug" value={slug} />
+                        <input type="hidden" name="characterId" value={characterId} />
+                        <input type="hidden" name="attemptId" value={v.newer.attemptId} />
+                        <input type="hidden" name="view" value={v.id} />
+                        <input type="hidden" name="keepCanonical" value="1" />
+                        <input type="hidden" name="confirmReplace" value="1" />
+                        <Button type="submit" size="sm" data-testid="reference-view-use-newer-button">
+                          Use the new take
+                        </Button>
+                      </ActionForm>
+                    ) : (
+                      <span className="text-[11.5px] text-faint">in the set</span>
+                    )}
+                  </span>
                 ) : v.state === "making" ? (
                   <span className="flex items-center gap-1 text-[11.5px] text-accent">
                     <span
@@ -420,7 +465,9 @@ export function ViewChecklist({
             data-testid="reference-views-make"
           >
             {chosen.length === 0
-              ? "Tick the views to make"
+              ? views.every((v) => v.state === "in_set")
+                ? "Tick a view to make it again"
+                : "Tick the views to make"
               : `Make ${chosen.length === 1 ? `the ${chosen[0]!.label.toLowerCase()} view` : `${chosen.length} views`} · ${paid ? `$${price.toFixed(2)}` : "free"}`}
           </Button>
           <p className="text-[11px] text-muted" data-testid="reference-views-total">
@@ -432,9 +479,10 @@ export function ViewChecklist({
               : ""}
           </p>
         </div>
-      ) : views.every((v) => v.state === "in_set") ? (
+      ) : null}
+      {views.every((v) => v.state === "in_set") ? (
         <p className="text-pass" data-testid="reference-plan-total">
-          The set is complete.
+          The set is complete. Tick a view to make it again; the new take is offered beside it.
         </p>
       ) : null}
       {note ? (

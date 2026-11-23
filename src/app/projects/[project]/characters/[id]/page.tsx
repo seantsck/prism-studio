@@ -19,7 +19,8 @@ import {
   uploadLookReference,
 } from "@/server/actions";
 import { createCharacterContinuityLock } from "@/server/character-continuity-actions";
-import { getRepo, requireProject } from "@/server/repo";
+import { getRepo, requireProject, requireProjectFresh } from "@/server/repo";
+import { autoAddMadeViews, viewSlots } from "@/server/auto-add-views";
 import { ActionForm } from "@/components/action-form";
 import { SubjectImagePanel } from "@/components/images/subject-image-panel";
 import { VisualBiblePanel } from "@/components/images/visual-bible-panel";
@@ -31,8 +32,6 @@ import { CharacterAi } from "@/components/characters/character-ai";
 import { SheetField } from "@/components/characters/sheet-field";
 import { PART_SIZE_HINT, PART_SIZE_LABEL, partSizeOf } from "@/domain/character-ai";
 import { PART_SIZES } from "@/domain/schemas";
-import { visualRoleOf } from "@/domain/visual-bible";
-import { hasStoredImage } from "@/domain/generation/subject-image";
 import type { Asset } from "@/domain/schemas";
 import { ReferenceViewsPanel, type ViewState } from "@/components/characters/reference-views";
 import { MakeCanonical } from "@/components/characters/make-canonical";
@@ -60,7 +59,10 @@ export default async function CharacterPage({
   const { project: slug, id } = await params;
   const query = await searchParams;
   const fresh = query.new === "1";
-  const data = await requireProject(slug);
+  let data = await requireProject(slug);
+  // a finished reference view goes into its empty slot in the set by itself (it was made as that view)
+  if (data.characters.some((x) => x.id === id) && (await autoAddMadeViews(data, id)).length)
+    data = await requireProjectFresh(slug);
   const found = data.characters.find((x) => x.id === id);
   if (!found) notFound();
   let c = found;
@@ -99,26 +101,33 @@ export default async function CharacterPage({
   const viewStates: Record<string, ViewState> = {};
   // a view is in the set when ITS slot holds a picture (a canonical identity alone does not fill the front view: the
   // Studio shows the canonical in the front view, but the front reference is its own slot)
+  const slots = viewSlots(data, c.id);
   const slotAsset: Record<string, Asset> = {};
   for (const v of REFERENCE_SET_VIEWS) {
-    const ref = data.identityRefs.find(
-      (r) =>
-        r.characterId === c.id &&
-        !!r.assetId &&
-        (v.slot === "additional"
-          ? r.slot === "additional" && (r.metadata as { view?: unknown }).view === v.id
-          : r.slot === v.slot && visualRoleOf(r) === null),
-    );
-    const asset = ref ? data.assets.find((x) => x.id === ref.assetId) : undefined;
-    if (asset && hasStoredImage(asset)) slotAsset[v.id] = asset;
-    viewStates[v.id] = slotAsset[v.id] ? "in_set" : "missing";
+    const asset = slots[v.id]?.asset;
+    if (asset) slotAsset[v.id] = asset;
+    viewStates[v.id] = asset ? "in_set" : "missing";
   }
+  // a newer take of a view already in the set: offered beside it (never swapped in by itself)
+  const viewNewer: Record<string, { attemptId: string; url: string | null }> = {};
+  const takeAt = new Map(pictures.takes.map((t) => [t.attemptId, t.createdAt]));
   for (const t of pictures.takes) {
     const view = referenceSetViewOf(t.settings.intent);
-    if (!view || viewStates[view] === "in_set") continue;
-    if (IN_FLIGHT.has(t.status)) viewStates[view] = "making";
-    else if (t.status === "succeeded" && !t.rejected && t.asset && viewStates[view] !== "making")
-      viewStates[view] = "made";
+    if (!view) continue;
+    if (IN_FLIGHT.has(t.status)) {
+      // being made (again, when the view is already in the set: its picture stays until a new take is chosen)
+      viewStates[view] = "making";
+      continue;
+    }
+    if (t.status !== "succeeded" || t.rejected || !t.asset) continue;
+    if (viewStates[view] === "missing") viewStates[view] = "made";
+    const inSlot = slotAsset[view];
+    if (inSlot && t.asset.id !== inSlot.id) {
+      const slotAttempt = (slots[view]?.ref?.metadata as { attemptId?: unknown } | undefined)?.attemptId;
+      const slotAt = typeof slotAttempt === "string" ? (takeAt.get(slotAttempt) ?? "") : "";
+      const current = viewNewer[view] ? (takeAt.get(viewNewer[view]!.attemptId) ?? "") : slotAt;
+      if (t.createdAt > current) viewNewer[view] = { attemptId: t.attemptId, url: t.asset.url };
+    }
   }
   // a view whose newest try failed says so (it can be ticked and made again)
   const lastTry: Record<string, { at: string; error: string | null }> = {};
@@ -323,6 +332,7 @@ export default async function CharacterPage({
           quote={viewsQuote}
           states={viewStates}
           failures={viewFailures}
+          newer={viewNewer}
           pictures={viewPictures}
           engines={engines}
           suggestedEngine={SUGGESTED_VIEWS_MODEL}
