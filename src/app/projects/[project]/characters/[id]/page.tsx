@@ -31,6 +31,8 @@ import { PART_SIZES } from "@/domain/schemas";
 import type { Asset } from "@/domain/schemas";
 import { ReferenceViewsPanel, type ViewState } from "@/components/characters/reference-views";
 import { MergeCharacter, type MergeTarget } from "@/components/characters/merge-character";
+import { UseAsFront, ViewLock } from "@/components/characters/picture-actions";
+import { ZoomImage } from "@/components/zoom-image";
 import { planCharacterMerge } from "@/domain/character-merge";
 import { characterUsage } from "@/domain/subject-trash";
 import { REFERENCE_SET_VIEWS, referenceSetViewOf } from "@/domain/generation/reference-studio";
@@ -137,6 +139,13 @@ export default async function CharacterPage({
     if (!view || t.status !== "succeeded" || t.rejected || !t.asset || t.asset.id === slotAsset[view]?.id)
       continue;
     (viewTakes[view] ??= []).push({ attemptId: t.attemptId, url: t.asset.url, engine: t.modelLabel });
+  }
+  // each view's newest try (any state): what the run tracker follows
+  const viewLatest: Record<string, { attemptId: string; status: string }> = {};
+  for (const t of pictures.takes) {
+    const view = referenceSetViewOf(t.settings.intent);
+    if (view && (!viewLatest[view] || t.createdAt > (takeAt.get(viewLatest[view]!.attemptId) ?? "")))
+      viewLatest[view] = { attemptId: t.attemptId, status: t.status };
   }
   // each view's picture locked in place, and the generations still running for each view (to stop them)
   const viewLocked: Record<string, boolean> = {};
@@ -390,6 +399,7 @@ export default async function CharacterPage({
           takes={viewTakes}
           locked={viewLocked}
           jobs={viewJobs}
+          latest={viewLatest}
           pictures={viewPictures}
           engines={engines}
           suggestedEngine={SUGGESTED_VIEWS_MODEL}
@@ -441,8 +451,21 @@ export default async function CharacterPage({
                     >
                       <div className="aspect-[3/4] overflow-hidden rounded-[3px] border border-line2 bg-[#232326]">
                         {i.url ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={i.url} alt={i.label} className="h-full w-full object-cover" />
+                          <ZoomImage
+                            src={i.url}
+                            alt={i.label}
+                            className="h-full w-full object-cover"
+                            caption={i.label}
+                          >
+                            {i.wardrobeOnly ? null : (
+                              <UseAsFront
+                                slug={slug}
+                                characterId={c.id}
+                                assetId={i.assetId}
+                                isFront={slotAsset.front?.id === i.assetId}
+                              />
+                            )}
+                          </ZoomImage>
                         ) : null}
                       </div>
                       <div className="truncate text-[11.5px]" title={i.label}>
@@ -453,6 +476,25 @@ export default async function CharacterPage({
                         {i.rejected ? " · rejected" : ""}
                       </div>
                       <div className="flex flex-wrap gap-1">
+                        {i.wardrobeOnly ? null : (
+                          <UseAsFront
+                            slug={slug}
+                            characterId={c.id}
+                            assetId={i.assetId}
+                            isFront={slotAsset.front?.id === i.assetId}
+                          />
+                        )}
+                        {(() => {
+                          const inView = REFERENCE_SET_VIEWS.find((v) => slotAsset[v.id]?.id === i.assetId);
+                          return inView ? (
+                            <ViewLock
+                              slug={slug}
+                              characterId={c.id}
+                              view={inView.id}
+                              locked={!!viewLocked[inView.id]}
+                            />
+                          ) : null;
+                        })()}
                         <ArchiveButton slug={slug} subject={archiveSubject} assetId={i.assetId} />
                         <DeleteButton slug={slug} subject={archiveSubject} assetId={i.assetId} />
                       </div>
@@ -479,6 +521,7 @@ export default async function CharacterPage({
               url: viewPictures[v.id]?.url ?? null,
               attemptId: viewPictures[v.id]?.attemptId ?? null,
               assetId: viewPictures[v.id]?.assetId ?? null,
+              locked: viewLocked[v.id],
             }))}
           />
         </div>
@@ -552,8 +595,20 @@ export default async function CharacterPage({
                   </div>
                   {url ? (
                     <figure>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={url} alt={v.label} className="aspect-[3/4] w-full object-cover" />
+                      <ZoomImage
+                        src={url}
+                        alt={`${c.name}: ${v.label}`}
+                        className="aspect-[3/4] w-full object-cover"
+                        caption={`${c.name} · ${v.label}${ref?.locked ? " · locked" : ""}`}
+                      >
+                        <ViewLock slug={slug} characterId={c.id} view={v.id} locked={!!ref?.locked} />
+                        <UseAsFront
+                          slug={slug}
+                          characterId={c.id}
+                          assetId={asset!.id}
+                          isFront={v.id === "front"}
+                        />
+                      </ZoomImage>
                       {origin ? (
                         // a generated reference is never presented as a photograph of the Character
                         <figcaption
@@ -568,6 +623,11 @@ export default async function CharacterPage({
                   ) : (
                     <FramePlaceholder code={v.id} label="Missing" className="aspect-[3/4]" />
                   )}
+                  {asset ? (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      <ViewLock slug={slug} characterId={c.id} view={v.id} locked={!!ref?.locked} />
+                    </div>
+                  ) : null}
                   {ref?.locked && asset ? null : (
                     <ActionForm action={uploadIdentityRef} className="mt-2 flex flex-col gap-1">
                       {hidden}

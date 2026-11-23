@@ -1916,11 +1916,9 @@ test("ZE: a character's page makes the ticked reference views, one by one or all
   await page.getByTestId("reference-views-select-all").click();
   await expect(page.getByTestId("reference-views-make")).toHaveText(/Make 6 views/);
   await page.getByTestId("reference-views-make").click();
-  await expect(page.getByTestId("reference-views-note")).toContainText("wait for it and are made from it");
-  await expect(page.locator('[data-testid="reference-view"][data-state="waiting"]')).toHaveCount(5);
-  await expect(page.locator('[data-testid="reference-view"][data-state="waiting"]').first()).toContainText(
-    "waiting for the front view",
-  );
+  // a tracker follows this run view by view until the last one is done
+  await expect(page.getByTestId("reference-views-run")).toBeVisible();
+  await expect(page.getByTestId("reference-views-run-view")).toHaveCount(6);
   // the front fails here, so the others are never started (and never charged)
   await expect(page.getByTestId("reference-views-note")).toContainText("The front view did not finish", {
     timeout: 60_000,
@@ -1992,6 +1990,10 @@ test("ZG: the views are made with the engine picked beside them, and what is add
   await expect(page.locator('[data-testid="vb-view"][data-state="in_set"]')).toHaveCount(6, {
     timeout: 120_000,
   });
+  // the run is followed to the last picture (the right profile waits for the left one, which it mirrors)
+  await expect(page.getByTestId("reference-views-run-status")).toHaveText("All 5 finished", {
+    timeout: 60_000,
+  });
   // nothing was left to add by hand, and the Visual Bible makes nothing itself
   await expect(page.getByTestId("reference-views-add-all-button")).toHaveCount(0);
   await expect(page.getByTestId("vb-add-made-button")).toHaveCount(0);
@@ -2026,8 +2028,12 @@ test("ZG: the views are made with the engine picked beside them, and what is add
   // every take of a view is an option: the earlier front is one click away
   const options = step4Front.getByTestId("reference-view-takes");
   await expect(options.getByTestId("reference-view-take")).toHaveCount(1);
+  // clicking a take shows it large, with the button to use it
+  await options.getByTestId("reference-view-take").getByTestId("zoom-open").click();
+  const zoom = page.getByTestId("zoom-dialog");
+  await expect(zoom.getByTestId("zoom-image")).toBeVisible();
   page.once("dialog", (d) => void d.accept());
-  await options.getByTestId("reference-view-take").click();
+  await zoom.getByTestId("reference-view-take-use").click();
   await expect
     .poll(async () => step4Front.getByTestId("reference-view-picture").getAttribute("src"), {
       timeout: 30_000,
@@ -2040,6 +2046,26 @@ test("ZG: the views are made with the engine picked beside them, and what is add
   });
   await expect(step4Front.getByTestId("reference-view-pick")).toHaveCount(0);
   await expect(step4Front.getByTestId("reference-view-takes")).toHaveCount(0);
+
+  // any picture opens large; from there it can become the front view (the canonical)
+  const tqRow = page.locator('[data-testid="reference-view"][data-view="three_quarter"]');
+  const tqSrc = await tqRow.getByTestId("reference-view-picture").getAttribute("src");
+  await tqRow.getByTestId("zoom-open").click();
+  await expect(page.getByTestId("zoom-dialog").getByTestId("zoom-image")).toHaveAttribute("src", tqSrc!);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("zoom-dialog")).toHaveCount(0);
+  // a generated picture becomes the canonical by becoming the front view (asked first); unlock the front first
+  await step4Front.getByTestId("reference-view-lock").click();
+  await expect(step4Front.getByTestId("reference-view-lock")).toHaveAttribute("data-locked", "0", {
+    timeout: 30_000,
+  });
+  page.once("dialog", (d) => void d.accept());
+  await page
+    .getByTestId("character-picture")
+    .filter({ has: page.locator(`img[src="${tqSrc}"]`) })
+    .getByTestId("use-as-front-button")
+    .click();
+  await expect(page.getByTestId("vb-canonical-image")).toHaveAttribute("src", tqSrc!, { timeout: 30_000 });
 });
 
 test("ZF: the size of part decides what Prism fills in, and marks the rest optional", async ({ page }) => {

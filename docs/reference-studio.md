@@ -423,6 +423,17 @@ reference is on a plain, solid, pure white backdrop.
 clicking one uses it (asked first). **Lock** keeps a view's picture in place: it is not made again, and no new take,
 option or upload replaces it; locking the front view also locks the canonical (the same picture).
 
+**Seeing, following and choosing.** Every picture on a Character's page (the six views, their other takes, the
+Visual Bible's set, the reference set, Pictures) opens large when clicked, with what can be done to it: Lock /
+Unlock its view, **Make canonical (front)** (puts it in the front view, which is the canonical; asked first), or use an
+other take as the view. A press of Make starts a **run**, followed view by view (waiting · being made · ✓ finished ·
+✕ did not finish) until the last picture is done ("All 5 finished"); it is kept for the tab and dismissed by hand.
+
+**Pairs that match.** The right profile mirrors the left: made together, it waits for the left one and is sent its
+picture with "make the right profile the mirror image of the left profile reference" (`fromLeft`); made alone, it
+is sent the left profile in the set. Its price is quoted as an upper bound for the picture it will be sent (and the
+views made from a front that does not exist yet likewise), so what is confirmed always covers what is charged.
+
 **Merge into…** (src/domain/character-merge.ts, src/server/character-merge-actions.ts): when a Character is the same
 person as another one of its project, it is merged into that one. The one chosen is KEPT, with its place in the story
 (Shots, Scenes, lines, Continuity Locks); the merged one must not be used by the story (merge the other way) and must

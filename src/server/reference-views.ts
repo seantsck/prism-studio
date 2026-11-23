@@ -9,6 +9,7 @@ import { referenceOrigin } from "@/domain/generation/reference-integrity";
 import { isOffered } from "@/domain/generation/models/offered";
 import type { Character, ProjectData } from "@/domain/schemas";
 import { prepareSubjectImage } from "@/generation/subject-submission";
+import type { GenerationRequest } from "@/domain/generation/schemas";
 import { UserFacingError } from "./action-result";
 import { getGenerationConfig, getRegistry } from "./generation";
 import { readSubjectImageForm } from "./reference-request";
@@ -66,6 +67,49 @@ async function startingImages(data: ProjectData, character: Character) {
   return { photos, front };
 }
 
+/**
+ * The price of a request with `extra` more reference pictures than it has now (pictures that do not exist yet), and a
+ * generous allowance for the words that come with them: an upper bound, so what is confirmed always covers what is
+ * charged. Engines priced per picture regardless of references come out the same.
+ */
+function upperBound(
+  request: Record<string, unknown>,
+  extra: number,
+  model: NonNullable<ReturnType<typeof modelOf>>,
+) {
+  const adapter = getRegistry().adapter(model.provider);
+  if (!adapter) return null;
+  const r = request as unknown as GenerationRequest;
+  const refs = r.references ?? [];
+  const padded = {
+    ...r,
+    modality: "image_to_image",
+    references: [
+      ...refs,
+      ...Array.from({ length: extra }, (_, i) => ({ ...(refs[0] ?? {}), assetId: `not-yet-${i}` })),
+    ],
+    prompt: { ...r.prompt, positive: `${r.prompt.positive}\n${"x".repeat(1_500)}` },
+  } as GenerationRequest;
+  return adapter.estimateCost(padded, model).amount;
+}
+
+/** What the right profile is told when it is sent the left profile. */
+export const RIGHT_FROM_LEFT =
+  "Make the right profile the mirror image of the left profile reference picture: the same pose, head angle, height in the frame, crop, lighting, clothing and expression, with the person facing the RIGHT edge of the picture instead.";
+
+/** The left profile in the reference set (a stored picture of this Character), or null. */
+async function leftProfileOf(data: ProjectData, character: Character): Promise<string | null> {
+  const own = await subjectImageAssetIds(
+    data,
+    { kind: "character", characterId: character.id },
+    { startInlineWorker: false },
+  );
+  const ref = data.identityRefs.find(
+    (r) => r.characterId === character.id && r.slot === "profile" && !!r.assetId && own.has(r.assetId),
+  );
+  return ref?.assetId ?? null;
+}
+
 /** True when the creator has their own photos of this Character (every view is then made from them). */
 export async function hasOwnPhotos(data: ProjectData, character: Character): Promise<boolean> {
   return (await startingImages(data, character)).photos.length > 0;
@@ -80,8 +124,10 @@ async function prepareView(
   model: string,
   userId: string | null,
   key: string,
+  direction = "",
 ) {
   const f = new FormData();
+  if (direction) f.set("direction", direction);
   f.set("subjectKind", "character");
   f.set("subjectId", character.id);
   f.set("intent", intent);
@@ -137,17 +183,27 @@ export async function quoteReferenceViews(
   const registry = getRegistry();
   const m = modelOf(model);
   const { photos, front } = await startingImages(data, character);
+  const left = await leftProfileOf(data, character);
   const views: ViewQuote[] = [];
   for (const v of REFERENCE_SET_VIEWS) {
-    // the front view is made from the photos (or the words); the others from the photos, else from the front view
-    const start = photos.length ? photos : v.id !== "front" && front ? [front] : [];
     try {
-      const { prepared } = await prepareView(data, character, v.intent, start, model, userId, "quote-only");
+      // priced exactly as it is made (the same preparation); a picture it will be sent that does not exist yet (the
+      // front view it is made from, the left profile the right one mirrors) is priced as an upper bound
+      const { prepared } = await prepareReferenceView(data, character, v.id, userId, "quote-only", model);
+      const notYet =
+        (!photos.length && !front && v.id !== "front" ? 1 : 0) + (v.id === "right_profile" && !left ? 1 : 0);
+      const cost = prepared.ok
+        ? m && registry.billsMoney(m)
+          ? notYet
+            ? upperBound(prepared.input.attempt.request ?? {}, notYet, m)
+            : prepared.estimate.amount
+          : 0
+        : null;
       views.push({
         id: v.id,
         label: v.label,
         intent: v.intent,
-        costUsd: prepared.ok ? (m && registry.billsMoney(m) ? prepared.estimate.amount : 0) : null,
+        costUsd: cost,
         problem: prepared.ok ? null : (prepared.reasons[0] ?? "This view cannot be made right now."),
       });
     } catch (err) {
@@ -187,6 +243,8 @@ export async function prepareReferenceView(
   model: string = SUGGESTED_VIEWS_MODEL,
   /** made together with a new front view: start from that front picture (this Character's own take) */
   fromFrontAssetId: string | null = null,
+  /** for the right profile: the left profile picture it mirrors (made in the same run, or in the set) */
+  fromLeftAssetId: string | null = null,
 ) {
   const v = REFERENCE_SET_VIEWS.find((x) => x.id === viewId);
   if (!v) throw new UserFacingError("Choose one of the reference views.");
@@ -201,7 +259,18 @@ export async function prepareReferenceView(
         : front
           ? [front]
           : [];
-  const { prepared, registry, req } = await prepareView(data, character, v.intent, start, model, userId, key);
+  // the right profile mirrors the left one: it is sent the left profile too, and told to match it, so the two are a pair
+  const left = v.id === "right_profile" ? (fromLeftAssetId ?? (await leftProfileOf(data, character))) : null;
+  const { prepared, registry, req } = await prepareView(
+    data,
+    character,
+    v.intent,
+    left ? [...start, left] : start,
+    model,
+    userId,
+    key,
+    left ? RIGHT_FROM_LEFT : "",
+  );
   const m = registry.model(req.provider, req.modelId);
   return { view: v, prepared, paid: !!m && registry.billsMoney(m) };
 }
