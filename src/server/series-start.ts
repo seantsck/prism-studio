@@ -1,8 +1,8 @@
 import "server-only";
 import { BIBLE_AI_FIELDS, bibleDraftInstruction, bibleRefineInstruction } from "@/domain/bible-ai";
-import { characterAiFields, characterFillInstruction } from "@/domain/character-ai";
+import { characterAiFields, characterFillInstruction, partSizeOf } from "@/domain/character-ai";
 import { LOCATION_AI_FIELDS, locationFillInstruction, type LocationAiKey } from "@/domain/location-ai";
-import type { Episode, ProjectData } from "@/domain/schemas";
+import type { Episode, PartSize, ProjectData } from "@/domain/schemas";
 import {
   emptyEpisodeOne,
   freshProjectData,
@@ -273,7 +273,7 @@ export function quoteCharacterFill(
   data: ProjectData,
   characterId: string,
   writer?: string | null,
-  opts: { refine?: boolean } = {},
+  opts: { refine?: boolean; size?: PartSize } = {},
 ): QuoteResult {
   const r = resolveWriter(writer);
   if (!r) return { ok: false, reason: WRITING_AI_OFF };
@@ -294,9 +294,9 @@ export function quoteCharacterFill(
     instruction: characterFillInstruction(
       data,
       { ...character, ...CHARACTER_SHEET_CEILING },
-      { note: "あ".repeat(REFINE_NOTE_MAX), revise: opts.refine },
+      { note: "あ".repeat(REFINE_NOTE_MAX), revise: opts.refine, size: opts.size ?? partSizeOf(character) },
     ),
-    count: characterAiFields(inStory).length,
+    count: characterAiFields(inStory, opts.size ?? partSizeOf(character)).length,
     targetText: text,
     draftText: null,
     conversation: [],

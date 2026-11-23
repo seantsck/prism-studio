@@ -1,7 +1,15 @@
 import { SheetAi } from "@/components/ai/sheet-ai";
 import type { WritingProposal } from "@/data/writing-repository";
-import { characterAiFields, characterAsText, parseCharacterIdeas } from "@/domain/character-ai";
-import type { Character } from "@/domain/schemas";
+import {
+  PART_SIZE_HINT,
+  PART_SIZE_LABEL,
+  characterAiFields,
+  characterAsText,
+  parseCharacterIdeas,
+  partSizeOf,
+} from "@/domain/character-ai";
+import { priceText } from "@/domain/pricing/user-price";
+import { PART_SIZES, type Character, type PartSize } from "@/domain/schemas";
 import { fillCharacter, reviewCharacterFill } from "@/server/character-ai-actions";
 import type { QuoteResult } from "@/server/series-start";
 
@@ -15,6 +23,7 @@ export function CharacterAi({
   refineQuote,
   prominent,
   filled,
+  sizeQuotes,
 }: {
   slug: string;
   character: Character;
@@ -26,6 +35,8 @@ export function CharacterAi({
   /** The sheet is thin: say plainly that this is the next step. */
   prominent: boolean;
   filled?: string[];
+  /** the price of filling in for each size of part (the Character's own size is chosen) */
+  sizeQuotes?: Record<PartSize, QuoteResult>;
 }) {
   const fields = characterAiFields(inStory);
   const proposed =
@@ -58,6 +69,37 @@ export function CharacterAi({
       refineQuote={refineQuote}
       prominent={prominent}
       filled={filled}
+      fillButtonText={sizeQuotes ? "Fill in with Prism" : undefined}
+      fillExtra={
+        sizeQuotes ? (
+          <fieldset className="space-y-1" data-testid="character-ai-size">
+            <legend className="mb-1 text-[11px] text-muted">How big is the part?</legend>
+            {PART_SIZES.map((p) => {
+              const q = sizeQuotes[p];
+              return (
+                <label key={p} className="flex items-start gap-2 text-[12.5px]">
+                  <input
+                    type="radio"
+                    name="partSize"
+                    value={p}
+                    defaultChecked={partSizeOf(character) === p}
+                    className="mt-0.5"
+                    data-testid={`character-ai-size-${p}`}
+                  />
+                  <span>
+                    <span className="font-medium">{PART_SIZE_LABEL[p]}</span>
+                    <span className="text-muted" data-testid={`character-ai-size-price-${p}`}>
+                      {" "}
+                      · {q.ok ? (q.paid ? priceText(q.usd) : "free") : "unavailable"}
+                    </span>
+                    <span className="block text-[11px] text-faint">{PART_SIZE_HINT[p]}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </fieldset>
+        ) : undefined
+      }
       intro={`Prism writes every field from what is already here${inStory ? ", the Bible and the rest of the cast" : ""}: personality, how they move and speak, a precise physical description for their pictures, a signature habit and the rules that keep them consistent${inStory ? ", plus their role and relationships in this story" : ""}.`}
       notePlaceholder="Raised in Kyoto, studied in London; polite in public, ruthless in private."
       fill={fillCharacter}

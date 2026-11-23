@@ -28,6 +28,9 @@ import { ArchiveButton, ArchivedPanel, DeleteButton, DeleteSubjectButton } from 
 import { LibraryToggle } from "@/components/characters/library";
 import { UseInProject } from "@/components/library/use-in-project";
 import { CharacterAi } from "@/components/characters/character-ai";
+import { SheetField } from "@/components/characters/sheet-field";
+import { PART_SIZE_HINT, PART_SIZE_LABEL, partSizeOf } from "@/domain/character-ai";
+import { PART_SIZES } from "@/domain/schemas";
 import { ReferenceViewsPanel, type ViewState } from "@/components/characters/reference-views";
 import { referenceSetViewOf } from "@/domain/generation/reference-studio";
 import { quoteReferenceViews } from "@/server/reference-views";
@@ -77,6 +80,7 @@ export default async function CharacterPage({
   const images = await subjectImageState({ kind: "character", characterId: c.id }, data);
   // every picture of this Character (their photos, Look pictures, finished takes), each with Archive, and the archive
   const pictures = await referenceStudioState(data, `character:${c.id}`);
+  const size = partSizeOf(c);
   const ownPhotos = pictures.images.filter((i) => i.origin === "uploaded").length;
   // each reference view: in the set, being made, made and waiting to be added, or still to make (and its price)
   const IN_FLIGHT = new Set([
@@ -155,7 +159,12 @@ export default async function CharacterPage({
           character={c}
           inStory={!inLibrary}
           latest={aiLatest}
-          fillQuote={quoteCharacterFill(data, c.id)}
+          fillQuote={quoteCharacterFill(data, c.id, null, { size: "lead" })}
+          sizeQuotes={{
+            lead: quoteCharacterFill(data, c.id, null, { size: "lead" }),
+            supporting: quoteCharacterFill(data, c.id, null, { size: "supporting" }),
+            minor: quoteCharacterFill(data, c.id, null, { size: "minor" }),
+          }}
           refineQuote={quoteCharacterFill(data, c.id, null, { refine: true })}
           prominent={characterSheetThin(c)}
           filled={auto.filled}
@@ -165,6 +174,22 @@ export default async function CharacterPage({
           <ActionForm key={c.updatedAt} action={saveCharacter} className="space-y-3">
             {hidden}
             <input type="hidden" name="id" value={c.id} />
+            <Field
+              label="Size of part"
+              hint={
+                inLibrary
+                  ? "Each project sets its own when the character is added; here it decides what Prism fills in."
+                  : PART_SIZE_HINT[size]
+              }
+            >
+              <select name="partSize" defaultValue={c.partSize ?? "lead"} data-testid="character-part-size">
+                {PART_SIZES.map((p) => (
+                  <option key={p} value={p}>
+                    {PART_SIZE_LABEL[p]}
+                  </option>
+                ))}
+              </select>
+            </Field>
             {inLibrary ? (
               <>
                 {/* the role is set per project, on each project's copy */}
@@ -178,36 +203,36 @@ export default async function CharacterPage({
                 <Field label="Name">
                   <input name="name" defaultValue={c.name} />
                 </Field>
-                <Field label="Role" hint="In this project, e.g. Lead — heiress">
+                <SheetField k="role" size={size} extra="In this project, e.g. Lead — heiress.">
                   <input name="role" defaultValue={c.role} />
-                </Field>
+                </SheetField>
               </div>
             )}
-            <Field label="Description">
+            <SheetField k="description" size={size}>
               <textarea name="description" rows={2} defaultValue={c.description} />
-            </Field>
-            <Field label="Personality">
+            </SheetField>
+            <SheetField k="personality" size={size}>
               <textarea name="personality" rows={2} defaultValue={c.personality} />
-            </Field>
-            <Field label="Behavior notes">
+            </SheetField>
+            <SheetField k="behaviorNotes" size={size}>
               <textarea name="behaviorNotes" rows={2} defaultValue={c.behaviorNotes} />
-            </Field>
-            <Field label="Physical description">
-              <textarea name="physicalDescription" rows={2} defaultValue={c.physicalDescription} />
-            </Field>
-            <Field label="Signature behavior">
+            </SheetField>
+            <SheetField k="physicalDescription" size={size}>
+              <textarea name="physicalDescription" rows={3} defaultValue={c.physicalDescription} />
+            </SheetField>
+            <SheetField k="signatureBehavior" size={size}>
               <input name="signatureBehavior" defaultValue={c.signatureBehavior} />
-            </Field>
+            </SheetField>
             {inLibrary ? (
               <input type="hidden" name="relationshipNotes" value={c.relationshipNotes} />
             ) : (
-              <Field label="Relationship notes">
+              <SheetField k="relationshipNotes" size={size}>
                 <textarea name="relationshipNotes" rows={2} defaultValue={c.relationshipNotes} />
-              </Field>
+              </SheetField>
             )}
-            <Field label="Continuity rules" hint="One per line">
+            <SheetField k="continuityRules" size={size} extra="One per line.">
               <textarea name="continuityRules" rows={3} defaultValue={join(c.continuityRules)} />
-            </Field>
+            </SheetField>
             <Button type="submit" variant="primary">
               Save character
             </Button>

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import {
+  partSizeOf,
   characterAiFields,
   characterFieldValue,
   characterFillInstruction,
@@ -9,12 +10,13 @@ import {
   parseCharacterIdeas,
 } from "@/domain/character-ai";
 import { emptyEpisodeOne, REFINE_NOTE_MAX } from "@/domain/series-start";
-import { characterSchema, type Character, type ProjectData } from "@/domain/schemas";
+import { characterSchema, type Character, type PartSize, type ProjectData } from "@/domain/schemas";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { getRepo, requireProjectFresh } from "./repo";
 import { quoteCharacterFill } from "./series-start";
 import { getWritingRepo } from "./story";
 import { askPrism } from "./writing-actions";
+import { NEEDS_0067, partSizeFrom, saveCharacterWithSize } from "./part-size";
 
 /**
  * Fill in a Character's sheet with Prism, then review it field by field (src/domain/character-ai.ts). Each request
@@ -51,10 +53,13 @@ async function queue(
   data: ProjectData,
   slug: string,
   character: Character,
-  opts: { note?: string; revise?: boolean },
+  opts: { note?: string; revise?: boolean; size?: PartSize },
   form: FormData,
 ) {
-  const q = quoteCharacterFill(data, character.id, str(form, "model"), { refine: opts.revise });
+  const q = quoteCharacterFill(data, character.id, str(form, "model"), {
+    refine: opts.revise,
+    size: opts.size,
+  });
   if (!q.ok) throw new UserFacingError(q.reason);
   confirmed(form, q.usd, q.paid);
   const first = [...data.episodes].sort((a, b) => a.number - b.number)[0]!;
@@ -79,8 +84,19 @@ async function queue(
 async function fillCharacter_impl(form: FormData) {
   const { slug, data, character } = await load(form);
   const note = str(form, "note").slice(0, REFINE_NOTE_MAX);
-  await queue(data, slug, character, { note }, form);
-  return { ok: true as const, message: `Prism is filling in ${character.name}…` };
+  // the size of part chosen here is the Character's from now on (in this project)
+  const size = partSizeFrom(form) ?? partSizeOf(character);
+  let remembered = true;
+  let current = character;
+  if (partSizeFrom(form) && partSizeFrom(form) !== character.partSize) {
+    current = characterSchema.parse({ ...character, partSize: size, updatedAt: new Date().toISOString() });
+    ({ remembered } = await saveCharacterWithSize(data.project.id, current));
+  }
+  await queue(data, slug, current, { note, size }, form);
+  return {
+    ok: true as const,
+    message: `Prism is filling in ${character.name}…${remembered ? "" : ` ${NEEDS_0067}`}`,
+  };
 }
 
 async function reviewCharacterFill_impl(form: FormData) {
@@ -113,7 +129,13 @@ async function reviewCharacterFill_impl(form: FormData) {
     const note = str(form, "note").slice(0, REFINE_NOTE_MAX);
     if (!note) throw new UserFacingError("Tell Prism what to change in the draft.");
     // Prism revises the draft as it reads now, the creator's edits included
-    await queue(data, slug, { ...character, ...edited } as Character, { note, revise: true }, form);
+    await queue(
+      data,
+      slug,
+      { ...character, ...edited } as Character,
+      { note, revise: true, size: partSizeOf(character) },
+      form,
+    );
     return { ok: true as const, message: "Prism is revising the draft…" };
   }
 

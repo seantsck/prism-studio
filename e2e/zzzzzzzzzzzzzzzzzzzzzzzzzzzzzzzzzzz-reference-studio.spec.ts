@@ -1887,3 +1887,36 @@ test("ZE: a character's page makes one reference view or all the missing ones, a
       (await page.locator('[data-testid="reference-view"][data-state="missing"]').count()),
   ).toBe(6);
 });
+
+test("ZF: the size of part decides what Prism fills in, and marks the rest optional", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  const box = page.getByTestId("new-character");
+  await box.getByTestId("new-character-prompt").fill("A hotel doorman in a burgundy coat and white gloves.");
+  await box.getByTestId("new-character-name").fill("Doorman");
+  await box.getByTestId("new-character-fill").locator("input").uncheck();
+  await box.getByTestId("new-character-create").click();
+  await expect(page.getByRole("heading", { name: "Doorman", exact: true })).toBeVisible({ timeout: 60_000 });
+
+  // every field says what Prism uses it for; a lead needs them all
+  const physical = page.locator('[data-testid="sheet-field"][data-field="physicalDescription"]');
+  await expect(physical).toContainText("Goes into every picture of them");
+  await expect(physical).toContainText("Only what a camera sees");
+  await expect(page.locator('[data-testid="sheet-field"][data-optional="1"]')).toHaveCount(0);
+
+  // three sizes, each with its price; a minor part asks Prism for how he looks and what stays the same
+  const ai = page.getByTestId("character-ai");
+  await expect(ai.getByTestId("character-ai-size-lead")).toBeChecked();
+  await expect(ai.getByTestId("character-ai-size-price-minor")).toContainText("free");
+  await ai.getByTestId("character-ai-size-minor").check();
+  await ai.getByTestId("character-ai-fill").click();
+  await expect(ai.getByTestId("character-ai-filled")).toContainText("Continuity rules", { timeout: 60_000 });
+  await expect(ai.getByTestId("character-ai-filled")).not.toContainText("Personality");
+  // remembered: the page now treats him as a minor part, and the fields he does not need are optional
+  await expect(page.getByTestId("character-part-size")).toHaveValue("minor");
+  await expect(page.locator('[data-testid="sheet-field"][data-field="personality"]')).toHaveAttribute(
+    "data-optional",
+    "1",
+  );
+  await expect(page.locator('textarea[name="personality"]')).toHaveValue("");
+});

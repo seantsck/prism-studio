@@ -44,6 +44,8 @@ export function SheetAi({
   anchorId,
   prompt,
   filled = [],
+  fillExtra,
+  fillButtonText,
 }: {
   /** "character-ai" / "location-ai": the prefix of every test id */
   testId: string;
@@ -68,6 +70,10 @@ export function SheetAi({
   prompt?: string;
   /** the empty fields Prism's answer has just filled in (src/server/sheet-autofill.ts) */
   filled?: string[];
+  /** more choices inside the Fill in form (a Character's size of part, each with its price) */
+  fillExtra?: React.ReactNode;
+  /** the Fill in button's text, when the price is shown beside each choice instead */
+  fillButtonText?: string;
 }) {
   const pending = !!latest && (latest.status === "queued" || latest.status === "running");
   // what is left to decide: Prism's version of a field that differs from the sheet (empty ones were filled in at once)
@@ -232,6 +238,7 @@ export function SheetAi({
               {prominent ? `Most of ${name}'s sheet is empty. ` : ""}
               {intro} You review it before anything changes.
             </p>
+            {fillExtra}
             <Field label="Anything to add (optional)">
               <textarea
                 name="note"
@@ -246,7 +253,7 @@ export function SheetAi({
               variant={prominent ? "primary" : "secondary"}
               data-testid={`${testId}-fill`}
             >
-              Fill in with Prism · {priceOf(fillQuote)}
+              {fillButtonText ?? `Fill in with Prism · ${priceOf(fillQuote)}`}
             </Button>
           </ActionForm>
         ) : (

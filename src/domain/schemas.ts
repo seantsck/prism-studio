@@ -196,6 +196,10 @@ export type Asset = z.infer<typeof assetSchema>;
 
 // ───────────────────────── Characters ─────────────────────────
 
+/** How big a part is: a lead, a supporting role, or a minor part / extra. */
+export const PART_SIZES = ["lead", "supporting", "minor"] as const;
+export type PartSize = (typeof PART_SIZES)[number];
+
 export const characterSchema = z.object({
   id,
   projectId: id,
@@ -210,6 +214,11 @@ export const characterSchema = z.object({
   relationshipNotes: text,
   /** In the Trash since (migration 0064). Absent = not stored (never trashed, or the column is not there yet). */
   trashedAt: iso.nullable().optional(),
+  /**
+   * How big the part is in this project (migration 0067): what "Fill in with Prism" writes and which fields matter.
+   * Null / absent = not chosen (treated as a lead). Never copied with the Character: each project chooses its own.
+   */
+  partSize: z.enum(PART_SIZES).nullable().optional(),
   createdAt: iso,
   updatedAt: iso,
 });
