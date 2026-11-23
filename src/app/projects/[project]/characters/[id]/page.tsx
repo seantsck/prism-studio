@@ -34,6 +34,7 @@ import type { WritingProposal } from "@/data/writing-repository";
 import { characterSheetThin, isCharacterRequest } from "@/domain/character-ai";
 import { quoteCharacterFill } from "@/server/series-start";
 import { getWritingRepo } from "@/server/story";
+import { autoFillCharacter } from "@/server/sheet-autofill";
 import { referenceStudioState } from "@/server/reference-studio";
 import Link from "next/link";
 
@@ -49,8 +50,9 @@ export default async function CharacterPage({
   const { project: slug, id } = await params;
   const fresh = (await searchParams).new === "1";
   const data = await requireProject(slug);
-  const c = data.characters.find((x) => x.id === id);
-  if (!c) notFound();
+  const found = data.characters.find((x) => x.id === id);
+  if (!found) notFound();
+  let c = found;
   const refs = data.identityRefs.filter((r) => r.characterId === c.id);
   const looks = data.looks.filter((l) => l.characterId === c.id);
   const voices = data.voiceProfiles.filter((v) => v.characterId === c.id);
@@ -86,7 +88,11 @@ export default async function CharacterPage({
         if (isCharacterRequest(p.instruction, c.id) && (!aiLatest || p.createdAt > aiLatest.createdAt))
           aiLatest = p;
   }
-  if (aiLatest && (aiLatest.createdAt <= c.updatedAt || aiLatest.status === "rejected")) aiLatest = null;
+  if (aiLatest && (aiLatest.status === "rejected" || aiLatest.status === "accepted")) aiLatest = null;
+  // Prism's answer fills in the fields left empty at once; what was written stays for review
+  const auto = await autoFillCharacter(data, c, aiLatest);
+  c = auto.character;
+  if (auto.proposalDone) aiLatest = null;
   const saved = library.entries.some((e) => e.characterId === c.id);
   // made on its own (the account's library, in no story): it has no role here, and joins projects from this page
   const inLibrary = data.project.purpose === "library";
@@ -121,6 +127,7 @@ export default async function CharacterPage({
           fillQuote={quoteCharacterFill(data, c.id)}
           refineQuote={quoteCharacterFill(data, c.id, null, { refine: true })}
           prominent={characterSheetThin(c)}
+          filled={auto.filled}
         />
         <ReferencePlanPanel
           name={c.name}
@@ -216,7 +223,8 @@ export default async function CharacterPage({
           />
         </div>
         <Panel title="Character">
-          <ActionForm action={saveCharacter} className="space-y-3">
+          {/* keyed by the sheet's version: Prism's filled-in fields show here at once */}
+          <ActionForm key={c.updatedAt} action={saveCharacter} className="space-y-3">
             {hidden}
             <input type="hidden" name="id" value={c.id} />
             {inLibrary ? (

@@ -122,6 +122,8 @@ async function reviewCharacterFill_impl(form: FormData) {
   const next: Record<string, unknown> = { ...character, updatedAt: new Date().toISOString() };
   for (const f of chosen) next[f.key] = edited[f.key];
   await (await getRepo()).upsert(data.project.id, "characters", characterSchema.parse(next));
+  // applied: the draft is done with
+  await writing.rejectProposal(data.project.id, proposal.id, new Date().toISOString());
   revalidatePath(`/projects/${slug}`, "layout");
   return {
     ok: true as const,

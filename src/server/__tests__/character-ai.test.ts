@@ -60,6 +60,7 @@ import { fillCharacter, reviewCharacterFill } from "../character-ai-actions";
 import { createStandaloneCharacter, createStandaloneLocation } from "../library-actions";
 import { quoteCharacterFill, quoteLocationFill, quoteNewFill } from "../series-start";
 import { fillLocation, reviewLocationFill } from "../location-ai-actions";
+import { autoFillCharacter, autoFillLocation } from "../sheet-autofill";
 import { LOCATION_AI_FIELDS, isLocationRequest, namedLines, parseLocationIdeas } from "@/domain/location-ai";
 import type { Location } from "@/domain/schemas";
 import {
@@ -336,5 +337,75 @@ describe("Have Prism fill in the details, ticked on the create box", () => {
     expect(
       (await proposalsOf(slug)).filter((p) => isLocationRequest(p.instruction, hall.created!.id)),
     ).toHaveLength(1);
+  });
+});
+
+describe("Prism's answer fills in the empty fields at once", () => {
+  it("fills what was empty, keeps what was written for review, and runs once", async () => {
+    const made = await createStandaloneCharacter(form({ prompt: TAKUMI, name: "Takumi" }));
+    const { slug, id } = made.created!;
+    await fillCharacter(form({ projectSlug: slug, characterId: id }));
+    await work();
+    let data = (await repo.loadProject(slug))!;
+    const proposal = (await proposalsOf(slug)).find((p) => isCharacterRequest(p.instruction, id))!;
+    const before = data.characters.find((c) => c.id === id)!;
+    const first = await autoFillCharacter(data, before, proposal);
+    expect(first.filled).toEqual(["Personality", "Behavior notes", "Signature behavior", "Continuity rules"]);
+    expect(first.proposalDone).toBe(false); // Prism words the description differently: left to review
+    data = (await repo.loadProject(slug))!;
+    const after = data.characters.find((c) => c.id === id)!;
+    expect(after.personality).toBe("Test personality for Takumi.");
+    expect(after.continuityRules).toEqual([
+      "Test continuity rules one for Takumi.",
+      "Test continuity rules two.",
+    ]);
+    expect(after.description).toBe(TAKUMI);
+    expect(after.physicalDescription).toBe(TAKUMI);
+    // once: a field the creator empties afterwards is not filled again
+    await repo.upsert(data.project.id, "characters", {
+      ...after,
+      personality: "",
+      updatedAt: new Date().toISOString(),
+    });
+    data = (await repo.loadProject(slug))!;
+    const again = await autoFillCharacter(
+      data,
+      data.characters.find((c) => c.id === id)!,
+      proposal,
+    );
+    expect(again.filled).toEqual([]);
+  });
+
+  it("a Location's empty fields are filled; its draft closes once nothing is left to review", async () => {
+    const made = await createStandaloneLocation(form({ prompt: "A ballroom called The Gilded Hall." }));
+    const { slug, id } = made.created!;
+    await fillLocation(form({ projectSlug: slug, locationId: id }));
+    await work();
+    let data = (await repo.loadProject(slug))!;
+    const proposal = (await proposalsOf(slug)).find((p) => isLocationRequest(p.instruction, id))!;
+    const res = await autoFillLocation(
+      data,
+      data.locations.find((l) => l.id === id)!,
+      proposal,
+    );
+    expect(res.filled).toEqual(["Geography", "Zones", "Entrances / exits", "Lighting", "Recurring props"]);
+    expect(res.location.zones.map((z) => z.name)).toEqual(["Test zones A", "Test zones B"]);
+    expect(res.location.description).toBe("A ballroom called The Gilded Hall.");
+    expect(res.proposalDone).toBe(false);
+    // the creator takes Prism's description too: nothing left, the draft is done
+    data = (await repo.loadProject(slug))!;
+    const l = data.locations.find((x) => x.id === id)!;
+    const theirs = parseLocationIdeas(
+      (await repo.writing.getProposal(data.project.id, proposal.id))!.result!.ideas,
+    );
+    await repo.upsert(data.project.id, "locations", { ...l, description: theirs.description! });
+    data = (await repo.loadProject(slug))!;
+    const closing = await autoFillLocation(
+      data,
+      data.locations.find((x) => x.id === id)!,
+      proposal,
+    );
+    expect(closing).toMatchObject({ filled: [], proposalDone: true });
+    expect((await repo.writing.getProposal(data.project.id, proposal.id))!.status).toBe("rejected");
   });
 });

@@ -23,6 +23,7 @@ import { locationBibleOf } from "@/domain/location-visual-bible";
 import type { Location } from "@/domain/schemas";
 import { quoteLocationFill } from "@/server/series-start";
 import { getWritingRepo } from "@/server/story";
+import { autoFillLocation } from "@/server/sheet-autofill";
 
 export default async function LocationsPage({
   params,
@@ -58,10 +59,21 @@ export default async function LocationsPage({
           if (isLocationRequest(p.instruction, l.id) && p.createdAt > (aiLatest.get(l.id)?.createdAt ?? ""))
             aiLatest.set(l.id, p);
   }
-  const latestFor = (id: string) => {
+  const latestOpen = (id: string) => {
     const p = aiLatest.get(id);
     return p && p.status !== "rejected" && p.status !== "accepted" ? p : null;
   };
+  // Prism's answer fills in each Location's empty fields at once; what was written stays for review
+  const filledFor = new Map<string, string[]>();
+  const closed = new Set<string>();
+  const locations: Location[] = [];
+  for (const l of data.locations) {
+    const auto = await autoFillLocation(data, l, latestOpen(l.id));
+    locations.push(auto.location);
+    filledFor.set(l.id, auto.filled);
+    if (auto.proposalDone) closed.add(l.id);
+  }
+  const latestFor = (id: string) => (closed.has(id) ? null : latestOpen(id));
   const planFor = (l: Location) => {
     const bible = locationBibleOf(l);
     const views = viewsOf(l.id);
@@ -99,7 +111,7 @@ export default async function LocationsPage({
       />
       <div className="grid gap-6 p-6 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-3">
-          {[...data.locations, null].map((l) => (
+          {[...locations, null].map((l) => (
             <details
               key={l?.id ?? "new"}
               id={l ? `location-${l.id}` : undefined}
@@ -139,6 +151,7 @@ export default async function LocationsPage({
                       fillQuote={quoteLocationFill(data, l.id)}
                       refineQuote={quoteLocationFill(data, l.id, null, { refine: true })}
                       prominent={locationSheetThin(l)}
+                      filled={filledFor.get(l.id)}
                     />
                     <ReferencePlanPanel
                       kind="location"
