@@ -293,7 +293,9 @@ test("C: a 3/4 view FROM the photo: what will be sent is shown, then a labelled 
   await expect(prompt).toContainText("The same person as in the identity reference image");
   await expect(prompt).toContainText("the reference image wins where they differ");
   await expect(prompt).toContainText("Three-quarter view");
-  await expect(prompt).toContainText("Plain light-grey studio background");
+  await expect(prompt).toContainText("Background: one plain, solid, neutral light-grey colour");
+  // made from a photo: the photo's surroundings are not copied
+  await expect(prompt).toContainText("Do not copy the surroundings of the reference images");
   // rules for the software, the story's canon and the film's night lighting are not image content
   await expect(prompt).not.toContainText("Guardrails");
   await expect(prompt).not.toContainText("vehicle door");
@@ -1960,7 +1962,8 @@ test("ZG: the views are made with the engine picked beside them, and what is add
   await expect(front).toHaveAttribute("data-state", "made", { timeout: 60_000 });
   await expect(front.getByTestId("reference-view-picture")).toBeVisible();
   // the Visual Bible sends its views here instead of making them on its own
-  await expect(page.getByTestId("vb-generate-three_quarter")).toHaveAttribute("href", "#reference-views");
+  // the Visual Bible has no make-it links beside its items
+  await expect(page.getByTestId("visual-bible").locator('[data-testid^="vb-generate-"]')).toHaveCount(0);
   await expect(page.getByTestId("vb-item-front")).toHaveAttribute("data-done", "false");
   await front.getByTestId("reference-view-add-button").click();
   await expect(front).toHaveAttribute("data-state", "in_set", { timeout: 30_000 });
@@ -1998,6 +2001,17 @@ test("ZG: the views are made with the engine picked beside them, and what is add
   await expect(page.getByTestId("reference-plan-total")).toHaveText("The set is complete.");
   for (const key of ["three_quarter", "profile", "full_body"])
     await expect(page.getByTestId(`vb-item-${key}`)).toHaveAttribute("data-done", "true");
+
+  // the front view became the canonical; another picture becomes it with "Make canonical" under it (asked first)
+  const vbFront = page.locator('[data-testid="vb-view"][data-view="front"]');
+  const threeQuarter = page.locator('[data-testid="vb-view"][data-view="three_quarter"]');
+  await expect(vbFront.getByTestId("canonical-mark")).toHaveText("✓ Canonical");
+  page.once("dialog", (d) => void d.accept());
+  await threeQuarter.getByTestId("make-canonical-button").click();
+  await expect(threeQuarter.getByTestId("canonical-mark")).toBeVisible({ timeout: 30_000 });
+  await expect(vbFront.getByTestId("make-canonical-button")).toBeVisible();
+  // the same button sits under every picture of the character
+  await expect(page.getByTestId("character-pictures").getByTestId("canonical-mark")).toHaveCount(1);
 });
 
 test("ZF: the size of part decides what Prism fills in, and marks the rest optional", async ({ page }) => {

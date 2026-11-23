@@ -256,7 +256,15 @@ describe("subject-image policy v2: what the images are FOR", () => {
         sourceAssetIds,
       });
       expect(plan.positive).not.toMatch(/Guardrails|Canon|vehicle door|Never /);
-      expect(lines(plan, "composition").join(" ")).toMatch(/Plain light-grey studio background/);
+      // every reference is made on one plain, solid, neutral background
+      expect(lines(plan, "composition").join(" ")).toMatch(
+        /Background: one plain, solid, neutral light-grey colour, evenly lit, with no scenery/,
+      );
+      expect(lines(plan, "negative_constraints").join(" ")).toMatch(/busy or patterned background/);
+      // made from images: their surroundings are never copied
+      expect(lines(plan, "composition").join(" ").includes("Do not copy the surroundings")).toBe(
+        sourceAssetIds.length > 0,
+      );
     }
     // words only: the project's style names the rendering medium, and the studio setup stays
     const text = buildSubjectImagePlan(data, {

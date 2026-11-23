@@ -861,7 +861,8 @@ function Price({
             : `Sends ${quote.sending.length} image${quote.sending.length === 1 ? "" : "s"}`}
           {quote.notSent > 0 ? ` (${quote.notSent} more did not fit this model)` : ""} · show
         </summary>
-        <div className="mt-2 space-y-2 rounded-[3px] border border-line bg-bg p-2">
+        {/* scrolls inside the price footer: open, it never grows taller than the screen it is pinned to */}
+        <div className="mt-2 max-h-[45vh] space-y-2 overflow-y-auto rounded-[3px] border border-line bg-bg p-2">
           {quote.sending.length > 0 ? (
             <ol className="flex flex-wrap gap-2">
               {quote.sending.map((s, i) => (

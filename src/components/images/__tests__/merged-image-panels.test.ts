@@ -215,9 +215,9 @@ describe("5B-I3b + I4 merged Character image UI", () => {
       expect(count(html, `vb-item-${key}`)).toBe(1);
     expect(count(html, "vb-use-as-canonical")).toBe(1);
     expect(count(html, "vb-add-expression")).toBe(1);
-    expect(count(html, "vb-generate-portrait")).toBeGreaterThanOrEqual(1);
-    // the views of the set are made in "4. Six views" on the same page
-    expect(html).toContain('href="#reference-views"');
+    // the Visual Bible makes nothing and links nowhere beside its items: views are made in "4. Six views"
+    expect(html).not.toContain("vb-generate-");
+    expect(html).not.toMatch(/>Generate /);
     // the hosted offer belongs to the Images panel only, never duplicated into the Visual Bible
     expect(html).not.toContain("High Quality Removal");
   });

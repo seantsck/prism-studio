@@ -380,6 +380,16 @@ set" does and skips, with the reason, a view that would replace a different pict
 views as a Reference set strip (in the set, or made and not added yet) and makes nothing itself: its view items point
 to 4. Six views, Looks and expressions to the Reference Studio.
 
+Every reference Prism makes of a Character (the six views, a Look sheet, an expression, an outfit) is asked for on
+one plain, solid, neutral light-grey background, evenly lit, with no scenery, objects, pattern or gradient; made from
+photos or other references, the prompt also says not to copy their surroundings, and "busy or patterned background"
+is in what to avoid (src/domain/generation/subject-image.ts). A scene still ("scene_variation") keeps its scene.
+
+The canonical identity is the one picture that defines the face, sent with every Shot. Adding the front view makes
+it canonical; **Make canonical** under any picture of the Character (in Pictures, and under each view in the Visual
+Bible's Reference set) makes that picture canonical instead, asking first when one already exists. The Visual Bible's
+items carry no links: it shows what the Character has, and makes nothing.
+
 The project runs only so many generations at once (`PRISM_STUDIO_GENERATION_MAX_ACTIVE_PER_PROJECT`, 3 by default).
 Ticked views that do not fit are not started and not charged: they wait in the page ("waiting for a free slot") and
 start on their own, at the confirmed prices, as slots free up while the page is open (Cancel waiting drops them). A

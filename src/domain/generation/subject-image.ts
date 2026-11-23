@@ -80,8 +80,16 @@ export const SUBJECT_IMAGE_INTENT_LABEL: Record<SubjectImageIntent, string> = {
   time_variant: "Time-of-day variant",
 };
 
-/** A reference is a neutral studio picture: the project's scene lighting is for Shots, not for references. */
-const STUDIO = "Plain light-grey studio background, soft even light, natural colour, sharp focus.";
+/**
+ * A reference is a neutral studio picture: the project's scene lighting is for Shots, not for references. The
+ * background is one plain, solid, neutral colour (the standard for every reference Prism makes): nothing behind the
+ * person leaks into the Shots made from it, and a background can be removed cleanly from it.
+ */
+const STUDIO =
+  "Background: one plain, solid, neutral light-grey colour, evenly lit, with no scenery, objects, pattern, gradient or text. Soft even studio light, natural colour, sharp focus.";
+/** Sent with a reference made FROM images: their surroundings are never copied, only the person. */
+const STUDIO_FROM_IMAGES =
+  "Do not copy the surroundings of the reference images: show the person on the plain light-grey background described above.";
 const SOLO = "One person only. No text, watermark or border.";
 const EMPTY_PLACE = "No text, watermark or border.";
 
@@ -519,10 +527,15 @@ export function buildSubjectImagePlan(
   }
 
   if (!edit) {
+    const studioReference =
+      input.subject.kind === "character" && COMPOSITION[input.subject.intent].includes(STUDIO);
     sections.push({
       key: "composition",
       title: SUBJECT_IMAGE_INTENT_LABEL[input.subject.intent],
-      lines: COMPOSITION[input.subject.intent],
+      lines: [
+        ...COMPOSITION[input.subject.intent],
+        ...(studioReference && operation! === "reference" ? [STUDIO_FROM_IMAGES] : []),
+      ],
     });
     if (direction) sections.push({ key: "action", title: "Direction", lines: [direction] });
     // Only what describes the PICTURE. The project's story canon and software guardrails are rules for Prism and its
@@ -540,7 +553,12 @@ export function buildSubjectImagePlan(
           : line("Project visual style, for the rendering medium only (the studio setup above stays)", style);
     if (rendering.length) sections.push({ key: "hard_constraints", title: "Rendering", lines: rendering });
   }
-  const negative = ["text, captions, watermark, logo, extra limbs, duplicated person"];
+  const negative = [
+    "text, captions, watermark, logo, extra limbs, duplicated person",
+    ...(!edit && input.subject.kind === "character" && COMPOSITION[input.subject.intent].includes(STUDIO)
+      ? ["scenery or a room behind the person, busy or patterned background, gradient background"]
+      : []),
+  ];
   sections.push({ key: "negative_constraints", title: "Avoid", lines: negative });
 
   const plan: PromptPlan = { version: 1, sections: sections.filter((x) => x.lines.length > 0) };
