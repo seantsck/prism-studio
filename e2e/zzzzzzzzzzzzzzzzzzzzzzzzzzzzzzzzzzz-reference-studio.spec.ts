@@ -2010,6 +2010,9 @@ test("ZG: the views are made with the engine picked beside them, and what is add
   await threeQuarter.getByTestId("make-canonical-button").click();
   await expect(threeQuarter.getByTestId("canonical-mark")).toBeVisible({ timeout: 30_000 });
   await expect(vbFront.getByTestId("make-canonical-button")).toBeVisible();
+  // the front view keeps its own picture in the set: the front reference stays done
+  await expect(vbFront).toHaveAttribute("data-state", "in_set");
+  await expect(page.getByTestId("vb-item-front")).toHaveAttribute("data-done", "true");
   // the same button sits under every picture of the character
   await expect(page.getByTestId("character-pictures").getByTestId("canonical-mark")).toHaveCount(1);
 });
