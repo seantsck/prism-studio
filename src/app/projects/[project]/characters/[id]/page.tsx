@@ -115,6 +115,8 @@ export default async function CharacterPage({
   const library = await repo.libraryEntries();
   // the newest "Fill in with Prism" request for this Character (kept with Episode 1), while newer than the sheet
   let aiLatest: WritingProposal | null = null;
+  // the newest request of any state: to tell whether the creator edited the sheet after Prism last answered
+  let aiLast: WritingProposal | null = null;
   const firstEpisode = [...data.episodes].sort((a, b) => a.number - b.number)[0];
   if (firstEpisode) {
     const writing = await getWritingRepo();
@@ -123,6 +125,7 @@ export default async function CharacterPage({
         if (isCharacterRequest(p.instruction, c.id) && (!aiLatest || p.createdAt > aiLatest.createdAt))
           aiLatest = p;
   }
+  aiLast = aiLatest;
   if (aiLatest && (aiLatest.status === "rejected" || aiLatest.status === "accepted")) aiLatest = null;
   // Prism's answer fills in the fields left empty at once; what was written stays for review
   const auto = await autoFillCharacter(data, c, aiLatest);
@@ -168,6 +171,12 @@ export default async function CharacterPage({
           refineQuote={quoteCharacterFill(data, c.id, null, { refine: true })}
           prominent={characterSheetThin(c)}
           filled={auto.filled}
+          editedSince={
+            !aiLatest &&
+            !!aiLast &&
+            Date.parse(c.updatedAt) >
+              Date.parse(aiLast.decidedAt ?? aiLast.completedAt ?? aiLast.createdAt) + 2_000
+          }
         />
         <Panel title="Character">
           {/* keyed by the sheet's version: Prism's filled-in fields show here at once */}

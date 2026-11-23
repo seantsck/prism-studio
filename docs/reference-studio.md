@@ -346,8 +346,8 @@ from it is a secondary link to the home page.
 
 A Character's page opens with the sheet and the Character's details side by side: **Fill in the sheet with Prism** on
 the left, the **Character** form on the right. Under them, **References: how many, and the price** lists the six views,
-each in the set, being made, made and waiting to be added, or with **Make · $price**; **Make all N · $total** makes every
-missing view on one confirmation (`src/server/reference-views.ts`, `src/server/reference-view-actions.ts`). Each price is
+each in the set, being made, made and waiting to be added, or ticked to make with its price; tick them one by one or
+**Select all**, and **Make N views · $total** makes the ticked ones on one confirmation (`src/server/reference-views.ts`, `src/server/reference-view-actions.ts`). Each price is
 the exact one the Reference Studio would show for that same request (the same preparation as the submission, with GPT
 Image 2.5 Flare), the total is the sum of those prices, and the server prices them again and refuses a smaller
 confirmation; every view is prepared before any starts. Views start from the creator's photos (up to 8), else from the
@@ -362,6 +362,11 @@ a minor part, only the physical description and continuity rules, briefly. In th
 uses it for (`uses`, with a tip for the physical description and the continuity rules), and a field that does not
 matter for the size is marked optional and shown quieter. Before 0067 is applied, a chosen size is used for that
 request but not remembered (`saveCharacterWithSize` saves the rest and says so).
+
+Once a sheet has the creator's words, the button is **Refine with Prism**: Prism reads the sheet as it is, the
+creator's edits included, keeps them, and brings the other fields in line (`edited`); the result is reviewed like any
+suggestion. When the creator has edited the sheet since Prism's last suggestion, the panel says so and makes Refine
+the main action.
 
 ## Prices
 

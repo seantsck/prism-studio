@@ -24,6 +24,7 @@ export function CharacterAi({
   prominent,
   filled,
   sizeQuotes,
+  editedSince,
 }: {
   slug: string;
   character: Character;
@@ -37,6 +38,8 @@ export function CharacterAi({
   filled?: string[];
   /** the price of filling in for each size of part (the Character's own size is chosen) */
   sizeQuotes?: Record<PartSize, QuoteResult>;
+  /** the creator has edited the sheet since Prism's last suggestion */
+  editedSince?: boolean;
 }) {
   const fields = characterAiFields(inStory);
   const proposed =
@@ -70,6 +73,12 @@ export function CharacterAi({
       prominent={prominent}
       filled={filled}
       fillButtonText={sizeQuotes ? "Fill in with Prism" : undefined}
+      refineMode={!prominent}
+      editedHint={
+        editedSince
+          ? `You edited ${character.name} since Prism's last suggestion. Refine with Prism to bring the rest of the sheet in line with your edits.`
+          : undefined
+      }
       fillExtra={
         sizeQuotes ? (
           <fieldset className="pt-1" data-testid="character-ai-size">
@@ -110,9 +119,11 @@ export function CharacterAi({
         ) : undefined
       }
       intro={
-        sizeQuotes
-          ? `Prism fills in what the part needs, from what is already here${inStory ? ", the Bible and the rest of the cast" : ""}. Choose how big the part is: each size shows its price.`
-          : `Prism writes every field from what is already here${inStory ? ", the Bible and the rest of the cast" : ""}: personality, how they move and speak, a precise physical description for their pictures, a signature habit and the rules that keep them consistent${inStory ? ", plus their role and relationships in this story" : ""}.`
+        !prominent
+          ? `Prism reads the sheet as it is now, your edits included${inStory ? ", with the Bible and the rest of the cast" : ""}, keeps what you wrote, and suggests how to bring the rest in line.`
+          : sizeQuotes
+            ? `Prism fills in what the part needs, from what is already here${inStory ? ", the Bible and the rest of the cast" : ""}. Choose how big the part is: each size shows its price.`
+            : `Prism writes every field from what is already here${inStory ? ", the Bible and the rest of the cast" : ""}: personality, how they move and speak, a precise physical description for their pictures, a signature habit and the rules that keep them consistent${inStory ? ", plus their role and relationships in this story" : ""}.`
       }
       notePlaceholder="Raised in Kyoto, studied in London; polite in public, ruthless in private."
       fill={fillCharacter}

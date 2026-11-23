@@ -161,7 +161,11 @@ export function characterAsText(c: Character): Record<CharacterAiKey, string> {
 export function characterFillInstruction(
   data: ProjectData,
   c: Character,
-  opts: { note?: string; revise?: boolean; size?: PartSize } = {},
+  /**
+   * `revise`: Prism's own draft, revised with the creator's note. `edited`: the sheet as it stands, after the creator's
+   * edits: Prism keeps their edits and brings the rest in line with them.
+   */
+  opts: { note?: string; revise?: boolean; edited?: boolean; size?: PartSize } = {},
 ): string {
   const note = opts.note?.trim() || undefined;
   const revise = !!opts.revise;
@@ -184,7 +188,9 @@ export function characterFillInstruction(
       : "This character belongs to no story yet: keep them usable in any story, and invent no plot events.",
     revise
       ? "This is a draft: keep everything the creator's note does not ask to change."
-      : "Keep everything already written below (improve the wording only where it is unclear); fill in what is empty, following the creator's note when there is one.",
+      : opts.edited
+        ? "The creator has edited this sheet. Keep their edits as they are; bring every other field in line with them (and with the creator's note when there is one); fill in what is empty; improve wording only where it is unclear."
+        : "Keep everything already written below (improve the wording only where it is unclear); fill in what is empty, following the creator's note when there is one.",
     "",
     `Name: ${c.name}`,
     ...written.map((f) => `${f.label}: ${sheet[f.key].replace(/\s+/g, " ").slice(0, 1200)}`),

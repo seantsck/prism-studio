@@ -494,3 +494,17 @@ describe("the size of part", () => {
     expect(after.partSize ?? null).toBeNull();
   });
 });
+
+describe("refining a sheet the creator has edited", () => {
+  it("asks Prism to keep the edits and bring the rest in line", async () => {
+    const made = await createStandaloneCharacter(form({ prompt: TAKUMI, name: "Takumi" }));
+    const { slug, id } = made.created!;
+    expect(
+      await fillCharacter(form({ projectSlug: slug, characterId: id, edited: "1", note: "Colder." })),
+    ).toMatchObject({ ok: true, message: "Prism is refining Takumi…" });
+    const [asked] = (await proposalsOf(slug)).filter((p) => isCharacterRequest(p.instruction, id));
+    expect(asked!.instruction).toMatch(/^Fill in the character sheet/);
+    expect(asked!.instruction).toContain("The creator has edited this sheet. Keep their edits as they are");
+    expect(asked!.instruction).toContain("Creator's note: Colder.");
+  });
+});
