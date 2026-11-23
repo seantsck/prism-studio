@@ -322,6 +322,15 @@ character has a real face (with the count so far), then the six views, each tick
 of the views still to make with GPT Image 2.5 Flare (the first from the photos or the description, each further one
 from it). The picture list appears once there is a picture.
 
+Locations have the same **Fill in the sheet with Prism** (`src/domain/location-ai.ts`,
+`src/server/location-ai-actions.ts`, `quoteLocationFill`), at the top of each Location on the Locations page: a precise
+visual description, the geography, the zones and entrances Shots use to place people ("Name: description", one per
+line), the lighting and the recurring props. Applying it marks the draft done (a Location keeps no edit time); a locked
+Location is not filled in. Under it, its reference plan: 3 to 6 photos of a real place, then four views (canonical
+appearance, establishing view, reverse angle, time-of-day variant) with the price of the rest. Both panels share one
+component (`src/components/ai/sheet-ai.tsx`). A new Character or Location from the home page opens scrolled to its
+Fill in panel. A library Location shows **Use in a project** under them.
+
 ## Prices
 
 Every paid step shows the creator ONE exact price before it runs, and that is what they are charged: Prism's own

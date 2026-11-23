@@ -1,6 +1,7 @@
 import "server-only";
 import { BIBLE_AI_FIELDS, bibleDraftInstruction, bibleRefineInstruction } from "@/domain/bible-ai";
 import { characterAiFields, characterFillInstruction } from "@/domain/character-ai";
+import { LOCATION_AI_FIELDS, locationFillInstruction, type LocationAiKey } from "@/domain/location-ai";
 import type { Episode, ProjectData } from "@/domain/schemas";
 import {
   emptyEpisodeOne,
@@ -318,3 +319,47 @@ const CHARACTER_SHEET_CEILING = {
   relationshipNotes: "あ".repeat(1200),
   continuityRules: ["あ".repeat(1200)],
 };
+
+/** Filling in a Location's sheet with Prism (or revising Prism's draft): priced like a Character's. */
+export function quoteLocationFill(
+  data: ProjectData,
+  locationId: string,
+  writer?: string | null,
+  opts: { refine?: boolean } = {},
+): QuoteResult {
+  const r = resolveWriter(writer);
+  if (!r) return { ok: false, reason: WRITING_AI_OFF };
+  const location = data.locations.find((l) => l.id === locationId);
+  if (!location) return { ok: false, reason: "That location is not in this project." };
+  const episode =
+    [...data.episodes].sort((a, b) => a.number - b.number)[0] ??
+    emptyEpisodeOne(data.project.id, new Date().toISOString());
+  const text = canonical(episode.scriptText);
+  const ceiling = Object.fromEntries(LOCATION_AI_FIELDS.map((f) => [f.key, "あ".repeat(1200)])) as Record<
+    LocationAiKey,
+    string
+  >;
+  const p = priceWriting({
+    data,
+    episode,
+    text,
+    scope: scopeOf(text, "episode", { start: 0, end: text.length }, null),
+    mode: "brainstorm",
+    instruction: locationFillInstruction(data, location, ceiling, {
+      note: "あ".repeat(REFINE_NOTE_MAX),
+      revise: opts.refine,
+    }),
+    count: LOCATION_AI_FIELDS.length,
+    targetText: text,
+    draftText: null,
+    conversation: [],
+    model: r.model,
+    withPlan: false,
+    withBible: data.project.purpose !== "library",
+    bibleText: null,
+  });
+  const refused = over(r.model, p.usd, "Filling in the location");
+  if (refused || p.tooLong)
+    return { ok: false, reason: refused ?? "The episode script is too long to send." };
+  return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd: p.usd };
+}

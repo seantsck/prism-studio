@@ -35,11 +35,27 @@ export interface ReferencePlan {
   modelLabel: string;
 }
 
-/** `photos`: the creator's own photos of this Character (sent with the first view, up to 8). */
-export function referencePlan(doneViews: ReadonlySet<string>, photos: number): ReferencePlan {
+/**
+ * The pictures a Location needs: how it looks (from the creator's photos, or the description), then an establishing
+ * view, the reverse angle and a time-of-day variant, each made from the first.
+ */
+export const LOCATION_PLAN_VIEWS = [
+  { id: "canonical", label: "Canonical appearance" },
+  { id: "establishing", label: "Establishing view" },
+  { id: "reverse", label: "Reverse angle" },
+  { id: "variant", label: "Time-of-day variant" },
+] as const;
+export const LOCATION_PHOTOS_BEST = [3, 6] as const;
+
+/** `photos`: the creator's own photos (sent with the first view, up to 8). Character views unless others are given. */
+export function referencePlan(
+  doneViews: ReadonlySet<string>,
+  photos: number,
+  planViews: ReadonlyArray<{ id: string; label: string }> = REFERENCE_SET_VIEWS,
+): ReferencePlan {
   const first = pictureCost(Math.min(photos, REFERENCE_PHOTOS_BEST[1]));
   const next = pictureCost(1);
-  const views = REFERENCE_SET_VIEWS.map((v, i) => ({
+  const views = planViews.map((v, i) => ({
     id: v.id,
     label: v.label,
     costUsd: i === 0 ? first : next,

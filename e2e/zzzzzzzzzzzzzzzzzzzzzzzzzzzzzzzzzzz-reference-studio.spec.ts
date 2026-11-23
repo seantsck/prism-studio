@@ -1777,3 +1777,44 @@ test("ZC: a new character's page starts with Fill in with Prism and the referenc
     "Polite in public, ruthless in private.",
   );
 });
+
+test("ZD: a new location opens on Fill in with Prism and its reference plan; Prism's zones are applied", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  const box = page.getByTestId("new-location");
+  await box
+    .getByTestId("new-location-prompt")
+    .fill("A tea room called The Moss Pavilion, tatami floor, open to a moss garden.");
+  await box.getByTestId("new-location-create").click();
+  const row = page.locator('[data-testid="location-row"][data-name="The Moss Pavilion"]');
+  await expect(row).toHaveAttribute("open", "", { timeout: 60_000 });
+  const ai = row.getByTestId("location-ai");
+  await expect(ai).toContainText("Most of The Moss Pavilion's sheet is empty.");
+  const plan = row.getByTestId("reference-plan");
+  await expect(plan.getByTestId("reference-plan-views").locator("li")).toHaveCount(4);
+  await expect(plan.getByTestId("reference-plan-total")).toContainText("4 to make: about");
+  await expect(plan).toContainText("a wide view, the reverse angle");
+  // a library location offers its way into a project, like a library character
+  await expect(row.getByTestId("use-in-project")).toContainText("The Moss Pavilion is ready");
+
+  await ai.getByTestId("location-ai-fill").click();
+  const review = row.getByTestId("location-ai-review");
+  await expect(review).toBeVisible({ timeout: 60_000 });
+  // only the zones: untick everything else
+  for (const f of ["description", "geography", "entrances", "lighting", "recurringProps"])
+    await review
+      .locator(`[data-testid="location-ai-field"][data-field="${f}"] input[type="checkbox"]`)
+      .uncheck();
+  await review
+    .locator('[data-testid="location-ai-field"][data-field="zones"]')
+    .getByTestId("location-ai-text")
+    .fill("Tokonoma: the alcove with the scroll\nGarden edge: where the screens open");
+  await review.getByTestId("location-ai-apply").click();
+  await expect(row.getByTestId("location-ai-review")).toHaveCount(0, { timeout: 30_000 });
+  await expect(row.locator(":scope > summary")).toContainText("2 zones");
+  await expect(row.locator('textarea[name="zones"]')).toHaveValue(
+    "Tokonoma: the alcove with the scroll\nGarden edge: where the screens open",
+  );
+});
