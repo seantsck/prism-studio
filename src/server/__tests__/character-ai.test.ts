@@ -58,7 +58,10 @@ vi.mock("@/server/storage", () => {
 import { createProject } from "../actions";
 import { fillCharacter, reviewCharacterFill } from "../character-ai-actions";
 import { createStandaloneCharacter } from "../library-actions";
-import { quoteCharacterFill } from "../series-start";
+import { quoteCharacterFill, quoteLocationFill } from "../series-start";
+import { fillLocation, reviewLocationFill } from "../location-ai-actions";
+import { LOCATION_AI_FIELDS, isLocationRequest, namedLines, parseLocationIdeas } from "@/domain/location-ai";
+import type { Location } from "@/domain/schemas";
 import {
   CHARACTER_AI_FIELDS,
   characterAiFields,
@@ -223,5 +226,82 @@ describe("filling in a Character with Prism", () => {
         false,
       ),
     ).toEqual({ personality: "Calm." });
+  });
+});
+
+describe("filling in a Location with Prism", () => {
+  it("asks one idea per field; zones and entrances apply as named lists; a locked Location is refused", async () => {
+    expect(
+      await createProject(
+        form({ title: "Ojousama", premise: "An heiress must marry a stranger.", defaultLanguage: "ja" }),
+      ),
+    ).toMatchObject({ ok: true });
+    const slug = world.redirects.at(-1)!.split("/")[2]!;
+    let data = (await repo.loadProject(slug))!;
+    const hall: Location = {
+      id: crypto.randomUUID(),
+      projectId: data.project.id,
+      name: "The Gilded Hall",
+      description: "A ballroom with crystal chandeliers.",
+      geography: "",
+      zones: [],
+      entrances: [],
+      lighting: "",
+      recurringProps: [],
+      referenceAssetIds: [],
+      locked: false,
+      set3d: null,
+    };
+    await repo.upsert(data.project.id, "locations", hall);
+    data = (await repo.loadProject(slug))!;
+    expect(quoteLocationFill(data, hall.id)).toMatchObject({ ok: true, paid: false });
+
+    expect(
+      await fillLocation(form({ projectSlug: slug, locationId: hall.id, note: "Kyoto, old money." })),
+    ).toMatchObject({
+      ok: true,
+      message: "Prism is filling in The Gilded Hall…",
+    });
+    const [asked] = (await proposalsOf(slug)).filter((p) => isLocationRequest(p.instruction, hall.id));
+    expect(asked!.alternativesRequested).toBe(LOCATION_AI_FIELDS.length);
+    expect(asked!.instruction).toContain("Description: A ballroom with crystal chandeliers.");
+    expect(asked!.instruction).toContain("Creator's note: Kyoto, old money.");
+    await work();
+    const ready = (await proposalsOf(slug)).find((p) => p.id === asked!.id)!;
+    expect(Object.keys(parseLocationIdeas(ready.result!.ideas))).toHaveLength(LOCATION_AI_FIELDS.length);
+
+    expect(
+      await reviewLocationFill(
+        form({
+          projectSlug: slug,
+          locationId: hall.id,
+          proposalId: ready.id,
+          text_zones: "- Dance floor: the centre, under the chandelier\nBar: by the east wall",
+          use_zones: "1",
+          text_lighting: "Warm chandelier light; cold moonlight through the west windows at night.",
+          use_lighting: "1",
+          text_geography: "Not ticked.",
+        }),
+      ),
+    ).toMatchObject({ ok: true, message: "2 fields applied to The Gilded Hall." });
+    const after = (await repo.loadProject(slug))!.locations.find((l) => l.id === hall.id)!;
+    expect(after.zones.map((z) => [z.name, z.description])).toEqual([
+      ["Dance floor", "the centre, under the chandelier"],
+      ["Bar", "by the east wall"],
+    ]);
+    expect(after.lighting).toBe("Warm chandelier light; cold moonlight through the west windows at night.");
+    expect(after.geography).toBe("");
+    // applied: the draft is done with
+    expect((await proposalsOf(slug)).find((p) => p.id === ready.id)!.status).toBe("rejected");
+
+    await repo.upsert(data.project.id, "locations", { ...after, locked: true });
+    expect(await fillLocation(form({ projectSlug: slug, locationId: hall.id }))).toMatchObject({
+      ok: false,
+      error: "The Gilded Hall is locked. Unlock it to fill it in.",
+    });
+    expect(namedLines("A: b: c\n\nD")).toEqual([
+      { name: "A", description: "b: c" },
+      { name: "D", description: "" },
+    ]);
   });
 });

@@ -14,6 +14,15 @@ import { LocationLibraryPanel, LocationLibraryToggle } from "@/components/locati
 import { loadLocationLibrary } from "@/server/character-library";
 import { getRepo } from "@/server/repo";
 import { UseInProject } from "@/components/library/use-in-project";
+import { LocationAi } from "@/components/locations/location-ai";
+import { ReferencePlanPanel } from "@/components/characters/reference-plan";
+import type { WritingProposal } from "@/data/writing-repository";
+import { isLocationRequest, locationAsText, locationSheetThin } from "@/domain/location-ai";
+import { LOCATION_PLAN_VIEWS, referencePlan } from "@/domain/generation/reference-plan";
+import { locationBibleOf } from "@/domain/location-visual-bible";
+import type { Location } from "@/domain/schemas";
+import { quoteLocationFill } from "@/server/series-start";
+import { getWritingRepo } from "@/server/story";
 
 export default async function LocationsPage({
   params,
@@ -38,6 +47,33 @@ export default async function LocationsPage({
       .filter((e) => e.projectId === data.project.id)
       .map((e) => e.locationId),
   );
+  // the newest "Fill in with Prism" request per Location (kept with Episode 1), until it is applied or discarded
+  const aiLatest = new Map<string, WritingProposal>();
+  const firstEpisode = [...data.episodes].sort((a, b) => a.number - b.number)[0];
+  if (firstEpisode) {
+    const writing = await getWritingRepo();
+    for (const s of await writing.listSessions(data.project.id, firstEpisode.id))
+      for (const p of await writing.listProposals(data.project.id, s.id))
+        for (const l of data.locations)
+          if (isLocationRequest(p.instruction, l.id) && p.createdAt > (aiLatest.get(l.id)?.createdAt ?? ""))
+            aiLatest.set(l.id, p);
+  }
+  const latestFor = (id: string) => {
+    const p = aiLatest.get(id);
+    return p && p.status !== "rejected" && p.status !== "accepted" ? p : null;
+  };
+  const planFor = (l: Location) => {
+    const bible = locationBibleOf(l);
+    const views = viewsOf(l.id);
+    const done = new Set<string>();
+    if (bible.canonicalAssetId) done.add("canonical");
+    if (bible.entries.some((e) => e.role === "establishing") || views.some((v) => v.kind === "establishing"))
+      done.add("establishing");
+    if (views.some((v) => v.kind === "reverse")) done.add("reverse");
+    if (bible.entries.some((e) => e.role === "variant")) done.add("variant");
+    const photos = l.referenceAssetIds.filter((id) => assets.get(id)?.source === "upload").length;
+    return { plan: referencePlan(done, photos, LOCATION_PLAN_VIEWS), photos };
+  };
   const hidden = <input type="hidden" name="projectSlug" value={slug} />;
   const named = (xs: Array<{ name: string; description: string }>) =>
     xs.map((x) => (x.description ? `${x.name}: ${x.description}` : x.name)).join("\n");
@@ -94,6 +130,39 @@ export default async function LocationsPage({
                   </div>
                 ) : null}
                 {l ? (
+                  <div className="mb-4 space-y-4">
+                    <LocationAi
+                      slug={slug}
+                      location={l}
+                      inStory={!inLibrary}
+                      latest={latestFor(l.id)}
+                      fillQuote={quoteLocationFill(data, l.id)}
+                      refineQuote={quoteLocationFill(data, l.id, null, { refine: true })}
+                      prominent={locationSheetThin(l)}
+                    />
+                    <ReferencePlanPanel
+                      kind="location"
+                      className="max-w-4xl"
+                      name={l.name}
+                      photos={planFor(l).photos}
+                      plan={planFor(l).plan}
+                      studioHref={`/projects/${slug}/studio?subject=location:${l.id}`}
+                    />
+                    {inLibrary ? (
+                      <div className="max-w-4xl">
+                        <UseInProject
+                          kind="location"
+                          id={l.id}
+                          name={l.name}
+                          projects={projects}
+                          saved={saved.has(l.id)}
+                          fresh={isNew === "1" && l.id === open}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                {l ? (
                   <div className="mb-4">
                     <LocationVisualBiblePanel
                       data={data}
@@ -104,7 +173,12 @@ export default async function LocationsPage({
                     />
                   </div>
                 ) : null}
-                <ActionForm action={saveLocation} className="grid max-w-4xl grid-cols-2 gap-3">
+                {/* keyed by the sheet: applying Prism's fields shows them here at once */}
+                <ActionForm
+                  key={l ? JSON.stringify(locationAsText(l)) : "new"}
+                  action={saveLocation}
+                  className="grid max-w-4xl grid-cols-2 gap-3"
+                >
                   {hidden}
                   {l ? <input type="hidden" name="id" value={l.id} /> : null}
                   <Field label="Name" className="col-span-2">

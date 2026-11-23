@@ -145,7 +145,7 @@ async function createStandaloneCharacter_impl(form: FormData) {
   return {
     slug: studio.slug,
     id: character.id,
-    href: `/projects/${studio.slug}/characters/${character.id}?new=1`,
+    href: `/projects/${studio.slug}/characters/${character.id}?new=1#character-ai`,
   };
 }
 
@@ -223,7 +223,7 @@ async function createStandaloneLocation_impl(form: FormData) {
   return {
     slug: studio.slug,
     id: location.id,
-    href: `/projects/${studio.slug}/locations?open=${location.id}&new=1`,
+    href: `/projects/${studio.slug}/locations?open=${location.id}&new=1#location-${location.id}`,
   };
 }
 

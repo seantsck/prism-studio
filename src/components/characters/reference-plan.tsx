@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { Panel } from "@/components/ui";
-import { REFERENCE_PHOTOS_BEST, type ReferencePlan } from "@/domain/generation/reference-plan";
+import {
+  LOCATION_PHOTOS_BEST,
+  REFERENCE_PHOTOS_BEST,
+  type ReferencePlan,
+} from "@/domain/generation/reference-plan";
 import { priceText } from "@/domain/pricing/user-price";
 
 /**
@@ -13,18 +17,22 @@ export function ReferencePlanPanel({
   plan,
   photos,
   studioHref,
+  kind = "character",
+  className = "xl:col-span-2",
 }: {
   name: string;
   plan: ReferencePlan;
   photos: number;
   studioHref: string;
+  kind?: "character" | "location";
+  className?: string;
 }) {
-  const [low, high] = REFERENCE_PHOTOS_BEST;
+  const [low, high] = kind === "character" ? REFERENCE_PHOTOS_BEST : LOCATION_PHOTOS_BEST;
   const todo = plan.views.filter((v) => !v.done);
   return (
     <Panel
       title="References: how many, and the price"
-      className="xl:col-span-2"
+      className={className}
       actions={
         <Link href={studioHref} className="text-[12px] text-accent hover:underline">
           Make them in the Reference Studio
@@ -33,11 +41,13 @@ export function ReferencePlanPanel({
     >
       <div className="grid gap-4 text-[12.5px] md:grid-cols-2" data-testid="reference-plan">
         <div className="space-y-1">
-          <div className="font-medium">1. Photos (optional, best for a real face)</div>
+          <div className="font-medium">
+            1. Photos (optional, best for {kind === "character" ? "a real face" : "a real place"})
+          </div>
           <p className="text-muted">
-            {low} to {high} photos: face large, sharp and evenly lit; front, 3/4 and side; one full body. No
-            sunglasses, filters or group shots. Without photos, Prism makes {name} from the physical
-            description.
+            {kind === "character"
+              ? `${low} to ${high} photos: face large, sharp and evenly lit; front, 3/4 and side; one full body. No sunglasses, filters or group shots. Without photos, Prism makes ${name} from the physical description.`
+              : `${low} to ${high} photos: a wide view, the reverse angle and a few details, all at the same time of day. Without photos, Prism makes ${name} from its description.`}
           </p>
           <p
             className={photos >= low && photos <= high ? "text-pass" : "text-faint"}
@@ -47,7 +57,9 @@ export function ReferencePlanPanel({
           </p>
         </div>
         <div className="space-y-1">
-          <div className="font-medium">2. Six views, made one at a time</div>
+          <div className="font-medium">
+            2. {plan.views.length === 6 ? "Six" : plan.views.length} views, made one at a time
+          </div>
           <ul className="flex flex-wrap gap-1.5" data-testid="reference-plan-views">
             {plan.views.map((v) => (
               <li

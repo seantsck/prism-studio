@@ -73,7 +73,7 @@ describe("a character made on its own", () => {
     expect(aiko).toMatchObject({ description: prompt, physicalDescription: prompt });
     // it opens on its own page (the browser goes there after uploading any photos)
     expect(made).toMatchObject({
-      created: { id: aiko.id, href: `/projects/your-library/characters/${aiko.id}?new=1` },
+      created: { id: aiko.id, href: `/projects/your-library/characters/${aiko.id}?new=1#character-ai` },
     });
     expect((await loadLibrary()).characters).toEqual([
       expect.objectContaining({ name: "Aiko Mori", projectTitle: "Your library" }),
@@ -128,7 +128,7 @@ describe("a location made on its own", () => {
     )!;
     expect(hall).toMatchObject({ description: prompt, locked: false });
     expect(made).toMatchObject({
-      created: { href: `/projects/your-library/locations?open=${hall.id}&new=1` },
+      created: { href: `/projects/your-library/locations?open=${hall.id}&new=1#location-${hall.id}` },
     });
     const lib = await loadLocationLibrary();
     expect(lib.locations).toEqual([

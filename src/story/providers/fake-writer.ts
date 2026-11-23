@@ -1,5 +1,6 @@
 import { BIBLE_AI_FIELDS, isBibleRequest } from "@/domain/bible-ai";
 import { CHARACTER_AI_FIELDS, isCharacterRequest } from "@/domain/character-ai";
+import { LOCATION_AI_FIELDS, isLocationRequest } from "@/domain/location-ai";
 import type { WritingResult } from "@/domain/story/writing";
 import type { WritingRequest } from "../provider";
 
@@ -140,6 +141,26 @@ export function fakeWriting(req: WritingRequest): WritingResult {
       detail: f.list
         ? [`Test ${f.label.toLowerCase()} one for ${name}.`, `Test ${f.label.toLowerCase()} two.`].join("\n")
         : `Test ${f.label.toLowerCase()} for ${name}.`,
+    }));
+    return {
+      message: `Here is a test sheet for ${name} (a placeholder from the test writer).`,
+      alternatives: [],
+      ideas,
+    };
+  }
+
+  // a location sheet: one idea per field (named lists as "Name: description"), a test pattern
+  if (req.mode === "brainstorm" && isLocationRequest(req.instruction)) {
+    const name = /location sheet for (.+?) \[location /.exec(req.instruction)?.[1] ?? "it";
+    const ideas = LOCATION_AI_FIELDS.map((f) => ({
+      title: f.key,
+      detail: f.named
+        ? [`Test ${f.label.toLowerCase()} A: one for ${name}`, `Test ${f.label.toLowerCase()} B: two`].join(
+            "\n",
+          )
+        : f.list
+          ? [`Test ${f.label.toLowerCase()} one`, `Test ${f.label.toLowerCase()} two`].join("\n")
+          : `Test ${f.label.toLowerCase()} for ${name}.`,
     }));
     return {
       message: `Here is a test sheet for ${name} (a placeholder from the test writer).`,
