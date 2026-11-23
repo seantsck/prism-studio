@@ -94,6 +94,8 @@ import { deleteFromTrash, emptyTrash, moveToTrash, restoreFromTrash } from "../t
 import { purgeExpiredTrash } from "../trash";
 import { trashOf } from "@/domain/trash";
 import { referenceStudioState } from "../reference-studio";
+import { autoAddMadeViews } from "../auto-add-views";
+import { makeReferenceViews } from "../reference-view-actions";
 import { quoteReferenceImage, reviewReferenceImage, uploadReferencePhoto } from "../reference-studio-actions";
 import { replaceLookReference, saveAsCharacterReference, startSubjectImage } from "../subject-image-actions";
 import {
@@ -971,6 +973,76 @@ describe("a Character's reference set", () => {
     // the photo is still in the library, and still one of her references
     expect((await data()).assets.some((a) => a.id === photo)).toBe(true);
     expect(refs.some((r) => r.assetId === photo)).toBe(true);
+  });
+
+  /** Views made in "4. Six views" (their own keys), beside the Studio takes `scene()` made. */
+  async function viewsScene(views: string) {
+    const base = await scene();
+    expect(
+      await makeReferenceViews(
+        form({
+          projectSlug: "ojousama",
+          characterId: base.yumeko.id,
+          views,
+          batchId: "unit",
+          model: "mock/mock-image-1",
+        }),
+      ),
+    ).toMatchObject({ ok: true });
+    await work();
+    const made = (await attempts(base.yumeko.id)).filter((v) => v.job?.idempotencyKey.startsWith("views-"));
+    const of = (intent: string) =>
+      made.find((v) => (v.attempt.modelSettings as { intent?: string }).intent === intent)!.outputs[0]!.asset
+        .id;
+    return { ...base, made, of };
+  }
+
+  it("a view made in 4. Six views goes into its EMPTY slot by itself; a filled slot and Studio takes are left alone", async () => {
+    const { yumeko, photo, of, made } = await viewsScene("front,three_quarter,half_body");
+    expect(made.map((v) => v.attempt.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
+    // the half body is already filled with the photo: nothing touches it
+    expect(await put(yumeko.id, "half_body", { assetId: photo })).toEqual({ ok: true });
+    const filled = await autoAddMadeViews(await data(), yumeko.id);
+    expect(filled.sort()).toEqual(["front", "three_quarter"]);
+    let refs = (await data()).identityRefs.filter((r) => r.characterId === yumeko.id);
+    // the views' own takes, not the Studio takes of the same angles
+    expect(refs.find((r) => r.slot === "front")!.assetId).toBe(of("portrait"));
+    expect(refs.find((r) => r.slot === "three_quarter")!.assetId).toBe(of("three_quarter"));
+    expect(refs.find((r) => (r.metadata as { view?: string }).view === "half_body")!.assetId).toBe(photo);
+    // the front view also became the canonical identity (there was none)
+    expect(
+      refs.find((r) => (r.metadata as { visualRole?: string }).visualRole === "canonical")!.assetId,
+    ).toBe(of("portrait"));
+    // run again: nothing left to fill, nothing changes
+    expect(await autoAddMadeViews(await data(), yumeko.id)).toEqual([]);
+    refs = (await data()).identityRefs.filter((r) => r.characterId === yumeko.id);
+    expect(refs.filter((r) => r.slot === "front")).toHaveLength(1);
+  });
+
+  it("Studio takes alone are never added by themselves", async () => {
+    const { yumeko } = await scene();
+    expect(await autoAddMadeViews(await data(), yumeko.id)).toEqual([]);
+  });
+
+  it("a canonical the creator chose is kept when the front view goes in", async () => {
+    const { yumeko, photo } = await viewsScene("front");
+    const d = await data();
+    await repo.upsert(d.project.id, "identityRefs", {
+      id: "canonical-chosen-2",
+      characterId: yumeko.id,
+      slot: "additional",
+      assetId: photo,
+      label: "Canonical identity",
+      metadata: { visualRole: "canonical", source: "visual_bible" },
+      locked: false,
+    });
+    expect(await autoAddMadeViews(await data(), yumeko.id)).toEqual(["front"]);
+    const refs = (await data()).identityRefs.filter((r) => r.characterId === yumeko.id);
+    expect(
+      refs
+        .filter((r) => (r.metadata as { visualRole?: string }).visualRole === "canonical")
+        .map((r) => r.assetId),
+    ).toEqual([photo]);
   });
 
   it("from a Character's page (keepCanonical), the front view fills its own slot and keeps a canonical the creator chose", async () => {

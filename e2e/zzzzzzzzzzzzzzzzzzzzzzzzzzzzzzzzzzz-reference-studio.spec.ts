@@ -1954,19 +1954,16 @@ test("ZG: the views are made with the engine picked beside them, and what is add
   });
   await expect(page.getByTestId("reference-views-total")).toContainText("Free with Mock Image 1");
 
-  // the front view, made with that engine, shows here and goes into the set in one click
+  // the front view, made with that engine, goes into the set by itself: it was made as the front view
+  await expect(page.getByTestId("vb-item-front")).toHaveAttribute("data-done", "false");
   await page.getByTestId("reference-views-select-all").click();
   const front = page.locator('[data-testid="reference-view"][data-view="front"]');
   await front.getByTestId("reference-view-pick").check();
   await page.getByTestId("reference-views-make").click();
-  await expect(front).toHaveAttribute("data-state", "made", { timeout: 60_000 });
+  await expect(front).toHaveAttribute("data-state", "in_set", { timeout: 60_000 });
   await expect(front.getByTestId("reference-view-picture")).toBeVisible();
-  // the Visual Bible sends its views here instead of making them on its own
   // the Visual Bible has no make-it links beside its items
   await expect(page.getByTestId("visual-bible").locator('[data-testid^="vb-generate-"]')).toHaveCount(0);
-  await expect(page.getByTestId("vb-item-front")).toHaveAttribute("data-done", "false");
-  await front.getByTestId("reference-view-add-button").click();
-  await expect(front).toHaveAttribute("data-state", "in_set", { timeout: 30_000 });
   // what is in the set is what the Visual Bible reads: the front reference, and the canonical identity
   await expect(page.getByTestId("vb-item-front")).toHaveAttribute("data-done", "true");
   await expect(page.getByTestId("vb-item-canonical")).toHaveAttribute("data-done", "true");
@@ -1980,25 +1977,18 @@ test("ZG: the views are made with the engine picked beside them, and what is add
     page.locator('[data-testid="reference-engine"][data-engine="openai-image/gpt-image-2.5-flare"]'),
   ).toContainText("Start here");
 
-  // the other five, made (more than run at once: the rest wait their turn), then added to the set in one click
+  // the other five (more than run at once: the rest wait their turn) each go into the set as they finish
   await page.getByTestId("reference-views-select-all").click();
   await expect(page.getByTestId("reference-views-make")).toHaveText("Make 5 views · free");
   await page.getByTestId("reference-views-make").click();
-  await expect(page.getByTestId("reference-views-add-all-button")).toHaveText(
-    "Add all 5 made views to the set",
-    { timeout: 90_000 },
-  );
-  // the Visual Bible already shows them, made and not added yet; it makes nothing itself
-  await expect(page.locator('[data-testid="vb-view"][data-state="made"]')).toHaveCount(5);
-  await expect(page.getByTestId("visual-bible").getByRole("button", { name: /Generate/ })).toHaveCount(0);
-  await expect(page.getByTestId("vb-item-three_quarter")).toContainText("Made, not added to the set yet.");
-  // the Visual Bible can add them too; here they are added from the Visual Bible
-  await expect(page.getByTestId("vb-add-made-button")).toHaveText("Add the 5 made views to the set");
-  await page.getByTestId("vb-add-made-button").click();
   await expect(page.locator('[data-testid="vb-view"][data-state="in_set"]')).toHaveCount(6, {
-    timeout: 30_000,
+    timeout: 120_000,
   });
-  await expect(page.getByTestId("reference-plan-total")).toHaveText("The set is complete.");
+  // nothing was left to add by hand, and the Visual Bible makes nothing itself
+  await expect(page.getByTestId("reference-views-add-all-button")).toHaveCount(0);
+  await expect(page.getByTestId("vb-add-made-button")).toHaveCount(0);
+  await expect(page.getByTestId("visual-bible").getByRole("button", { name: /Generate/ })).toHaveCount(0);
+  await expect(page.getByTestId("reference-plan-total")).toContainText("The set is complete.");
   for (const key of ["three_quarter", "profile", "full_body"])
     await expect(page.getByTestId(`vb-item-${key}`)).toHaveAttribute("data-done", "true");
 
@@ -2015,6 +2005,21 @@ test("ZG: the views are made with the engine picked beside them, and what is add
   await expect(page.getByTestId("vb-item-front")).toHaveAttribute("data-done", "true");
   // the same button sits under every picture of the character
   await expect(page.getByTestId("character-pictures").getByTestId("canonical-mark")).toHaveCount(1);
+
+  // a view in the set can be made again; the new take is offered beside it, never swapped in by itself
+  const step4Front = page.locator('[data-testid="reference-view"][data-view="front"]');
+  await step4Front.getByTestId("reference-view-pick").check();
+  await expect(page.getByTestId("reference-views-make")).toHaveText("Make the front view · free");
+  await page.getByTestId("reference-views-make").click();
+  await expect(step4Front.getByTestId("reference-view-use-newer-button")).toBeVisible({ timeout: 90_000 });
+  await expect(step4Front).toHaveAttribute("data-state", "in_set");
+  const before = await step4Front.getByTestId("reference-view-picture").getAttribute("src");
+  page.once("dialog", (d) => void d.accept());
+  await step4Front.getByTestId("reference-view-use-newer-button").click();
+  await expect(step4Front.getByTestId("reference-view-use-newer-button")).toHaveCount(0, { timeout: 30_000 });
+  expect(await step4Front.getByTestId("reference-view-picture").getAttribute("src")).not.toBe(before);
+  // the canonical the creator chose (the 3/4 view) is kept
+  await expect(threeQuarter.getByTestId("canonical-mark")).toBeVisible();
 });
 
 test("ZF: the size of part decides what Prism fills in, and marks the rest optional", async ({ page }) => {

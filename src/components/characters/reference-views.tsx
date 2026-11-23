@@ -22,6 +22,7 @@ export function ReferenceViewsPanel({
   quote,
   states,
   failures,
+  newer,
   pictures,
   engines,
   suggestedEngine,
@@ -38,6 +39,8 @@ export function ReferenceViewsPanel({
   states: Record<string, ViewState>;
   /** views whose newest try failed: why */
   failures: Record<string, string>;
+  /** a newer take of a view already in the set */
+  newer: Record<string, { attemptId: string; url: string | null }>;
   /** each view's picture: the one in the set, or the newest finished take (`attemptId`) waiting to be added */
   pictures: Record<string, { url: string | null; attemptId: string | null }>;
   /** the engines that can make views; `quote` is priced with the chosen one (`quote.model`) */
@@ -140,6 +143,7 @@ export function ReferenceViewsPanel({
               failed: failures[v.id] ?? null,
               pictureUrl: pictures[v.id]?.url ?? null,
               attemptId: pictures[v.id]?.attemptId ?? null,
+              newer: newer[v.id] ?? null,
             }))}
             paid={quote.paid}
             engine={quote.model}
