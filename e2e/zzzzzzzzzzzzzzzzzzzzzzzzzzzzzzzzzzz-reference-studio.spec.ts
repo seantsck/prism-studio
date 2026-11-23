@@ -1836,11 +1836,13 @@ test("ZD: a new location opens with Prism filling in its empty fields, beside it
   await expect(row.getByTestId("use-in-project")).toContainText("The Moss Pavilion is ready");
 
   // no button to press: Prism's answer fills in the empty fields on its own
-  await expect(ai.getByTestId("location-ai-filled")).toContainText("Zones", { timeout: 60_000 });
-  await expect(row.locator(":scope > summary")).toContainText("2 zones");
+  // (the "filled in" note shows on the one page load that filled them, so the fields themselves are what is checked:
+  // a refresh of the page while Prism works can land after that load)
   await expect(row.locator('textarea[name="zones"]')).toHaveValue(
     "Test zones A: one for The Moss Pavilion\nTest zones B: two",
+    { timeout: 60_000 },
   );
+  await expect(row.locator(":scope > summary")).toContainText("2 zones");
   // the description that was typed stays; Prism's wording of it waits in the review, and can be discarded
   const review = row.getByTestId("location-ai-review");
   await expect(review.locator('[data-testid="location-ai-field"]')).toHaveCount(1);
@@ -2054,4 +2056,64 @@ test("ZF: the size of part decides what Prism fills in, and marks the rest optio
     "1",
   );
   await expect(page.locator('textarea[name="personality"]')).toHaveValue("");
+});
+
+test("ZH: a character made on its own is merged into the script's character of the same person", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await page.goto("/");
+  const box = page.getByTestId("new-character");
+  await box
+    .getByTestId("new-character-prompt")
+    .fill("Japanese man in his mid-30s, jet-black hair, navy suit.");
+  await box.getByTestId("new-character-name").fill("Takumi Saionji");
+  await box.getByTestId("new-character-fill").locator("input").uncheck();
+  await box.getByTestId("new-character-create").click();
+  await expect(page.getByRole("heading", { name: "Takumi Saionji", exact: true })).toBeVisible({
+    timeout: 60_000,
+  });
+  const use = page.getByTestId("use-in-project");
+  await use.getByTestId("use-in-project-select").selectOption("ojousama");
+  await use.getByTestId("use-in-project-add").click();
+  await expect(page).toHaveURL(/\/projects\/ojousama\/characters\//, { timeout: 30_000 });
+
+  // a front view, made and in the set
+  await page.getByTestId("reference-views-engine").selectOption("mock/mock-image-1");
+  await expect(page.getByTestId("reference-views-make")).toHaveText("Make 6 views · free", {
+    timeout: 30_000,
+  });
+  await page.getByTestId("reference-views-select-all").click();
+  const front = page.locator('[data-testid="reference-view"][data-view="front"]');
+  await front.getByTestId("reference-view-pick").check();
+  await page.getByTestId("reference-views-make").click();
+  await expect(front).toHaveAttribute("data-state", "in_set", { timeout: 60_000 });
+
+  // the script's Takumi looks like the same person: the merge is offered at the top, his place in the story named
+  const merge = page.getByTestId("merge-character");
+  await expect(merge).toBeVisible();
+  const into = merge.getByTestId("merge-into");
+  const takumi = await into.locator("option", { hasText: /^Takumi \(Antagonist/ }).getAttribute("value");
+  await into.selectOption(takumi!);
+  await expect(into.locator("option:checked")).toContainText("in the story: 1 Shot");
+  await expect(merge.getByTestId("merge-summary")).toContainText("of Takumi Saionji move to Takumi");
+  page.once("dialog", (d) => void d.accept());
+  await merge.getByTestId("merge-submit").click();
+
+  // the kept character (the story's one) under the chosen name, with the merged pictures; the other is in the Trash
+  await expect(page).toHaveURL(new RegExp(`/characters/${takumi}\\?merged=1`), { timeout: 30_000 });
+  await expect(page.getByTestId("merged-note")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Takumi Saionji", exact: true })).toBeVisible();
+  await expect(page.getByTestId("vb-item-front")).toHaveAttribute("data-done", "true");
+  await expect(page.locator('[data-testid="vb-view"][data-view="front"]')).toHaveAttribute(
+    "data-state",
+    "in_set",
+  );
+  await page.goto("/projects/ojousama/characters");
+  await expect(page.getByRole("link", { name: /^Takumi Saionji \d+ identity refs/ })).toHaveCount(1);
+  await expect(page.getByRole("link", { name: /^Takumi \d+ identity refs/ })).toHaveCount(0);
+
+  // the Continuity Lock is explained where it is offered
+  await page.goto(`/projects/ojousama/characters/${takumi}`);
+  await expect(page.getByTestId("cl-explainer")).toContainText("What is a Continuity Lock?");
 });

@@ -397,6 +397,16 @@ and the front view becomes the canonical identity only when there is none. Only 
 are added; a take made in the Reference Studio stays the creator's to use or reject. A view already in the set can be
 ticked to make it again; its new take is offered beside it ("Use the new take", asked first), never swapped in.
 
+**Merge into…** (src/domain/character-merge.ts, src/server/character-merge-actions.ts): when a Character is the same
+person as another one of its project, it is merged into that one. The one chosen is KEPT, with its place in the story
+(Shots, Scenes, lines, Continuity Locks); the merged one must not be used by the story (merge the other way) and must
+have no Locks. Pictures move by their reference pointers: a view slot, the canonical and the cutout hold one picture
+each, so where both have one the side chosen wins and the other picture goes with the merged Character to the Trash
+(restorable); an empty placeholder trades contents with the picture. Photos, expressions, Looks and voice profiles
+move. The sheet takes the name chosen and the preferred side's wording, the other's where empty. Nothing is copied or
+deleted; generation history stays with the Character that made it. The panel shows at the top of the page when another
+character shares a word of the name.
+
 The project runs only so many generations at once (`PRISM_STUDIO_GENERATION_MAX_ACTIVE_PER_PROJECT`, 3 by default).
 Ticked views that do not fit are not started and not charged: they wait in the page ("waiting for a free slot") and
 start on their own, at the confirmed prices, as slots free up while the page is open (Cancel waiting drops them). A

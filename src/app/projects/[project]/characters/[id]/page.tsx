@@ -35,6 +35,9 @@ import { PART_SIZES } from "@/domain/schemas";
 import type { Asset } from "@/domain/schemas";
 import { ReferenceViewsPanel, type ViewState } from "@/components/characters/reference-views";
 import { MakeCanonical } from "@/components/characters/make-canonical";
+import { MergeCharacter, type MergeTarget } from "@/components/characters/merge-character";
+import { planCharacterMerge } from "@/domain/character-merge";
+import { characterUsage } from "@/domain/subject-trash";
 import { REFERENCE_SET_VIEWS, referenceSetViewOf } from "@/domain/generation/reference-studio";
 import { quoteReferenceViews, SUGGESTED_VIEWS_MODEL } from "@/server/reference-views";
 import { getGenerationConfig, getGenerationRepo } from "@/server/generation";
@@ -54,7 +57,7 @@ export default async function CharacterPage({
   searchParams,
 }: {
   params: Promise<{ project: string; id: string }>;
-  searchParams: Promise<{ new?: string; engine?: string }>;
+  searchParams: Promise<{ new?: string; engine?: string; merged?: string }>;
 }) {
   const { project: slug, id } = await params;
   const query = await searchParams;
@@ -188,6 +191,34 @@ export default async function CharacterPage({
   );
   // how many of the project's generation slots are busy (any subject): views that don't fit wait their turn
   const activeInProject = (await (await getGenerationRepo()).listActiveProjectJobs(data.project.id)).length;
+  // "Merge into…": the other characters of this project, each with what merging into it would do (or why not)
+  const mergeTargets: MergeTarget[] = data.characters
+    .filter((x) => x.id !== c.id)
+    .map((t) => {
+      const plan = (prefer: "merged" | "kept") =>
+        planCharacterMerge(data, c.id, t.id, { name: c.name, prefer });
+      const merged = plan("merged");
+      const kept = plan("kept");
+      return {
+        id: t.id,
+        name: t.name,
+        role: t.role,
+        usedIn: characterUsage(data, t.id).join("; "),
+        preview:
+          merged.ok && kept.ok
+            ? { merged: merged.plan.summary, kept: kept.plan.summary }
+            : { refused: merged.ok ? (kept.ok ? "" : kept.reason) : merged.reason },
+      };
+    });
+  // shown at the top when another character looks like the same person (a name word in common), lower down otherwise
+  const nameWords = new Set(c.name.toLowerCase().split(/\s+/).filter(Boolean));
+  const likelySame = mergeTargets.some((t) =>
+    t.name
+      .toLowerCase()
+      .split(/\s+/)
+      .some((w) => nameWords.has(w)),
+  );
+  const merge = <MergeCharacter slug={slug} characterId={c.id} name={c.name} targets={mergeTargets} />;
   const archiveSubject = { kind: "character" as const, id: c.id, name: c.name };
   const repo = await getRepo();
   const library = await repo.libraryEntries();
@@ -235,6 +266,16 @@ export default async function CharacterPage({
         }
       />
       <div className="grid gap-4 p-6 xl:grid-cols-2">
+        {query.merged === "1" ? (
+          <p
+            className="rounded-[3px] border border-pass/40 bg-pass/10 px-3 py-2 text-[12.5px] xl:col-span-2"
+            data-testid="merged-note"
+            role="status"
+          >
+            Merged. The other character is in the Trash, where it can be restored.
+          </p>
+        ) : null}
+        {likelySame ? merge : null}
         <CharacterAi
           slug={slug}
           character={c}
@@ -416,6 +457,7 @@ export default async function CharacterPage({
             </div>
           </Panel>
         ) : null}
+        {likelySame ? null : merge}
         <div className="xl:col-span-2">
           <VisualBiblePanel
             data={data}
@@ -647,11 +689,37 @@ export default async function CharacterPage({
         </Panel>
 
         <Panel title={`Continuity Locks (${locks.length})`} className="xl:col-span-2">
-          <p className="mb-2 text-[12px] text-muted">
-            {CONTINUITY_LOCK_EXPLANATION} A Lock is immutable: it copies today&apos;s identity facts, the
-            chosen Look and their stored images, so later edits here never change a Shot that relies on it. No
-            images are generated or copied.
-          </p>
+          <div
+            className="mb-3 space-y-1.5 rounded-[3px] border border-line bg-panel2 p-3 text-[12.5px]"
+            data-testid="cl-explainer"
+          >
+            <p className="font-medium">What is a Continuity Lock?</p>
+            <p className="text-muted">
+              A saved, frozen snapshot of how {c.name} looks: the written appearance, the outfit (the Look you
+              choose) and the exact reference pictures, as they are right now. A shot can be pinned to a Lock,
+              so it is always made from that snapshot.
+            </p>
+            <ul className="list-disc space-y-0.5 pl-5 text-muted">
+              <li>
+                <span className="text-fg">Why:</span> later changes here (a new canonical, a remade view, an
+                edited outfit) never change a shot pinned to a Lock, so shots you approved keep matching each
+                other.
+              </li>
+              <li>
+                <span className="text-fg">When:</span> once you are happy with {c.name}&apos;s look and start
+                making and approving shots. While you are still designing the character, you don&apos;t need
+                one.
+              </li>
+              <li>
+                <span className="text-fg">How:</span> choose a Look below and save a Lock; then pin shots to
+                it in Shot Prep. A Lock can&apos;t be edited: to change the look, save a new one and pin the
+                shots you want to it.
+              </li>
+            </ul>
+            <p className="text-[11px] text-faint">
+              {CONTINUITY_LOCK_EXPLANATION} Saving a Lock copies no pictures and makes nothing.
+            </p>
+          </div>
           <ActionForm
             action={createCharacterContinuityLock}
             className="mb-3 flex flex-wrap items-end gap-2 border border-dashed border-line2 p-2"
