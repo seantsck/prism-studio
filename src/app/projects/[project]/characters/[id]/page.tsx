@@ -32,6 +32,8 @@ import { SheetField } from "@/components/characters/sheet-field";
 import { PART_SIZE_HINT, PART_SIZE_LABEL, partSizeOf } from "@/domain/character-ai";
 import { PART_SIZES } from "@/domain/schemas";
 import { visualRoleOf } from "@/domain/visual-bible";
+import { hasStoredImage } from "@/domain/generation/subject-image";
+import type { Asset } from "@/domain/schemas";
 import { ReferenceViewsPanel, type ViewState } from "@/components/characters/reference-views";
 import { MakeCanonical } from "@/components/characters/make-canonical";
 import { REFERENCE_SET_VIEWS, referenceSetViewOf } from "@/domain/generation/reference-studio";
@@ -95,7 +97,22 @@ export default async function CharacterPage({
     "cancel_requested",
   ]);
   const viewStates: Record<string, ViewState> = {};
-  for (const v of pictures.referenceSet) viewStates[v.id] = v.assetId ? "in_set" : "missing";
+  // a view is in the set when ITS slot holds a picture (a canonical identity alone does not fill the front view: the
+  // Studio shows the canonical in the front view, but the front reference is its own slot)
+  const slotAsset: Record<string, Asset> = {};
+  for (const v of REFERENCE_SET_VIEWS) {
+    const ref = data.identityRefs.find(
+      (r) =>
+        r.characterId === c.id &&
+        !!r.assetId &&
+        (v.slot === "additional"
+          ? r.slot === "additional" && (r.metadata as { view?: unknown }).view === v.id
+          : r.slot === v.slot && visualRoleOf(r) === null),
+    );
+    const asset = ref ? data.assets.find((x) => x.id === ref.assetId) : undefined;
+    if (asset && hasStoredImage(asset)) slotAsset[v.id] = asset;
+    viewStates[v.id] = slotAsset[v.id] ? "in_set" : "missing";
+  }
   for (const t of pictures.takes) {
     const view = referenceSetViewOf(t.settings.intent);
     if (!view || viewStates[view] === "in_set") continue;
@@ -121,23 +138,8 @@ export default async function CharacterPage({
     string,
     { url: string | null; attemptId: string | null; assetId: string | null }
   > = {};
-  // the picture IN each view's slot (the Reference Studio's front view shows the canonical identity instead; here the
-  // front view is its own picture, and the canonical is marked wherever it is)
-  for (const v of REFERENCE_SET_VIEWS) {
-    const ref = data.identityRefs.find(
-      (r) =>
-        r.characterId === c.id &&
-        !!r.assetId &&
-        (v.slot === "additional"
-          ? r.slot === "additional" && (r.metadata as { view?: unknown }).view === v.id
-          : r.slot === v.slot && visualRoleOf(r) === null),
-    );
-    const asset = ref ? data.assets.find((x) => x.id === ref.assetId) : undefined;
-    const shown = pictures.referenceSet.find((x) => x.id === v.id);
-    if (viewStates[v.id] !== "in_set") continue;
-    if (asset) viewPictures[v.id] = { url: assetUrl(asset) ?? null, attemptId: null, assetId: asset.id };
-    else if (shown?.assetId) viewPictures[v.id] = { url: shown.url, attemptId: null, assetId: shown.assetId };
-  }
+  for (const [view, asset] of Object.entries(slotAsset))
+    viewPictures[view] = { url: assetUrl(asset) ?? null, attemptId: null, assetId: asset.id };
   // the canonical identity now (the picture that defines the face)
   const canonicalAssetId = pictures.images.find((i) => i.canonical)?.assetId ?? null;
   const newestMade: Record<string, string> = {};

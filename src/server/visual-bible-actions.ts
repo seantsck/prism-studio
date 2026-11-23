@@ -154,7 +154,11 @@ async function addToReferenceSet_impl(form: FormData) {
     view.slot === "additional"
       ? refs.find((r) => r.slot === "additional" && (r.metadata as { view?: unknown }).view === viewId)
       : refs.find((r) => r.slot === view.slot && visualRoleOf(r) === null);
-  const canonicalRef = view.canonical ? refs.find((r) => visualRoleOf(r) === "canonical") : undefined;
+  const existingCanonical = view.canonical ? refs.find((r) => visualRoleOf(r) === "canonical") : undefined;
+  // from a Character's page the creator chooses the canonical with "Make canonical": adding the front view there
+  // makes it the canonical only when there is none yet, and never replaces one they chose
+  const keepCanonical = str(form, "keepCanonical") === "1" && holds(existingCanonical);
+  const canonicalRef = keepCanonical ? undefined : existingCanonical;
 
   for (const r of [slotRef, canonicalRef]) {
     if (!holds(r) || r!.assetId === assetId) continue;
@@ -183,7 +187,7 @@ async function addToReferenceSet_impl(form: FormData) {
     },
     locked: false,
   });
-  if (view.canonical && canonicalRef?.assetId !== assetId)
+  if (view.canonical && !keepCanonical && canonicalRef?.assetId !== assetId)
     await repo.upsert(data.project.id, "identityRefs", {
       id: canonicalRef?.id ?? randomUUID(),
       characterId: character.id,
@@ -220,6 +224,7 @@ async function addViewsToReferenceSet_impl(form: FormData) {
     one.set("characterId", str(form, "characterId"));
     one.set("view", view);
     one.set("attemptId", attemptId);
+    one.set("keepCanonical", "1");
     const label = REFERENCE_SET_VIEWS.find((v) => v.id === view)?.label ?? view;
     try {
       await addToReferenceSet_impl(one);

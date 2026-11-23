@@ -973,6 +973,46 @@ describe("a Character's reference set", () => {
     expect(refs.some((r) => r.assetId === photo)).toBe(true);
   });
 
+  it("from a Character's page (keepCanonical), the front view fills its own slot and keeps a canonical the creator chose", async () => {
+    const { yumeko, photo, front } = await scene();
+    // the creator made the photo canonical first ("Make canonical"); the front slot is still empty
+    expect(await put(yumeko.id, "three_quarter", { assetId: photo })).toEqual({ ok: true });
+    const d = await data();
+    await repo.upsert(d.project.id, "identityRefs", {
+      id: "canonical-chosen",
+      characterId: yumeko.id,
+      slot: "additional",
+      assetId: photo,
+      label: "Canonical identity",
+      metadata: { visualRole: "canonical", source: "visual_bible" },
+      locked: false,
+    });
+    const canonicals = async () =>
+      (await data()).identityRefs
+        .filter(
+          (r) =>
+            r.characterId === yumeko.id && (r.metadata as { visualRole?: string }).visualRole === "canonical",
+        )
+        .map((r) => r.assetId);
+    expect(await put(yumeko.id, "front", { attemptId: front.attempt.id, keepCanonical: "1" })).toEqual({
+      ok: true,
+    });
+    const refs = (await data()).identityRefs.filter((r) => r.characterId === yumeko.id);
+    expect(refs.find((r) => r.slot === "front")!.assetId).toBe(front.outputs[0]!.asset.id);
+    expect(await canonicals()).toEqual([photo]);
+  });
+
+  it("from a Character's page with no canonical yet, the front view still becomes the canonical", async () => {
+    const { yumeko, front } = await scene();
+    expect(await put(yumeko.id, "front", { attemptId: front.attempt.id, keepCanonical: "1" })).toEqual({
+      ok: true,
+    });
+    const refs = (await data()).identityRefs.filter((r) => r.characterId === yumeko.id);
+    expect(
+      refs.find((r) => (r.metadata as { visualRole?: string }).visualRole === "canonical")!.assetId,
+    ).toBe(front.outputs[0]!.asset.id);
+  });
+
   it("refuses a view that is not in the set, another Character's picture, and a locked view holding an image", async () => {
     const { yumeko, photo, threeQuarter } = await scene();
     expect(await put(yumeko.id, "back", { assetId: photo })).toMatchObject({
