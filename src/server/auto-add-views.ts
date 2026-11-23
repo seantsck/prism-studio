@@ -13,8 +13,8 @@ import { getRepo } from "./repo";
  * finishes it goes straight into the reference set: the creator does not have to add it. A take made in the Reference
  * Studio is not added by itself (the creator uses it there, or rejects it). Only an EMPTY view slot is filled (a picture already in
  * a view is never replaced here, locked or not; a newer take is offered beside it instead), and a rejected or archived
- * take is never used. The front view also becomes the canonical identity when there is none yet;
- * a canonical the creator chose is kept.
+ * take is never used. The front view is always the canonical identity, so filling it sets the
+ * canonical too.
  */
 
 /** The reference set slot each view is kept in, and the picture it holds (undefined: empty). */
@@ -62,7 +62,6 @@ export async function autoAddMadeViews(data: ProjectData, characterId: string): 
   const canonicalRef = data.identityRefs.find(
     (r) => r.characterId === characterId && visualRoleOf(r) === "canonical",
   );
-  let hasCanonical = hasStoredImage(data.assets.find((a) => a.id === canonicalRef?.assetId));
   for (const v of REFERENCE_SET_VIEWS) {
     const take = newest[v.id];
     const slot = slots[v.id]!;
@@ -82,7 +81,7 @@ export async function autoAddMadeViews(data: ProjectData, characterId: string): 
       locked: false,
     });
     filled.push(v.id);
-    if (v.canonical && !hasCanonical) {
+    if (v.canonical && !canonicalRef?.locked) {
       const ref: IdentityRef = {
         id: canonicalRef?.id ?? randomUUID(),
         characterId,
@@ -93,8 +92,33 @@ export async function autoAddMadeViews(data: ProjectData, characterId: string): 
         locked: false,
       };
       await repo.upsert(data.project.id, "identityRefs", ref);
-      hasCanonical = true;
     }
   }
   return filled;
+}
+
+/**
+ * The front view is always the canonical identity (the owner's rule, 2026-11-23). Where the two differ (pictures set
+ * before the rule, or a front picture uploaded into its slot), the canonical is brought in line with the front view,
+ * unless the canonical is locked. Returns true when it changed.
+ */
+export async function syncCanonicalToFront(data: ProjectData, characterId: string): Promise<boolean> {
+  const front = viewSlots(data, characterId).front;
+  if (!front?.asset) return false;
+  const canonicalRef = data.identityRefs.find(
+    (r) => r.characterId === characterId && visualRoleOf(r) === "canonical",
+  );
+  if (canonicalRef?.assetId === front.asset.id || canonicalRef?.locked) return false;
+  await (
+    await getRepo()
+  ).upsert(data.project.id, "identityRefs", {
+    id: canonicalRef?.id ?? randomUUID(),
+    characterId,
+    slot: "additional",
+    assetId: front.asset.id,
+    label: "Canonical identity",
+    metadata: { visualRole: "canonical", source: "visual_bible" },
+    locked: false,
+  });
+  return true;
 }

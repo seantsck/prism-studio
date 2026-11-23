@@ -361,6 +361,11 @@ async function openYumeko(page: Page) {
   await page.getByRole("link", { name: "Yumeko" }).first().click();
 }
 
+/** Yumeko's Looks, on the Looks page (under Characters in the sidebar). */
+function yumekoLooks(page: Page) {
+  return page.getByTestId("looks-character").filter({ hasText: "Yumeko ·" });
+}
+
 /** A facts-only Continuity Lock of the spec-owned Look, from the Character page (the 2G.4 spec's own path). */
 async function createLock(page: Page, name: string) {
   await openYumeko(page);
@@ -379,13 +384,15 @@ test("4C Character Lock: a master Look edit keeps the clip fresh; switching to L
   const url = await openShot(page, "4C");
 
   // this spec's own minimal fixture: a Look of Yumeko and a facts-only Lock v1 of it
-  await openYumeko(page);
-  const newLook = page.locator("details", { has: page.locator("summary", { hasText: "+ New look" }) });
+  await page.goto("/projects/ojousama/looks");
+  const newLook = yumekoLooks(page).locator("details", {
+    has: page.locator("summary", { hasText: "+ New look" }),
+  });
   await newLook.locator("summary").click();
   await newLook.locator('input[name="name"]').fill(LOOK);
   await newLook.locator('textarea[name="wardrobe"]').fill("linen travel suit");
   await newLook.getByRole("button", { name: "Create look" }).click();
-  await expect(page.locator("summary", { hasText: LOOK })).toBeVisible({ timeout: 15_000 });
+  await expect(yumekoLooks(page).locator("summary", { hasText: LOOK })).toBeVisible({ timeout: 15_000 });
   await createLock(page, LOCK_V1);
 
   // Shot 4C: Yumeko wears that Look under Lock v1; a Production Frame uploaded under v1 is current
@@ -416,8 +423,8 @@ test("4C Character Lock: a master Look edit keeps the clip fresh; switching to L
   await expect(clip).toHaveAttribute("data-freshness", "fresh");
 
   // edit the MASTER Look (the editable library): the locked Shot's truth is unchanged
-  await openYumeko(page);
-  const look = page.locator("details", { has: page.locator("summary", { hasText: LOOK }) });
+  await page.goto("/projects/ojousama/looks");
+  const look = yumekoLooks(page).locator("details", { has: page.locator("summary", { hasText: LOOK }) });
   await look.locator("summary").click();
   await look.locator('textarea[name="wardrobe"]').fill("midnight blue gown");
   await look.getByRole("button", { name: "Save look" }).click();

@@ -146,7 +146,7 @@ export function visualBibleReadiness(data: ProjectData, characterId: string): Vi
       "canonical",
       "Canonical identity",
       canonical,
-      "Choose the image that defines this Character's face.",
+      "The front view in the reference set is the canonical identity: add a front view.",
       "portrait",
     ),
     {

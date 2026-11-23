@@ -94,14 +94,29 @@ test("Character: a new Look 'Ivory Suit', real identity images and a Look image 
   page,
 }) => {
   characterUrl = await openCharacter(page, "Yumeko");
-  const newLook = page.locator("details", { has: page.locator("summary", { hasText: "+ New look" }) });
+  // Looks live on their own page, under Characters in the sidebar
+  await page.getByTestId("open-looks").click();
+  await expect(page).toHaveURL(/\/looks/);
+  const yumekoLooks = page.getByTestId("looks-character").filter({ hasText: "Yumeko ·" });
+  const newLook = yumekoLooks.locator("details", { has: page.locator("summary", { hasText: "+ New look" }) });
   await newLook.locator("summary").click();
   await newLook.locator('input[name="name"]').fill("Ivory Suit");
   await newLook.locator('textarea[name="wardrobe"]').fill("ivory tailored suit");
   await newLook.locator('input[name="hair"]').fill("low chignon");
   await newLook.locator('input[name="makeup"]').fill("soft matte");
   await newLook.getByRole("button", { name: "Create look" }).click();
-  await expect(page.locator("summary", { hasText: "Ivory Suit" })).toBeVisible({ timeout: 15_000 });
+  await expect(yumekoLooks.locator("summary", { hasText: "Ivory Suit" })).toBeVisible({ timeout: 15_000 });
+  const ivory = yumekoLooks.locator("details", { has: page.locator("summary", { hasText: "Ivory Suit" }) });
+  await ivory.locator("summary").click();
+  await ivory.getByTestId("look-ref-file").setInputFiles({
+    name: "e2e-ivory-suit.png",
+    mimeType: "image/png",
+    buffer: png(300, 400, [235, 230, 215]),
+  });
+  await ivory.getByTestId("look-ref-upload").click();
+  await expect(ivory.getByTestId("look-ref-thumb")).toHaveCount(1, { timeout: 15_000 });
+
+  await page.goto(characterUrl);
 
   for (const [slot, rgb] of [
     ["front", [200, 170, 150]],
@@ -117,15 +132,8 @@ test("Character: a new Look 'Ivory Suit', real identity images and a Look image 
     await expect(card.locator("img")).toBeVisible({ timeout: 15_000 });
   }
 
-  const ivory = page.locator("details", { has: page.locator("summary", { hasText: "Ivory Suit" }) });
-  await ivory.locator("summary").click();
-  await ivory.getByTestId("look-ref-file").setInputFiles({
-    name: "e2e-ivory-suit.png",
-    mimeType: "image/png",
-    buffer: png(300, 400, [235, 230, 215]),
-  });
-  await ivory.getByTestId("look-ref-upload").click();
-  await expect(ivory.getByTestId("look-ref-thumb")).toHaveCount(1, { timeout: 15_000 });
+  // the Character page lists the Look and links to where it is edited
+  await expect(page.getByTestId("character-looks")).toContainText("Ivory Suit");
 });
 
 test("Create Continuity Lock 'Yumeko — Ivory Suit v1': facts + exactly the real images, no generation", async ({
@@ -230,8 +238,8 @@ test("Use as Production Frame; then edit the MASTER Look: the locked Shot keeps 
   await expect(page.getByTestId("pf-selected")).toHaveAttribute("data-freshness", "fresh");
   lockedParts = (await packageOf(page, request, shotUrl)).provenance.parts;
 
-  // the master Look changes (the editable source library)
-  await page.goto(characterUrl);
+  // the master Look changes (the editable source library, on the Looks page)
+  await page.goto(characterUrl.replace(/\/characters\/[^/]+$/, "/looks"));
   const ivory = page.locator("details", { has: page.locator("summary", { hasText: "Ivory Suit" }) });
   await ivory.locator("summary").click();
   await ivory.locator('textarea[name="wardrobe"]').fill("black evening gown");

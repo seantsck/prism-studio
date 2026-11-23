@@ -254,10 +254,10 @@ test("G — Character: upload a portrait, Remove Background, review original vs 
   await page.getByRole("link", { name: "Yumeko" }).first().click();
   await expect(page.getByTestId("subject-images")).toBeVisible();
   // the seeded identity references are locked: the creator explicitly unlocks them before uploading (as in story B)
-  const unlock = page.getByRole("button", { name: "Unlock", exact: true });
+  const unlock = page.getByRole("button", { name: "Unlock to change", exact: true });
   if ((await unlock.count()) > 0) {
     await unlock.first().click();
-    await expect(page.getByRole("button", { name: "Lock all", exact: true })).toBeVisible({
+    await expect(page.getByRole("button", { name: "Approve and lock the set", exact: true })).toBeVisible({
       timeout: 30_000,
     });
   }
@@ -307,7 +307,7 @@ test("G — Character: upload a portrait, Remove Background, review original vs 
 
 // ── Phase 5B-I4: Character Visual Bible ──
 
-test("H — Character: the Visual Bible shows readiness; Use as Canonical sets the large canonical image", async ({
+test("H — Character: the Visual Bible shows readiness; a picture used as the front view is the canonical image", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -316,15 +316,20 @@ test("H — Character: the Visual Bible shows readiness; Use as Canonical sets t
   const vb = page.getByTestId("visual-bible");
   await expect(vb).toBeVisible();
   await expect(vb.getByTestId("vb-readiness")).toBeVisible();
-  // the earlier stories made generated images: choose one as the canonical identity (an explicit act)
-  const source = vb.getByTestId("vb-canonical-source");
-  const value = await source.locator("option", { hasText: "Generated" }).first().getAttribute("value");
-  await source.selectOption(value!);
-  await vb.getByTestId("vb-use-as-canonical").click();
-  await expect(page.getByText("Canonical identity set")).toBeVisible({ timeout: 30_000 });
+  // the earlier stories made generated images: use one as the front view, which is the canonical identity (asked first)
+  page.once("dialog", (d) => void d.accept());
+  await page
+    .getByTestId("subject-images")
+    .getByTestId("subject-image")
+    .filter({ has: page.getByTestId("use-as-canonical") })
+    .first()
+    .getByTestId("use-as-canonical")
+    .click();
+  await expect(page.getByText("Front view and canonical identity set")).toBeVisible({ timeout: 30_000 });
   await page.reload();
   await expect(page.getByTestId("vb-canonical-image")).toBeVisible();
   await expect(page.getByTestId("vb-item-canonical")).toHaveAttribute("data-done", "true");
+  await expect(page.getByTestId("vb-item-front")).toHaveAttribute("data-done", "true");
   // a generated canonical is labelled as a generated reference, never presented as a photograph of the Character
   await expect(page.getByTestId("vb-canonical-origin")).toHaveText("generated reference");
 });

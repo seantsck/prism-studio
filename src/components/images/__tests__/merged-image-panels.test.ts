@@ -213,7 +213,8 @@ describe("5B-I3b + I4 merged Character image UI", () => {
       "expressions",
     ])
       expect(count(html, `vb-item-${key}`)).toBe(1);
-    expect(count(html, "vb-use-as-canonical")).toBe(1);
+    // the canonical identity is the front view: it is not chosen here
+    expect(count(html, "vb-use-as-canonical")).toBe(0);
     expect(count(html, "vb-add-expression")).toBe(1);
     // the Visual Bible makes nothing and links nowhere beside its items: views are made in "4. Six views"
     expect(html).not.toContain("vb-generate-");

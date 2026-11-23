@@ -78,10 +78,14 @@ async function designate(form: FormData, role: Exclude<VisualRole, "expression">
   refresh(slug);
 }
 
+/**
+ * The canonical identity IS the front view (the owner's rule, 2026-11-23): choosing a picture as the canonical puts it
+ * in the front view of the reference set, and the front view is always the canonical. Replacing a front view that holds
+ * another picture is still asked first.
+ */
 export async function setCanonicalIdentity(form: FormData): Promise<ActionResult> {
-  return runAction(() => designate(form, "canonical", "canonical identity"), {
-    name: "setCanonicalIdentity",
-  });
+  form.set("view", "front");
+  return runAction(() => addToReferenceSet_impl(form), { name: "setCanonicalIdentity" });
 }
 
 export async function setCharacterCutout(form: FormData): Promise<ActionResult> {
@@ -154,11 +158,8 @@ async function addToReferenceSet_impl(form: FormData) {
     view.slot === "additional"
       ? refs.find((r) => r.slot === "additional" && (r.metadata as { view?: unknown }).view === viewId)
       : refs.find((r) => r.slot === view.slot && visualRoleOf(r) === null);
-  const existingCanonical = view.canonical ? refs.find((r) => visualRoleOf(r) === "canonical") : undefined;
-  // from a Character's page the creator chooses the canonical with "Make canonical": adding the front view there
-  // makes it the canonical only when there is none yet, and never replaces one they chose
-  const keepCanonical = str(form, "keepCanonical") === "1" && holds(existingCanonical);
-  const canonicalRef = keepCanonical ? undefined : existingCanonical;
+  // the front view is always the canonical identity: setting one sets the other
+  const canonicalRef = view.canonical ? refs.find((r) => visualRoleOf(r) === "canonical") : undefined;
 
   for (const r of [slotRef, canonicalRef]) {
     if (!holds(r) || r!.assetId === assetId) continue;
@@ -166,9 +167,10 @@ async function addToReferenceSet_impl(form: FormData) {
       throw new UserFacingError(
         `${character.name}'s ${view.label.toLowerCase()} is locked. Unlock the identity references first.`,
       );
-    if (!confirmed)
+    // the canonical simply follows the front view; replacing a picture IN the view is asked first
+    if (r === slotRef && !confirmed)
       throw new UserFacingError(
-        `${character.name} already has a ${view.label.toLowerCase()}. Confirm to replace it (the old image stays in the library).`,
+        `${character.name} already has a ${view.id === "front" ? "front view (the canonical identity)" : view.label.toLowerCase()}. Confirm to replace it (the old image stays in the library).`,
       );
   }
 
@@ -187,7 +189,7 @@ async function addToReferenceSet_impl(form: FormData) {
     },
     locked: false,
   });
-  if (view.canonical && !keepCanonical && canonicalRef?.assetId !== assetId)
+  if (view.canonical && canonicalRef?.assetId !== assetId)
     await repo.upsert(data.project.id, "identityRefs", {
       id: canonicalRef?.id ?? randomUUID(),
       characterId: character.id,
@@ -224,7 +226,6 @@ async function addViewsToReferenceSet_impl(form: FormData) {
     one.set("characterId", str(form, "characterId"));
     one.set("view", view);
     one.set("attemptId", attemptId);
-    one.set("keepCanonical", "1");
     const label = REFERENCE_SET_VIEWS.find((v) => v.id === view)?.label ?? view;
     try {
       await addToReferenceSet_impl(one);

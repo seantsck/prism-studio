@@ -183,14 +183,18 @@ test("hosted: Lock → Shot selects it → worker generates from the LOCKED imag
     (await page.getByRole("link", { name: "Yumeko" }).first().getAttribute("href"))!,
     "http://x",
   ).pathname;
-  await page.goto(characterUrl);
-  const newLook = page.locator("details", { has: page.locator("summary", { hasText: "+ New look" }) });
+  // Looks are made and edited on the Looks page (under Characters in the sidebar)
+  const looksUrl = characterUrl.replace(/\/characters\/[^/]+$/, "/looks");
+  await page.goto(looksUrl);
+  const yumekoLooks = page.getByTestId("looks-character").filter({ hasText: "Yumeko ·" });
+  const newLook = yumekoLooks.locator("details", { has: page.locator("summary", { hasText: "+ New look" }) });
   await newLook.locator("summary").click();
   await newLook.locator('input[name="name"]').fill(LOOK);
   await newLook.locator('textarea[name="wardrobe"]').fill("ivory tailored suit");
   await newLook.getByRole("button", { name: "Create look" }).click();
-  const lookDetails = page.locator("details", { has: page.locator("summary", { hasText: LOOK }) });
+  const lookDetails = yumekoLooks.locator("details", { has: page.locator("summary", { hasText: LOOK }) });
   await expect(lookDetails).toHaveCount(1, { timeout: 30_000 });
+  await page.goto(characterUrl);
   for (const [slot, rgb] of [
     ["front", [200, 170, 150]],
     ["profile", [180, 150, 130]],
@@ -221,6 +225,7 @@ test("hosted: Lock → Shot selects it → worker generates from the LOCKED imag
       { slot: "front", locked: false },
       { slot: "profile", locked: false },
     ]);
+  await page.goto(looksUrl);
   await lookDetails.locator("summary").click();
   await lookDetails.getByTestId("look-ref-file").setInputFiles({
     name: `${PREFIX}-ivory.png`,
@@ -229,6 +234,7 @@ test("hosted: Lock → Shot selects it → worker generates from the LOCKED imag
   });
   await lookDetails.getByTestId("look-ref-upload").click();
   await expect(lookDetails.getByTestId("look-ref-thumb")).toHaveCount(1, { timeout: 30_000 });
+  await page.goto(characterUrl);
 
   // ── Create Continuity Lock v1 (persisted; no generation, no copy) ──
   await page.getByTestId("cl-look").selectOption({ label: LOOK });
@@ -336,7 +342,7 @@ test("hosted: Lock → Shot selects it → worker generates from the LOCKED imag
   await expect(page.getByTestId("pf-selected")).toHaveAttribute("data-freshness", "fresh");
 
   // ── edit the MASTER Look: the locked Shot keeps its truth ──
-  await page.goto(characterUrl);
+  await page.goto(looksUrl);
   await lookDetails.locator("summary").click();
   await lookDetails.locator('textarea[name="wardrobe"]').fill("black evening gown");
   await lookDetails.getByRole("button", { name: "Save look" }).click();

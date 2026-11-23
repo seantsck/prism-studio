@@ -1,17 +1,15 @@
 import Link from "next/link";
 import { ActionForm } from "@/components/action-form";
-import { Badge, Button, Field, Panel } from "@/components/ui";
+import { Badge, Button, Panel } from "@/components/ui";
 import { referenceOrigin, referenceOriginLabel } from "@/domain/generation/reference-integrity";
 import type { ProjectData } from "@/domain/schemas";
 import { SUGGESTED_EXPRESSIONS, visualBibleReadiness, visualRoleOf } from "@/domain/visual-bible";
 import { assetUrl } from "@/lib/utils";
-import { MakeCanonical } from "@/components/characters/make-canonical";
 import type { EditSource, ImageModelOption } from "@/server/subject-images";
 import {
   addViewsToReferenceSet,
   addExpressionReference,
   clearVisualBibleDesignation,
-  setCanonicalIdentity,
   setCharacterCutout,
 } from "@/server/visual-bible-actions";
 
@@ -46,9 +44,6 @@ export function VisualBiblePanel(props: {
   const assets = new Map(data.assets.map((a) => [a.id, a]));
   const url = (id: string | null) => (id ? (assetUrl(assets.get(id)) ?? null) : null);
   const looks = data.looks.filter((l) => l.characterId === characterId);
-  const canonicalRef = data.identityRefs.find(
-    (r) => r.characterId === characterId && visualRoleOf(r) === "canonical",
-  );
   const cutoutRef = data.identityRefs.find(
     (r) => r.characterId === characterId && visualRoleOf(r) === "cutout",
   );
@@ -192,15 +187,9 @@ export function VisualBiblePanel(props: {
                       </span>
                       {v.state === "made" ? <div className="text-muted">made, not added yet</div> : null}
                     </figcaption>
-                    {v.assetId ? (
-                      <div className="mt-1">
-                        <MakeCanonical
-                          slug={slug}
-                          characterId={characterId}
-                          assetId={v.assetId}
-                          isCanonical={v.assetId === vb.canonicalAssetId}
-                          hasCanonical={!!vb.canonicalAssetId}
-                        />
+                    {v.id === "front" && v.state === "in_set" ? (
+                      <div className="text-[10.5px] text-pass" data-testid="canonical-mark">
+                        canonical identity
                       </div>
                     ) : null}
                   </figure>
@@ -231,32 +220,10 @@ export function VisualBiblePanel(props: {
             ))}
           </ul>
           <p className="text-[11px] text-muted">
-            The views you add to the set in 4. Six views fill in the references here; the front view becomes
-            the canonical identity, unless you press Make canonical under another picture. Guidance only: skip
+            The views you add to the set in 4. Six views fill in the references here; the front view is always
+            the canonical identity (the picture that defines the face in every shot). Guidance only: skip
             anything you don&apos;t need. Nothing is made here, and nothing is replaced without you.
           </p>
-
-          {props.sources.length > 0 ? (
-            <ActionForm
-              action={setCanonicalIdentity}
-              successMessage="Canonical identity set"
-              className="flex flex-wrap items-end gap-2"
-            >
-              {hidden}
-              <Field label="Canonical identity">
-                {sourceSelect("assetId", props.sources, "vb-canonical-source")}
-              </Field>
-              {canonicalRef ? (
-                <label className="flex items-center gap-1 text-[11px]">
-                  <input type="checkbox" name="confirmReplace" value="1" data-testid="vb-canonical-confirm" />
-                  Replace the current canonical identity
-                </label>
-              ) : null}
-              <Button type="submit" size="sm" data-testid="vb-use-as-canonical">
-                Use as Canonical
-              </Button>
-            </ActionForm>
-          ) : null}
 
           <div className="space-y-1" data-testid="vb-looks">
             <div className="text-[12px] font-medium">Looks</div>
