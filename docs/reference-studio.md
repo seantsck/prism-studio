@@ -363,6 +363,15 @@ uses it for (`uses`, with a tip for the physical description and the continuity 
 matter for the size is marked optional and shown quieter. Before 0067 is applied, a chosen size is used for that
 request but not remembered (`saveCharacterWithSize` saves the rest and says so).
 
+The character page is numbered in the order it is used: 1. Fill in the sheet with Prism, 2. Character, then the
+Reference pictures panel with 3. Photos and 4. Six views. The views are made with the engine picked beside them
+(Prism's suggestion first; an engine that is not set up is listed with the reason); picking another re-reads the page
+with that engine's exact prices (`?engine=provider/modelId`), and the server prices again with the same engine before
+anything starts. A finished view shows its picture in the list with **Add to the set**; a made view can also be ticked
+to make it again. What is in the set is what the Visual Bible below reads (the front view also becomes the canonical
+identity), so the Visual Bible's front, 3/4, profile and full-body items point to 4. Six views instead of making
+pictures on their own.
+
 The project runs only so many generations at once (`PRISM_STUDIO_GENERATION_MAX_ACTIVE_PER_PROJECT`, 3 by default).
 Ticked views that do not fit are not started and not charged: they wait in the page ("waiting for a free slot") and
 start on their own, at the confirmed prices, as slots free up while the page is open (Cancel waiting drops them). A

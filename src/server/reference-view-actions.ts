@@ -31,10 +31,12 @@ async function makeReferenceViews_impl(form: FormData) {
   // the same click twice (a double press, a retry) never makes the same views twice
   const batch = str(form, "batchId").slice(0, 64) || crypto.randomUUID();
   const userId = user.kind === "supabase" ? user.id : null;
+  // the engine the creator chose next to the views (Prism's suggestion when none was sent)
+  const model = str(form, "model") || undefined;
 
   const prepared: Awaited<ReturnType<typeof prepareReferenceView>>[] = [];
   for (const id of viewIds) {
-    const p = await prepareReferenceView(data, character, id, userId, `views-${batch}-${id}`);
+    const p = await prepareReferenceView(data, character, id, userId, `views-${batch}-${id}`, model);
     if (!p.prepared.ok) throw new UserFacingError(`${p.view.label}: ${p.prepared.reasons[0]}`);
     prepared.push(p);
   }

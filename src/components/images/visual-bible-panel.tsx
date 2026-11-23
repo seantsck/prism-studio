@@ -79,8 +79,19 @@ export function VisualBiblePanel(props: {
   const studio = `/projects/${slug}/studio?subject=character:${characterId}`;
   const linkButton =
     "inline-flex h-6 items-center rounded-[3px] border border-line2 bg-panel2 px-2 text-[12px] font-medium hover:bg-[#1f1f25]";
+  // the views of the reference set are made (with their engine and price) and added in "4. Six views" above
+  const VIEW_INTENTS = new Set(["portrait", "three_quarter", "profile", "full_body"]);
   const generate = (intent: string, lookId?: string) =>
-    preferred?.paid ? (
+    VIEW_INTENTS.has(intent) && !lookId ? (
+      <a
+        href="#reference-views"
+        className="text-[11.5px] text-accent hover:underline"
+        data-testid={`vb-generate-${intent}`}
+        data-in-views="true"
+      >
+        {intent === "portrait" ? "Add the front view in 4. Six views" : "Make it in 4. Six views"}
+      </a>
+    ) : preferred?.paid ? (
       // a paid picture is never one click here: the Reference Studio shows its price first, then asks
       <Link
         href={`${studio}&make=${intent === "profile" ? "profile_left" : intent}${lookId ? `&look=${lookId}` : ""}`}
@@ -171,7 +182,9 @@ export function VisualBiblePanel(props: {
             ))}
           </ul>
           <p className="text-[11px] text-muted">
-            Guidance only: skip anything you don&apos;t need. Nothing is generated or replaced without you.
+            The views you add to the set in 4. Six views fill in the references here; the front view becomes
+            the canonical identity. Guidance only: skip anything you don&apos;t need. Nothing is generated or
+            replaced without you.
           </p>
 
           {props.sources.length > 0 ? (
