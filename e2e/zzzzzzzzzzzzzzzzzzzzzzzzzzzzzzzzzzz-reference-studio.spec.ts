@@ -1772,27 +1772,29 @@ test("ZC: a new character's page starts with Fill in with Prism and the referenc
 
   await ai.getByTestId("character-ai-note").fill("Raised in Kyoto.");
   await ai.getByTestId("character-ai-fill").click();
-  // Prism's sheet appears on its own, field by field, ticked where it differs
+  // Prism's answer fills in what was empty at once; nothing written is touched
+  await expect(ai.getByTestId("character-ai-filled")).toContainText("Personality", { timeout: 60_000 });
+  await expect(page.locator('textarea[name="personality"]')).toHaveValue("Test personality for Kenji.");
+  await expect(page.locator('textarea[name="description"]').first()).toHaveValue(
+    "Japanese man in his mid-30s, jet-black hair swept back, tailored navy suit.",
+  );
+  // what was written is left to review: unticked, never a role for a library character
   const review = page.getByTestId("character-ai-review");
-  await expect(review).toBeVisible({ timeout: 60_000 });
   await expect(review.locator('[data-testid="character-ai-field"][data-field="role"]')).toHaveCount(0);
-  // what was written stays unless its box is ticked; what was empty is ticked
-  await expect(
-    review.locator('[data-testid="character-ai-field"][data-field="description"] input[type="checkbox"]'),
-  ).not.toBeChecked();
-  await expect(
-    review.locator('[data-testid="character-ai-field"][data-field="personality"] input[type="checkbox"]'),
-  ).toBeChecked();
-  const personality = review.locator('[data-testid="character-ai-field"][data-field="personality"]');
-  await personality.getByTestId("character-ai-text").fill("Polite in public, ruthless in private.");
+  await expect(review.locator('[data-testid="character-ai-field"][data-field="personality"]')).toHaveCount(0);
+  const description = review.locator('[data-testid="character-ai-field"][data-field="description"]');
+  await expect(description.locator('input[type="checkbox"]')).not.toBeChecked();
+  // taking Prism's wording for one of them is a tick and Apply
+  await description.locator('input[type="checkbox"]').check();
+  await description.getByTestId("character-ai-text").fill("A composed heir, raised in Kyoto.");
   await review.getByTestId("character-ai-apply").click();
   await expect(page.getByTestId("character-ai-review")).toHaveCount(0, { timeout: 30_000 });
-  await expect(page.locator('textarea[name="personality"]')).toHaveValue(
-    "Polite in public, ruthless in private.",
+  await expect(page.locator('textarea[name="description"]').first()).toHaveValue(
+    "A composed heir, raised in Kyoto.",
   );
 });
 
-test("ZD: a new location opens on Fill in with Prism and its reference plan; Prism's zones are applied", async ({
+test("ZD: a new location opens with Prism filling in its empty fields, beside its reference plan", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -1816,22 +1818,18 @@ test("ZD: a new location opens on Fill in with Prism and its reference plan; Pri
   // a library location offers its way into a project, like a library character
   await expect(row.getByTestId("use-in-project")).toContainText("The Moss Pavilion is ready");
 
-  // no button to press: the suggestion appears on its own
-  const review = row.getByTestId("location-ai-review");
-  await expect(review).toBeVisible({ timeout: 60_000 });
-  // only the zones: untick everything else
-  for (const f of ["description", "geography", "entrances", "lighting", "recurringProps"])
-    await review
-      .locator(`[data-testid="location-ai-field"][data-field="${f}"] input[type="checkbox"]`)
-      .uncheck();
-  await review
-    .locator('[data-testid="location-ai-field"][data-field="zones"]')
-    .getByTestId("location-ai-text")
-    .fill("Tokonoma: the alcove with the scroll\nGarden edge: where the screens open");
-  await review.getByTestId("location-ai-apply").click();
-  await expect(row.getByTestId("location-ai-review")).toHaveCount(0, { timeout: 30_000 });
+  // no button to press: Prism's answer fills in the empty fields on its own
+  await expect(ai.getByTestId("location-ai-filled")).toContainText("Zones", { timeout: 60_000 });
   await expect(row.locator(":scope > summary")).toContainText("2 zones");
   await expect(row.locator('textarea[name="zones"]')).toHaveValue(
-    "Tokonoma: the alcove with the scroll\nGarden edge: where the screens open",
+    "Test zones A: one for The Moss Pavilion\nTest zones B: two",
   );
+  // the description that was typed stays; Prism's wording of it waits in the review, and can be discarded
+  const review = row.getByTestId("location-ai-review");
+  await expect(review.locator('[data-testid="location-ai-field"]')).toHaveCount(1);
+  await expect(row.locator('textarea[name="description"]')).toHaveValue(
+    "A tea room called The Moss Pavilion, tatami floor, open to a moss garden.",
+  );
+  await review.getByTestId("location-ai-discard").click();
+  await expect(row.getByTestId("location-ai-review")).toHaveCount(0, { timeout: 30_000 });
 });

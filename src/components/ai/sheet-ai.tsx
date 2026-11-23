@@ -43,6 +43,7 @@ export function SheetAi({
   className,
   anchorId,
   prompt,
+  filled = [],
 }: {
   /** "character-ai" / "location-ai": the prefix of every test id */
   testId: string;
@@ -65,9 +66,16 @@ export function SheetAi({
   anchorId?: string;
   /** what the creator wrote, shown whole at the top */
   prompt?: string;
+  /** the empty fields Prism's answer has just filled in (src/server/sheet-autofill.ts) */
+  filled?: string[];
 }) {
   const pending = !!latest && (latest.status === "queued" || latest.status === "running");
-  const offered = proposed ? fields.filter((f) => proposed[f.key] !== undefined) : [];
+  // what is left to decide: Prism's version of a field that differs from the sheet (empty ones were filled in at once)
+  const offered = proposed
+    ? fields.filter(
+        (f) => proposed[f.key] !== undefined && proposed[f.key]!.trim() !== (current[f.key] ?? "").trim(),
+      )
+    : [];
   const reviewing = offered.length > 0;
   return (
     <Panel
@@ -93,7 +101,12 @@ export function SheetAi({
             The last request failed{latest.error ? `: ${latest.error.message}` : ""}.
           </p>
         ) : null}
-        {proposed && !reviewing ? (
+        {filled.length ? (
+          <p className="text-[13px] text-pass" data-testid={`${testId}-filled`}>
+            Prism filled in {filled.join(", ")}. They are in the sheet below, ready to edit.
+          </p>
+        ) : null}
+        {proposed && !reviewing && !filled.length && fields.every((f) => proposed[f.key] === undefined) ? (
           <p className="text-[13px] text-warn" data-testid={`${testId}-empty`}>
             Prism&apos;s answer did not name the sheet&apos;s fields. Ask again.
           </p>

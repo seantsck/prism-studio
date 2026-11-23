@@ -14,6 +14,7 @@ export function CharacterAi({
   fillQuote,
   refineQuote,
   prominent,
+  filled,
 }: {
   slug: string;
   character: Character;
@@ -24,6 +25,7 @@ export function CharacterAi({
   refineQuote: QuoteResult;
   /** The sheet is thin: say plainly that this is the next step. */
   prominent: boolean;
+  filled?: string[];
 }) {
   const fields = characterAiFields(inStory);
   const proposed =
@@ -55,6 +57,7 @@ export function CharacterAi({
       fillQuote={fillQuote}
       refineQuote={refineQuote}
       prominent={prominent}
+      filled={filled}
       intro={`Prism writes every field from what is already here${inStory ? ", the Bible and the rest of the cast" : ""}: personality, how they move and speak, a precise physical description for their pictures, a signature habit and the rules that keep them consistent${inStory ? ", plus their role and relationships in this story" : ""}.`}
       notePlaceholder="Raised in Kyoto, studied in London; polite in public, ruthless in private."
       fill={fillCharacter}

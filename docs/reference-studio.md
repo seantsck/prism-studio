@@ -337,6 +337,13 @@ request is sent straight after creating, confirmed at that price, and the page o
 Fill in panel shows **What you wrote**, whole, at the top. In the review, fields the creator left empty are ticked and
 fields they wrote are not, so their own words stay unless they choose Prism's version.
 
+When Prism's answer arrives, the fields the creator left **empty** are filled in at once
+(`src/server/sheet-autofill.ts`, run when the page is opened): asking was the go-ahead, and nothing written is touched.
+The panel says which fields Prism filled in; the review then holds only Prism's wording of fields the creator wrote,
+unticked. When nothing is left to review the draft is closed. It runs once per draft (a Character only while unedited
+since the request). On a library Character or Location, **Add to [project]** is the main action; starting a new project
+from it is a secondary link to the home page.
+
 ## Prices
 
 Every paid step shows the creator ONE exact price before it runs, and that is what they are charged: Prism's own
