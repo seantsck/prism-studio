@@ -475,7 +475,8 @@ export function Stage({
                       </label>
                     ) : null}
                   </ActionForm>
-                ) : (
+                ) : character ? null : (
+                  // a Character's canonical identity is its front view: "Add to the reference set" above sets it
                   <ActionForm
                     action={character ? setCanonicalIdentity : setCanonicalLocation}
                     successMessage={`${canonicalName} set`}

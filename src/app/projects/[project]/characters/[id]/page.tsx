@@ -6,21 +6,17 @@ import {
   ContinuityLockCard,
 } from "@/components/character-continuity/continuity-lock-ui";
 import { referenceOrigin, referenceOriginLabel } from "@/domain/generation/reference-integrity";
-import { IDENTITY_SLOTS } from "@/domain/schemas";
 import { assetUrl } from "@/lib/utils";
 import {
   saveCharacter,
-  saveLook,
   saveVoiceProfile,
   setIdentityLocked,
-  setLookLocked,
   setVoiceLocked,
   uploadIdentityRef,
-  uploadLookReference,
 } from "@/server/actions";
 import { createCharacterContinuityLock } from "@/server/character-continuity-actions";
 import { getRepo, requireProject, requireProjectFresh } from "@/server/repo";
-import { autoAddMadeViews, viewSlots } from "@/server/auto-add-views";
+import { autoAddMadeViews, syncCanonicalToFront, viewSlots } from "@/server/auto-add-views";
 import { ActionForm } from "@/components/action-form";
 import { SubjectImagePanel } from "@/components/images/subject-image-panel";
 import { VisualBiblePanel } from "@/components/images/visual-bible-panel";
@@ -34,7 +30,6 @@ import { PART_SIZE_HINT, PART_SIZE_LABEL, partSizeOf } from "@/domain/character-
 import { PART_SIZES } from "@/domain/schemas";
 import type { Asset } from "@/domain/schemas";
 import { ReferenceViewsPanel, type ViewState } from "@/components/characters/reference-views";
-import { MakeCanonical } from "@/components/characters/make-canonical";
 import { MergeCharacter, type MergeTarget } from "@/components/characters/merge-character";
 import { planCharacterMerge } from "@/domain/character-merge";
 import { characterUsage } from "@/domain/subject-trash";
@@ -65,6 +60,9 @@ export default async function CharacterPage({
   let data = await requireProject(slug);
   // a finished reference view goes into its empty slot in the set by itself (it was made as that view)
   if (data.characters.some((x) => x.id === id) && (await autoAddMadeViews(data, id)).length)
+    data = await requireProjectFresh(slug);
+  // the front view is always the canonical identity
+  if (data.characters.some((x) => x.id === id) && (await syncCanonicalToFront(data, id)))
     data = await requireProjectFresh(slug);
   const found = data.characters.find((x) => x.id === id);
   if (!found) notFound();
@@ -152,8 +150,6 @@ export default async function CharacterPage({
   > = {};
   for (const [view, asset] of Object.entries(slotAsset))
     viewPictures[view] = { url: assetUrl(asset) ?? null, attemptId: null, assetId: asset.id };
-  // the canonical identity now (the picture that defines the face)
-  const canonicalAssetId = pictures.images.find((i) => i.canonical)?.assetId ?? null;
   const newestMade: Record<string, string> = {};
   for (const t of pictures.takes) {
     const view = referenceSetViewOf(t.settings.intent);
@@ -437,15 +433,6 @@ export default async function CharacterPage({
                         {i.rejected ? " · rejected" : ""}
                       </div>
                       <div className="flex flex-wrap gap-1">
-                        {i.wardrobeOnly ? null : (
-                          <MakeCanonical
-                            slug={slug}
-                            characterId={c.id}
-                            assetId={i.assetId}
-                            isCanonical={i.canonical}
-                            hasCanonical={!!canonicalAssetId}
-                          />
-                        )}
                         <ArchiveButton slug={slug} subject={archiveSubject} assetId={i.assetId} />
                         <DeleteButton slug={slug} subject={archiveSubject} assetId={i.assetId} />
                       </div>
@@ -487,35 +474,66 @@ export default async function CharacterPage({
         </div>
 
         <Panel
-          title="Identity references"
+          title="Reference set: approve and lock"
           className="xl:col-span-2"
           actions={
+            <Badge tone={identityLocked ? "pass" : "warn"}>
+              {identityLocked ? "Approved, locked" : "Not locked"}
+            </Badge>
+          }
+        >
+          <div
+            className={
+              identityLocked
+                ? "mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[3px] border border-pass/40 bg-pass/10 p-3 text-[12.5px]"
+                : "mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[3px] border border-accent/50 bg-accent/5 p-3 text-[12.5px]"
+            }
+            data-testid="identity-lock-box"
+          >
+            <div className="max-w-[70ch] space-y-1">
+              <p className="font-medium">
+                {identityLocked
+                  ? `${c.name}'s reference set is approved and locked.`
+                  : `Happy with these pictures? Approve and lock ${c.name}'s reference set.`}
+              </p>
+              <p className="text-muted">
+                Locking freezes these pictures: every shot keeps using exactly them, and nothing replaces one
+                by accident (a new take, an upload or a merge). It is not needed to make shots, but lock the
+                set before you approve shots so they all match. You can unlock at any time to change a
+                picture.
+              </p>
+            </div>
             <ActionForm action={setIdentityLocked}>
               {hidden}
               <input type="hidden" name="characterId" value={c.id} />
               <input type="hidden" name="locked" value={String(!identityLocked)} />
-              <Button size="sm" type="submit">
-                {identityLocked ? "Unlock" : "Lock all"}
+              <Button
+                size="sm"
+                type="submit"
+                variant={identityLocked ? undefined : "primary"}
+                data-testid="identity-lock"
+              >
+                {identityLocked ? "Unlock to change" : "Approve and lock the set"}
               </Button>
             </ActionForm>
-          }
-        >
-          <div className="grid grid-cols-2 gap-3">
-            {IDENTITY_SLOTS.filter((s) => s !== "additional").map((slot) => {
-              const ref = refs.find((r) => r.slot === slot);
-              const asset = data.assets.find((a) => a.id === ref?.assetId);
-              const url = assetUrl(asset);
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+            {REFERENCE_SET_VIEWS.map((v) => {
+              const ref = slots[v.id]?.ref;
+              const asset = slots[v.id]?.asset;
+              const url = asset ? assetUrl(asset) : null;
               const origin = url ? referenceOrigin(asset) : null;
               return (
-                <div key={slot} data-testid={`identity-slot-${slot}`} className="border border-line p-2">
+                <div key={v.id} data-testid={`identity-slot-${v.id}`} className="border border-line p-2">
                   <div className="mb-1 flex items-center justify-between text-[11px] uppercase tracking-wide text-muted">
-                    {slot.replace("_", " ")}
-                    {ref?.locked ? <Badge tone="pass">locked</Badge> : null}
+                    {v.label}
+                    {v.id === "front" ? <span className="normal-case text-pass">canonical</span> : null}
+                    {ref?.locked && asset ? <Badge tone="pass">locked</Badge> : null}
                   </div>
                   {url ? (
                     <figure>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={url} alt={slot} className="aspect-[3/4] w-full object-cover" />
+                      <img src={url} alt={v.label} className="aspect-[3/4] w-full object-cover" />
                       {origin ? (
                         // a generated reference is never presented as a photograph of the Character
                         <figcaption
@@ -528,164 +546,65 @@ export default async function CharacterPage({
                       ) : null}
                     </figure>
                   ) : (
-                    <FramePlaceholder
-                      code={slot}
-                      label={asset ? "Placeholder reference" : "Missing"}
-                      className="aspect-[3/4]"
-                    />
+                    <FramePlaceholder code={v.id} label="Missing" className="aspect-[3/4]" />
                   )}
-                  <ActionForm action={uploadIdentityRef} className="mt-2 flex gap-1">
-                    {hidden}
-                    <input type="hidden" name="characterId" value={c.id} />
-                    <input type="hidden" name="slot" value={slot} />
-                    <input
-                      data-testid="identity-file"
-                      type="file"
-                      name="file"
-                      accept="image/*"
-                      className="!p-0.5 text-[11px]"
-                    />
-                    <Button data-testid="identity-upload" size="sm" type="submit">
-                      Upload
-                    </Button>
-                  </ActionForm>
+                  {ref?.locked && asset ? null : (
+                    <ActionForm action={uploadIdentityRef} className="mt-2 flex flex-col gap-1">
+                      {hidden}
+                      <input type="hidden" name="characterId" value={c.id} />
+                      <input type="hidden" name="slot" value={v.slot} />
+                      {v.slot === "additional" ? <input type="hidden" name="view" value={v.id} /> : null}
+                      <input type="hidden" name="label" value={v.label} />
+                      <input
+                        data-testid="identity-file"
+                        type="file"
+                        name="file"
+                        accept="image/*"
+                        className="!p-0.5 text-[11px]"
+                      />
+                      <Button data-testid="identity-upload" size="sm" type="submit">
+                        Upload
+                      </Button>
+                    </ActionForm>
+                  )}
                 </div>
               );
             })}
           </div>
         </Panel>
 
-        <Panel title={`Looks (${looks.length})`} className="xl:col-span-2">
-          <div className="space-y-3">
-            {looks.map((l) => (
-              <details key={l.id} className="border border-line" open={looks.length === 1}>
-                <summary className="flex items-center justify-between px-3 py-2">
-                  <span className="font-medium">{l.name}</span>
+        <Panel
+          title={`Looks (${looks.length})`}
+          className="xl:col-span-2"
+          actions={
+            <Link
+              href={`/projects/${slug}/looks#looks-${c.id}`}
+              className="text-[12px] text-accent hover:underline"
+              data-testid="open-looks"
+            >
+              Edit Looks
+            </Link>
+          }
+        >
+          <p className="mb-2 text-[12px] text-muted">
+            A Look is an outfit (wardrobe, hair, makeup, accessories) {c.name} wears in some scenes, with its
+            own pictures. Looks are made and edited on the Looks page, under Characters in the sidebar.
+          </p>
+          {looks.length ? (
+            <ul className="flex flex-wrap gap-2 text-[12.5px]" data-testid="character-looks">
+              {looks.map((l) => (
+                <li
+                  key={l.id}
+                  className="flex items-center gap-1.5 rounded-[3px] border border-line px-2 py-1"
+                >
+                  {l.name}
                   <Badge tone={l.locked ? "pass" : "warn"}>{l.locked ? "locked" : "open"}</Badge>
-                </summary>
-                <div className="border-t border-line p-3">
-                  <ActionForm action={saveLook} className="grid grid-cols-2 gap-3">
-                    {hidden}
-                    <input type="hidden" name="id" value={l.id} />
-                    <input type="hidden" name="characterId" value={c.id} />
-                    <input type="hidden" name="episodeId" value={l.episodeId ?? ""} />
-                    <Field label="Name" className="col-span-2">
-                      <input name="name" defaultValue={l.name} disabled={l.locked} />
-                    </Field>
-                    {(
-                      [
-                        ["wardrobe", "Wardrobe"],
-                        ["shoes", "Shoes"],
-                        ["jewelry", "Jewelry"],
-                        ["hair", "Hair"],
-                        ["makeup", "Makeup"],
-                        ["grooming", "Grooming"],
-                        ["bodyNotes", "Body notes"],
-                        ["accessories", "Accessories"],
-                      ] as const
-                    ).map(([k, label]) => (
-                      <Field label={label} key={k}>
-                        <textarea name={k} rows={2} defaultValue={l[k]} disabled={l.locked} />
-                      </Field>
-                    ))}
-                    <div className="col-span-2 flex gap-2">
-                      {!l.locked ? (
-                        <Button type="submit" variant="primary">
-                          Save look
-                        </Button>
-                      ) : null}
-                    </div>
-                  </ActionForm>
-                  <div className="mt-2 text-[12px]">
-                    <div className="mb-1 text-muted">
-                      Look reference images ({l.referenceAssetIds.length})
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {l.referenceAssetIds.map((aid) => {
-                        const url = assetUrl(assetsById.get(aid));
-                        return url ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            key={aid}
-                            data-testid="look-ref-thumb"
-                            src={url}
-                            alt={`${l.name} reference`}
-                            className="h-14 border border-line object-cover"
-                          />
-                        ) : (
-                          <span key={aid} className="border border-line px-1 text-[11px] text-muted">
-                            placeholder
-                          </span>
-                        );
-                      })}
-                    </div>
-                    {!l.locked ? (
-                      <ActionForm action={uploadLookReference} className="mt-1 flex gap-1">
-                        {hidden}
-                        <input type="hidden" name="lookId" value={l.id} />
-                        <input
-                          data-testid="look-ref-file"
-                          type="file"
-                          name="file"
-                          accept="image/*"
-                          className="!p-0.5 text-[11px]"
-                        />
-                        <Button data-testid="look-ref-upload" size="sm" type="submit">
-                          Add Look image
-                        </Button>
-                      </ActionForm>
-                    ) : null}
-                  </div>
-                  <ActionForm action={setLookLocked} className="mt-2">
-                    {hidden}
-                    <input type="hidden" name="id" value={l.id} />
-                    <input type="hidden" name="locked" value={String(!l.locked)} />
-                    <Button type="submit">{l.locked ? "Unlock look" : "Lock look"}</Button>
-                  </ActionForm>
-                </div>
-              </details>
-            ))}
-            <details className="border border-dashed border-line2">
-              <summary className="px-3 py-2 text-muted">+ New look</summary>
-              <ActionForm action={saveLook} className="grid grid-cols-2 gap-3 border-t border-line p-3">
-                {hidden}
-                <input type="hidden" name="characterId" value={c.id} />
-                <Field label="Name" className="col-span-2">
-                  <input name="name" placeholder="Episode 1 / Formal Black" required />
-                </Field>
-                <Field label="Episode">
-                  <select name="episodeId" defaultValue="">
-                    <option value="">All episodes</option>
-                    {data.episodes.map((e) => (
-                      <option key={e.id} value={e.id}>
-                        Ep {e.number} — {e.title}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Wardrobe" className="col-span-2">
-                  <textarea name="wardrobe" rows={2} />
-                </Field>
-                <Field label="Shoes">
-                  <input name="shoes" />
-                </Field>
-                <Field label="Jewelry">
-                  <input name="jewelry" />
-                </Field>
-                <Field label="Hair">
-                  <input name="hair" />
-                </Field>
-                <Field label="Makeup">
-                  <input name="makeup" />
-                </Field>
-                <div className="col-span-2">
-                  <Button type="submit" variant="primary">
-                    Create look
-                  </Button>
-                </div>
-              </ActionForm>
-            </details>
-          </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-[12px] text-faint">No Look yet.</p>
+          )}
         </Panel>
 
         <Panel title={`Continuity Locks (${locks.length})`} className="xl:col-span-2">

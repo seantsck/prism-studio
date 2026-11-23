@@ -397,6 +397,19 @@ and the front view becomes the canonical identity only when there is none. Only 
 are added; a take made in the Reference Studio stays the creator's to use or reject. A view already in the set can be
 ticked to make it again; its new take is offered beside it ("Use the new take", asked first), never swapped in.
 
+**The front view is the canonical identity** (owner's rule, 2026-11-23). Putting a picture in the front view sets the
+canonical; "Use as front view (canonical)" (Images panel) and the canonical action put the picture in the front view;
+the Character page brings an older, different canonical in line with the front view (`syncCanonicalToFront`, unless the
+canonical is locked). There is no separate canonical choice any more.
+
+**Reference set: approve and lock** (Character page): all six views with their pictures (or Missing) and an Upload for
+each (right profile and half body are kept in additional slots named by `view`), and one clear box: approving locks
+the set, so every shot keeps using exactly these pictures and nothing replaces one by accident; not needed to make
+shots, recommended before approving them; unlock at any time. A locked picture cannot be replaced by an upload.
+
+**Looks** have their own page, under Characters in the sidebar (`/projects/<slug>/looks`): every character's Looks,
+edited, locked and given pictures there. The Character page lists its Looks and links to it.
+
 **Merge into…** (src/domain/character-merge.ts, src/server/character-merge-actions.ts): when a Character is the same
 person as another one of its project, it is merged into that one. The one chosen is KEPT, with its place in the story
 (Shots, Scenes, lines, Continuity Locks); the merged one must not be used by the story (merge the other way) and must

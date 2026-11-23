@@ -213,7 +213,7 @@ describe("5B-I4 Character Visual Bible", () => {
     // replacing needs an explicit confirmation
     expect(await setCanonicalIdentity(form({ characterId: y.id, assetId: b.id }))).toMatchObject({
       ok: false,
-      error: expect.stringMatching(/already has a canonical identity/),
+      error: expect.stringMatching(/already has a front view \(the canonical identity\)/),
     });
     expect((await canonicalOf(y.id))?.assetId).toBe(a.id);
     expect(

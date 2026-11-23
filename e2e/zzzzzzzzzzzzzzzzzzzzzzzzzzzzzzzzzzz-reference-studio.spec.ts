@@ -1994,19 +1994,13 @@ test("ZG: the views are made with the engine picked beside them, and what is add
   for (const key of ["three_quarter", "profile", "full_body"])
     await expect(page.getByTestId(`vb-item-${key}`)).toHaveAttribute("data-done", "true");
 
-  // the front view became the canonical; another picture becomes it with "Make canonical" under it (asked first)
+  // the front view is always the canonical identity
   const vbFront = page.locator('[data-testid="vb-view"][data-view="front"]');
-  const threeQuarter = page.locator('[data-testid="vb-view"][data-view="three_quarter"]');
-  await expect(vbFront.getByTestId("canonical-mark")).toHaveText("✓ Canonical");
-  page.once("dialog", (d) => void d.accept());
-  await threeQuarter.getByTestId("make-canonical-button").click();
-  await expect(threeQuarter.getByTestId("canonical-mark")).toBeVisible({ timeout: 30_000 });
-  await expect(vbFront.getByTestId("make-canonical-button")).toBeVisible();
-  // the front view keeps its own picture in the set: the front reference stays done
-  await expect(vbFront).toHaveAttribute("data-state", "in_set");
-  await expect(page.getByTestId("vb-item-front")).toHaveAttribute("data-done", "true");
-  // the same button sits under every picture of the character
-  await expect(page.getByTestId("character-pictures").getByTestId("canonical-mark")).toHaveCount(1);
+  await expect(vbFront.getByTestId("canonical-mark")).toHaveText("canonical identity");
+  await expect(page.getByTestId("visual-bible").getByTestId("canonical-mark")).toHaveCount(1);
+  // the reference set shows all six views, and how to approve (lock) it
+  await expect(page.locator('[data-testid^="identity-slot-"]')).toHaveCount(6);
+  await expect(page.getByTestId("identity-lock-box")).toContainText("Approve and lock");
 
   // a view in the set can be made again; the new take is offered beside it, never swapped in by itself
   const step4Front = page.locator('[data-testid="reference-view"][data-view="front"]');
@@ -2019,9 +2013,10 @@ test("ZG: the views are made with the engine picked beside them, and what is add
   page.once("dialog", (d) => void d.accept());
   await step4Front.getByTestId("reference-view-use-newer-button").click();
   await expect(step4Front.getByTestId("reference-view-use-newer-button")).toHaveCount(0, { timeout: 30_000 });
-  expect(await step4Front.getByTestId("reference-view-picture").getAttribute("src")).not.toBe(before);
-  // the canonical the creator chose (the 3/4 view) is kept
-  await expect(threeQuarter.getByTestId("canonical-mark")).toBeVisible();
+  const after = await step4Front.getByTestId("reference-view-picture").getAttribute("src");
+  expect(after).not.toBe(before);
+  // the canonical follows the front view
+  await expect(page.getByTestId("vb-canonical-image")).toHaveAttribute("src", after!);
 });
 
 test("ZF: the size of part decides what Prism fills in, and marks the rest optional", async ({ page }) => {

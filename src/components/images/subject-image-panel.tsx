@@ -368,18 +368,24 @@ export function SubjectImagePanel(props: {
                       <>
                         <ActionForm
                           action={cutFrom ? setCharacterCutout : setCanonicalIdentity}
-                          successMessage={cutFrom ? "Cutout set" : "Canonical identity set"}
+                          successMessage={cutFrom ? "Cutout set" : "Front view and canonical identity set"}
                           className="flex gap-1"
+                          confirmMessage={
+                            cutFrom
+                              ? undefined
+                              : "Use this picture as the front view? The front view is the canonical identity, sent with every shot. A front view already in the set is replaced and stays in your pictures."
+                          }
                         >
                           <input type="hidden" name="projectSlug" value={props.projectSlug} />
                           <input type="hidden" name="characterId" value={subject.id} />
                           <input type="hidden" name="attemptId" value={v.attempt.id} />
+                          {cutFrom ? null : <input type="hidden" name="confirmReplace" value="1" />}
                           <Button
                             type="submit"
                             size="sm"
                             data-testid={cutFrom ? "use-as-cutout" : "use-as-canonical"}
                           >
-                            {cutFrom ? "Use as Cutout" : "Use as Canonical"}
+                            {cutFrom ? "Use as Cutout" : "Use as front view (canonical)"}
                           </Button>
                         </ActionForm>
                         <ActionForm

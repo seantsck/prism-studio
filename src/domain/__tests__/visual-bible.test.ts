@@ -53,7 +53,9 @@ describe("Visual Bible domain", () => {
     const c = data.characters[0]!;
     const vb = visualBibleReadiness({ ...data, identityRefs: [], assets: [] }, c.id);
     expect(vb.done).toBe(0);
-    expect(vb.items.find((i) => i.key === "canonical")!.suggestion).toMatch(/defines this Character's face/);
+    expect(vb.items.find((i) => i.key === "canonical")!.suggestion).toMatch(
+      /front view in the reference set is the canonical identity/,
+    );
     expect(vb.items.every((i) => i.suggestion !== null || i.done)).toBe(true);
   });
   it("a Continuity Lock is unchanged by a canonical identity: the frozen images are sent, in frozen order", () => {

@@ -94,7 +94,7 @@ import { deleteFromTrash, emptyTrash, moveToTrash, restoreFromTrash } from "../t
 import { purgeExpiredTrash } from "../trash";
 import { trashOf } from "@/domain/trash";
 import { referenceStudioState } from "../reference-studio";
-import { autoAddMadeViews } from "../auto-add-views";
+import { autoAddMadeViews, syncCanonicalToFront } from "../auto-add-views";
 import { makeReferenceViews } from "../reference-view-actions";
 import { quoteReferenceImage, reviewReferenceImage, uploadReferencePhoto } from "../reference-studio-actions";
 import { replaceLookReference, saveAsCharacterReference, startSubjectImage } from "../subject-image-actions";
@@ -592,8 +592,10 @@ describe("making, reviewing and promoting", () => {
       },
     );
     const state = await referenceStudioState(await data(), `character:${yumeko.id}`);
-    expect(state.selected!.filledSlots).toEqual(["three_quarter"]);
+    // the canonical identity is the front view: choosing it fills the front view too
+    expect(state.selected!.filledSlots).toEqual(["front", "three_quarter"]);
     expect(state.takes.find((t) => t.attemptId === first.attempt.id)!.roles).toEqual([
+      "Front reference",
       "Three quarter reference",
       "Canonical identity",
     ]);
@@ -866,7 +868,7 @@ describe("where a real model can be used, the Studio offers no test model and sh
       referenceStudioState(await data(), `character:${yumeko.id}`),
     );
     expect(state.takes.map((t) => [t.attemptId, t.test, t.roles])).toEqual([
-      [first.attempt.id, true, ["Canonical identity"]],
+      [first.attempt.id, true, ["Front reference", "Canonical identity"]],
     ]);
     expect(state.takes.some((t) => t.attemptId === second.attempt.id)).toBe(false);
     expect(state.images.filter((i) => i.test).map((i) => i.canonical)).toEqual([true]);
@@ -958,7 +960,8 @@ describe("a Character's reference set", () => {
     const frontTake = front.outputs[0]!.asset.id;
     expect(await put(yumeko.id, "front", { attemptId: front.attempt.id })).toMatchObject({
       ok: false,
-      error: "Yumeko already has a front. Confirm to replace it (the old image stays in the library).",
+      error:
+        "Yumeko already has a front view (the canonical identity). Confirm to replace it (the old image stays in the library).",
     });
     expect(await put(yumeko.id, "front", { attemptId: front.attempt.id, confirmReplace: "1" })).toEqual({
       ok: true,
@@ -1019,13 +1022,33 @@ describe("a Character's reference set", () => {
     expect(refs.filter((r) => r.slot === "front")).toHaveLength(1);
   });
 
+  it("the canonical identity is brought in line with the front view (unless it is locked)", async () => {
+    const { yumeko, photo, front } = await scene();
+    expect(await put(yumeko.id, "front", { attemptId: front.attempt.id })).toEqual({ ok: true });
+    const d = await data();
+    const canonical = d.identityRefs.find(
+      (r) =>
+        r.characterId === yumeko.id && (r.metadata as { visualRole?: string }).visualRole === "canonical",
+    )!;
+    // an older canonical (set before the rule) that differs from the front view
+    await repo.upsert(d.project.id, "identityRefs", { ...canonical, assetId: photo });
+    expect(await syncCanonicalToFront(await data(), yumeko.id)).toBe(true);
+    const after = (await data()).identityRefs.find((r) => r.id === canonical.id)!;
+    expect(after.assetId).toBe(front.outputs[0]!.asset.id);
+    expect(await syncCanonicalToFront(await data(), yumeko.id)).toBe(false);
+    // a locked canonical is never changed
+    const d2 = await data();
+    await repo.upsert(d2.project.id, "identityRefs", { ...after, assetId: photo, locked: true });
+    expect(await syncCanonicalToFront(await data(), yumeko.id)).toBe(false);
+  });
+
   it("Studio takes alone are never added by themselves", async () => {
     const { yumeko } = await scene();
     expect(await autoAddMadeViews(await data(), yumeko.id)).toEqual([]);
   });
 
-  it("a canonical the creator chose is kept when the front view goes in", async () => {
-    const { yumeko, photo } = await viewsScene("front");
+  it("the front view going in becomes the canonical, replacing an older one", async () => {
+    const { yumeko, photo, of } = await viewsScene("front");
     const d = await data();
     await repo.upsert(d.project.id, "identityRefs", {
       id: "canonical-chosen-2",
@@ -1042,10 +1065,10 @@ describe("a Character's reference set", () => {
       refs
         .filter((r) => (r.metadata as { visualRole?: string }).visualRole === "canonical")
         .map((r) => r.assetId),
-    ).toEqual([photo]);
+    ).toEqual([of("portrait")]);
   });
 
-  it("from a Character's page (keepCanonical), the front view fills its own slot and keeps a canonical the creator chose", async () => {
+  it("adding the front view always makes it the canonical identity", async () => {
     const { yumeko, photo, front } = await scene();
     // the creator made the photo canonical first ("Make canonical"); the front slot is still empty
     expect(await put(yumeko.id, "three_quarter", { assetId: photo })).toEqual({ ok: true });
@@ -1071,7 +1094,7 @@ describe("a Character's reference set", () => {
     });
     const refs = (await data()).identityRefs.filter((r) => r.characterId === yumeko.id);
     expect(refs.find((r) => r.slot === "front")!.assetId).toBe(front.outputs[0]!.asset.id);
-    expect(await canonicals()).toEqual([photo]);
+    expect(await canonicals()).toEqual([front.outputs[0]!.asset.id]);
   });
 
   it("from a Character's page with no canonical yet, the front view still becomes the canonical", async () => {

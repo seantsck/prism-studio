@@ -378,7 +378,6 @@ export function ViewChecklist({
                         <input type="hidden" name="characterId" value={characterId} />
                         <input type="hidden" name="attemptId" value={v.newer.attemptId} />
                         <input type="hidden" name="view" value={v.id} />
-                        <input type="hidden" name="keepCanonical" value="1" />
                         <input type="hidden" name="confirmReplace" value="1" />
                         <Button type="submit" size="sm" data-testid="reference-view-use-newer-button">
                           Use the new take
@@ -415,7 +414,6 @@ export function ViewChecklist({
                         <input type="hidden" name="characterId" value={characterId} />
                         <input type="hidden" name="attemptId" value={v.attemptId} />
                         <input type="hidden" name="view" value={v.id} />
-                        <input type="hidden" name="keepCanonical" value="1" />
                         <Button type="submit" size="sm" data-testid="reference-view-add-button">
                           Add to the set
                         </Button>

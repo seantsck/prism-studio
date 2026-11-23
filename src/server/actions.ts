@@ -386,6 +386,22 @@ async function uploadIdentityRef_impl(form: FormData) {
   const file = hasFile(form, "file");
   if (!file) throw new UserFacingError("Choose an image to upload.");
   const slot = str(form, "slot") as (typeof IDENTITY_SLOTS)[number];
+  const characterId = str(form, "characterId");
+  // a view of the reference set kept in an additional slot (right profile, half body) is named by `view`
+  const view = str(form, "view");
+  const existing = data.identityRefs.find(
+    (r) =>
+      r.characterId === characterId &&
+      (slot !== "additional"
+        ? r.slot === slot && !(r.metadata as { visualRole?: unknown }).visualRole
+        : !!view && r.slot === "additional" && (r.metadata as { view?: unknown }).view === view),
+  );
+  if (
+    existing?.locked &&
+    existing.assetId &&
+    data.assets.some((a) => a.id === existing.assetId && a.objectPath)
+  )
+    throw new UserFacingError("This picture is locked. Unlock the reference set to change it.");
   const { asset } = await ingestUpload(data, repo.currentUserId(), file, {
     allowed: ["image"],
     purpose: "identity_ref",
@@ -398,17 +414,13 @@ async function uploadIdentityRef_impl(form: FormData) {
     await discardUpload(asset);
     throw err;
   }
-  const characterId = str(form, "characterId");
-  const existing = data.identityRefs.find(
-    (r) => r.characterId === characterId && r.slot === slot && slot !== "additional",
-  );
   await repo.upsert(data.project.id, "identityRefs", {
     id: existing?.id ?? randomUUID(),
     characterId,
     slot,
     assetId: asset.id,
-    label: str(form, "label") || slot.replace("_", " "),
-    metadata: {},
+    label: str(form, "label") || (view ? view.replace("_", " ") : slot.replace("_", " ")),
+    metadata: view && slot === "additional" ? { view } : {},
     locked: false,
   });
   refresh(slug);
