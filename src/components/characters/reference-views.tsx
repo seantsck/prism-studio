@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { Panel } from "@/components/ui";
 import { REFERENCE_PHOTOS_BEST } from "@/domain/generation/reference-plan";
+import { TEST_ENGINE_NOTE, VIEW_ENGINE_NOTES } from "@/domain/generation/view-engines";
 import type { ViewsQuote } from "@/server/reference-views";
+import { cn } from "@/lib/utils";
 
 import { ViewChecklist, type ViewEngine, type ViewState } from "./view-checklist";
 
@@ -84,6 +86,46 @@ export function ReferenceViewsPanel({
                   ? "The other views are made from the front view, so they keep its face."
                   : `With no photos, the front view is made from ${name}'s description. Make it first: the other views are then made from it and keep its face. Made all at once from the description, each view is drawn separately and faces can differ.`}
             </p>
+            <div className="space-y-1.5 pt-3" data-testid="reference-engines">
+              <div className="font-medium">Which engine?</div>
+              <ul className="space-y-1.5">
+                {[...engines]
+                  .sort((a, b) => Number(b.available) - Number(a.available))
+                  .map((e) => {
+                    const note = VIEW_ENGINE_NOTES[e.value] ?? (e.paid ? null : TEST_ENGINE_NOTE);
+                    if (!note) return null;
+                    return (
+                      <li
+                        key={e.value}
+                        className={cn(
+                          "rounded-[3px] border px-2 py-1",
+                          e.value === quote.model ? "border-accent/60 bg-accent/5" : "border-line",
+                          !e.available && "opacity-60",
+                        )}
+                        data-testid="reference-engine"
+                        data-engine={e.value}
+                      >
+                        <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+                          <span className="font-medium">
+                            {e.label}
+                            {e.value === suggestedEngine ? (
+                              <span className="ml-1 text-[11px] font-normal text-accent">suggested</span>
+                            ) : null}
+                          </span>
+                          <span className="text-[11px] text-muted">{note.when}</span>
+                        </div>
+                        <p className="text-[11.5px] text-muted">{note.why}</p>
+                        {!e.available ? (
+                          <p className="text-[11px] text-warn">Not available: {e.unavailable}.</p>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+              </ul>
+              <p className="text-[11px] text-faint">
+                Each view&apos;s exact price for the engine picked is shown beside it.
+              </p>
+            </div>
           </div>
 
           <ViewChecklist

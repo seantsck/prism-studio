@@ -8,7 +8,7 @@ import { Button } from "@/components/ui";
 import { RefreshWhileActive } from "@/components/images/refresh-while-active";
 import { userPrice } from "@/domain/pricing/user-price";
 import { makeReferenceViews } from "@/server/reference-view-actions";
-import { addToReferenceSet } from "@/server/visual-bible-actions";
+import { addToReferenceSet, addViewsToReferenceSet } from "@/server/visual-bible-actions";
 import { cn } from "@/lib/utils";
 
 export type ViewState = "in_set" | "making" | "made" | "missing";
@@ -192,6 +192,8 @@ export function ViewChecklist({
   const missingOnes = makeable.filter((v) => v.state === "missing");
   const all = missingOnes.length > 0 && missingOnes.every(isPicked);
 
+  // finished views not yet in the set, each with the take to add
+  const madeToAdd = views.filter((v) => v.state === "made" && v.attemptId && !waitingIds.has(v.id));
   const count = (s: ViewState) => views.filter((v) => v.state === s).length;
   const done = count("in_set") + count("made");
   const making = count("making");
@@ -273,6 +275,25 @@ export function ViewChecklist({
       ) : null}
 
       <EnginePicker engine={engine} engines={engines} suggested={suggestedEngine} />
+
+      {madeToAdd.length > 1 ? (
+        <ActionForm
+          action={addViewsToReferenceSet}
+          successMessage=""
+          className="flex flex-wrap items-center gap-2"
+          data-testid="reference-views-add-all"
+        >
+          <input type="hidden" name="projectSlug" value={slug} />
+          <input type="hidden" name="characterId" value={characterId} />
+          {madeToAdd.map((v) => (
+            <input key={v.id} type="hidden" name="viewTake" value={`${v.id}:${v.attemptId}`} />
+          ))}
+          <Button type="submit" variant="primary" size="sm" data-testid="reference-views-add-all-button">
+            Add all {madeToAdd.length} made views to the set
+          </Button>
+          <span className="text-[11px] text-muted">They fill in the Visual Bible below.</span>
+        </ActionForm>
+      ) : null}
 
       <ul className="space-y-1" data-testid="reference-plan-views">
         {views.map((v) => {
@@ -449,8 +470,8 @@ function EnginePicker({
   const picking = pending && pending !== engine ? pending : null;
   if (engines.length === 0) return null;
   return (
-    <label className="flex flex-wrap items-center gap-2 text-[11.5px]">
-      <span className="text-muted">Engine</span>
+    <label className="flex items-center gap-2 text-[11.5px]">
+      <span className="shrink-0 text-muted">Engine</span>
       <select
         value={picking ?? engine}
         onChange={(e) => {
@@ -460,8 +481,7 @@ function EnginePicker({
           setPending(e.target.value);
           router.replace(`${pathname}?${next.toString()}#reference-views`, { scroll: false });
         }}
-        className="h-7 text-[12px]"
-        style={{ width: "auto", maxWidth: "20rem" }}
+        className="min-w-0 flex-1 text-[12px]"
         aria-label="Engine for the views"
         data-testid="reference-views-engine"
       >
