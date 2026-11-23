@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { GenerationSubmitError } from "@/data/generation-repository";
+import { isGenerationSubmitError } from "@/data/generation-repository";
 import { userPrice } from "@/domain/pricing/user-price";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { requireUser } from "./auth";
@@ -10,9 +10,11 @@ import { requireProjectFresh } from "./repo";
 import { prepareReferenceView } from "./reference-views";
 
 /**
- * Make one reference view, or every view still missing, from a Character's page (src/server/reference-views.ts). The
+ * Make one reference view, or several, from a Character's page (src/server/reference-views.ts). The
  * views are priced again here, exactly as they were shown; the creator's confirmed total must cover that, or nothing
- * starts. All of them are prepared before any is queued, so a refusal starts none. Each view is its own ordinary
+ * starts. All of them are prepared before any is queued, so a refusal starts none. The project runs only so many
+ * generations at once: the views that do not fit are returned as `waiting` (not started, not charged) and the page
+ * sends them again as slots free up. Each view is its own ordinary
  * generation: a take in the Reference Studio, added to the set by the creator.
  */
 
@@ -30,7 +32,7 @@ async function makeReferenceViews_impl(form: FormData) {
   const batch = str(form, "batchId").slice(0, 64) || crypto.randomUUID();
   const userId = user.kind === "supabase" ? user.id : null;
 
-  const prepared = [];
+  const prepared: Awaited<ReturnType<typeof prepareReferenceView>>[] = [];
   for (const id of viewIds) {
     const p = await prepareReferenceView(data, character, id, userId, `views-${batch}-${id}`);
     if (!p.prepared.ok) throw new UserFacingError(`${p.view.label}: ${p.prepared.reasons[0]}`);
@@ -49,38 +51,54 @@ async function makeReferenceViews_impl(form: FormData) {
   }
   const generation = await getGenerationRepo();
   const started: string[] = [];
+  const waiting: string[] = [];
   let held: string | null = null;
   for (const p of prepared) {
     if (!p.prepared.ok) continue;
+    if (held) {
+      waiting.push(p.view.id);
+      continue;
+    }
     try {
       await generation.createSubjectImageAttempt(p.prepared.input);
-      started.push(p.view.label);
+      started.push(p.view.id);
     } catch (err) {
-      if (!(err instanceof GenerationSubmitError)) throw err;
-      // the project's limit on generations running at once: the rest wait, nothing is charged for them
+      if (!isGenerationSubmitError(err)) throw err;
+      // the project's limit on generations running at once: the rest wait for a free slot, nothing is charged for them
       if (err.code === "project_busy" || err.code === "throttled") {
         held = err.message;
-        break;
+        waiting.push(p.view.id);
+        continue;
       }
       throw new UserFacingError(err.message);
     }
   }
-  revalidatePath(`/projects/${slug}`, "layout");
-  if (started.length === 0)
-    throw new UserFacingError(
-      `Nothing was started: ${held ?? "try again in a moment."} Nothing was charged.`,
-    );
-  const rest = prepared.length - started.length;
-  return {
-    ok: true as const,
+  if (started.length) revalidatePath(`/projects/${slug}`, "layout");
+  const label = (ids: string[]) =>
+    ids.length === 1
+      ? `the ${(prepared.find((p) => p.view.id === ids[0])?.view.label ?? ids[0]!).toLowerCase()} view`
+      : `${ids.length} views`;
+  const result: ReferenceViewsResult = {
+    ok: true,
+    started,
+    waiting,
     message:
-      `Making ${started.length === 1 ? `the ${started[0]!.toLowerCase()} view` : `${started.length} views`}` +
-      (rest
-        ? `. The other ${rest} wait (${held}) and are not charged: press again once these finish.`
-        : ". They appear in the Reference Studio as they finish."),
+      started.length === 0
+        ? `Every slot is busy: ${label(waiting)} ${waiting.length === 1 ? "waits and starts" : "wait and start"} on their own as slots free up. Nothing is charged until each starts.`
+        : `Making ${label(started)}` +
+          (waiting.length
+            ? `. ${waiting.length === 1 ? "One more waits" : `${waiting.length} more wait`} for a free slot and start on their own while this page is open; each is charged only when it starts.`
+            : ". They appear in the Reference Studio as they finish."),
   };
+  return result;
 }
 
-export async function makeReferenceViews(form: FormData): Promise<ActionResult> {
-  return runAction(() => makeReferenceViews_impl(form), { name: "makeReferenceViews" });
+/** What starting views says: which views started now, and which wait for a free slot (not started, not charged). */
+export type ReferenceViewsResult =
+  { ok: true; message: string; started: string[]; waiting: string[] } | Exclude<ActionResult, { ok: true }>;
+
+export async function makeReferenceViews(form: FormData): Promise<ReferenceViewsResult> {
+  return (await runAction(() => makeReferenceViews_impl(form), {
+    name: "makeReferenceViews",
+  })) as ReferenceViewsResult;
 }

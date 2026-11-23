@@ -363,6 +363,13 @@ uses it for (`uses`, with a tip for the physical description and the continuity 
 matter for the size is marked optional and shown quieter. Before 0067 is applied, a chosen size is used for that
 request but not remembered (`saveCharacterWithSize` saves the rest and says so).
 
+The project runs only so many generations at once (`PRISM_STUDIO_GENERATION_MAX_ACTIVE_PER_PROJECT`, 3 by default).
+Ticked views that do not fit are not started and not charged: they wait in the page ("waiting for a free slot") and
+start on their own, at the confirmed prices, as slots free up while the page is open (Cancel waiting drops them). A
+summary above the list says how many are done, being made, waiting and failed, and how many of the project's slots
+are busy; the page refreshes itself while anything is being made or waiting. A view whose newest try failed says so
+and can be ticked again. The ticks are the creator's and never change on their own.
+
 Once a sheet has the creator's words, the button is **Refine with Prism**: Prism reads the sheet as it is, the
 creator's edits included, keeps them, and brings the other fields in line (`edited`); the result is reviewed like any
 suggestion. When the creator has edited the sheet since Prism's last suggestion, the panel says so and makes Refine

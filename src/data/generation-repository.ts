@@ -41,6 +41,19 @@ export class GenerationSubmitError extends Error {
   }
 }
 
+/**
+ * True for a GenerationSubmitError, even one thrown by another copy of this module (the in-memory repository can be
+ * created by a different server bundle than the action catching the error, and then `instanceof` is false).
+ */
+export function isGenerationSubmitError(err: unknown): err is GenerationSubmitError {
+  return (
+    err instanceof GenerationSubmitError ||
+    (err instanceof Error &&
+      err.name === "GenerationSubmitError" &&
+      typeof (err as { code?: unknown }).code === "string")
+  );
+}
+
 /** `stale_animation_source`: the Shot's selected Production Frame is not the one the animation was prepared from. */
 export const STALE_ANIMATION_SOURCE_MESSAGE =
   "The Production Frame changed while this animation was being submitted. Review the current Production Frame and animate again.";

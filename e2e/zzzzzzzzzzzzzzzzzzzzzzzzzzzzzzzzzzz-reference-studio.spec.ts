@@ -1892,19 +1892,33 @@ test("ZE: a character's page makes the ticked reference views, one by one or all
     "making",
     { timeout: 30_000 },
   );
-  // all at once: the five still missing (ticked again when the page comes back)
-  await expect(page.getByTestId("reference-views-make")).toContainText("Make 5 views");
+  // the summary says what is going on
+  // the summary says what is going on, and the page keeps itself up to date
+  await expect(page.getByTestId("reference-views-progress")).toBeVisible();
+  // the ticks are the creator's: the five unticked stay unticked while the page refreshes
+  await page.waitForTimeout(3500);
+  await expect(
+    page.locator('[data-testid="reference-view"][data-picked="1"]:not([data-view="front"])'),
+  ).toHaveCount(0);
+  // all at once: more than the project runs at once (3), so what doesn't fit waits and starts on its own
+  await page.getByTestId("reference-views-select-all").click();
+  await expect(page.getByTestId("reference-views-make")).toHaveText(/Make [56] views/);
   await page.getByTestId("reference-views-make").click();
+  await expect(page.getByTestId("reference-views-note")).toContainText(/Making \d views/);
+  // this test server has no image provider, so each try fails quickly and frees its slot: every view gets its try,
+  // and none is left waiting or untried
   await expect
-    .poll(async () => page.locator('[data-testid="reference-view"][data-state="making"]').count(), {
-      timeout: 30_000,
-    })
-    .toBeGreaterThan(1);
-  // nothing is made twice: every view is either being made or still waiting its turn
-  expect(
-    (await page.locator('[data-testid="reference-view"][data-state="making"]').count()) +
-      (await page.locator('[data-testid="reference-view"][data-state="missing"]').count()),
-  ).toBe(6);
+    .poll(
+      async () =>
+        page
+          .locator(
+            '[data-testid="reference-view"]:is([data-state="making"],[data-state="made"],[data-state="in_set"],[data-failed="1"])',
+          )
+          .count(),
+      { timeout: 60_000 },
+    )
+    .toBe(6);
+  await expect(page.getByTestId("reference-views-waiting")).toHaveText("0 waiting", { timeout: 30_000 });
 });
 
 test("ZF: the size of part decides what Prism fills in, and marks the rest optional", async ({ page }) => {
