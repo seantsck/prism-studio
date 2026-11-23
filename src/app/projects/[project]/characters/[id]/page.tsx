@@ -130,6 +130,22 @@ export default async function CharacterPage({
       if (t.createdAt > current) viewNewer[view] = { attemptId: t.attemptId, url: t.asset.url };
     }
   }
+  // every finished take of each view that is not the picture in it: the options to choose from, newest first
+  const viewTakes: Record<string, Array<{ attemptId: string; url: string | null; engine: string }>> = {};
+  for (const t of [...pictures.takes].sort((a, b) => b.createdAt.localeCompare(a.createdAt))) {
+    const view = referenceSetViewOf(t.settings.intent);
+    if (!view || t.status !== "succeeded" || t.rejected || !t.asset || t.asset.id === slotAsset[view]?.id) continue;
+    (viewTakes[view] ??= []).push({ attemptId: t.attemptId, url: t.asset.url, engine: t.modelLabel });
+  }
+  // each view's picture locked in place, and the generations still running for each view (to stop them)
+  const viewLocked: Record<string, boolean> = {};
+  for (const v of REFERENCE_SET_VIEWS) viewLocked[v.id] = !!(slots[v.id]?.ref?.locked && slotAsset[v.id]);
+  const viewJobs: Record<string, string[]> = {};
+  for (const a of images.attempts) {
+    const view = referenceSetViewOf((a.attempt.modelSettings as { intent?: string }).intent);
+    if (view && a.job && IN_FLIGHT.has(a.job.status) && a.job.status !== "cancel_requested")
+      (viewJobs[view] ??= []).push(a.job.id);
+  }
   // a view whose newest try failed says so (it can be ticked and made again)
   const lastTry: Record<string, { at: string; error: string | null }> = {};
   for (const t of pictures.takes) {
@@ -370,6 +386,9 @@ export default async function CharacterPage({
           states={viewStates}
           failures={viewFailures}
           newer={viewNewer}
+          takes={viewTakes}
+          locked={viewLocked}
+          jobs={viewJobs}
           pictures={viewPictures}
           engines={engines}
           suggestedEngine={SUGGESTED_VIEWS_MODEL}

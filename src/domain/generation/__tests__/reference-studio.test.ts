@@ -92,7 +92,7 @@ describe("how one image can be changed", () => {
     const quality = editInstruction("lighting_quality", "");
     expect(quality.ok && quality.instruction).toMatch(/Do not change the content of the picture\.$/);
     const clean = editInstruction("clean_background", "");
-    expect(clean.ok && clean.instruction).toMatch(/plain light-grey studio backdrop/);
+    expect(clean.ok && clean.instruction).toMatch(/plain, solid white studio backdrop/);
   });
 
   it("a wardrobe change takes typed words or one of the Character's Looks", () => {

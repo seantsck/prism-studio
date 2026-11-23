@@ -86,10 +86,10 @@ export const SUBJECT_IMAGE_INTENT_LABEL: Record<SubjectImageIntent, string> = {
  * person leaks into the Shots made from it, and a background can be removed cleanly from it.
  */
 const STUDIO =
-  "Background: one plain, solid, neutral light-grey colour, evenly lit, with no scenery, objects, pattern, gradient or text. Soft even studio light, natural colour, sharp focus.";
+  "Background: plain, solid, pure white (#FFFFFF) seamless studio backdrop, evenly lit edge to edge, with no scenery, objects, pattern, gradient, shadow on the backdrop or text. Soft even studio light, natural colour, sharp focus.";
 /** Sent with a reference made FROM images: their surroundings are never copied, only the person. */
 const STUDIO_FROM_IMAGES =
-  "Do not copy the surroundings of the reference images: show the person on the plain light-grey background described above.";
+  "Do not copy the surroundings of the reference images: show the person on the plain white background described above.";
 const SOLO = "One person only. No text, watermark or border.";
 const EMPTY_PLACE = "No text, watermark or border.";
 
@@ -135,7 +135,7 @@ const COMPOSITION: Record<SubjectImageIntent, string[]> = {
     SOLO,
   ],
   full_body: [
-    "Full-body view: front, neutral standing pose, arms relaxed at the sides; head to shoes with space above and below, nothing cropped.",
+    "Full-length view of the WHOLE person: front, neutral standing pose, arms relaxed at the sides. The entire body is in the picture from the top of the head down to the shoes, both feet fully visible standing on the floor, with clear space above the head and below the feet; nothing is cropped. A tall, head-to-toe framing, not a portrait or a half body.",
     STUDIO,
     SOLO,
   ],
@@ -556,7 +556,7 @@ export function buildSubjectImagePlan(
   const negative = [
     "text, captions, watermark, logo, extra limbs, duplicated person",
     ...(!edit && input.subject.kind === "character" && COMPOSITION[input.subject.intent].includes(STUDIO)
-      ? ["scenery or a room behind the person, busy or patterned background, gradient background"]
+      ? ["scenery or a room behind the person, busy or patterned background, gradient background, grey or coloured background"]
       : []),
   ];
   sections.push({ key: "negative_constraints", title: "Avoid", lines: negative });

@@ -23,6 +23,9 @@ export function ReferenceViewsPanel({
   states,
   failures,
   newer,
+  takes,
+  locked,
+  jobs,
   pictures,
   engines,
   suggestedEngine,
@@ -41,6 +44,12 @@ export function ReferenceViewsPanel({
   failures: Record<string, string>;
   /** a newer take of a view already in the set */
   newer: Record<string, { attemptId: string; url: string | null }>;
+  /** every finished take of each view, other than the picture in it (the options to choose from) */
+  takes: Record<string, Array<{ attemptId: string; url: string | null; engine: string }>>;
+  /** views whose picture is locked in place */
+  locked: Record<string, boolean>;
+  /** generations still running for each view (to stop them) */
+  jobs: Record<string, string[]>;
   /** each view's picture: the one in the set, or the newest finished take (`attemptId`) waiting to be added */
   pictures: Record<string, { url: string | null; attemptId: string | null }>;
   /** the engines that can make views; `quote` is priced with the chosen one (`quote.model`) */
@@ -144,6 +153,9 @@ export function ReferenceViewsPanel({
               pictureUrl: pictures[v.id]?.url ?? null,
               attemptId: pictures[v.id]?.attemptId ?? null,
               newer: newer[v.id] ?? null,
+              takes: takes[v.id] ?? [],
+              locked: !!locked[v.id],
+              jobIds: jobs[v.id] ?? [],
             }))}
             paid={quote.paid}
             engine={quote.model}

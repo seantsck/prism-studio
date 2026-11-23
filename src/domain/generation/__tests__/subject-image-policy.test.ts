@@ -258,7 +258,7 @@ describe("subject-image policy v2: what the images are FOR", () => {
       expect(plan.positive).not.toMatch(/Guardrails|Canon|vehicle door|Never /);
       // every reference is made on one plain, solid, neutral background
       expect(lines(plan, "composition").join(" ")).toMatch(
-        /Background: one plain, solid, neutral light-grey colour, evenly lit, with no scenery/,
+        /Background: plain, solid, pure white \(#FFFFFF\) seamless studio backdrop, evenly lit edge to edge, with no scenery/,
       );
       expect(lines(plan, "negative_constraints").join(" ")).toMatch(/busy or patterned background/);
       // made from images: their surroundings are never copied

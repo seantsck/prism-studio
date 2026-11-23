@@ -7,8 +7,8 @@ import { ActionForm } from "@/components/action-form";
 import { Button } from "@/components/ui";
 import { RefreshWhileActive } from "@/components/images/refresh-while-active";
 import { userPrice } from "@/domain/pricing/user-price";
-import { makeReferenceViews } from "@/server/reference-view-actions";
-import { addToReferenceSet, addViewsToReferenceSet } from "@/server/visual-bible-actions";
+import { makeReferenceViews, stopReferenceViews } from "@/server/reference-view-actions";
+import { addToReferenceSet, addViewsToReferenceSet, setViewLocked } from "@/server/visual-bible-actions";
 import { cn } from "@/lib/utils";
 
 export type ViewState = "in_set" | "making" | "made" | "missing";
@@ -28,7 +28,19 @@ export interface ChecklistView {
   attemptId?: string | null;
   /** a newer take of a view already in the set, to use instead of the picture in it */
   newer?: { attemptId: string; url: string | null } | null;
+  /** every finished take of this view other than the picture in it: the options to choose from */
+  takes?: Array<{ attemptId: string; url: string | null; engine: string }>;
+  /** its picture is locked in place: not made again, not replaced */
+  locked?: boolean;
+  /** its generations still running (to stop them) */
+  jobIds?: string[];
 }
+
+/** "Front" → "front view", "3/4 view" → "3/4 view", "Left profile" → "left profile view". */
+const viewName = (label: string) => {
+  const l = label.toLowerCase();
+  return l.endsWith("view") ? l : `${l} view`;
+};
 
 /** An engine that can make the views ("provider/modelId"). */
 export interface ViewEngine {
@@ -46,6 +58,8 @@ interface Waiting {
   /** the engine they were confirmed with */
   model: string;
   items: { id: string; costUsd: number }[];
+  /** they wait for this new front view and are made from it */
+  afterFront?: string;
 }
 
 const storeKey = (characterId: string) => `prism-reference-views-waiting:${characterId}`;
@@ -135,6 +149,7 @@ export function ViewChecklist({
     (v) =>
       (v.state === "missing" || v.state === "made" || v.state === "in_set") &&
       v.costUsd != null &&
+      !v.locked &&
       !waitingIds.has(v.id),
   );
   // a missing view starts ticked, a made one unticked; what the creator changed stays as they left it
@@ -145,7 +160,13 @@ export function ViewChecklist({
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
 
   const send = useCallback(
-    async (items: { id: string; costUsd: number }[], batch: string, model: string, auto: boolean) => {
+    async (
+      items: { id: string; costUsd: number }[],
+      batch: string,
+      model: string,
+      auto: boolean,
+      afterFront?: string,
+    ) => {
       setSending(true);
       try {
         const form = new FormData();
@@ -154,12 +175,22 @@ export function ViewChecklist({
         form.set("views", items.map((i) => i.id).join(","));
         form.set("batchId", batch);
         form.set("model", model);
+        if (afterFront) form.set("fromFront", afterFront);
         if (paid) form.set("confirmedTotalUsd", items.reduce((s, i) => s + i.costUsd, 0).toFixed(4));
         const res = await makeReferenceViews(form);
         if (res.ok) {
           const left = items.filter((i) => res.waiting.includes(i.id));
-          setWaiting(left.length ? { batch, model, items: left } : null);
+          setWaiting(
+            left.length ? { batch, model, items: left, afterFront: res.afterFront ?? afterFront } : null,
+          );
           if (!auto || res.started.length) setNote({ ok: true, text: res.message });
+          // what was sent is no longer ticked (a view made again is not made a third time by the next press)
+          if (!auto)
+            setToggled((t) => {
+              const next = new Set(t);
+              for (const i of items) next.delete(i.id);
+              return next;
+            });
         } else {
           setWaiting(null);
           setNote({ ok: false, text: res.error });
@@ -180,7 +211,7 @@ export function ViewChecklist({
     if (!waiting || sending || activeInProject >= atOnce) return;
     if (Date.now() - lastTry.current < 4000) return;
     lastTry.current = Date.now();
-    void send(waiting.items, waiting.batch, waiting.model, true);
+    void send(waiting.items, waiting.batch, waiting.model, true, waiting.afterFront);
   }, [waiting, sending, activeInProject, atOnce, views, send]);
 
   const priceOf = (usd: number) => (paid ? `$${(userPrice(usd) ?? 0).toFixed(2)}` : "free");
@@ -279,6 +310,34 @@ export function ViewChecklist({
         </div>
       ) : null}
 
+      {busy ? (
+        <ActionForm
+          action={stopReferenceViews}
+          successMessage=""
+          className="flex flex-wrap items-center gap-2"
+          confirmMessage={`Stop making ${making + queued === 1 ? "this view" : `these ${making + queued} views`}? Views waiting their turn are not started or charged. A view the engine has already started may still be charged by it.`}
+          onResult={(r) => {
+            if (r.ok) {
+              setWaiting(null);
+              setNote({ ok: true, text: r.message ?? "Stopped." });
+            }
+          }}
+          data-testid="reference-views-stop"
+        >
+          <input type="hidden" name="projectSlug" value={slug} />
+          <input type="hidden" name="characterId" value={characterId} />
+          {views.flatMap((v) =>
+            (v.jobIds ?? []).map((j) => <input key={j} type="hidden" name="jobId" value={j} />),
+          )}
+          <Button type="submit" size="sm" data-testid="reference-views-stop-button">
+            ■ Stop
+          </Button>
+          <span className="text-[11px] text-muted">
+            New views can be made once these finish or are stopped.
+          </span>
+        </ActionForm>
+      ) : null}
+
       <EnginePicker engine={engine} engines={engines} suggested={suggestedEngine} />
 
       {madeToAdd.length > 1 ? (
@@ -307,6 +366,8 @@ export function ViewChecklist({
           const can =
             (v.state === "missing" || v.state === "made" || v.state === "in_set") &&
             v.costUsd != null &&
+            !v.locked &&
+            !busy &&
             !isWaiting;
           const picked = can && isPicked(v);
           return (
@@ -357,7 +418,7 @@ export function ViewChecklist({
                         again: {priceOf(v.costUsd)}
                       </span>
                     ) : null}
-                    {v.newer ? (
+                    {v.newer && !v.locked ? (
                       <ActionForm
                         action={addToReferenceSet}
                         successMessage=""
@@ -384,8 +445,29 @@ export function ViewChecklist({
                         </Button>
                       </ActionForm>
                     ) : (
-                      <span className="text-[11.5px] text-faint">in the set</span>
+                      <span className="text-[11.5px] text-faint">
+                        {v.locked ? "locked in the set" : "in the set"}
+                      </span>
                     )}
+                    <ActionForm action={setViewLocked} successMessage="" quiet className="inline">
+                      <input type="hidden" name="projectSlug" value={slug} />
+                      <input type="hidden" name="characterId" value={characterId} />
+                      <input type="hidden" name="view" value={v.id} />
+                      <input type="hidden" name="locked" value={String(!v.locked)} />
+                      <Button
+                        type="submit"
+                        size="sm"
+                        title={
+                          v.locked
+                            ? "Unlock this view so it can be made again or replaced"
+                            : "Lock this picture in place: it is not made again or replaced"
+                        }
+                        data-testid="reference-view-lock"
+                        data-locked={v.locked ? "1" : "0"}
+                      >
+                        {v.locked ? "🔒 Unlock" : "Lock"}
+                      </Button>
+                    </ActionForm>
                   </span>
                 ) : v.state === "making" ? (
                   <span className="flex items-center gap-1 text-[11.5px] text-accent">
@@ -425,7 +507,9 @@ export function ViewChecklist({
                     )}
                   </span>
                 ) : isWaiting ? (
-                  <span className="text-[11.5px] text-muted">waiting for a free slot</span>
+                  <span className="text-[11.5px] text-muted">
+                    {waiting?.afterFront ? "waiting for the front view" : "waiting for a free slot"}
+                  </span>
                 ) : v.costUsd == null ? (
                   <span className="text-[11.5px] text-warn" title={v.problem ?? ""}>
                     {v.problem ?? "can't be made right now"}
@@ -441,6 +525,51 @@ export function ViewChecklist({
                   </span>
                 )}
               </div>
+              {!v.locked && (v.state === "in_set" || v.state === "made") && (v.takes?.length ?? 0) > 0 ? (
+                <div
+                  className="mt-1 flex flex-wrap items-center gap-1.5 pl-2 text-[11px] text-muted"
+                  data-testid="reference-view-takes"
+                >
+                  <span>Other takes:</span>
+                  {v
+                    .takes!.filter((t) => t.attemptId !== v.attemptId)
+                    .slice(0, 8)
+                    .map((t) => (
+                      <ActionForm
+                        key={t.attemptId}
+                        action={addToReferenceSet}
+                        successMessage=""
+                        quiet
+                        className="inline"
+                        confirmMessage={`Use this take (${t.engine}) as the ${v.label.toLowerCase()}? The one in the set now stays in your pictures.`}
+                      >
+                        <input type="hidden" name="projectSlug" value={slug} />
+                        <input type="hidden" name="characterId" value={characterId} />
+                        <input type="hidden" name="attemptId" value={t.attemptId} />
+                        <input type="hidden" name="view" value={v.id} />
+                        <input type="hidden" name="confirmReplace" value="1" />
+                        <button
+                          type="submit"
+                          className="block overflow-hidden rounded-[2px] border border-line hover:border-accent"
+                          title={`Use this take (${t.engine})`}
+                          data-testid="reference-view-take"
+                        >
+                          {t.url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={t.url}
+                              alt={`${v.label}, ${t.engine}`}
+                              className="h-10 w-8 object-cover"
+                            />
+                          ) : (
+                            <span className="block h-10 w-8" />
+                          )}
+                        </button>
+                      </ActionForm>
+                    ))}
+                  <span className="text-faint">click one to use it</span>
+                </div>
+              ) : null}
             </li>
           );
         })}
@@ -451,7 +580,7 @@ export function ViewChecklist({
           <Button
             type="button"
             variant="primary"
-            disabled={chosen.length === 0 || sending}
+            disabled={chosen.length === 0 || sending || busy}
             onClick={() =>
               void send(
                 chosen.map((v) => ({ id: v.id, costUsd: v.costUsd! })),
@@ -462,11 +591,13 @@ export function ViewChecklist({
             }
             data-testid="reference-views-make"
           >
-            {chosen.length === 0
-              ? views.every((v) => v.state === "in_set")
-                ? "Tick a view to make it again"
-                : "Tick the views to make"
-              : `Make ${chosen.length === 1 ? `the ${chosen[0]!.label.toLowerCase()} view` : `${chosen.length} views`} · ${paid ? `$${price.toFixed(2)}` : "free"}`}
+            {busy
+              ? `Making ${making + queued === 1 ? "1 view" : `${making + queued} views`}…`
+              : chosen.length === 0
+                ? views.every((v) => v.state === "in_set")
+                  ? "Tick a view to make it again"
+                  : "Tick the views to make"
+                : `Make ${chosen.length === 1 ? `the ${viewName(chosen[0]!.label)}` : `${chosen.length} views`} · ${paid ? `$${price.toFixed(2)}` : "free"}`}
           </Button>
           <p className="text-[11px] text-muted" data-testid="reference-views-total">
             {paid

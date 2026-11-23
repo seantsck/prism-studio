@@ -1,5 +1,9 @@
 import "server-only";
-import { REFERENCE_SET_VIEWS } from "@/domain/generation/reference-studio";
+import {
+  CHARACTER_PRESETS,
+  preferredFormat,
+  REFERENCE_SET_VIEWS,
+} from "@/domain/generation/reference-studio";
 import { REFERENCE_PHOTOS_BEST, REFERENCE_PLAN_MODEL } from "@/domain/generation/reference-plan";
 import { referenceOrigin } from "@/domain/generation/reference-integrity";
 import { isOffered } from "@/domain/generation/models/offered";
@@ -62,6 +66,11 @@ async function startingImages(data: ProjectData, character: Character) {
   return { photos, front };
 }
 
+/** True when the creator has their own photos of this Character (every view is then made from them). */
+export async function hasOwnPhotos(data: ProjectData, character: Character): Promise<boolean> {
+  return (await startingImages(data, character)).photos.length > 0;
+}
+
 /** The request a view would send, prepared exactly as the submission prepares it. */
 async function prepareView(
   data: ProjectData,
@@ -79,6 +88,13 @@ async function prepareView(
   f.set("model", model);
   f.set("sources", "chosen");
   for (const id of startAssetIds) f.append("startAssetId", id);
+  // a view is a tall picture (a full body must fit head to shoes): the preset's preferred shape the engine offers,
+  // never the engine's own first one (which can be a wide 21:9)
+  const ratio = preferredFormat(
+    CHARACTER_PRESETS.find((p) => p.intent === intent)?.ratios ?? ["2:3", "3:4", "9:16", "1:1"],
+    modelOf(model)?.capabilities.image?.aspectRatios ?? [],
+  );
+  if (ratio) f.set("aspectRatio", ratio);
   const req = await readSubjectImageForm(f, data, { startInlineWorker: false });
   const registry = getRegistry();
   return {
@@ -169,12 +185,22 @@ export async function prepareReferenceView(
   userId: string | null,
   key: string,
   model: string = SUGGESTED_VIEWS_MODEL,
+  /** made together with a new front view: start from that front picture (this Character's own take) */
+  fromFrontAssetId: string | null = null,
 ) {
   const v = REFERENCE_SET_VIEWS.find((x) => x.id === viewId);
   if (!v) throw new UserFacingError("Choose one of the reference views.");
   if (!modelOf(model)) throw new UserFacingError("Choose an engine for the views.");
   const { photos, front } = await startingImages(data, character);
-  const start = photos.length ? photos : v.id !== "front" && front ? [front] : [];
+  const start = photos.length
+    ? photos
+    : v.id === "front"
+      ? []
+      : fromFrontAssetId
+        ? [fromFrontAssetId]
+        : front
+          ? [front]
+          : [];
   const { prepared, registry, req } = await prepareView(data, character, v.intent, start, model, userId, key);
   const m = registry.model(req.provider, req.modelId);
   return { view: v, prepared, paid: !!m && registry.billsMoney(m) };
