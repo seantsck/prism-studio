@@ -344,6 +344,16 @@ unticked. When nothing is left to review the draft is closed. It runs once per d
 since the request). On a library Character or Location, **Add to [project]** is the main action; starting a new project
 from it is a secondary link to the home page.
 
+A Character's page opens with the sheet and the Character's details side by side: **Fill in the sheet with Prism** on
+the left, the **Character** form on the right. Under them, **References: how many, and the price** lists the six views,
+each in the set, being made, made and waiting to be added, or with **Make · $price**; **Make all N · $total** makes every
+missing view on one confirmation (`src/server/reference-views.ts`, `src/server/reference-view-actions.ts`). Each price is
+the exact one the Reference Studio would show for that same request (the same preparation as the submission, with GPT
+Image 2.5 Flare), the total is the sum of those prices, and the server prices them again and refuses a smaller
+confirmation; every view is prepared before any starts. Views start from the creator's photos (up to 8), else from the
+front view once it exists, else from the description (the panel advises making the front view first). The project's
+limit on generations at once still applies: the first views start, the rest wait uncharged for the next press.
+
 ## Prices
 
 Every paid step shows the creator ONE exact price before it runs, and that is what they are charged: Prism's own

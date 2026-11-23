@@ -365,7 +365,8 @@ describe("Prism's answer fills in the empty fields at once", () => {
     await repo.upsert(data.project.id, "characters", {
       ...after,
       personality: "",
-      updatedAt: new Date().toISOString(),
+      // a later edit (a person's edit comes seconds after; here, a millisecond is enough)
+      updatedAt: new Date(Date.parse(after.updatedAt) + 1).toISOString(),
     });
     data = (await repo.loadProject(slug))!;
     const again = await autoFillCharacter(

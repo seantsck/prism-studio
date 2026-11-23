@@ -40,10 +40,12 @@ export async function autoFillCharacter(
   const proposed = parseCharacterIdeas(proposal.result.ideas, inStory);
   const record = character as unknown as Record<string, unknown>;
   const fields = characterAiFields(inStory).filter((f) => proposed[f.key] !== undefined);
-  const fill = character.updatedAt < proposal.createdAt ? fields.filter((f) => isEmpty(record[f.key])) : [];
+  const fill = character.updatedAt <= proposal.createdAt ? fields.filter((f) => isEmpty(record[f.key])) : [];
   let next = character;
   if (fill.length) {
-    const changed: Record<string, unknown> = { ...character, updatedAt: new Date().toISOString() };
+    // always after the request, even within the same millisecond, so this draft never fills the sheet twice
+    const after = Math.max(Date.now(), Date.parse(proposal.createdAt) + 1);
+    const changed: Record<string, unknown> = { ...character, updatedAt: new Date(after).toISOString() };
     for (const f of fill) changed[f.key] = proposed[f.key];
     next = characterSchema.parse(changed);
     await (await getRepo()).upsert(data.project.id, "characters", next);

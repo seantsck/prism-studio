@@ -43,7 +43,7 @@ export function CharacterAi({
       anchorId="character-ai"
       prompt={character.description}
       name={character.name}
-      className="xl:col-span-2"
+      className="self-start"
       hidden={
         <>
           <input type="hidden" name="projectSlug" value={slug} />

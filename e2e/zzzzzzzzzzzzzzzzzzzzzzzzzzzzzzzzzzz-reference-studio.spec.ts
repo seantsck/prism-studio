@@ -1767,8 +1767,8 @@ test("ZC: a new character's page starts with Fill in with Prism and the referenc
   await expect(ai).not.toContainText("role and relationships");
   const plan = page.getByTestId("reference-plan");
   await expect(plan.getByTestId("reference-plan-photos")).toHaveText("You have 0 photos.");
-  await expect(plan.getByTestId("reference-plan-views").locator("li")).toHaveCount(6);
-  await expect(plan.getByTestId("reference-plan-total")).toContainText("6 to make: about");
+  await expect(plan.getByTestId("reference-view")).toHaveCount(6);
+  await expect(plan.getByTestId("reference-views-make-all")).toContainText("Make all 6 · $");
 
   await ai.getByTestId("character-ai-note").fill("Raised in Kyoto.");
   await ai.getByTestId("character-ai-fill").click();
@@ -1832,4 +1832,58 @@ test("ZD: a new location opens with Prism filling in its empty fields, beside it
   );
   await review.getByTestId("location-ai-discard").click();
   await expect(row.getByTestId("location-ai-review")).toHaveCount(0, { timeout: 30_000 });
+});
+
+test("ZE: a character's page makes one reference view or all the missing ones, at the exact total shown", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  const box = page.getByTestId("new-character");
+  await box.getByTestId("new-character-prompt").fill("A young chef with a shaved head and a white jacket.");
+  await box.getByTestId("new-character-name").fill("Haru");
+  await box.getByTestId("new-character-fill").locator("input").uncheck();
+  await box.getByTestId("new-character-create").click();
+  await expect(page.getByRole("heading", { name: "Haru", exact: true })).toBeVisible({ timeout: 60_000 });
+
+  // the sheet and the character's details side by side at the top
+  const ai = await page.getByTestId("character-ai").boundingBox();
+  const sheet = await page.locator('input[name="name"][value="Haru"]').first().boundingBox();
+  expect(ai && sheet && sheet.x > ai.x + ai.width / 2).toBe(true);
+
+  const views = page.getByTestId("reference-view");
+  await expect(views).toHaveCount(6);
+  await expect(page.getByTestId("reference-views-start")).toContainText("Make it first");
+  // the total on the button is the sum of the six prices shown
+  const prices = await page
+    .getByTestId("reference-view-make")
+    .evaluateAll((bs) => bs.map((b) => Number((b.textContent ?? "").replace(/.*\$/, ""))));
+  expect(prices).toHaveLength(6);
+  const sum = Math.round(prices.reduce((a, b) => a + b, 0) * 100) / 100;
+  const all = page.getByTestId("reference-views-make-all");
+  await expect(all).toHaveText(`Make all 6 · $${sum.toFixed(2)}`);
+
+  // one view: the front, on its own
+  await page
+    .locator('[data-testid="reference-view"][data-view="front"]')
+    .getByTestId("reference-view-make")
+    .click();
+  await expect(page.locator('[data-testid="reference-view"][data-view="front"]')).toHaveAttribute(
+    "data-state",
+    "making",
+    { timeout: 30_000 },
+  );
+  // the others are now made from... the front once it exists; meanwhile "all" covers the five still missing
+  await expect(page.getByTestId("reference-views-make-all")).toContainText("Make all 5");
+  await page.getByTestId("reference-views-make-all").click();
+  await expect
+    .poll(async () => page.locator('[data-testid="reference-view"][data-state="making"]').count(), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThan(1);
+  // nothing is made twice: every view is either being made or still waiting its turn
+  expect(
+    (await page.locator('[data-testid="reference-view"][data-state="making"]').count()) +
+      (await page.locator('[data-testid="reference-view"][data-state="missing"]').count()),
+  ).toBe(6);
 });
