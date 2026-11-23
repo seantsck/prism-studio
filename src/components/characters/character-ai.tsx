@@ -39,6 +39,7 @@ export function CharacterAi({
     <SheetAi
       testId="character-ai"
       anchorId="character-ai"
+      prompt={character.description}
       name={character.name}
       className="xl:col-span-2"
       hidden={

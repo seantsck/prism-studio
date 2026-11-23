@@ -5,6 +5,8 @@ import { LOCATION_AI_FIELDS, locationFillInstruction, type LocationAiKey } from 
 import type { Episode, ProjectData } from "@/domain/schemas";
 import {
   emptyEpisodeOne,
+  freshProjectData,
+  newProjectRecords,
   REFINE_NOTE_MAX,
   seasonPlanInstruction,
   seasonRefineInstruction,
@@ -362,4 +364,63 @@ export function quoteLocationFill(
   if (refused || p.tooLong)
     return { ok: false, reason: refused ?? "The episode script is too long to send." };
   return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd: p.usd };
+}
+
+/**
+ * The price of "Have Prism fill in the details" on the home page's create boxes, before the Character or Location
+ * exists: priced as the longest one that box can make, in the account's library (no story, no Episode yet), so it is
+ * never below the request that is then sent.
+ */
+export function quoteNewFill(kind: "character" | "location", writer?: string | null): QuoteResult {
+  const now = new Date().toISOString();
+  const records = newProjectRecords({
+    id: crypto.randomUUID(),
+    userId: "price-only",
+    title: "Your library",
+    slug: "your-library",
+    projectType: "film",
+    description: "",
+    now,
+  });
+  const base = freshProjectData(records);
+  const data: ProjectData = { ...base, project: { ...base.project, purpose: "library" }, episodes: [] };
+  const id = crypto.randomUUID();
+  const long = "あ".repeat(1200);
+  if (kind === "character") {
+    data.characters = [
+      {
+        id,
+        projectId: data.project.id,
+        name: "あ".repeat(80),
+        role: "",
+        description: long,
+        personality: "",
+        behaviorNotes: "",
+        physicalDescription: long,
+        continuityRules: [],
+        signatureBehavior: "",
+        relationshipNotes: "",
+        createdAt: now,
+        updatedAt: now,
+      },
+    ];
+    return quoteCharacterFill(data, id, writer);
+  }
+  data.locations = [
+    {
+      id,
+      projectId: data.project.id,
+      name: "あ".repeat(80),
+      description: long,
+      geography: "",
+      zones: [],
+      entrances: [],
+      lighting: "",
+      recurringProps: [],
+      referenceAssetIds: [],
+      locked: false,
+      set3d: null,
+    },
+  ];
+  return quoteLocationFill(data, id, writer);
 }

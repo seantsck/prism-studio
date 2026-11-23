@@ -331,6 +331,12 @@ appearance, establishing view, reverse angle, time-of-day variant) with the pric
 component (`src/components/ai/sheet-ai.tsx`). A new Character or Location from the home page opens scrolled to its
 Fill in panel. A library Location shows **Use in a project** under them.
 
+The home page's create boxes offer **Have Prism fill in the details** (ticked by default) with its price, worked out
+before anything exists for the longest Character or Location the box can make (`quoteNewFill`); left ticked, the
+request is sent straight after creating, confirmed at that price, and the page opens with Prism already writing. The
+Fill in panel shows **What you wrote**, whole, at the top. In the review, fields the creator left empty are ticked and
+fields they wrote are not, so their own words stay unless they choose Prism's version.
+
 ## Prices
 
 Every paid step shows the creator ONE exact price before it runs, and that is what they are charged: Prism's own

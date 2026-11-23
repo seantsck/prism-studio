@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ImagePlus, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { priceText } from "@/domain/pricing/user-price";
 import {
   CHARACTER_NAME_MAX,
   CHARACTER_PROMPT_MAX,
@@ -50,7 +51,12 @@ const TEXT: Record<Kind, { title: string; hint: string; placeholder: string; but
  * request carries only a few megabytes, and the browser makes an upright, smaller copy of a large phone photo, exactly
  * as the Reference Studio does), and its page opens: the character's own page, from where it joins a project.
  */
-function SubjectBox({ kind, maxUploadBytes }: { kind: Kind; maxUploadBytes: number }) {
+/** The price of "Have Prism fill in the details" (worked out on the server before the box is shown). */
+export type FillOffer =
+  { ok: true; model: string; label: string; paid: boolean; usd: number } | { ok: false; reason: string };
+
+function SubjectBox({ kind, maxUploadBytes, fill }: { kind: Kind; maxUploadBytes: number; fill: FillOffer }) {
+  const [fillIt, setFillIt] = useState(fill.ok);
   const router = useRouter();
   const t = TEXT[kind];
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -270,6 +276,38 @@ function SubjectBox({ kind, maxUploadBytes }: { kind: Kind; maxUploadBytes: numb
           </p>
         </div>
 
+        {fill.ok ? (
+          <label
+            className="mx-3 mt-2 flex items-start gap-2 text-[11.5px] leading-snug"
+            data-testid={`new-${kind}-fill`}
+          >
+            <input
+              type="checkbox"
+              name="fill"
+              value="1"
+              checked={fillIt}
+              onChange={(e) => setFillIt(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              Have Prism fill in the details{" "}
+              <span className="font-medium" data-testid={`new-${kind}-fill-price`}>
+                · {fill.paid ? priceText(fill.usd) : "free"}
+              </span>
+              <span className="block text-faint">
+                {kind === "character"
+                  ? "Personality, how they move and speak, a precise look for pictures, a signature habit. You review it before anything changes."
+                  : "Layout, zones and entrances, lighting, props. You review it before anything changes."}
+              </span>
+            </span>
+          </label>
+        ) : null}
+        {fill.ok ? (
+          <>
+            <input type="hidden" name="fillModel" value={fill.model} />
+            {fill.paid ? <input type="hidden" name="fillConfirmedUsd" value={fill.usd.toFixed(4)} /> : null}
+          </>
+        ) : null}
         <div className="flex items-center gap-2 px-3 pb-3 pt-2">
           <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted" aria-live="polite">
             {busy ?? (error ? <span className="text-fail">{error}</span> : null)}
@@ -288,10 +326,10 @@ function SubjectBox({ kind, maxUploadBytes }: { kind: Kind; maxUploadBytes: numb
   );
 }
 
-export function NewCharacter({ maxUploadBytes }: { maxUploadBytes: number }) {
-  return <SubjectBox kind="character" maxUploadBytes={maxUploadBytes} />;
+export function NewCharacter({ maxUploadBytes, fill }: { maxUploadBytes: number; fill: FillOffer }) {
+  return <SubjectBox kind="character" maxUploadBytes={maxUploadBytes} fill={fill} />;
 }
 
-export function NewLocation({ maxUploadBytes }: { maxUploadBytes: number }) {
-  return <SubjectBox kind="location" maxUploadBytes={maxUploadBytes} />;
+export function NewLocation({ maxUploadBytes, fill }: { maxUploadBytes: number; fill: FillOffer }) {
+  return <SubjectBox kind="location" maxUploadBytes={maxUploadBytes} fill={fill} />;
 }

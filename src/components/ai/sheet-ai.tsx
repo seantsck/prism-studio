@@ -42,6 +42,7 @@ export function SheetAi({
   review,
   className,
   anchorId,
+  prompt,
 }: {
   /** "character-ai" / "location-ai": the prefix of every test id */
   testId: string;
@@ -62,6 +63,8 @@ export function SheetAi({
   className?: string;
   /** the element id to scroll to (unique on the page) */
   anchorId?: string;
+  /** what the creator wrote, shown whole at the top */
+  prompt?: string;
 }) {
   const pending = !!latest && (latest.status === "queued" || latest.status === "running");
   const offered = proposed ? fields.filter((f) => proposed[f.key] !== undefined) : [];
@@ -73,6 +76,12 @@ export function SheetAi({
     >
       <div className="scroll-mt-4 space-y-3" data-testid={testId} id={anchorId}>
         <RefreshWhileActive active={pending} intervalMs={3000} />
+        {prompt?.trim() ? (
+          <div className="rounded-[3px] border border-line bg-bg/40 p-2.5" data-testid={`${testId}-prompt`}>
+            <div className="text-[11px] text-faint">What you wrote</div>
+            <p className="mt-0.5 whitespace-pre-wrap text-[13px] leading-relaxed">{prompt}</p>
+          </div>
+        ) : null}
         {pending ? (
           <p className="flex items-center gap-2 text-[13px]" data-testid={`${testId}-running`}>
             <span className="h-2 w-2 animate-pulse rounded-full bg-accent" aria-hidden />
@@ -101,13 +110,14 @@ export function SheetAi({
             {hidden}
             <input type="hidden" name="proposalId" value={latest!.id} />
             <p className="text-[13px] text-muted">
-              Prism&apos;s version, beside yours. Edit any field, tick what to use, and apply; the rest stays as
-              it is.
+              Prism&apos;s suggestion, beside yours. What you left empty is ticked; what you wrote stays as
+              you wrote it unless you tick Prism&apos;s version. Edit anything, then apply.
             </p>
             <ul className="space-y-3">
               {offered.map((f) => {
                 const next = proposed![f.key]!;
-                const differs = next.trim() !== (current[f.key] ?? "").trim();
+                const mine = (current[f.key] ?? "").trim();
+                const differs = next.trim() !== mine;
                 return (
                   <li
                     key={f.key}
@@ -116,11 +126,20 @@ export function SheetAi({
                     data-field={f.key}
                   >
                     <label className="flex items-center gap-2 text-[13px] font-medium">
-                      <input type="checkbox" name={`use_${f.key}`} value="1" defaultChecked={differs} />
+                      <input
+                        type="checkbox"
+                        name={`use_${f.key}`}
+                        value="1"
+                        defaultChecked={differs && !mine}
+                      />
                       {f.label}
-                      {differs ? null : (
+                      {!differs ? (
                         <span className="text-[11px] font-normal text-faint">same as yours</span>
-                      )}
+                      ) : mine ? (
+                        <span className="text-[11px] font-normal text-faint">
+                          you wrote this one: tick to use Prism&apos;s
+                        </span>
+                      ) : null}
                     </label>
                     <div className="mt-1 grid gap-2 text-[12.5px] md:grid-cols-2">
                       <div>

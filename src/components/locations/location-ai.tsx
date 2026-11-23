@@ -29,6 +29,7 @@ export function LocationAi({
   return (
     <SheetAi
       testId="location-ai"
+      prompt={location.description}
       name={location.name}
       className="max-w-4xl"
       hidden={
