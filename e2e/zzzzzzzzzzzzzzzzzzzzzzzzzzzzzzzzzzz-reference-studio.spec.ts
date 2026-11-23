@@ -1971,6 +1971,33 @@ test("ZG: the views are made with the engine picked beside them, and what is add
   // the engine stays picked, and the other views are now made from the front view
   await expect(engine).toHaveValue("mock/mock-image-1");
   await expect(page.getByTestId("reference-views-start")).toContainText("made from the front view");
+  // the left side says when to pick each engine; the one picked is marked
+  await expect(page.getByTestId("reference-engines")).toContainText("Which engine?");
+  await expect(
+    page.locator('[data-testid="reference-engine"][data-engine="openai-image/gpt-image-2.5-flare"]'),
+  ).toContainText("Start here");
+
+  // the other five, made (more than run at once: the rest wait their turn), then added to the set in one click
+  await page.getByTestId("reference-views-select-all").click();
+  await expect(page.getByTestId("reference-views-make")).toHaveText("Make 5 views · free");
+  await page.getByTestId("reference-views-make").click();
+  await expect(page.getByTestId("reference-views-add-all-button")).toHaveText(
+    "Add all 5 made views to the set",
+    { timeout: 90_000 },
+  );
+  // the Visual Bible already shows them, made and not added yet; it makes nothing itself
+  await expect(page.locator('[data-testid="vb-view"][data-state="made"]')).toHaveCount(5);
+  await expect(page.getByTestId("visual-bible").getByRole("button", { name: /Generate/ })).toHaveCount(0);
+  await expect(page.getByTestId("vb-item-three_quarter")).toContainText("Made, not added to the set yet.");
+  // the Visual Bible can add them too; here they are added from the Visual Bible
+  await expect(page.getByTestId("vb-add-made-button")).toHaveText("Add the 5 made views to the set");
+  await page.getByTestId("vb-add-made-button").click();
+  await expect(page.locator('[data-testid="vb-view"][data-state="in_set"]')).toHaveCount(6, {
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("reference-plan-total")).toHaveText("The set is complete.");
+  for (const key of ["three_quarter", "profile", "full_body"])
+    await expect(page.getByTestId(`vb-item-${key}`)).toHaveAttribute("data-done", "true");
 });
 
 test("ZF: the size of part decides what Prism fills in, and marks the rest optional", async ({ page }) => {

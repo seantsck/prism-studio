@@ -379,6 +379,13 @@ export default async function CharacterPage({
             slug={slug}
             sources={images.sources}
             models={images.models}
+            views={viewsQuote.views.map((v) => ({
+              id: v.id,
+              label: v.label,
+              state: viewStates[v.id] ?? "missing",
+              url: viewPictures[v.id]?.url ?? null,
+              attemptId: viewPictures[v.id]?.attemptId ?? null,
+            }))}
           />
         </div>
         <div className="xl:col-span-2">

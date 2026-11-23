@@ -6,8 +6,8 @@ import type { ProjectData } from "@/domain/schemas";
 import { SUGGESTED_EXPRESSIONS, visualBibleReadiness, visualRoleOf } from "@/domain/visual-bible";
 import { assetUrl } from "@/lib/utils";
 import type { EditSource, ImageModelOption } from "@/server/subject-images";
-import { startSubjectImage } from "@/server/subject-image-actions";
 import {
+  addViewsToReferenceSet,
   addExpressionReference,
   clearVisualBibleDesignation,
   setCanonicalIdentity,
@@ -16,24 +16,25 @@ import {
 
 /**
  * Phase 5B-I4: the Character Visual Bible. Shows what the Character has and what Prism suggests next. Guidance only:
- * nothing here is a gate, nothing is generated or replaced automatically. Generate presets feed the existing I1/I2
- * image pipeline; designations point at existing images (nothing is copied).
+ * nothing here is a gate, nothing is generated or replaced automatically. Nothing is made here at all: the reference
+ * views are made and added in "4. Six views" on the Character's page (shown here as the Reference set), Look sheets and
+ * expressions in the Reference Studio. Designations point at existing images (nothing is copied).
  */
-const PRESET_LABEL: Record<string, string> = {
-  portrait: "Generate Portrait",
-  three_quarter: "Generate 3/4 View",
-  profile: "Generate Profile",
-  full_body: "Generate Full Body",
-  expression_variant: "Generate Expression",
-  look_sheet: "Generate Look Reference",
-};
-
 export function VisualBiblePanel(props: {
   data: ProjectData;
   characterId: string;
   slug: string;
   sources: EditSource[];
   models: ImageModelOption[];
+  /** the six views of the reference set: what is in it, and what was made and waits to be added (step 4) */
+  views?: Array<{
+    id: string;
+    label: string;
+    state: "in_set" | "making" | "made" | "missing";
+    url: string | null;
+    /** a made view: the take to add */
+    attemptId?: string | null;
+  }>;
 }) {
   const { data, characterId, slug } = props;
   const character = data.characters.find((c) => c.id === characterId);
@@ -41,8 +42,6 @@ export function VisualBiblePanel(props: {
   const vb = visualBibleReadiness(data, characterId);
   const assets = new Map(data.assets.map((a) => [a.id, a]));
   const url = (id: string | null) => (id ? (assetUrl(assets.get(id)) ?? null) : null);
-  const usable = props.models.filter((m) => m.available);
-  const preferred = usable.find((m) => !m.paid) ?? usable[0] ?? null;
   const looks = data.looks.filter((l) => l.characterId === characterId);
   const canonicalRef = data.identityRefs.find(
     (r) => r.characterId === characterId && visualRoleOf(r) === "canonical",
@@ -60,13 +59,6 @@ export function VisualBiblePanel(props: {
       <input type="hidden" name="characterId" value={characterId} />
     </>
   );
-  const subjectHidden = (
-    <>
-      <input type="hidden" name="projectSlug" value={slug} />
-      <input type="hidden" name="subjectKind" value="character" />
-      <input type="hidden" name="subjectId" value={characterId} />
-    </>
-  );
   const sourceSelect = (name: string, list: EditSource[], testId: string) => (
     <select name={name} data-testid={testId} aria-label="Image">
       {list.map((s) => (
@@ -77,9 +69,19 @@ export function VisualBiblePanel(props: {
     </select>
   );
   const studio = `/projects/${slug}/studio?subject=character:${characterId}`;
-  const linkButton =
-    "inline-flex h-6 items-center rounded-[3px] border border-line2 bg-panel2 px-2 text-[12px] font-medium hover:bg-[#1f1f25]";
-  // the views of the reference set are made (with their engine and price) and added in "4. Six views" above
+  // the view a readiness item is filled by, and that view's state on this page
+  const ITEM_VIEW: Record<string, string> = {
+    canonical: "front",
+    front: "front",
+    three_quarter: "three_quarter",
+    profile: "profile",
+    full_body: "full_body",
+  };
+  const viewStateOf = (key: string) => props.views?.find((v) => v.id === ITEM_VIEW[key])?.state ?? null;
+  const madeViews = (props.views ?? []).filter((v) => v.state === "made" && v.attemptId);
+  // Nothing is generated here: the views of the reference set are made in "4. Six views" on this page, Look sheets
+  // and expressions in the Reference Studio. The Visual Bible shows what the Character has and points to where to make
+  // the rest.
   const VIEW_INTENTS = new Set(["portrait", "three_quarter", "profile", "full_body"]);
   const generate = (intent: string, lookId?: string) =>
     VIEW_INTENTS.has(intent) && !lookId ? (
@@ -91,27 +93,15 @@ export function VisualBiblePanel(props: {
       >
         {intent === "portrait" ? "Add the front view in 4. Six views" : "Make it in 4. Six views"}
       </a>
-    ) : preferred?.paid ? (
-      // a paid picture is never one click here: the Reference Studio shows its price first, then asks
+    ) : (
       <Link
-        href={`${studio}&make=${intent === "profile" ? "profile_left" : intent}${lookId ? `&look=${lookId}` : ""}`}
-        className={linkButton}
+        href={`${studio}&make=${intent}${lookId ? `&look=${lookId}` : ""}`}
+        className="text-[11.5px] text-accent hover:underline"
         data-testid={`vb-generate-${intent}`}
-        data-paid="true"
       >
-        {PRESET_LABEL[intent] ?? "Generate"}
+        Make it in the Reference Studio
       </Link>
-    ) : preferred ? (
-      <ActionForm action={startSubjectImage} successMessage="Image queued" className="inline">
-        {subjectHidden}
-        <input type="hidden" name="intent" value={intent} />
-        <input type="hidden" name="model" value={`${preferred.provider}/${preferred.modelId}`} />
-        {lookId ? <input type="hidden" name="lookId" value={lookId} /> : null}
-        <Button type="submit" size="sm" data-testid={`vb-generate-${intent}`}>
-          {PRESET_LABEL[intent] ?? "Generate"}
-        </Button>
-      </ActionForm>
-    ) : null;
+    );
 
   return (
     <Panel
@@ -162,6 +152,72 @@ export function VisualBiblePanel(props: {
         </figure>
 
         <div className="space-y-3">
+          {props.views?.length ? (
+            <div data-testid="vb-views">
+              <div className="mb-1 flex items-baseline justify-between text-[12px]">
+                <span className="font-medium">Reference set</span>
+                <a href="#reference-views" className="text-[11px] text-accent hover:underline">
+                  Make views in 4. Six views
+                </a>
+              </div>
+              {madeViews.length ? (
+                <ActionForm
+                  action={addViewsToReferenceSet}
+                  successMessage=""
+                  className="mb-2 flex flex-wrap items-center gap-2"
+                  data-testid="vb-add-made"
+                >
+                  {hidden}
+                  {madeViews.map((v) => (
+                    <input key={v.id} type="hidden" name="viewTake" value={`${v.id}:${v.attemptId}`} />
+                  ))}
+                  <Button type="submit" size="sm" variant="primary" data-testid="vb-add-made-button">
+                    {madeViews.length === 1
+                      ? `Add the ${madeViews[0]!.label.toLowerCase()} to the set`
+                      : `Add the ${madeViews.length} made views to the set`}
+                  </Button>
+                  <span className="text-[11px] text-muted">
+                    Made in 4. Six views and not added yet: adding them fills in the references below.
+                  </span>
+                </ActionForm>
+              ) : null}
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+                {props.views.map((v) => (
+                  <figure
+                    key={v.id}
+                    className="text-[10.5px]"
+                    data-testid="vb-view"
+                    data-view={v.id}
+                    data-state={v.state}
+                  >
+                    {v.url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={v.url}
+                        alt={`${character.name}: ${v.label}`}
+                        className={
+                          v.state === "in_set"
+                            ? "aspect-[3/4] w-full max-w-[110px] rounded border border-pass/50 object-cover"
+                            : "aspect-[3/4] w-full max-w-[110px] rounded border border-dashed border-line object-cover opacity-70"
+                        }
+                      />
+                    ) : (
+                      <div className="flex aspect-[3/4] w-full max-w-[110px] items-center justify-center rounded border border-dashed border-line text-faint">
+                        {v.state === "making" ? "being made…" : "none yet"}
+                      </div>
+                    )}
+                    <figcaption className="mt-0.5 leading-tight">
+                      <span className={v.state === "in_set" ? "text-pass" : ""}>
+                        {v.state === "in_set" ? "✓ " : ""}
+                        {v.label}
+                      </span>
+                      {v.state === "made" ? <div className="text-muted">made, not added yet</div> : null}
+                    </figcaption>
+                  </figure>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <ul className="space-y-1 text-[13px]" data-testid="vb-readiness">
             {vb.items.map((i) => (
               <li
@@ -173,7 +229,13 @@ export function VisualBiblePanel(props: {
                 <span aria-hidden>{i.done ? "✓" : "○"}</span>
                 <span>{i.label}</span>
                 {!i.done && i.suggestion ? (
-                  <span className="text-[11px] text-muted">{i.suggestion}</span>
+                  <span className="text-[11px] text-muted">
+                    {viewStateOf(i.key) === "made"
+                      ? "Made, not added to the set yet."
+                      : viewStateOf(i.key) === "making"
+                        ? "Being made in 4. Six views."
+                        : i.suggestion}
+                  </span>
                 ) : null}
                 {!i.done && i.generateIntent
                   ? generate(i.generateIntent, i.generateIntent === "look_sheet" ? looks[0]?.id : undefined)
@@ -183,8 +245,8 @@ export function VisualBiblePanel(props: {
           </ul>
           <p className="text-[11px] text-muted">
             The views you add to the set in 4. Six views fill in the references here; the front view becomes
-            the canonical identity. Guidance only: skip anything you don&apos;t need. Nothing is generated or
-            replaced without you.
+            the canonical identity. Guidance only: skip anything you don&apos;t need. Nothing is made here,
+            and nothing is replaced without you.
           </p>
 
           {props.sources.length > 0 ? (
@@ -319,15 +381,6 @@ export function VisualBiblePanel(props: {
               </p>
             )}
           </div>
-
-          {preferred ? (
-            <details className="text-[11px] text-muted">
-              <summary className="cursor-pointer">Advanced</summary>
-              {preferred.paid
-                ? `Generate presets open the Reference Studio, which shows the price of ${preferred.label} before anything is made.`
-                : `Generate presets use ${preferred.label} (free); choose another model in the Reference Studio.`}
-            </details>
-          ) : null}
         </div>
       </div>
     </Panel>

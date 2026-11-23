@@ -90,7 +90,7 @@ async function makeReferenceViews_impl(form: FormData) {
         : `Making ${label(started)}` +
           (waiting.length
             ? `. ${waiting.length === 1 ? "One more waits" : `${waiting.length} more wait`} for a free slot and start on their own while this page is open; each is charged only when it starts.`
-            : ". They appear in the Reference Studio as they finish."),
+            : ". Each appears in the list as it finishes."),
   };
   return result;
 }

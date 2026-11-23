@@ -372,6 +372,14 @@ to make it again. What is in the set is what the Visual Bible below reads (the f
 identity), so the Visual Bible's front, 3/4, profile and full-body items point to 4. Six views instead of making
 pictures on their own.
 
+Beside the photos, **Which engine?** says when to pick each offered engine (src/domain/generation/view-engines.ts:
+only what the catalogs state, never a general "best"), with the one picked marked and any engine that is not set up
+labelled with the reason. Finished views not yet in the set can be added one by one, or all at once ("Add all N made
+views to the set", in step 4 or in the Visual Bible: `addViewsToReferenceSet`, which adds each exactly as "Add to the
+set" does and skips, with the reason, a view that would replace a different picture). The Visual Bible shows the six
+views as a Reference set strip (in the set, or made and not added yet) and makes nothing itself: its view items point
+to 4. Six views, Looks and expressions to the Reference Studio.
+
 The project runs only so many generations at once (`PRISM_STUDIO_GENERATION_MAX_ACTIVE_PER_PROJECT`, 3 by default).
 Ticked views that do not fit are not started and not charged: they wait in the page ("waiting for a free slot") and
 start on their own, at the confirmed prices, as slots free up while the page is open (Cancel waiting drops them). A

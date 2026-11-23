@@ -201,6 +201,48 @@ export async function addToReferenceSet(form: FormData): Promise<ActionResult> {
 }
 
 /**
+ * Add several finished views to the reference set at once (the views made on a Character's page): each is added
+ * exactly as "Add to the set" adds it, one after another, so the front view also becomes the canonical identity. A view
+ * that would replace a different picture is skipped with the reason (replacing is confirmed one by one, never in bulk).
+ */
+async function addViewsToReferenceSet_impl(form: FormData) {
+  const pairs = form
+    .getAll("viewTake")
+    .map(String)
+    .map((x) => x.split(":"))
+    .filter((p): p is [string, string] => p.length === 2 && !!p[0] && !!p[1]);
+  if (pairs.length === 0) throw new UserFacingError("There is no finished view to add.");
+  const added: string[] = [];
+  const skipped: string[] = [];
+  for (const [view, attemptId] of pairs) {
+    const one = new FormData();
+    one.set("projectSlug", str(form, "projectSlug"));
+    one.set("characterId", str(form, "characterId"));
+    one.set("view", view);
+    one.set("attemptId", attemptId);
+    const label = REFERENCE_SET_VIEWS.find((v) => v.id === view)?.label ?? view;
+    try {
+      await addToReferenceSet_impl(one);
+      added.push(label);
+    } catch (err) {
+      if (!(err instanceof UserFacingError)) throw err;
+      skipped.push(`${label}: ${err.message}`);
+    }
+  }
+  if (added.length === 0) throw new UserFacingError(`Nothing was added. ${skipped.join(" ")}`);
+  return {
+    ok: true as const,
+    message:
+      `Added ${added.length === 1 ? `the ${added[0]!.toLowerCase()}` : `${added.length} views`} to the set.` +
+      (skipped.length ? ` Not added: ${skipped.join(" ")}` : ""),
+  };
+}
+
+export async function addViewsToReferenceSet(form: FormData): Promise<ActionResult> {
+  return runAction(() => addViewsToReferenceSet_impl(form), { name: "addViewsToReferenceSet" });
+}
+
+/**
  * The Production checklist's "Approve": lock a Character's reference images and the Looks an Episode uses, in one act.
  * Locked references are what every Shot is made from; they are unlocked on the Character page.
  */
