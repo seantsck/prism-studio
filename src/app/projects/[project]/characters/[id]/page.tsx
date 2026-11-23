@@ -34,7 +34,7 @@ import { PART_SIZES } from "@/domain/schemas";
 import { ReferenceViewsPanel, type ViewState } from "@/components/characters/reference-views";
 import { referenceSetViewOf } from "@/domain/generation/reference-studio";
 import { quoteReferenceViews } from "@/server/reference-views";
-import { getGenerationConfig } from "@/server/generation";
+import { getGenerationConfig, getGenerationRepo } from "@/server/generation";
 import { randomUUID } from "node:crypto";
 import type { WritingProposal } from "@/data/writing-repository";
 import { characterSheetThin, isCharacterRequest } from "@/domain/character-ai";
@@ -100,6 +100,19 @@ export default async function CharacterPage({
     else if (t.status === "succeeded" && !t.rejected && t.asset && viewStates[view] !== "making")
       viewStates[view] = "made";
   }
+  // a view whose newest try failed says so (it can be ticked and made again)
+  const lastTry: Record<string, { at: string; error: string | null }> = {};
+  for (const t of pictures.takes) {
+    const view = referenceSetViewOf(t.settings.intent);
+    if (view && (!lastTry[view] || t.createdAt > lastTry[view]!.at))
+      lastTry[view] = {
+        at: t.createdAt,
+        error: t.status === "failed" ? (t.error ?? "It could not be made.") : null,
+      };
+  }
+  const viewFailures: Record<string, string> = {};
+  for (const [view, t] of Object.entries(lastTry))
+    if (t.error && viewStates[view] === "missing") viewFailures[view] = t.error;
   const viewsQuote = await quoteReferenceViews(
     data,
     c,
@@ -110,6 +123,8 @@ export default async function CharacterPage({
     ),
     null,
   );
+  // how many of the project's generation slots are busy (any subject): views that don't fit wait their turn
+  const activeInProject = (await (await getGenerationRepo()).listActiveProjectJobs(data.project.id)).length;
   const archiveSubject = { kind: "character" as const, id: c.id, name: c.name };
   const repo = await getRepo();
   const library = await repo.libraryEntries();
@@ -253,10 +268,12 @@ export default async function CharacterPage({
           name={c.name}
           quote={viewsQuote}
           states={viewStates}
+          failures={viewFailures}
           photos={ownPhotos}
           studioHref={`/projects/${slug}/studio?subject=character:${c.id}`}
           batchId={randomUUID()}
           atOnce={getGenerationConfig().limits.maxActivePerProject}
+          activeInProject={activeInProject}
         />
         {inLibrary ? (
           <div className="xl:col-span-2">

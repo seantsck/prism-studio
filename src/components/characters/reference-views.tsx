@@ -20,22 +20,28 @@ export function ReferenceViewsPanel({
   name,
   quote,
   states,
+  failures,
   photos,
   studioHref,
   batchId,
   atOnce,
+  activeInProject,
 }: {
   slug: string;
   characterId: string;
   name: string;
   quote: ViewsQuote;
   states: Record<string, ViewState>;
+  /** views whose newest try failed: why */
+  failures: Record<string, string>;
   photos: number;
   studioHref: string;
   /** one id per page view: pressing the same button twice never makes the same views twice */
   batchId: string;
   /** how many generations this project runs at once */
   atOnce: number;
+  /** generations running in this project now */
+  activeInProject: number;
 }) {
   const [low, high] = REFERENCE_PHOTOS_BEST;
   return (
@@ -74,8 +80,6 @@ export function ReferenceViewsPanel({
         </div>
 
         <ViewChecklist
-          // a view started (or added) changes what can be made: the checklist starts again, every missing view ticked
-          key={quote.views.map((v) => `${v.id}:${states[v.id] ?? "missing"}`).join(",")}
           slug={slug}
           characterId={characterId}
           views={quote.views.map((v) => ({
@@ -84,11 +88,13 @@ export function ReferenceViewsPanel({
             state: states[v.id] ?? "missing",
             costUsd: v.costUsd,
             problem: v.problem,
+            failed: failures[v.id] ?? null,
           }))}
           paid={quote.paid}
           modelLabel={quote.modelLabel}
           batchId={batchId}
           atOnce={atOnce}
+          activeInProject={activeInProject}
           studioHref={studioHref}
         />
       </div>
