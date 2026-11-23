@@ -9,7 +9,7 @@ import { RefreshWhileActive } from "@/components/images/refresh-while-active";
 import { userPrice } from "@/domain/pricing/user-price";
 import { makeReferenceViews, stopReferenceViews } from "@/server/reference-view-actions";
 import { addToReferenceSet, addViewsToReferenceSet } from "@/server/visual-bible-actions";
-import { UseAsFront, ViewLock } from "./picture-actions";
+import { ViewLock } from "./picture-actions";
 import { ZoomImage } from "@/components/zoom-image";
 import { cn } from "@/lib/utils";
 
@@ -552,21 +552,12 @@ export function ViewChecklist({
                       <ZoomImage
                         src={v.pictureUrl}
                         alt={`${v.label}${v.state === "in_set" ? " in the set" : ", made"}`}
-                        className="h-10 w-8 shrink-0 rounded-[2px] border border-line object-cover"
+                        className="h-10 w-8 shrink-0 rounded-[2px] border border-line bg-white object-contain"
                         caption={`${v.label}${v.state === "in_set" ? (v.locked ? " · locked in the set" : " · in the set") : " · made"}`}
                         testId="reference-view-picture"
                       >
                         {v.state === "in_set" ? (
                           <ViewLock slug={slug} characterId={characterId} view={v.id} locked={!!v.locked} />
-                        ) : null}
-                        {v.pictureAssetId || v.attemptId ? (
-                          <UseAsFront
-                            slug={slug}
-                            characterId={characterId}
-                            assetId={v.pictureAssetId}
-                            attemptId={v.state === "made" ? v.attemptId : null}
-                            isFront={v.id === "front" && v.state === "in_set"}
-                          />
                         ) : null}
                       </ZoomImage>
                     </span>
@@ -596,7 +587,7 @@ export function ViewChecklist({
                           <ZoomImage
                             src={v.newer.url}
                             alt={`New take: ${v.label}`}
-                            className="h-10 w-8 rounded-[2px] border border-accent/60 object-cover"
+                            className="h-10 w-8 rounded-[2px] border border-accent/60 bg-white object-contain"
                             caption={`${v.label} · the new take (use it with the button beside it)`}
                           />
                         ) : null}
@@ -715,7 +706,7 @@ export function ViewChecklist({
                             <ZoomImage
                               src={t.url}
                               alt={`${v.label}, ${t.engine}`}
-                              className="h-10 w-8 rounded-[2px] border border-line object-cover hover:border-accent"
+                              className="h-10 w-8 rounded-[2px] border border-line bg-white object-contain hover:border-accent"
                               caption={`${v.label} · another take (${t.engine})`}
                             >
                               {use}

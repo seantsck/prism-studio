@@ -31,7 +31,7 @@ import { PART_SIZES } from "@/domain/schemas";
 import type { Asset } from "@/domain/schemas";
 import { ReferenceViewsPanel, type ViewState } from "@/components/characters/reference-views";
 import { MergeCharacter, type MergeTarget } from "@/components/characters/merge-character";
-import { UseAsFront, ViewLock } from "@/components/characters/picture-actions";
+import { ViewLock } from "@/components/characters/picture-actions";
 import { ZoomImage } from "@/components/zoom-image";
 import { planCharacterMerge } from "@/domain/character-merge";
 import { characterUsage } from "@/domain/subject-trash";
@@ -454,18 +454,10 @@ export default async function CharacterPage({
                           <ZoomImage
                             src={i.url}
                             alt={i.label}
-                            className="h-full w-full object-cover"
+                            wrapperClassName="block h-full w-full"
+                            className="h-full w-full bg-white object-contain"
                             caption={i.label}
-                          >
-                            {i.wardrobeOnly ? null : (
-                              <UseAsFront
-                                slug={slug}
-                                characterId={c.id}
-                                assetId={i.assetId}
-                                isFront={slotAsset.front?.id === i.assetId}
-                              />
-                            )}
-                          </ZoomImage>
+                          ></ZoomImage>
                         ) : null}
                       </div>
                       <div className="truncate text-[11.5px]" title={i.label}>
@@ -476,14 +468,6 @@ export default async function CharacterPage({
                         {i.rejected ? " · rejected" : ""}
                       </div>
                       <div className="flex flex-wrap gap-1">
-                        {i.wardrobeOnly ? null : (
-                          <UseAsFront
-                            slug={slug}
-                            characterId={c.id}
-                            assetId={i.assetId}
-                            isFront={slotAsset.front?.id === i.assetId}
-                          />
-                        )}
                         {(() => {
                           const inView = REFERENCE_SET_VIEWS.find((v) => slotAsset[v.id]?.id === i.assetId);
                           return inView ? (
@@ -598,16 +582,11 @@ export default async function CharacterPage({
                       <ZoomImage
                         src={url}
                         alt={`${c.name}: ${v.label}`}
-                        className="aspect-[3/4] w-full object-cover"
+                        wrapperClassName="block w-full"
+                        className="aspect-[3/4] w-full bg-white object-contain"
                         caption={`${c.name} · ${v.label}${ref?.locked ? " · locked" : ""}`}
                       >
                         <ViewLock slug={slug} characterId={c.id} view={v.id} locked={!!ref?.locked} />
-                        <UseAsFront
-                          slug={slug}
-                          characterId={c.id}
-                          assetId={asset!.id}
-                          isFront={v.id === "front"}
-                        />
                       </ZoomImage>
                       {origin ? (
                         // a generated reference is never presented as a photograph of the Character

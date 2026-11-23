@@ -2054,18 +2054,9 @@ test("ZG: the views are made with the engine picked beside them, and what is add
   await expect(page.getByTestId("zoom-dialog").getByTestId("zoom-image")).toHaveAttribute("src", tqSrc!);
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("zoom-dialog")).toHaveCount(0);
-  // a generated picture becomes the canonical by becoming the front view (asked first); unlock the front first
-  await step4Front.getByTestId("reference-view-lock").click();
-  await expect(step4Front.getByTestId("reference-view-lock")).toHaveAttribute("data-locked", "0", {
-    timeout: 30_000,
-  });
-  page.once("dialog", (d) => void d.accept());
-  await page
-    .getByTestId("character-picture")
-    .filter({ has: page.locator(`img[src="${tqSrc}"]`) })
-    .getByTestId("use-as-front-button")
-    .click();
-  await expect(page.getByTestId("vb-canonical-image")).toHaveAttribute("src", tqSrc!, { timeout: 30_000 });
+  // the whole picture is shown, never cropped to fit its frame
+  await expect(tqRow.getByTestId("reference-view-picture")).toHaveClass(/object-contain/);
+  await expect(page.getByTestId("use-as-front-button")).toHaveCount(0);
 });
 
 test("ZF: the size of part decides what Prism fills in, and marks the rest optional", async ({ page }) => {
