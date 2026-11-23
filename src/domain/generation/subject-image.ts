@@ -556,7 +556,9 @@ export function buildSubjectImagePlan(
   const negative = [
     "text, captions, watermark, logo, extra limbs, duplicated person",
     ...(!edit && input.subject.kind === "character" && COMPOSITION[input.subject.intent].includes(STUDIO)
-      ? ["scenery or a room behind the person, busy or patterned background, gradient background, grey or coloured background"]
+      ? [
+          "scenery or a room behind the person, busy or patterned background, gradient background, grey or coloured background",
+        ]
       : []),
   ];
   sections.push({ key: "negative_constraints", title: "Avoid", lines: negative });

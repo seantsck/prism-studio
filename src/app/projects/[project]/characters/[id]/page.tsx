@@ -134,7 +134,8 @@ export default async function CharacterPage({
   const viewTakes: Record<string, Array<{ attemptId: string; url: string | null; engine: string }>> = {};
   for (const t of [...pictures.takes].sort((a, b) => b.createdAt.localeCompare(a.createdAt))) {
     const view = referenceSetViewOf(t.settings.intent);
-    if (!view || t.status !== "succeeded" || t.rejected || !t.asset || t.asset.id === slotAsset[view]?.id) continue;
+    if (!view || t.status !== "succeeded" || t.rejected || !t.asset || t.asset.id === slotAsset[view]?.id)
+      continue;
     (viewTakes[view] ??= []).push({ attemptId: t.attemptId, url: t.asset.url, engine: t.modelLabel });
   }
   // each view's picture locked in place, and the generations still running for each view (to stop them)
