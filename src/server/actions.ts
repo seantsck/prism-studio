@@ -396,7 +396,11 @@ async function uploadIdentityRef_impl(form: FormData) {
         ? r.slot === slot && !(r.metadata as { visualRole?: unknown }).visualRole
         : !!view && r.slot === "additional" && (r.metadata as { view?: unknown }).view === view),
   );
-  if (existing?.locked && existing.assetId && data.assets.some((a) => a.id === existing.assetId && a.objectPath))
+  if (
+    existing?.locked &&
+    existing.assetId &&
+    data.assets.some((a) => a.id === existing.assetId && a.objectPath)
+  )
     throw new UserFacingError("This picture is locked. Unlock the reference set to change it.");
   const { asset } = await ingestUpload(data, repo.currentUserId(), file, {
     allowed: ["image"],
