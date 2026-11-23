@@ -5,6 +5,7 @@ import { referenceOrigin, referenceOriginLabel } from "@/domain/generation/refer
 import type { ProjectData } from "@/domain/schemas";
 import { SUGGESTED_EXPRESSIONS, visualBibleReadiness, visualRoleOf } from "@/domain/visual-bible";
 import { assetUrl } from "@/lib/utils";
+import { MakeCanonical } from "@/components/characters/make-canonical";
 import type { EditSource, ImageModelOption } from "@/server/subject-images";
 import {
   addViewsToReferenceSet,
@@ -34,6 +35,8 @@ export function VisualBiblePanel(props: {
     url: string | null;
     /** a made view: the take to add */
     attemptId?: string | null;
+    /** its picture */
+    assetId?: string | null;
   }>;
 }) {
   const { data, characterId, slug } = props;
@@ -79,29 +82,8 @@ export function VisualBiblePanel(props: {
   };
   const viewStateOf = (key: string) => props.views?.find((v) => v.id === ITEM_VIEW[key])?.state ?? null;
   const madeViews = (props.views ?? []).filter((v) => v.state === "made" && v.attemptId);
-  // Nothing is generated here: the views of the reference set are made in "4. Six views" on this page, Look sheets
-  // and expressions in the Reference Studio. The Visual Bible shows what the Character has and points to where to make
-  // the rest.
-  const VIEW_INTENTS = new Set(["portrait", "three_quarter", "profile", "full_body"]);
-  const generate = (intent: string, lookId?: string) =>
-    VIEW_INTENTS.has(intent) && !lookId ? (
-      <a
-        href="#reference-views"
-        className="text-[11.5px] text-accent hover:underline"
-        data-testid={`vb-generate-${intent}`}
-        data-in-views="true"
-      >
-        {intent === "portrait" ? "Add the front view in 4. Six views" : "Make it in 4. Six views"}
-      </a>
-    ) : (
-      <Link
-        href={`${studio}&make=${intent}${lookId ? `&look=${lookId}` : ""}`}
-        className="text-[11.5px] text-accent hover:underline"
-        data-testid={`vb-generate-${intent}`}
-      >
-        Make it in the Reference Studio
-      </Link>
-    );
+  // Nothing is generated here: the reference views are made in "4. Six views" on this page, Look sheets and
+  // expressions in the Reference Studio.
 
   return (
     <Panel
@@ -156,9 +138,6 @@ export function VisualBiblePanel(props: {
             <div data-testid="vb-views">
               <div className="mb-1 flex items-baseline justify-between text-[12px]">
                 <span className="font-medium">Reference set</span>
-                <a href="#reference-views" className="text-[11px] text-accent hover:underline">
-                  Make views in 4. Six views
-                </a>
               </div>
               {madeViews.length ? (
                 <ActionForm
@@ -213,6 +192,17 @@ export function VisualBiblePanel(props: {
                       </span>
                       {v.state === "made" ? <div className="text-muted">made, not added yet</div> : null}
                     </figcaption>
+                    {v.assetId ? (
+                      <div className="mt-1">
+                        <MakeCanonical
+                          slug={slug}
+                          characterId={characterId}
+                          assetId={v.assetId}
+                          isCanonical={v.assetId === vb.canonicalAssetId}
+                          hasCanonical={!!vb.canonicalAssetId}
+                        />
+                      </div>
+                    ) : null}
                   </figure>
                 ))}
               </div>
@@ -237,16 +227,13 @@ export function VisualBiblePanel(props: {
                         : i.suggestion}
                   </span>
                 ) : null}
-                {!i.done && i.generateIntent
-                  ? generate(i.generateIntent, i.generateIntent === "look_sheet" ? looks[0]?.id : undefined)
-                  : null}
               </li>
             ))}
           </ul>
           <p className="text-[11px] text-muted">
             The views you add to the set in 4. Six views fill in the references here; the front view becomes
-            the canonical identity. Guidance only: skip anything you don&apos;t need. Nothing is made here,
-            and nothing is replaced without you.
+            the canonical identity, unless you press Make canonical under another picture. Guidance only: skip
+            anything you don&apos;t need. Nothing is made here, and nothing is replaced without you.
           </p>
 
           {props.sources.length > 0 ? (
@@ -283,7 +270,6 @@ export function VisualBiblePanel(props: {
                 <span>{look.name}</span>
                 <Badge tone={storedReferences > 0 ? "pass" : "neutral"}>{storedReferences} ref</Badge>
                 {suggestion ? <span className="text-[11px] text-muted">{suggestion}</span> : null}
-                {generate("look_sheet", look.id)}
               </div>
             ))}
           </div>

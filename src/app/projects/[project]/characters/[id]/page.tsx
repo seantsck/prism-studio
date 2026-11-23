@@ -31,8 +31,10 @@ import { CharacterAi } from "@/components/characters/character-ai";
 import { SheetField } from "@/components/characters/sheet-field";
 import { PART_SIZE_HINT, PART_SIZE_LABEL, partSizeOf } from "@/domain/character-ai";
 import { PART_SIZES } from "@/domain/schemas";
+import { visualRoleOf } from "@/domain/visual-bible";
 import { ReferenceViewsPanel, type ViewState } from "@/components/characters/reference-views";
-import { referenceSetViewOf } from "@/domain/generation/reference-studio";
+import { MakeCanonical } from "@/components/characters/make-canonical";
+import { REFERENCE_SET_VIEWS, referenceSetViewOf } from "@/domain/generation/reference-studio";
 import { quoteReferenceViews, SUGGESTED_VIEWS_MODEL } from "@/server/reference-views";
 import { getGenerationConfig, getGenerationRepo } from "@/server/generation";
 import { randomUUID } from "node:crypto";
@@ -115,15 +117,36 @@ export default async function CharacterPage({
   for (const [view, t] of Object.entries(lastTry))
     if (t.error && viewStates[view] === "missing") viewFailures[view] = t.error;
   // the picture each view has: the one in the set, else the newest finished take waiting to be added
-  const viewPictures: Record<string, { url: string | null; attemptId: string | null }> = {};
-  for (const v of pictures.referenceSet) if (v.assetId) viewPictures[v.id] = { url: v.url, attemptId: null };
+  const viewPictures: Record<
+    string,
+    { url: string | null; attemptId: string | null; assetId: string | null }
+  > = {};
+  // the picture IN each view's slot (the Reference Studio's front view shows the canonical identity instead; here the
+  // front view is its own picture, and the canonical is marked wherever it is)
+  for (const v of REFERENCE_SET_VIEWS) {
+    const ref = data.identityRefs.find(
+      (r) =>
+        r.characterId === c.id &&
+        !!r.assetId &&
+        (v.slot === "additional"
+          ? r.slot === "additional" && (r.metadata as { view?: unknown }).view === v.id
+          : r.slot === v.slot && visualRoleOf(r) === null),
+    );
+    const asset = ref ? data.assets.find((x) => x.id === ref.assetId) : undefined;
+    const shown = pictures.referenceSet.find((x) => x.id === v.id);
+    if (viewStates[v.id] !== "in_set") continue;
+    if (asset) viewPictures[v.id] = { url: assetUrl(asset) ?? null, attemptId: null, assetId: asset.id };
+    else if (shown?.assetId) viewPictures[v.id] = { url: shown.url, attemptId: null, assetId: shown.assetId };
+  }
+  // the canonical identity now (the picture that defines the face)
+  const canonicalAssetId = pictures.images.find((i) => i.canonical)?.assetId ?? null;
   const newestMade: Record<string, string> = {};
   for (const t of pictures.takes) {
     const view = referenceSetViewOf(t.settings.intent);
     if (!view || viewStates[view] !== "made" || t.status !== "succeeded" || t.rejected || !t.asset) continue;
     if (newestMade[view] && newestMade[view]! >= t.createdAt) continue;
     newestMade[view] = t.createdAt;
-    viewPictures[view] = { url: t.asset.url, attemptId: t.attemptId };
+    viewPictures[view] = { url: t.asset.url, attemptId: t.attemptId, assetId: t.asset.id };
   }
   // the engines that can make the views: they take the photos (or the front view), or, with neither, draw from words
   const engines = pictures.models
@@ -361,6 +384,15 @@ export default async function CharacterPage({
                         {i.rejected ? " · rejected" : ""}
                       </div>
                       <div className="flex flex-wrap gap-1">
+                        {i.wardrobeOnly ? null : (
+                          <MakeCanonical
+                            slug={slug}
+                            characterId={c.id}
+                            assetId={i.assetId}
+                            isCanonical={i.canonical}
+                            hasCanonical={!!canonicalAssetId}
+                          />
+                        )}
                         <ArchiveButton slug={slug} subject={archiveSubject} assetId={i.assetId} />
                         <DeleteButton slug={slug} subject={archiveSubject} assetId={i.assetId} />
                       </div>
@@ -385,6 +417,7 @@ export default async function CharacterPage({
               state: viewStates[v.id] ?? "missing",
               url: viewPictures[v.id]?.url ?? null,
               attemptId: viewPictures[v.id]?.attemptId ?? null,
+              assetId: viewPictures[v.id]?.assetId ?? null,
             }))}
           />
         </div>
