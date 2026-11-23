@@ -75,8 +75,25 @@ async function makeReferenceViews_impl(form: FormData) {
     !fromFront && viewIds.includes("front") && viewIds.length > 1 && !(await hasOwnPhotos(data, character));
   const later = frontFirst ? viewIds.filter((v) => v !== "front") : [];
 
+  // The right profile mirrors the left one: made in the same run, it waits for the left and is sent its picture.
+  const fromLeft = str(form, "fromLeft");
+  let fromLeftAssetId: string | null = null;
+  let holdRight = false;
+  if (!frontFirst && fromLeft && viewIds.includes("right_profile")) {
+    const left = await generation.getSubjectImageAttempt(fromLeft);
+    if (left && left.attempt.characterId === character.id) {
+      if (left.attempt.status === "succeeded")
+        fromLeftAssetId =
+          (left.outputs.find((o) => o.output.role === "primary") ?? left.outputs[0])?.asset.id ?? null;
+      else if (!["failed", "cancelled"].includes(left.attempt.status)) holdRight = true;
+    }
+  }
+  const leftWithRight =
+    !frontFirst && !fromLeft && viewIds.includes("profile") && viewIds.includes("right_profile");
+  if (leftWithRight) holdRight = true;
+
   const prepared: Awaited<ReturnType<typeof prepareReferenceView>>[] = [];
-  for (const id of frontFirst ? ["front"] : viewIds) {
+  for (const id of (frontFirst ? ["front"] : viewIds).filter((v) => !(holdRight && v === "right_profile"))) {
     const p = await prepareReferenceView(
       data,
       character,
@@ -85,6 +102,7 @@ async function makeReferenceViews_impl(form: FormData) {
       `${VIEWS_KEY_PREFIX}${batch}-${id}`,
       model,
       fromFrontAssetId,
+      id === "right_profile" ? fromLeftAssetId : null,
     );
     if (!p.prepared.ok) throw new UserFacingError(`${p.view.label}: ${p.prepared.reasons[0]}`);
     prepared.push(p);
@@ -102,6 +120,7 @@ async function makeReferenceViews_impl(form: FormData) {
   }
   const started: string[] = [];
   let frontAttemptId: string | null = null;
+  let leftAttemptId: string | null = null;
   const waiting: string[] = [];
   let held: string | null = null;
   for (const p of prepared) {
@@ -114,6 +133,7 @@ async function makeReferenceViews_impl(form: FormData) {
       const created = await generation.createSubjectImageAttempt(p.prepared.input);
       started.push(p.view.id);
       if (p.view.id === "front") frontAttemptId = created.attempt.id;
+      if (p.view.id === "profile") leftAttemptId = created.attempt.id;
     } catch (err) {
       if (!isGenerationSubmitError(err)) throw err;
       // the project's limit on generations running at once: the rest wait for a free slot, nothing is charged for them
@@ -127,6 +147,8 @@ async function makeReferenceViews_impl(form: FormData) {
   }
   // the views waiting for the new front: they start from it once it is ready (or with it, when it is held too)
   for (const id of later) waiting.push(id);
+  if (holdRight) waiting.push("right_profile");
+  const afterLeft = holdRight ? (leftAttemptId ?? (fromLeft || null)) : null;
   if (started.length) revalidatePath(`/projects/${slug}`, "layout");
   const label = (ids: string[]) =>
     ids.length === 1
@@ -137,15 +159,24 @@ async function makeReferenceViews_impl(form: FormData) {
     started,
     waiting,
     ...(frontAttemptId && later.length ? { afterFront: frontAttemptId } : {}),
+    ...(fromFront ? { afterFront: fromFront } : {}),
+    ...(afterLeft ? { afterLeft } : {}),
     message:
-      started.length === 0
-        ? `Every slot is busy: ${label(waiting)} ${waiting.length === 1 ? "waits and starts" : "wait and start"} on their own as slots free up. Nothing is charged until each starts.`
-        : `Making ${label(started)}` +
-          (frontAttemptId && later.length
-            ? `. The other ${later.length === 1 ? "view waits" : `${later.length} wait`} for it and ${later.length === 1 ? "is" : "are"} made from it, so the face matches; each is charged only when it starts.`
-            : waiting.length
-              ? `. ${waiting.length === 1 ? "One more waits" : `${waiting.length} more wait`} for a free slot and start on their own while this page is open; each is charged only when it starts.`
-              : ". Each appears in the list as it finishes."),
+      started.length === 0 && !held
+        ? holdRight
+          ? "The right profile waits for the left one and is made from it, so the two match."
+          : "Waiting."
+        : started.length === 0
+          ? `Every slot is busy: ${label(waiting)} ${waiting.length === 1 ? "waits and starts" : "wait and start"} on their own as slots free up. Nothing is charged until each starts.`
+          : `Making ${label(started)}` +
+            (frontAttemptId && later.length
+              ? `. The other ${later.length === 1 ? "view waits" : `${later.length} wait`} for it and ${later.length === 1 ? "is" : "are"} made from it, so the face matches; each is charged only when it starts.`
+              : waiting.length
+                ? `. ${waiting.length === 1 ? "One more waits" : `${waiting.length} more wait`} for a free slot and start on their own while this page is open; each is charged only when it starts.`
+                : ". Each appears in the list as it finishes.") +
+            (holdRight && started.length
+              ? " The right profile waits for the left one, so the two match."
+              : ""),
   };
   return result;
 }
@@ -159,6 +190,8 @@ export type ReferenceViewsResult =
       waiting: string[];
       /** the front view the waiting views are made from (send it back as `fromFront`) */
       afterFront?: string;
+      /** the left profile the waiting right profile mirrors (send it back as `fromLeft`) */
+      afterLeft?: string;
     }
   | Exclude<ActionResult, { ok: true }>;
 

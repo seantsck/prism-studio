@@ -26,6 +26,7 @@ export function ReferenceViewsPanel({
   takes,
   locked,
   jobs,
+  latest,
   pictures,
   engines,
   suggestedEngine,
@@ -50,8 +51,10 @@ export function ReferenceViewsPanel({
   locked: Record<string, boolean>;
   /** generations still running for each view (to stop them) */
   jobs: Record<string, string[]>;
+  /** each view's newest try: what the run tracker follows */
+  latest: Record<string, { attemptId: string; status: string }>;
   /** each view's picture: the one in the set, or the newest finished take (`attemptId`) waiting to be added */
-  pictures: Record<string, { url: string | null; attemptId: string | null }>;
+  pictures: Record<string, { url: string | null; attemptId: string | null; assetId?: string | null }>;
   /** the engines that can make views; `quote` is priced with the chosen one (`quote.model`) */
   engines: ViewEngine[];
   suggestedEngine: string;
@@ -152,10 +155,12 @@ export function ReferenceViewsPanel({
               failed: failures[v.id] ?? null,
               pictureUrl: pictures[v.id]?.url ?? null,
               attemptId: pictures[v.id]?.attemptId ?? null,
+              pictureAssetId: pictures[v.id]?.assetId ?? null,
               newer: newer[v.id] ?? null,
               takes: takes[v.id] ?? [],
               locked: !!locked[v.id],
               jobIds: jobs[v.id] ?? [],
+              latestAttemptId: latest[v.id]?.attemptId ?? null,
             }))}
             paid={quote.paid}
             engine={quote.model}

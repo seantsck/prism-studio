@@ -5,6 +5,8 @@ import { referenceOrigin, referenceOriginLabel } from "@/domain/generation/refer
 import type { ProjectData } from "@/domain/schemas";
 import { SUGGESTED_EXPRESSIONS, visualBibleReadiness, visualRoleOf } from "@/domain/visual-bible";
 import { assetUrl } from "@/lib/utils";
+import { ZoomImage } from "@/components/zoom-image";
+import { UseAsFront, ViewLock } from "@/components/characters/picture-actions";
 import type { EditSource, ImageModelOption } from "@/server/subject-images";
 import {
   addViewsToReferenceSet,
@@ -35,6 +37,8 @@ export function VisualBiblePanel(props: {
     attemptId?: string | null;
     /** its picture */
     assetId?: string | null;
+    /** its picture is locked in place */
+    locked?: boolean;
   }>;
 }) {
   const { data, characterId, slug } = props;
@@ -165,8 +169,7 @@ export function VisualBiblePanel(props: {
                     data-state={v.state}
                   >
                     {v.url ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
+                      <ZoomImage
                         src={v.url}
                         alt={`${character.name}: ${v.label}`}
                         className={
@@ -174,7 +177,20 @@ export function VisualBiblePanel(props: {
                             ? "aspect-[3/4] w-full max-w-[110px] rounded border border-pass/50 object-cover"
                             : "aspect-[3/4] w-full max-w-[110px] rounded border border-dashed border-line object-cover opacity-70"
                         }
-                      />
+                        caption={`${character.name} · ${v.label}${v.state === "in_set" ? (v.locked ? " · locked in the set" : " · in the set") : " · made, not added yet"}`}
+                      >
+                        {v.state === "in_set" ? (
+                          <ViewLock slug={slug} characterId={characterId} view={v.id} locked={!!v.locked} />
+                        ) : null}
+                        {v.assetId ? (
+                          <UseAsFront
+                            slug={slug}
+                            characterId={characterId}
+                            assetId={v.assetId}
+                            isFront={v.id === "front" && v.state === "in_set"}
+                          />
+                        ) : null}
+                      </ZoomImage>
                     ) : (
                       <div className="flex aspect-[3/4] w-full max-w-[110px] items-center justify-center rounded border border-dashed border-line text-faint">
                         {v.state === "making" ? "being made…" : "none yet"}
@@ -190,6 +206,11 @@ export function VisualBiblePanel(props: {
                     {v.id === "front" && v.state === "in_set" ? (
                       <div className="text-[10.5px] text-pass" data-testid="canonical-mark">
                         canonical identity
+                      </div>
+                    ) : null}
+                    {v.state === "in_set" ? (
+                      <div className="mt-1">
+                        <ViewLock slug={slug} characterId={characterId} view={v.id} locked={!!v.locked} />
                       </div>
                     ) : null}
                   </figure>

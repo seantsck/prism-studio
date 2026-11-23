@@ -1081,6 +1081,43 @@ describe("a Character's reference set", () => {
     expect((tq.attempt.modelSettings as { aspectRatio?: string }).aspectRatio).not.toBe("21:9");
   });
 
+  it("the right profile made with the left waits for it, is sent its picture and told to mirror it", async () => {
+    const { yumeko } = await scene();
+    const make = (extra: Record<string, string>) =>
+      makeReferenceViews(
+        form({
+          projectSlug: "ojousama",
+          characterId: yumeko.id,
+          batchId: "pair",
+          model: "mock/mock-image-1",
+          ...extra,
+        }),
+      );
+    const first = await make({ views: "profile,right_profile" });
+    expect(first).toMatchObject({ ok: true, started: ["profile"], waiting: ["right_profile"] });
+    const afterLeft = first.ok ? first.afterLeft : undefined;
+    expect(afterLeft).toBeTruthy();
+    expect(await make({ views: "right_profile", fromLeft: afterLeft! })).toMatchObject({
+      ok: true,
+      started: [],
+      waiting: ["right_profile"],
+    });
+    await work();
+    expect(await make({ views: "right_profile", fromLeft: afterLeft! })).toMatchObject({
+      ok: true,
+      started: ["right_profile"],
+    });
+    const all = await attempts(yumeko.id);
+    const left = all.find((v) => v.attempt.id === afterLeft)!;
+    const right = all.find(
+      (v) =>
+        (v.attempt.modelSettings as { intent?: string }).intent === "profile_right" &&
+        v.job?.idempotencyKey.startsWith("views-pair"),
+    )!;
+    expect(right.attempt.inputAssetIds).toContain(left.outputs[0]!.asset.id);
+    expect(right.attempt.prompt).toContain("mirror image of the left profile");
+  });
+
   it("a locked view is not made again", async () => {
     const { yumeko, front } = await scene();
     expect(await put(yumeko.id, "front", { attemptId: front.attempt.id })).toEqual({ ok: true });

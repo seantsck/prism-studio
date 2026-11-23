@@ -8,7 +8,9 @@ import { Button } from "@/components/ui";
 import { RefreshWhileActive } from "@/components/images/refresh-while-active";
 import { userPrice } from "@/domain/pricing/user-price";
 import { makeReferenceViews, stopReferenceViews } from "@/server/reference-view-actions";
-import { addToReferenceSet, addViewsToReferenceSet, setViewLocked } from "@/server/visual-bible-actions";
+import { addToReferenceSet, addViewsToReferenceSet } from "@/server/visual-bible-actions";
+import { UseAsFront, ViewLock } from "./picture-actions";
+import { ZoomImage } from "@/components/zoom-image";
 import { cn } from "@/lib/utils";
 
 export type ViewState = "in_set" | "making" | "made" | "missing";
@@ -26,6 +28,8 @@ export interface ChecklistView {
   pictureUrl?: string | null;
   /** the finished take waiting to be added ("made") */
   attemptId?: string | null;
+  /** the picture shown (in the set, or the made take) */
+  pictureAssetId?: string | null;
   /** a newer take of a view already in the set, to use instead of the picture in it */
   newer?: { attemptId: string; url: string | null } | null;
   /** every finished take of this view other than the picture in it: the options to choose from */
@@ -34,7 +38,16 @@ export interface ChecklistView {
   locked?: boolean;
   /** its generations still running (to stop them) */
   jobIds?: string[];
+  /** its newest try (any state): what the run tracker follows */
+  latestAttemptId?: string | null;
 }
+
+/** One press of Make: the views it covers, and each one's newest try before it (a new try is this run's). */
+interface Run {
+  ids: string[];
+  before: Record<string, string | null>;
+}
+const runKey = (characterId: string) => `prism-reference-views-run:${characterId}`;
 
 /** "Front" → "front view", "3/4 view" → "3/4 view", "Left profile" → "left profile view". */
 const viewName = (label: string) => {
@@ -60,6 +73,8 @@ interface Waiting {
   items: { id: string; costUsd: number }[];
   /** they wait for this new front view and are made from it */
   afterFront?: string;
+  /** the right profile waits for this left profile and mirrors it */
+  afterLeft?: string;
 }
 
 const storeKey = (characterId: string) => `prism-reference-views-waiting:${characterId}`;
@@ -136,6 +151,29 @@ export function ViewChecklist({
   // what was waiting when the page was left (same tab), read after hydration: storage is not on the server
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setWaitingState(readWaiting(characterId)), [characterId]);
+  // the run being followed (kept for this tab, so a refresh or a visit elsewhere does not lose it)
+  const [run, setRunState] = useState<Run | null>(null);
+  const setRun = useCallback(
+    (r: Run | null) => {
+      setRunState(r);
+      try {
+        if (r) sessionStorage.setItem(runKey(characterId), JSON.stringify(r));
+        else sessionStorage.removeItem(runKey(characterId));
+      } catch {
+        /* storage unavailable: the run lives only in this page */
+      }
+    },
+    [characterId],
+  );
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(runKey(characterId));
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (raw) setRunState(JSON.parse(raw) as Run);
+    } catch {
+      /* nothing to restore */
+    }
+  }, [characterId]);
   // a view that started elsewhere (another tab, the Reference Studio) is no longer waiting
   const stillMakeable = new Set(
     views.filter((v) => v.state === "missing" || v.state === "made" || v.state === "in_set").map((v) => v.id),
@@ -166,6 +204,7 @@ export function ViewChecklist({
       model: string,
       auto: boolean,
       afterFront?: string,
+      afterLeft?: string,
     ) => {
       setSending(true);
       try {
@@ -176,14 +215,31 @@ export function ViewChecklist({
         form.set("batchId", batch);
         form.set("model", model);
         if (afterFront) form.set("fromFront", afterFront);
+        if (afterLeft) form.set("fromLeft", afterLeft);
         if (paid) form.set("confirmedTotalUsd", items.reduce((s, i) => s + i.costUsd, 0).toFixed(4));
         const res = await makeReferenceViews(form);
         if (res.ok) {
           const left = items.filter((i) => res.waiting.includes(i.id));
           setWaiting(
-            left.length ? { batch, model, items: left, afterFront: res.afterFront ?? afterFront } : null,
+            left.length
+              ? {
+                  batch,
+                  model,
+                  items: left,
+                  afterFront: res.afterFront ?? afterFront,
+                  afterLeft: res.afterLeft ?? afterLeft,
+                }
+              : null,
           );
           if (!auto || res.started.length) setNote({ ok: true, text: res.message });
+          // a new press starts a new run to follow, view by view, until the last one is finished
+          if (!auto && (res.started.length || res.waiting.length))
+            setRun({
+              ids: items.map((i) => i.id),
+              before: Object.fromEntries(
+                items.map((i) => [i.id, views.find((v) => v.id === i.id)?.latestAttemptId ?? null]),
+              ),
+            });
           // what was sent is no longer ticked (a view made again is not made a third time by the next press)
           if (!auto)
             setToggled((t) => {
@@ -193,6 +249,7 @@ export function ViewChecklist({
             });
         } else {
           setWaiting(null);
+          setRun(null);
           setNote({ ok: false, text: res.error });
         }
       } catch {
@@ -202,7 +259,7 @@ export function ViewChecklist({
         setSending(false);
       }
     },
-    [slug, characterId, paid, setWaiting],
+    [slug, characterId, paid, setWaiting, setRun, views],
   );
 
   // start what waits as soon as the project has a free slot (re-checked on every refresh, at most every few seconds)
@@ -211,7 +268,7 @@ export function ViewChecklist({
     if (!waiting || sending || activeInProject >= atOnce) return;
     if (Date.now() - lastTry.current < 4000) return;
     lastTry.current = Date.now();
-    void send(waiting.items, waiting.batch, waiting.model, true, waiting.afterFront);
+    void send(waiting.items, waiting.batch, waiting.model, true, waiting.afterFront, waiting.afterLeft);
   }, [waiting, sending, activeInProject, atOnce, views, send]);
 
   const priceOf = (usd: number) => (paid ? `$${(userPrice(usd) ?? 0).toFixed(2)}` : "free");
@@ -230,12 +287,31 @@ export function ViewChecklist({
 
   // finished views not yet in the set, each with the take to add
   const madeToAdd = views.filter((v) => v.state === "made" && v.attemptId && !waitingIds.has(v.id));
+  const stateOf = (id: string) => views.find((x) => x.id === id)?.state;
   const count = (s: ViewState) => views.filter((v) => v.state === s).length;
   const done = count("in_set") + count("made");
   const making = count("making");
   const queued = waiting?.items.length ?? 0;
   const failed = views.filter((v) => v.state === "missing" && v.failed && !waitingIds.has(v.id)).length;
   const busy = making > 0 || queued > 0;
+  // the run: each of its views is waiting, being made, or finished (a new try that is no longer being made)
+  const runViews = run
+    ? run.ids.map((id) => {
+        const v = views.find((x) => x.id === id);
+        const fresh = !!v?.latestAttemptId && v.latestAttemptId !== run.before[id];
+        const status = waitingIds.has(id)
+          ? ("waiting" as const)
+          : !fresh || v?.state === "making"
+            ? ("making" as const)
+            : v?.state === "missing"
+              ? ("failed" as const)
+              : ("finished" as const);
+        return { id, label: v?.label ?? id, status };
+      })
+    : [];
+  const runFinished = runViews.filter((r) => r.status === "finished" || r.status === "failed").length;
+  const runFailed = runViews.filter((r) => r.status === "failed").length;
+  const runDone = !!run && runFinished === runViews.length;
 
   return (
     <div className="space-y-2">
@@ -257,13 +333,85 @@ export function ViewChecklist({
         ) : null}
       </div>
 
+      {run ? (
+        <div
+          className={cn(
+            "space-y-1.5 rounded-[3px] border p-2",
+            runDone ? "border-pass/40 bg-pass/5" : "border-accent/40 bg-accent/5",
+          )}
+          data-testid="reference-views-run"
+          data-done={runDone ? "1" : "0"}
+          aria-live="polite"
+        >
+          <div className="flex items-baseline justify-between gap-2 text-[12px]">
+            <span className="font-medium" data-testid="reference-views-run-status">
+              {runDone
+                ? runFailed
+                  ? `Finished: ${runFinished - runFailed} of ${runViews.length} made, ${runFailed} did not finish`
+                  : `All ${runViews.length} finished`
+                : `Making ${runViews.length === 1 ? "1 view" : `${runViews.length} views`}: ${runFinished} of ${runViews.length} finished`}
+            </span>
+            {runDone ? (
+              <button
+                type="button"
+                className="text-[11px] text-accent hover:underline"
+                onClick={() => setRun(null)}
+                data-testid="reference-views-run-dismiss"
+              >
+                Dismiss
+              </button>
+            ) : null}
+          </div>
+          <div className="flex h-2 overflow-hidden rounded-full bg-line" aria-hidden>
+            <div
+              className={runDone ? "bg-pass" : "bg-pass transition-all"}
+              style={{ width: `${(runFinished / Math.max(1, runViews.length)) * 100}%` }}
+            />
+            {runDone ? null : <div className="flex-1 animate-pulse bg-accent/30" />}
+          </div>
+          <ol className="flex flex-wrap gap-1 text-[11px]">
+            {runViews.map((r) => (
+              <li
+                key={r.id}
+                className={cn(
+                  "rounded-[3px] border px-1.5 py-0.5",
+                  r.status === "finished"
+                    ? "border-pass/40 text-pass"
+                    : r.status === "failed"
+                      ? "border-warn/40 text-warn"
+                      : r.status === "making"
+                        ? "border-accent/50 text-accent"
+                        : "border-line text-muted",
+                )}
+                data-testid="reference-views-run-view"
+                data-status={r.status}
+              >
+                {r.status === "finished"
+                  ? "✓ "
+                  : r.status === "failed"
+                    ? "✕ "
+                    : r.status === "making"
+                      ? "● "
+                      : "… "}
+                {r.label}
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+
       {busy || done > 0 || failed > 0 ? (
         <div className="space-y-1" data-testid="reference-views-progress" aria-live="polite">
-          <div className="flex h-1.5 overflow-hidden rounded-full bg-line" aria-hidden>
-            <div className="bg-pass" style={{ width: `${(done / views.length) * 100}%` }} />
-            <div className="animate-pulse bg-accent" style={{ width: `${(making / views.length) * 100}%` }} />
-            <div className="bg-accent/30" style={{ width: `${(queued / views.length) * 100}%` }} />
-          </div>
+          {run ? null : (
+            <div className="flex h-1.5 overflow-hidden rounded-full bg-line" aria-hidden>
+              <div className="bg-pass" style={{ width: `${(done / views.length) * 100}%` }} />
+              <div
+                className="animate-pulse bg-accent"
+                style={{ width: `${(making / views.length) * 100}%` }}
+              />
+              <div className="bg-accent/30" style={{ width: `${(queued / views.length) * 100}%` }} />
+            </div>
+          )}
           <p className="text-[11.5px]">
             <span className="text-pass">{done} done</span>
             {" · "}
@@ -296,6 +444,7 @@ export function ViewChecklist({
                 className="text-accent hover:underline"
                 onClick={() => {
                   setWaiting(null);
+                  setRun(null);
                   setNote({
                     ok: true,
                     text: "The waiting views were cancelled. Nothing was charged for them.",
@@ -319,6 +468,7 @@ export function ViewChecklist({
           onResult={(r) => {
             if (r.ok) {
               setWaiting(null);
+              setRun(null);
               setNote({ ok: true, text: r.message ?? "Stopped." });
             }
           }}
@@ -398,13 +548,28 @@ export function ViewChecklist({
                     />
                   ) : null}
                   {v.pictureUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={v.pictureUrl}
-                      alt={`${v.label}${v.state === "in_set" ? " in the set" : ", made"}`}
-                      className="h-10 w-8 shrink-0 rounded-[2px] border border-line object-cover"
-                      data-testid="reference-view-picture"
-                    />
+                    <span data-testid="reference-view-picture-wrap">
+                      <ZoomImage
+                        src={v.pictureUrl}
+                        alt={`${v.label}${v.state === "in_set" ? " in the set" : ", made"}`}
+                        className="h-10 w-8 shrink-0 rounded-[2px] border border-line object-cover"
+                        caption={`${v.label}${v.state === "in_set" ? (v.locked ? " · locked in the set" : " · in the set") : " · made"}`}
+                        testId="reference-view-picture"
+                      >
+                        {v.state === "in_set" ? (
+                          <ViewLock slug={slug} characterId={characterId} view={v.id} locked={!!v.locked} />
+                        ) : null}
+                        {v.pictureAssetId || v.attemptId ? (
+                          <UseAsFront
+                            slug={slug}
+                            characterId={characterId}
+                            assetId={v.pictureAssetId}
+                            attemptId={v.state === "made" ? v.attemptId : null}
+                            isFront={v.id === "front" && v.state === "in_set"}
+                          />
+                        ) : null}
+                      </ZoomImage>
+                    </span>
                   ) : null}
                   <span className={v.state === "in_set" ? "text-pass" : ""}>
                     {v.state === "in_set" ? "✓ " : ""}
@@ -428,11 +593,11 @@ export function ViewChecklist({
                         data-testid="reference-view-use-newer"
                       >
                         {v.newer.url ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
+                          <ZoomImage
                             src={v.newer.url}
                             alt={`New take: ${v.label}`}
                             className="h-10 w-8 rounded-[2px] border border-accent/60 object-cover"
+                            caption={`${v.label} · the new take (use it with the button beside it)`}
                           />
                         ) : null}
                         <input type="hidden" name="projectSlug" value={slug} />
@@ -449,25 +614,7 @@ export function ViewChecklist({
                         {v.locked ? "locked in the set" : "in the set"}
                       </span>
                     )}
-                    <ActionForm action={setViewLocked} successMessage="" quiet className="inline">
-                      <input type="hidden" name="projectSlug" value={slug} />
-                      <input type="hidden" name="characterId" value={characterId} />
-                      <input type="hidden" name="view" value={v.id} />
-                      <input type="hidden" name="locked" value={String(!v.locked)} />
-                      <Button
-                        type="submit"
-                        size="sm"
-                        title={
-                          v.locked
-                            ? "Unlock this view so it can be made again or replaced"
-                            : "Lock this picture in place: it is not made again or replaced"
-                        }
-                        data-testid="reference-view-lock"
-                        data-locked={v.locked ? "1" : "0"}
-                      >
-                        {v.locked ? "🔒 Unlock" : "Lock"}
-                      </Button>
-                    </ActionForm>
+                    <ViewLock slug={slug} characterId={characterId} view={v.id} locked={!!v.locked} />
                   </span>
                 ) : v.state === "making" ? (
                   <span className="flex items-center gap-1 text-[11.5px] text-accent">
@@ -508,7 +655,11 @@ export function ViewChecklist({
                   </span>
                 ) : isWaiting ? (
                   <span className="text-[11.5px] text-muted">
-                    {waiting?.afterFront ? "waiting for the front view" : "waiting for a free slot"}
+                    {v.id === "right_profile" && waiting?.afterLeft && stateOf("profile") === "making"
+                      ? "waiting for the left profile"
+                      : waiting?.afterFront && stateOf("front") === "making"
+                        ? "waiting for the front view"
+                        : "waiting for a free slot"}
                   </span>
                 ) : v.costUsd == null ? (
                   <span className="text-[11.5px] text-warn" title={v.problem ?? ""}>
@@ -534,40 +685,48 @@ export function ViewChecklist({
                   {v
                     .takes!.filter((t) => t.attemptId !== v.attemptId)
                     .slice(0, 8)
-                    .map((t) => (
-                      <ActionForm
-                        key={t.attemptId}
-                        action={addToReferenceSet}
-                        successMessage=""
-                        quiet
-                        className="inline"
-                        confirmMessage={`Use this take (${t.engine}) as the ${v.label.toLowerCase()}? The one in the set now stays in your pictures.`}
-                      >
-                        <input type="hidden" name="projectSlug" value={slug} />
-                        <input type="hidden" name="characterId" value={characterId} />
-                        <input type="hidden" name="attemptId" value={t.attemptId} />
-                        <input type="hidden" name="view" value={v.id} />
-                        <input type="hidden" name="confirmReplace" value="1" />
-                        <button
-                          type="submit"
-                          className="block overflow-hidden rounded-[2px] border border-line hover:border-accent"
-                          title={`Use this take (${t.engine})`}
-                          data-testid="reference-view-take"
+                    .map((t) => {
+                      const use = (
+                        <ActionForm
+                          action={addToReferenceSet}
+                          successMessage=""
+                          quiet
+                          className="inline"
+                          confirmMessage={`Use this take (${t.engine}) as the ${v.label.toLowerCase()}? The one in the set now stays in your pictures.`}
                         >
+                          <input type="hidden" name="projectSlug" value={slug} />
+                          <input type="hidden" name="characterId" value={characterId} />
+                          <input type="hidden" name="attemptId" value={t.attemptId} />
+                          <input type="hidden" name="view" value={v.id} />
+                          <input type="hidden" name="confirmReplace" value="1" />
+                          <Button
+                            type="submit"
+                            size="sm"
+                            variant="primary"
+                            data-testid="reference-view-take-use"
+                          >
+                            Use as the {v.label.toLowerCase()}
+                          </Button>
+                        </ActionForm>
+                      );
+                      return (
+                        <span key={t.attemptId} data-testid="reference-view-take" className="inline-block">
                           {t.url ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
+                            <ZoomImage
                               src={t.url}
                               alt={`${v.label}, ${t.engine}`}
-                              className="h-10 w-8 object-cover"
-                            />
+                              className="h-10 w-8 rounded-[2px] border border-line object-cover hover:border-accent"
+                              caption={`${v.label} · another take (${t.engine})`}
+                            >
+                              {use}
+                            </ZoomImage>
                           ) : (
-                            <span className="block h-10 w-8" />
+                            use
                           )}
-                        </button>
-                      </ActionForm>
-                    ))}
-                  <span className="text-faint">click one to use it</span>
+                        </span>
+                      );
+                    })}
+                  <span className="text-faint">click one to see it large and use it</span>
                 </div>
               ) : null}
             </li>
