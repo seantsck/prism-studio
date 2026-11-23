@@ -53,7 +53,7 @@ async function queue(
   data: ProjectData,
   slug: string,
   character: Character,
-  opts: { note?: string; revise?: boolean; size?: PartSize },
+  opts: { note?: string; revise?: boolean; edited?: boolean; size?: PartSize },
   form: FormData,
 ) {
   const q = quoteCharacterFill(data, character.id, str(form, "model"), {
@@ -92,10 +92,12 @@ async function fillCharacter_impl(form: FormData) {
     current = characterSchema.parse({ ...character, partSize: size, updatedAt: new Date().toISOString() });
     ({ remembered } = await saveCharacterWithSize(data.project.id, current));
   }
-  await queue(data, slug, current, { note, size }, form);
+  // "Refine with Prism" on a sheet the creator has written in: their edits lead
+  const edited = str(form, "edited") === "1";
+  await queue(data, slug, current, { note, size, edited }, form);
   return {
     ok: true as const,
-    message: `Prism is filling in ${character.name}…${remembered ? "" : ` ${NEEDS_0067}`}`,
+    message: `Prism is ${edited ? "refining" : "filling in"} ${character.name}…${remembered ? "" : ` ${NEEDS_0067}`}`,
   };
 }
 

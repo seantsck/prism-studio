@@ -7,6 +7,7 @@ import { prepareSubjectImage } from "@/generation/subject-submission";
 import { UserFacingError } from "./action-result";
 import { getGenerationConfig, getRegistry } from "./generation";
 import { readSubjectImageForm } from "./reference-request";
+import { subjectImageAssetIds } from "./subject-image-sources";
 
 /**
  * Making a Character's reference views from its page: one view, or every view still missing, each priced EXACTLY as
@@ -37,10 +38,20 @@ export interface ViewsQuote {
   totalUsd: number | null;
 }
 
-/** The creator's own photos of this Character, then the front view (when it holds a picture). */
-function startingImages(data: ProjectData, character: Character) {
+/**
+ * The creator's own photos of this Character, then the front view; only pictures that are really stored and are this
+ * Character's own (what a generation may start from), so a slot holding a placeholder is never sent.
+ */
+async function startingImages(data: ProjectData, character: Character) {
+  const own = await subjectImageAssetIds(
+    data,
+    { kind: "character", characterId: character.id },
+    { startInlineWorker: false },
+  );
   const assets = new Map(data.assets.map((a) => [a.id, a]));
-  const refs = data.identityRefs.filter((r) => r.characterId === character.id && r.assetId);
+  const refs = data.identityRefs.filter(
+    (r) => r.characterId === character.id && r.assetId && own.has(r.assetId),
+  );
   const photos = [
     ...new Set(
       refs.filter((r) => referenceOrigin(assets.get(r.assetId!)) === "uploaded").map((r) => r.assetId!),
@@ -97,7 +108,7 @@ export async function quoteReferenceViews(
   const model = `${REFERENCE_PLAN_MODEL.provider}/${REFERENCE_PLAN_MODEL.modelId}`;
   const registry = getRegistry();
   const m = registry.model(REFERENCE_PLAN_MODEL.provider, REFERENCE_PLAN_MODEL.modelId);
-  const { photos, front } = startingImages(data, character);
+  const { photos, front } = await startingImages(data, character);
   const views: ViewQuote[] = [];
   for (const v of REFERENCE_SET_VIEWS) {
     // the front view is made from the photos (or the words); the others from the photos, else from the front view
@@ -148,7 +159,7 @@ export async function prepareReferenceView(
 ) {
   const v = REFERENCE_SET_VIEWS.find((x) => x.id === viewId);
   if (!v) throw new UserFacingError("Choose one of the reference views.");
-  const { photos, front } = startingImages(data, character);
+  const { photos, front } = await startingImages(data, character);
   const start = photos.length ? photos : v.id !== "front" && front ? [front] : [];
   const model = `${REFERENCE_PLAN_MODEL.provider}/${REFERENCE_PLAN_MODEL.modelId}`;
   const { prepared, registry, req } = await prepareView(data, character, v.intent, start, model, userId, key);

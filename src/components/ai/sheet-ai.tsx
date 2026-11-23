@@ -46,6 +46,8 @@ export function SheetAi({
   filled = [],
   fillExtra,
   fillButtonText,
+  refineMode = false,
+  editedHint,
 }: {
   /** "character-ai" / "location-ai": the prefix of every test id */
   testId: string;
@@ -74,6 +76,13 @@ export function SheetAi({
   fillExtra?: React.ReactNode;
   /** the Fill in button's text, when the price is shown beside each choice instead */
   fillButtonText?: string;
+  /**
+   * The sheet already has the creator's words: the button refines it (their edits lead, the rest is brought in line)
+   * instead of filling it in.
+   */
+  refineMode?: boolean;
+  /** said when the creator has edited the sheet since Prism's last suggestion */
+  editedHint?: string;
 }) {
   const pending = !!latest && (latest.status === "queued" || latest.status === "running");
   // what is left to decide: Prism's version of a field that differs from the sheet (empty ones were filled in at once)
@@ -231,15 +240,21 @@ export function SheetAi({
           <ActionForm action={fill} successMessage="" quiet className="space-y-2">
             {hidden}
             <input type="hidden" name="model" value={fillQuote.model} />
+            {refineMode ? <input type="hidden" name="edited" value="1" /> : null}
             {fillQuote.paid ? (
               <input type="hidden" name="confirmedTotalUsd" value={fillQuote.usd.toFixed(4)} />
+            ) : null}
+            {editedHint ? (
+              <p className="text-[13px] text-accent" data-testid={`${testId}-edited`}>
+                {editedHint}
+              </p>
             ) : null}
             <p className="text-[13px] text-muted">
               {prominent ? `Most of ${name}'s sheet is empty. ` : ""}
               {intro} You review it before anything changes.
             </p>
             {fillExtra}
-            <Field label="Anything to add (optional)">
+            <Field label={refineMode ? "What should change? (optional)" : "Anything to add (optional)"}>
               <textarea
                 name="note"
                 rows={2}
@@ -250,10 +265,14 @@ export function SheetAi({
             </Field>
             <Button
               type="submit"
-              variant={prominent ? "primary" : "secondary"}
+              variant={prominent || editedHint ? "primary" : "secondary"}
               data-testid={`${testId}-fill`}
             >
-              {fillButtonText ?? `Fill in with Prism · ${priceOf(fillQuote)}`}
+              {refineMode
+                ? fillButtonText
+                  ? "Refine with Prism"
+                  : `Refine with Prism · ${priceOf(fillQuote)}`
+                : (fillButtonText ?? `Fill in with Prism · ${priceOf(fillQuote)}`)}
             </Button>
           </ActionForm>
         ) : (
