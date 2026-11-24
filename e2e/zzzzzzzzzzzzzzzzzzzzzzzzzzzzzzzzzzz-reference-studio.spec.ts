@@ -2265,3 +2265,19 @@ test("ZJ: an episode with a script is redrafted whole: priced and confirmed, one
   await page.reload();
   await expect(page.getByTestId("revision-history").locator("li")).toHaveCount(Math.max(before, 1) + 1);
 });
+
+test("ZK: a character created in a project is in the library straight away, on the home page", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await page.goto("/projects/ojousama/characters");
+  const form = page.locator("form").filter({ has: page.locator('input[name="name"][required]') });
+  await form.locator('input[name="name"]').fill("Haruki Doorman");
+  await form.locator('input[name="role"]').fill("Hotel doorman");
+  await form.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByRole("heading", { name: "Haruki Doorman", exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+  await page.goto("/");
+  await expect(page.locator('[data-testid="home-character"][data-name="Haruki Doorman"]')).toBeVisible();
+});

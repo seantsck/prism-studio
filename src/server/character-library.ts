@@ -6,6 +6,7 @@ import type { Asset, ProjectData } from "@/domain/schemas";
 import { canonicalRefOf } from "@/domain/visual-bible";
 import { buildObjectPath } from "@/lib/storage-paths";
 import { assetUrl } from "@/lib/utils";
+import { CharacterLibraryUnavailableError } from "@/data/repository";
 import { UserFacingError } from "./action-result";
 import { getRepo } from "./repo";
 import { checksum, getUploadStorage, storageForAsset } from "./storage";
@@ -276,4 +277,22 @@ export async function copyLibraryIntoNewProject(
     }
   }
   return out;
+}
+
+/**
+ * Every Character the creator makes goes into their library (the owner's choice, 2026-11-24), wherever it is made: a
+ * new Character in a project, or the cast a story import creates. A copy of a library Character added to a project is
+ * not saved again (the library already has it). Best effort: without the library table (migration 0062) the Character
+ * is still made, just not saved.
+ */
+export async function keepInLibrary(projectId: string, characterIds: readonly string[]): Promise<void> {
+  const repo = await getRepo();
+  for (const id of characterIds) {
+    try {
+      await repo.setInLibrary(projectId, id, true);
+    } catch (err) {
+      if (err instanceof CharacterLibraryUnavailableError) return;
+      throw err;
+    }
+  }
 }
