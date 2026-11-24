@@ -29,6 +29,7 @@ import { buildObjectPath } from "@/lib/storage-paths";
 import { extractStoryText, STORY_UPLOAD_MAX_BYTES } from "@/story/extract";
 import { PROPOSAL_SECTIONS, STORY_PROMPT_VERSION, type ProposalSection } from "@/story/prompt";
 import { estimateUsd } from "@/story/provider";
+import { keepInLibrary } from "./character-library";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { requireUser } from "./auth";
 import { getRepo, requireProjectFresh } from "./repo";
@@ -409,6 +410,11 @@ async function apply_impl(form: FormData): Promise<ActionResult> {
   const pid = data.project.id;
   for (const c of [...plan.characters.create, ...plan.characters.update])
     await projectRepo.upsert(pid, "characters", c);
+  // the cast the story brings in goes into the creator's library too
+  await keepInLibrary(
+    pid,
+    plan.characters.create.map((c) => c.id),
+  );
   for (const l of [...plan.locations.create, ...plan.locations.update])
     await projectRepo.upsert(pid, "locations", l);
   if (plan.episode.create) {

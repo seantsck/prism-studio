@@ -44,6 +44,7 @@ import { emptyShot } from "@/domain/shot-defaults";
 import { SHOT_SECTION_SPECS, applySection } from "@/domain/shot-fields";
 import { validateLookLink } from "@/domain/looks";
 import { nextTakeNumber, selectTake as selectTakeDomain } from "@/domain/takes";
+import { keepInLibrary } from "./character-library";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { ProjectArchiveUnavailableError, ProjectTrashUnavailableError } from "@/data/repository";
 import { getRepo, requireProjectFresh } from "./repo";
@@ -308,6 +309,8 @@ async function saveCharacter_impl(form: FormData) {
     updatedAt: now(),
   });
   const { remembered } = await saveCharacterWithSize(data.project.id, character);
+  // a new Character goes into the creator's library too
+  if (!existing) await keepInLibrary(data.project.id, [character.id]);
   refresh(slug);
   if (!existing) redirect(`/projects/${slug}/characters/${character.id}`);
   if (!remembered) return { ok: true as const, message: `Saved. ${NEEDS_0067}` };

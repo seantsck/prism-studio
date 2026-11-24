@@ -188,8 +188,7 @@ export default async function HomePage({
           </p>
         ) : library.characters.length === 0 ? (
           <p className="py-6 text-center text-[13px] text-muted" data-testid="home-characters-empty">
-            Characters you save to your library appear here, ready for any project. Open a character and
-            choose &ldquo;Save to library&rdquo;.
+            Every character you create appears here, ready for any project.
           </p>
         ) : (
           <ul className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3">
