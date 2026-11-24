@@ -2171,3 +2171,50 @@ test("ZH: a character made on its own is merged into the script's character of t
   await page.goto(`/projects/ojousama/characters/${takumi}`);
   await expect(page.getByTestId("cl-explainer")).toContainText("What is a Continuity Lock?");
 });
+
+test("ZI: photos are added on a character's page (chosen or dropped), and the views are then made from them", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  await page.goto("/");
+  const box = page.getByTestId("new-character");
+  await box
+    .getByTestId("new-character-prompt")
+    .fill("A tall man in his 40s with a grey beard and a wool coat.");
+  await box.getByTestId("new-character-name").fill("Sean");
+  await box.getByTestId("new-character-fill").locator("input").uncheck();
+  await box.getByTestId("new-character-create").click();
+  await expect(page.getByRole("heading", { name: "Sean", exact: true })).toBeVisible({ timeout: 60_000 });
+
+  // step 3 has the upload area; with no photos the views would start from the description
+  const upload = page.getByTestId("character-photo-upload");
+  await expect(upload.getByTestId("studio-upload-zone")).toContainText("Add reference photos of Sean");
+  await expect(page.getByTestId("reference-plan-photos")).toHaveText("You have 0 photos.");
+  await expect(page.getByTestId("reference-views-start")).toContainText("made from Sean's description");
+
+  // one chosen, one dropped; both read, shown, then uploaded together
+  const photo = await drawnJpeg(page, 1200, 1600, 0);
+  await upload.getByTestId("studio-upload-file").setInputFiles({
+    name: "sean-front.jpg",
+    mimeType: "image/jpeg",
+    buffer: photo,
+  });
+  await dropFiles(page, "character-photo-upload", [
+    { name: "sean-side.jpg", mimeType: "image/jpeg", buffer: await drawnJpeg(page, 1200, 1600, 0) },
+  ]);
+  await listed(page, 2);
+  await upload.getByTestId("studio-upload-submit").click();
+  await expect(upload.getByTestId("studio-upload-status")).toContainText("2 photos added to Sean", {
+    timeout: 30_000,
+  });
+
+  // they are Sean's photos now: counted, listed in Pictures, and every view is made from them
+  await expect(page.getByTestId("reference-plan-photos")).toHaveText("You have 2 photos.", {
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("reference-views-start")).toHaveText(
+    "Every view is made from your 2 photos.",
+  );
+  await expect(page.getByTestId("character-picture")).toHaveCount(2);
+  await expect(upload.getByTestId("studio-upload-item")).toHaveCount(0);
+});

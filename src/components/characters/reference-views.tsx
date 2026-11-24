@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { Panel } from "@/components/ui";
 import { REFERENCE_PHOTOS_BEST } from "@/domain/generation/reference-plan";
 import { TEST_ENGINE_NOTE, VIEW_ENGINE_NOTES } from "@/domain/generation/view-engines";
@@ -35,6 +36,7 @@ export function ReferenceViewsPanel({
   batchId,
   atOnce,
   activeInProject,
+  photoUpload,
 }: {
   slug: string;
   characterId: string;
@@ -66,6 +68,8 @@ export function ReferenceViewsPanel({
   atOnce: number;
   /** generations running in this project now */
   activeInProject: number;
+  /** where the creator adds photos of the Character (step 3) */
+  photoUpload?: ReactNode;
 }) {
   const [low, high] = REFERENCE_PHOTOS_BEST;
   return (
@@ -94,6 +98,7 @@ export function ReferenceViewsPanel({
             >
               You have {photos} photo{photos === 1 ? "" : "s"}.
             </p>
+            {photoUpload ? <div className="pt-1.5">{photoUpload}</div> : null}
             <p className="pt-1 text-[11.5px] text-muted" data-testid="reference-views-start">
               {quote.startsFrom === "photos"
                 ? `Every view is made from your ${photos === 1 ? "photo" : `${Math.min(photos, high)} photos`}.`

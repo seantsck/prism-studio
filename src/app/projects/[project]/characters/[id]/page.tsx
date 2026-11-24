@@ -1,3 +1,5 @@
+import { CharacterPhotoUpload } from "@/components/characters/character-photo-upload";
+import { singleUploadLimit } from "@/lib/upload-policy";
 import { notFound } from "next/navigation";
 import { Badge, Button, Field, PageHeader, Panel } from "@/components/ui";
 import { FramePlaceholder } from "@/components/shared";
@@ -409,6 +411,16 @@ export default async function CharacterPage({
           engines={engines}
           suggestedEngine={SUGGESTED_VIEWS_MODEL}
           photos={ownPhotos}
+          photoUpload={
+            pictures.selected ? (
+              <CharacterPhotoUpload
+                slug={slug}
+                subject={pictures.selected}
+                maxUploadBytes={singleUploadLimit(process.env)}
+                hasPhotos={ownPhotos > 0}
+              />
+            ) : null
+          }
           studioHref={`/projects/${slug}/studio?subject=character:${c.id}`}
           batchId={randomUUID()}
           atOnce={getGenerationConfig().limits.maxActivePerProject}
