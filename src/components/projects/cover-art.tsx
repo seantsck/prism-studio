@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActionForm } from "@/components/action-form";
 import { RefreshWhileActive } from "@/components/images/refresh-while-active";
 import { Button } from "@/components/ui";
-import { ZoomImage } from "@/components/zoom-image";
+import { COVER_STYLES, COVER_TEXT_MAX, DEFAULT_COVER_DESIGN, type CoverDesign } from "@/domain/cover-design";
 import { priceText } from "@/domain/pricing/user-price";
-import { cn } from "@/lib/utils";
-import { makeCoverArt, setCover, stopCoverArt } from "@/server/cover-art-actions";
+import { cn, fullUrl } from "@/lib/utils";
+import { makeCoverArt, saveCoverDesign, setCover, stopCoverArt } from "@/server/cover-art-actions";
+import { drawCover, loadImage, type CoverText } from "./cover-render";
 import type { CoverArtState } from "@/server/cover-art";
 
 const ratioOf = (r: string | null, w: number | null, h: number | null) => {
@@ -16,56 +17,192 @@ const ratioOf = (r: string | null, w: number | null, h: number | null) => {
   return a && b ? `${a} / ${b}` : "2 / 3";
 };
 
-/** A cover with the project's title laid over it (the picture itself carries no lettering). */
+/** A cover drawn with its title design (the picture itself carries no lettering): the same drawing as the download. */
 export function CoverWithTitle({
   url,
-  title,
+  design,
+  text,
   ratio,
   width,
   height,
   className,
   testId,
-  small = false,
 }: {
   url: string | null;
-  title: string;
-  /** a thumbnail: smaller title type */
-  small?: boolean;
+  design: CoverDesign;
+  text: CoverText;
   ratio?: string | null;
   width?: number | null;
   height?: number | null;
   className?: string;
   testId?: string;
 }) {
+  const box = useRef<HTMLDivElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const [image, setImage] = useState<HTMLImageElement | null>(null);
+  const [fonts, setFonts] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    if (!url) return;
+    loadImage(url)
+      .then((i) => alive && setImage(i))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [url]);
+  // the title faces may arrive after the first drawing
+  useEffect(() => {
+    void document.fonts?.ready.then(() => setFonts((n) => n + 1));
+  }, []);
+  const key = JSON.stringify([design, text]);
+  useEffect(() => {
+    const el = box.current;
+    const c = canvas.current;
+    if (!el || !c) return;
+    const draw = () => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (!w || !h) return;
+      const dpr = window.devicePixelRatio || 1;
+      c.width = Math.round(w * dpr);
+      c.height = Math.round(h * dpr);
+      const ctx = c.getContext("2d");
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawCover(ctx, w, h, image, design, text);
+    };
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(el);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [image, key, fonts]);
   return (
     <div
+      ref={box}
       className={cn("relative overflow-hidden rounded-[3px] border border-line2 bg-[#1b1b1e]", className)}
       style={{ aspectRatio: ratioOf(ratio ?? null, width ?? null, height ?? null) }}
       data-testid={testId}
+      data-title={text.title}
+      data-style={design.style}
     >
-      {url ? (
-        <ZoomImage
-          src={url}
-          alt={`Cover art for ${title}`}
-          wrapperClassName="block h-full w-full"
-          className="h-full w-full object-cover"
-          caption={title}
-        />
-      ) : null}
-      <div
-        className={cn(
-          "pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/70 to-transparent",
-          small ? "px-2 pb-4 pt-1.5" : "px-3 pb-8 pt-3",
-        )}
-      >
-        <div
-          className={cn(
-            "text-balance text-center font-semibold leading-tight tracking-tight text-white drop-shadow",
-            small ? "text-[11px]" : "text-[18px]",
-          )}
-        >
-          {title}
-        </div>
+      <canvas ref={canvas} className="absolute inset-0 h-full w-full" aria-label={`Cover of ${text.title}`} />
+    </div>
+  );
+}
+
+/** The finished cover, drawn at the picture's own full size, saved as a PNG. */
+async function downloadCover(url: string, design: CoverDesign, text: CoverText, slug: string) {
+  const image = await loadImage(fullUrl(url));
+  const c = document.createElement("canvas");
+  c.width = image.naturalWidth;
+  c.height = image.naturalHeight;
+  const ctx = c.getContext("2d");
+  if (!ctx) return;
+  await document.fonts?.ready;
+  drawCover(ctx, c.width, c.height, image, design, text);
+  const blob = await new Promise<Blob | null>((done) => c.toBlob(done, "image/png"));
+  if (!blob) return;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  // the project's slug, not the title: browsers drop non-ASCII download names and save a bare "download"
+  a.download = `${slug}-cover.png`;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+}
+
+/** The title design of the current cover: style, subtitle, tagline, cast names and credits, saved with the cover. */
+function TitleDesign({
+  slug,
+  assetId,
+  design,
+  onChange,
+  onDownload,
+}: {
+  slug: string;
+  assetId: string;
+  design: CoverDesign;
+  onChange: (d: CoverDesign) => void;
+  onDownload: () => void;
+}) {
+  const set = (patch: Partial<CoverDesign>) => onChange({ ...design, ...patch });
+  return (
+    <div className="space-y-2 rounded-[3px] border border-line p-2.5" data-testid="cover-design">
+      <div className="font-medium">Title design</div>
+      <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Title style">
+        {COVER_STYLES.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            role="radio"
+            aria-checked={design.style === s.id}
+            title={s.hint}
+            onClick={() => set({ style: s.id })}
+            className={cn(
+              "rounded-full border px-2.5 py-1 text-[12px]",
+              design.style === s.id
+                ? "border-accent bg-accent/10 text-fg"
+                : "border-line text-muted hover:text-fg",
+            )}
+            data-testid="cover-style"
+            data-style={s.id}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+      <input
+        value={design.subtitle}
+        maxLength={COVER_TEXT_MAX.subtitle}
+        onChange={(e) => set({ subtitle: e.target.value })}
+        placeholder="Subtitle (optional), e.g. the English title"
+        aria-label="Subtitle"
+        data-testid="cover-subtitle"
+      />
+      <input
+        value={design.tagline}
+        maxLength={COVER_TEXT_MAX.tagline}
+        onChange={(e) => set({ tagline: e.target.value })}
+        placeholder="Tagline (optional), e.g. One proposal. No conditions."
+        aria-label="Tagline"
+        data-testid="cover-tagline"
+      />
+      <div className="flex flex-wrap gap-3">
+        <label className="flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={design.showCast}
+            onChange={(e) => set({ showCast: e.target.checked })}
+            data-testid="cover-show-cast"
+          />
+          Cast names
+        </label>
+        <label className="flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={design.showCredits}
+            onChange={(e) => set({ showCredits: e.target.checked })}
+            data-testid="cover-show-credits"
+          />
+          Credits block
+        </label>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <ActionForm action={saveCoverDesign} quiet>
+          <input type="hidden" name="projectSlug" value={slug} />
+          <input type="hidden" name="assetId" value={assetId} />
+          <input type="hidden" name="design" value={JSON.stringify(design)} />
+          <Button type="submit" size="sm" variant="primary" data-testid="cover-design-save">
+            Save title design
+          </Button>
+        </ActionForm>
+        <Button type="button" size="sm" onClick={onDownload} data-testid="cover-download">
+          Download cover
+        </Button>
       </div>
     </div>
   );
@@ -102,6 +239,13 @@ export function CoverArtPanel({
   );
   const price = shape?.usd != null ? (chosen?.paid ? priceText(shape.usd) : "free") : "";
   const takes = compact ? state.takes.slice(0, 4) : state.takes;
+  // the title design being edited (saved with the cover): edits hold until the saved design or the cover changes
+  const saved = state.cover?.design ?? DEFAULT_COVER_DESIGN;
+  const savedKey = `${state.cover?.assetId ?? ""}|${JSON.stringify(saved)}`;
+  const [edit, setEdit] = useState<{ key: string; design: CoverDesign } | null>(null);
+  const design = edit && edit.key === savedKey ? edit.design : saved;
+  const setDesign = (d: CoverDesign) => setEdit({ key: savedKey, design: d });
+  const textOf = (castNames: string[]): CoverText => ({ title, cast: castNames, kindLine: state.kindLine });
 
   return (
     <div className="space-y-3 text-[12.5px]" data-testid="cover-art">
@@ -109,14 +253,30 @@ export function CoverArtPanel({
       <div className={cn("grid gap-4", compact ? "sm:grid-cols-[160px_1fr]" : "md:grid-cols-[260px_1fr]")}>
         <div>
           {state.cover ? (
-            <CoverWithTitle
-              url={state.cover.url}
-              title={title}
-              width={state.cover.width}
-              height={state.cover.height}
-              testId="cover-current"
-              small={compact}
-            />
+            <>
+              <CoverWithTitle
+                url={state.cover.url}
+                design={design}
+                text={textOf(state.cover.cast)}
+                width={state.cover.width}
+                height={state.cover.height}
+                testId="cover-current"
+              />
+              {compact ? null : (
+                <div className="mt-2">
+                  <TitleDesign
+                    slug={slug}
+                    assetId={state.cover.assetId}
+                    design={design}
+                    onChange={setDesign}
+                    onDownload={() =>
+                      state.cover?.url &&
+                      void downloadCover(state.cover.url, design, textOf(state.cover.cast), slug)
+                    }
+                  />
+                </div>
+              )}
+            </>
           ) : (
             <div
               className="flex aspect-[2/3] items-center justify-center rounded-[3px] border border-dashed border-line2 px-3 text-center text-muted"
@@ -285,7 +445,8 @@ export function CoverArtPanel({
                 {t.status === "succeeded" ? (
                   <CoverWithTitle
                     url={t.url}
-                    title={title}
+                    design={design}
+                    text={textOf(t.cast)}
                     ratio={t.ratio}
                     width={t.width}
                     height={t.height}

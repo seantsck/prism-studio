@@ -2,6 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { SubjectAttemptView } from "@/data/generation-repository";
 import { isArchived } from "@/domain/archive";
+import { coverDesignOf } from "@/domain/cover-design";
 import {
   COVER_CAST_MAX,
   COVER_SHAPES,
@@ -48,6 +49,8 @@ export interface CoverTake {
   height: number | null;
   engine: string;
   createdAt: string;
+  /** the characters the take features (from its frozen package) */
+  cast: string[];
 }
 
 /** Everything the cover art panel shows: engines and prices per shape, the takes made, and the current cover. */
@@ -80,7 +83,9 @@ export async function coverArtState(data: ProjectData, userId: string | null) {
   const engines: CoverEngine[] = [];
   // test engines (coloured patterns, never a picture) only where the Studio offers them: no real engine is switched
   // on, or the server asks for them beside the real ones
-  const imageModels = registry.models().filter((m) => m.capabilities.image && registry.availabilityOf(m).available);
+  const imageModels = registry
+    .models()
+    .filter((m) => m.capabilities.image && registry.availabilityOf(m).available);
   const tests = offersTestModels(
     imageModels.map((m) => ({ test: m.kind === "mock", available: true })),
     config.mock.showBesideRealModels === true,
@@ -144,6 +149,9 @@ export async function coverArtState(data: ProjectData, userId: string | null) {
         height: asset?.height ?? null,
         engine: v.attempt.model,
         createdAt: v.attempt.createdAt,
+        cast: ((v.attempt.packageSnapshot as { cast?: Array<{ name?: unknown }> }).cast ?? [])
+          .map((c) => (typeof c.name === "string" ? c.name : ""))
+          .filter(Boolean),
       },
     ];
   });
@@ -155,8 +163,21 @@ export async function coverArtState(data: ProjectData, userId: string | null) {
     castMax: COVER_CAST_MAX,
     takes,
     cover: cover
-      ? { assetId: cover.id, url: previewUrl(cover), width: cover.width, height: cover.height }
+      ? {
+          assetId: cover.id,
+          url: previewUrl(cover),
+          width: cover.width,
+          height: cover.height,
+          design: coverDesignOf((cover.metadata as { cover?: { design?: unknown } }).cover?.design),
+          cast: takes.find((t) => t.assetId === cover.id)?.cast ?? [],
+        }
       : null,
+    kindLine:
+      data.project.projectType === "film"
+        ? "A feature film"
+        : data.project.projectType === "short"
+          ? "A short film"
+          : `A series in ${data.episodes.length} episode${data.episodes.length === 1 ? "" : "s"}`,
     available,
   };
 }

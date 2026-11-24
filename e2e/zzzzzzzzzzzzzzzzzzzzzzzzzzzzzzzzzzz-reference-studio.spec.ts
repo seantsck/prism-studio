@@ -2381,12 +2381,31 @@ test("ZM: cover art: shape chosen, priced and confirmed, made without lettering,
   await expect(take).toHaveAttribute("data-status", "succeeded", { timeout: 90_000 });
   await expect(take).toContainText(`#1 · ${ratio}`);
   await take.getByTestId("cover-use").click();
-  await expect(cover.getByTestId("cover-current")).toContainText("お嬢様、僕と結婚してください。", {
-    timeout: 30_000,
-  });
+  const current = cover.getByTestId("cover-current");
+  await expect(current).toHaveAttribute("data-title", "お嬢様、僕と結婚してください。", { timeout: 30_000 });
   await expect(take.getByTestId("cover-take-current")).toBeVisible();
+  // the title is designed like a DVD cover: a style, a subtitle and a tagline, saved with the cover
+  const design = cover.getByTestId("cover-design");
+  await expect(current).toHaveAttribute("data-style", "cinematic");
+  await design.locator('[data-testid="cover-style"][data-style="bold"]').click();
+  await expect(current).toHaveAttribute("data-style", "bold");
+  await design.getByTestId("cover-subtitle").fill("Will You Marry Me, My Lady?");
+  await design.getByTestId("cover-tagline").fill("One proposal. No conditions.");
+  await design.getByTestId("cover-show-credits").uncheck();
+  const saved = page.waitForResponse((r) => r.request().method() === "POST" && r.ok());
+  await design.getByTestId("cover-design-save").click();
+  await saved;
+  // the finished cover downloads as a full-size PNG
+  const download = page.waitForEvent("download");
+  await design.getByTestId("cover-download").click();
+  expect((await download).suggestedFilename()).toBe("ojousama-cover.png");
+  await page.reload();
+  await expect(cover.getByTestId("cover-current")).toHaveAttribute("data-style", "bold", { timeout: 30_000 });
+  await expect(design.getByTestId("cover-subtitle")).toHaveValue("Will You Marry Me, My Lady?");
+  await expect(design.getByTestId("cover-tagline")).toHaveValue("One proposal. No conditions.");
+  await expect(design.getByTestId("cover-show-credits")).not.toBeChecked();
   await page.goto("/projects/ojousama/start");
-  await expect(page.getByTestId("start-cover").getByTestId("cover-current")).toBeVisible();
+  await expect(page.getByTestId("start-cover").getByTestId("cover-current")).toHaveAttribute("data-style", "bold");
 });
 
 test("ZN: pictures are shown as small previews the browser keeps; enlarging one opens the original", async ({
