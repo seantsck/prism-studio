@@ -21,11 +21,12 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   const storage = await storageForAsset(asset);
   if (!storage) return new Response("Not found", { status: 404 });
 
-  const signed = await storage.signedUrl(asset.objectPath, 300);
+  // an hour-long link the browser may reuse for most of that hour: a picture already seen is not downloaded again
+  const signed = await storage.signedUrl(asset.objectPath, 3600);
   if (signed) {
     return new Response(null, {
       status: 307,
-      headers: { location: signed, "cache-control": "private, no-store" },
+      headers: { location: signed, "cache-control": "private, max-age=3300" },
     });
   }
 

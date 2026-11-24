@@ -507,7 +507,7 @@ describe("making, reviewing and promoting", () => {
       [1, "3/4 view", "reference", "succeeded"],
     ]);
     expect(state.takes[0]!.inputs).toEqual([
-      { assetId: photo, label: "yumeko.png", url: `/api/assets/${photo}` },
+      { assetId: photo, label: "yumeko.png", url: `/api/assets/${photo}/preview` },
     ]);
     expect(state.takes[1]!.attemptId).toBe(first.attempt.id);
     expect(second.attempt.attemptNumber).toBe(2);
@@ -520,7 +520,7 @@ describe("making, reviewing and promoting", () => {
     const subjects = state.subjects.filter((s) => s.kind === "character");
     expect(subjects.find((s) => s.name === "Yumeko")).toMatchObject({
       images: 3,
-      thumbUrl: `/api/assets/${photo}`,
+      thumbUrl: `/api/assets/${photo}/preview`,
     });
     expect(subjects.find((s) => s.name === "Sean")).toMatchObject({ images: 0, thumbUrl: null });
   });
@@ -601,7 +601,7 @@ describe("making, reviewing and promoting", () => {
       "Canonical identity",
     ]);
     expect(state.subjects.find((s) => s.name === "Yumeko")!.thumbUrl).toBe(
-      `/api/assets/${first.outputs[0]!.asset.id}`,
+      `/api/assets/${first.outputs[0]!.asset.id}/preview`,
     );
     // the read model says which picture stands for the Character, and which one is the creator's own photograph:
     // that is what the Studio chooses its starting images from

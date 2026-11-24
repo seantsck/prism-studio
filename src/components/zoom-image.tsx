@@ -1,5 +1,7 @@
 "use client";
 
+import { fullUrl } from "@/lib/utils";
+
 import { useEffect, useState, type ReactNode } from "react";
 
 /**
@@ -64,7 +66,7 @@ export function ZoomImage({
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={src}
+              src={fullUrl(src)}
               alt={alt}
               className="max-h-[82vh] max-w-[90vw] rounded-[3px] object-contain"
               data-testid="zoom-image"

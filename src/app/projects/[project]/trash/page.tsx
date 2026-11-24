@@ -1,7 +1,7 @@
 import { ActionForm } from "@/components/action-form";
 import { Button, PageHeader, Panel } from "@/components/ui";
 import { trashDaysLeft, trashOf } from "@/domain/trash";
-import { assetUrl } from "@/lib/utils";
+import { previewUrl } from "@/lib/utils";
 import { requireProjectFresh } from "@/server/repo";
 import { purgeExpiredTrash } from "@/server/trash";
 import {
@@ -145,9 +145,9 @@ export default async function TrashPage({ params }: { params: Promise<{ project:
                     data-asset={asset.id}
                   >
                     <div className="h-20 w-16 shrink-0 overflow-hidden rounded-[3px] border border-line2 bg-[#232326]">
-                      {asset.type === "image" && assetUrl(asset) ? (
+                      {asset.type === "image" && previewUrl(asset) ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={assetUrl(asset)!} alt="" className="h-full w-full object-cover" />
+                        <img src={previewUrl(asset)!} alt="" className="h-full w-full object-cover" />
                       ) : null}
                     </div>
                     <div className="min-w-0 flex-1 space-y-1 text-[12px]">

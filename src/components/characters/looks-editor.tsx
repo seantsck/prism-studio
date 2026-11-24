@@ -1,7 +1,7 @@
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button, Field } from "@/components/ui";
 import type { Asset, Character, CharacterLook, Episode } from "@/domain/schemas";
-import { assetUrl } from "@/lib/utils";
+import { previewUrl } from "@/lib/utils";
 import { saveLook, setLookLocked, uploadLookReference } from "@/server/actions";
 
 /**
@@ -70,7 +70,7 @@ export function LooksEditor({
               <div className="mb-1 text-muted">Look reference images ({l.referenceAssetIds.length})</div>
               <div className="flex flex-wrap gap-1">
                 {l.referenceAssetIds.map((aid) => {
-                  const url = assetUrl(assetsById.get(aid));
+                  const url = previewUrl(assetsById.get(aid));
                   return url ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img

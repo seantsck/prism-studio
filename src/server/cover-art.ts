@@ -7,7 +7,7 @@ import { hasStoredImage } from "@/domain/generation/subject-image";
 import type { Asset, ProjectData } from "@/domain/schemas";
 import { isTrashed } from "@/domain/trash";
 import { prepareCoverArt } from "@/generation/cover-submission";
-import { assetUrl } from "@/lib/utils";
+import { previewUrl } from "@/lib/utils";
 import { getGenerationConfig, getGenerationRepo, getRegistry } from "./generation";
 
 /** The cover chosen: the picture most recently used as the cover (`metadata.cover.selectedAt`), or none. */
@@ -100,7 +100,7 @@ export async function coverArtState(data: ProjectData, userId: string | null) {
         status: v.attempt.status,
         error:
           v.attempt.status === "failed" ? v.job?.lastErrorMessage || "This picture could not be made." : null,
-        url: asset ? assetUrl(asset) : null,
+        url: asset ? previewUrl(asset) : null,
         assetId: asset?.id ?? null,
         ratio: (v.attempt.modelSettings as { aspectRatio?: string }).aspectRatio ?? null,
         width: asset?.width ?? null,
@@ -116,7 +116,7 @@ export async function coverArtState(data: ProjectData, userId: string | null) {
     engines,
     takes,
     cover: cover
-      ? { assetId: cover.id, url: assetUrl(cover), width: cover.width, height: cover.height }
+      ? { assetId: cover.id, url: previewUrl(cover), width: cover.width, height: cover.height }
       : null,
     cast,
     available,

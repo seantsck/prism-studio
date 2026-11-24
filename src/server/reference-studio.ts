@@ -31,7 +31,7 @@ import { expressionOf, visualRoleOf } from "@/domain/visual-bible";
 import { MOCK_PROVIDER_ID } from "@/generation/providers/mock";
 import { PHOTOROOM_PROVIDER_ID } from "@/generation/providers/photoroom/config";
 import { PRISM_MATTING_PROVIDER_ID } from "@/generation/providers/prism-matting/adapter";
-import { assetUrl } from "@/lib/utils";
+import { previewUrl } from "@/lib/utils";
 import { getGenerationConfig, getGenerationRepo, getRegistry } from "./generation";
 import { hostedMattingOffer, type HostedMattingOffer } from "./subject-images";
 
@@ -421,7 +421,7 @@ export async function referenceStudioState(
         id: c.id,
         name: c.name,
         detail: c.role,
-        thumbUrl: thumb ? assetUrl(assets.get(thumb)) : null,
+        thumbUrl: thumb ? previewUrl(assets.get(thumb)) : null,
         images: images.size,
       };
     }),
@@ -439,7 +439,7 @@ export async function referenceStudioState(
         id: l.id,
         name: l.name,
         detail: "Location",
-        thumbUrl: thumb ? assetUrl(assets.get(thumb)) : null,
+        thumbUrl: thumb ? previewUrl(assets.get(thumb)) : null,
         images: images.size,
       };
     }),
@@ -528,7 +528,7 @@ export async function referenceStudioState(
     const origin = referenceOrigin(a);
     images.push({
       assetId: a.id,
-      url: assetUrl(a),
+      url: previewUrl(a),
       label,
       origin,
       originLabel: referenceOriginLabel(a),
@@ -643,7 +643,7 @@ export async function referenceStudioState(
         asset: asset
           ? {
               id: asset.id,
-              url: assetUrl(asset),
+              url: previewUrl(asset),
               width: asset.width ?? null,
               height: asset.height ?? null,
               hasAlpha: (asset.metadata as { hasAlpha?: unknown } | undefined)?.hasAlpha === true,
@@ -659,7 +659,7 @@ export async function referenceStudioState(
             labelOf.get(id) ??
             assets.get(id)?.name ??
             (trashedIds.has(id) ? "In the Trash" : "Picture deleted"),
-          url: assetUrl(assets.get(id)),
+          url: previewUrl(assets.get(id)),
         })),
         prompt: v.attempt.prompt,
         error:
@@ -702,7 +702,7 @@ export async function referenceStudioState(
         : null;
       return {
         assetId: a.id,
-        url: assetUrl(a),
+        url: previewUrl(a),
         label: takeNumber != null ? `Take #${takeNumber}` : a.name || "Photo",
         archivedAt: archiveOf(a)!.at,
         takeNumber,
@@ -734,7 +734,7 @@ export async function referenceStudioState(
           name: l.name,
           references: pictures.length,
           locked: l.locked,
-          pictureUrl: pictures[0] ? assetUrl(assets.get(pictures[0])) : null,
+          pictureUrl: pictures[0] ? previewUrl(assets.get(pictures[0])) : null,
           pictureAssetId: pictures[0] ?? null,
         };
       }),
@@ -773,7 +773,7 @@ export async function referenceStudioState(
               intent: v.intent,
               canonical: v.canonical,
               assetId: asset?.id ?? null,
-              url: asset ? assetUrl(asset) : null,
+              url: asset ? previewUrl(asset) : null,
               from: !asset
                 ? null
                 : origin === "uploaded"

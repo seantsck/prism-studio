@@ -8,7 +8,7 @@ import {
   locationBibleReadiness,
 } from "@/domain/location-visual-bible";
 import type { ProjectData } from "@/domain/schemas";
-import { assetUrl } from "@/lib/utils";
+import { previewUrl } from "@/lib/utils";
 import {
   addLocationDesignation,
   clearLocationDesignation,
@@ -44,7 +44,7 @@ export function LocationVisualBiblePanel(props: {
   if (!location) return null;
   const vb = locationBibleReadiness(data, locationId);
   const assets = new Map(data.assets.map((a) => [a.id, a]));
-  const url = (id: string | null) => (id ? (assetUrl(assets.get(id)) ?? null) : null);
+  const url = (id: string | null) => (id ? (previewUrl(assets.get(id)) ?? null) : null);
   const usable = props.models.filter((m) => m.available);
   const preferred = usable.find((m) => !m.paid) ?? usable[0] ?? null;
   const locked = location.locked;
