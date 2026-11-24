@@ -18,7 +18,6 @@ import { createCharacterContinuityLock } from "@/server/character-continuity-act
 import { getRepo, requireProject, requireProjectFresh } from "@/server/repo";
 import { autoAddMadeViews, syncCanonicalToFront, viewSlots } from "@/server/auto-add-views";
 import { ActionForm } from "@/components/action-form";
-import { SubjectImagePanel } from "@/components/images/subject-image-panel";
 import { VisualBiblePanel } from "@/components/images/visual-bible-panel";
 import { subjectImageState } from "@/server/subject-images";
 import { ArchiveButton, ArchivedPanel, DeleteButton, DeleteSubjectButton } from "@/components/studio/archive";
@@ -515,16 +514,6 @@ export default async function CharacterPage({
               assetId: viewPictures[v.id]?.assetId ?? null,
               locked: viewLocked[v.id],
             }))}
-          />
-        </div>
-        <div className="xl:col-span-2">
-          <SubjectImagePanel
-            projectSlug={slug}
-            subject={{ kind: "character", id: c.id, looks: looks.map((l) => ({ id: l.id, name: l.name })) }}
-            attempts={images.attempts}
-            models={images.models}
-            sources={images.sources}
-            hostedMatting={images.hostedMatting}
           />
         </div>
 

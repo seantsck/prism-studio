@@ -344,7 +344,7 @@ export function VisualBiblePanel(props: {
               </ActionForm>
             ) : (
               <p className="text-[11px] text-muted">
-                Remove the background from an image below to make a cutout.
+                Make a cutout in the Reference Studio (Cut out the person), then choose it here.
               </p>
             )}
           </div>

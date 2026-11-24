@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { buildSeedProject } from "../src/data/seed";
 import { FfmpegEpisodeRenderer } from "../src/render/ffmpeg-renderer";
 import { MediaLab } from "../src/render/__tests__/media-checks";
@@ -8,14 +8,13 @@ import { stillPng } from "../src/render/__tests__/render-fixtures";
  * Phase 5B-I1 / I1b on its own memory server (memory-5b-isolated): Character, Location and Shot images through the
  * existing generation pipeline with the FREE mock image models and the in-process worker. No provider, no paid call.
  *
- *   A  Character: Generate Image → finished → Use as Character Reference
+ *   A  Character: a picture made in the Reference Studio → Use as the front reference → the canonical identity, labelled
+ *                 generated, in the Visual Bible (5B-I4). Character edits and cutouts are made in the Reference Studio
+ *                 (its own spec, G and K); the Character page has no Images panel of its own
  *   B  Location:  Generate Image → finished → Use as Location Reference
  *   C  Shot 3A:   Generate Image (the existing Production Frame candidate workflow) → Use as Storyboard Frame
- *   D  Character: Edit Image → new image with lineage → Use as Character Reference (5B-I2)
  *   E  Location:  generated image → Use as Location View (5B-I2)
  *   F  Shot 3A:   Edit Image → new Production Frame candidate with lineage → existing PF guard → Use as Storyboard (5B-I2)
- *   G  Character: upload a plain-background portrait → Remove Background → review → Use as Character Reference (5B-I3)
- *   H  Character: Visual Bible readiness → Use as Canonical → the large canonical image (5B-I4)
  *   I  Location:  Visual Bible readiness → Use as Canonical → views from E → replacement needs confirmation (5B-I5)
  *   J  Shot 3A:   Production Frame Inputs from the Visual Bibles (Yumeko canonical + Look, the selected Lobby view,
  *                 the Lobby canonical) → Generate Production Frame → Use as Production Frame → refresh → Generate
@@ -57,34 +56,38 @@ test.describe.configure({ mode: "serial" });
 const P = "/projects/ojousama";
 const EP = `${P}/episodes/ep-1`;
 
-async function waitForFinished(page: Page, scope: ReturnType<Page["getByTestId"]>) {
-  await expect
-    .poll(
-      async () => {
-        await page.reload();
-        return scope.getByTestId("subject-image").first().getAttribute("data-status");
-      },
-      { timeout: 90_000, intervals: [1500] },
-    )
-    .toBe("succeeded");
-}
-
-test("A — Character: Generate Image, then Use as Character Reference", async ({ page }) => {
+test("A — Character: a picture made in the Reference Studio becomes the front view and canonical identity", async ({
+  page,
+}) => {
   test.setTimeout(180_000);
-  await page.goto(`${P}/characters`);
-  await page.getByRole("link", { name: "Yumeko" }).first().click();
-  const panel = page.getByTestId("subject-images");
-  await expect(panel).toBeVisible();
-  await expect(page.getByTestId("subject-image-model")).toHaveValue(/^mock\//); // a free model is suggested
-  await page.getByTestId("subject-image-intent").selectOption("portrait");
-  await page.getByTestId("subject-image-generate").click();
-  await expect(page.getByText("Image queued")).toBeVisible({ timeout: 30_000 });
-  await waitForFinished(page, panel);
-  await expect(panel.getByTestId("subject-image-preview").first()).toBeVisible();
-  const first = panel.getByTestId("subject-image").first();
-  await first.locator('select[name="slot"]').selectOption("additional");
-  await first.getByTestId("use-as-character-reference").click();
-  await expect(page.getByText("Character reference set")).toBeVisible({ timeout: 30_000 });
+  await page.goto(`${P}/studio`);
+  await page.getByTestId("studio-subject").filter({ hasText: "Yumeko" }).click();
+  await expect(page.getByTestId("reference-studio")).toHaveAttribute("data-subject", /^character:/);
+  await page.getByTestId("studio-preset-portrait").click();
+  await expect(page.getByTestId("studio-price")).toHaveAttribute("data-state", "ready", { timeout: 20_000 });
+  await page.getByTestId("studio-generate").click();
+  const take = page.getByTestId("studio-take");
+  await expect(take).toHaveAttribute("data-status", "succeeded", { timeout: 90_000 });
+  await page.getByTestId("studio-slot").selectOption("front");
+  const confirm = page.getByTestId("studio-confirm-replace-slot");
+  if ((await confirm.count()) > 0) await confirm.check();
+  await page.getByTestId("studio-use-reference").click();
+  await expect(page.getByTestId("studio-take-thumb").first()).toContainText("in use", { timeout: 30_000 });
+
+  // the Character page: the front view is the canonical identity, labelled as generated (never as a photograph)
+  const characterId = (await page.getByTestId("reference-studio").getAttribute("data-subject"))!.split(
+    ":",
+  )[1]!;
+  await page.goto(`${P}/characters/${characterId}`);
+  const vb = page.getByTestId("visual-bible");
+  await expect(vb).toBeVisible();
+  await expect(vb.getByTestId("vb-readiness")).toBeVisible();
+  await expect(page.getByTestId("vb-canonical-image")).toBeVisible();
+  await expect(page.getByTestId("vb-item-canonical")).toHaveAttribute("data-done", "true");
+  await expect(page.getByTestId("vb-item-front")).toHaveAttribute("data-done", "true");
+  await expect(page.getByTestId("vb-canonical-origin")).toHaveText("generated reference");
+  // the old Images panel is gone: pictures are made in 4. Six views or the Reference Studio, and listed in Pictures
+  await expect(page.getByTestId("subject-images")).toHaveCount(0);
 });
 
 test("B — Location: Generate Image, then Use as Location Reference", async ({ page }) => {
@@ -160,38 +163,6 @@ test("C — Shot 3A: Generate Image through the Production Frame workflow, then 
 
 // ── Phase 5B-I2: Edit Image (free mock models), lineage and promotion ──
 
-test("D — Character: Edit Image makes a NEW image with visible lineage, then Use as Character Reference", async ({
-  page,
-}) => {
-  test.setTimeout(180_000);
-  await page.goto(`${P}/characters`);
-  await page.getByRole("link", { name: "Yumeko" }).first().click();
-  const panel = page.getByTestId("subject-images");
-  const before = await panel.getByTestId("subject-image").count();
-  const edit = panel.getByTestId("subject-image-edit");
-  await edit.locator("summary").first().click();
-  await edit.getByTestId("subject-image-edit-instruction").fill("change the coat to dark green");
-  await edit.getByTestId("subject-image-edit-submit").click();
-  await expect(page.getByText("Edit queued")).toBeVisible({ timeout: 30_000 });
-  await expect
-    .poll(
-      async () => {
-        await page.reload();
-        const first = panel.getByTestId("subject-image").first();
-        return (await panel.getByTestId("subject-image").count()) > before
-          ? first.getAttribute("data-status")
-          : "waiting";
-      },
-      { timeout: 90_000, intervals: [1500] },
-    )
-    .toBe("succeeded");
-  const first = panel.getByTestId("subject-image").first();
-  await expect(first.getByTestId("subject-image-lineage")).toContainText("→ edit attempt #");
-  await first.locator('select[name="slot"]').selectOption("additional");
-  await first.getByTestId("use-as-character-reference").click();
-  await expect(page.getByText("Character reference set")).toBeVisible({ timeout: 30_000 });
-});
-
 test("E — Location: a generated image becomes a Location View", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto(`${P}/locations`);
@@ -244,95 +215,6 @@ test("F — Shot 3A: Edit Image is a new Production Frame candidate with lineage
 });
 
 // ── Phase 5B-I3: Remove Background (local, free; nothing generated) ──
-
-test("G — Character: upload a portrait, Remove Background, review original vs cutout, Use as Character Reference", async ({
-  page,
-}) => {
-  test.setTimeout(180_000);
-  const { portraitFixturePng } = await import("../src/generation/matting/fixture");
-  await page.goto(`${P}/characters`);
-  await page.getByRole("link", { name: "Yumeko" }).first().click();
-  await expect(page.getByTestId("subject-images")).toBeVisible();
-  // the seeded identity references are locked: the creator explicitly unlocks them before uploading (as in story B)
-  const unlock = page.getByRole("button", { name: "Unlock to change", exact: true });
-  if ((await unlock.count()) > 0) {
-    await unlock.first().click();
-    await expect(page.getByRole("button", { name: "Approve and lock the set", exact: true })).toBeVisible({
-      timeout: 30_000,
-    });
-  }
-  // an unlocked identity slot takes the fixture (the real upload path: magic bytes, checksum, private storage)
-  const slot = page.locator('[data-testid^="identity-slot-"]').last();
-  await expect(slot).toBeVisible();
-  await slot.getByTestId("identity-file").setInputFiles({
-    name: "yumeko-portrait.png",
-    mimeType: "image/png",
-    buffer: Buffer.from(portraitFixturePng()),
-  });
-  await slot.getByTestId("identity-upload").click();
-  await page.waitForTimeout(1500);
-  await page.reload();
-  const panel = page.getByTestId("subject-images");
-  const box = panel.getByTestId("subject-image-remove-background");
-  await box.locator("summary").first().click();
-  const option = box
-    .getByTestId("remove-background-source")
-    .locator("option", { hasText: "Reference:" })
-    .first();
-  await box.getByTestId("remove-background-source").selectOption((await option.getAttribute("value"))!);
-  await box.getByTestId("remove-background-submit").click();
-  await expect(page.getByText("Background removal queued")).toBeVisible({ timeout: 30_000 });
-  await expect
-    .poll(
-      async () => {
-        await page.reload();
-        const cut = panel
-          .getByTestId("subject-image")
-          .filter({ has: page.getByTestId("subject-image-cutout-lineage") });
-        return (await cut.count()) > 0 ? cut.first().getAttribute("data-status") : "waiting";
-      },
-      { timeout: 90_000, intervals: [1500] },
-    )
-    .toBe("succeeded");
-  const cut = panel
-    .getByTestId("subject-image")
-    .filter({ has: page.getByTestId("subject-image-cutout-lineage") })
-    .first();
-  await expect(cut.getByTestId("subject-image-cutout-review")).toBeVisible();
-  await expect(cut.getByTestId("subject-image-cutout-lineage")).toContainText("→ background removal #");
-  await cut.locator('select[name="slot"]').selectOption("additional");
-  await cut.getByTestId("use-as-character-reference").click();
-  await expect(page.getByText("Character reference set")).toBeVisible({ timeout: 30_000 });
-});
-
-// ── Phase 5B-I4: Character Visual Bible ──
-
-test("H — Character: the Visual Bible shows readiness; a picture used as the front view is the canonical image", async ({
-  page,
-}) => {
-  test.setTimeout(120_000);
-  await page.goto(`${P}/characters`);
-  await page.getByRole("link", { name: "Yumeko" }).first().click();
-  const vb = page.getByTestId("visual-bible");
-  await expect(vb).toBeVisible();
-  await expect(vb.getByTestId("vb-readiness")).toBeVisible();
-  // the earlier stories made generated images: use one as the front view, which is the canonical identity (asked first)
-  page.once("dialog", (d) => void d.accept());
-  await page
-    .getByTestId("subject-images")
-    .getByTestId("subject-image")
-    .filter({ has: page.getByTestId("use-as-canonical") })
-    .first()
-    .getByTestId("use-as-canonical")
-    .click();
-  await expect(page.getByText("Front view and canonical identity set")).toBeVisible({ timeout: 30_000 });
-  await page.reload();
-  await expect(page.getByTestId("vb-canonical-image")).toBeVisible();
-  await expect(page.getByTestId("vb-item-canonical")).toHaveAttribute("data-done", "true");
-  await expect(page.getByTestId("vb-item-front")).toHaveAttribute("data-done", "true");
-  // a generated canonical is labelled as a generated reference, never presented as a photograph of the Character
-  await expect(page.getByTestId("vb-canonical-origin")).toHaveText("generated reference");
-});
 
 test("I — Location: the Visual Bible shows readiness and views; Use as Canonical; replacing it needs confirmation", async ({
   page,
