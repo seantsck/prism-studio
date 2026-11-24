@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Panel } from "@/components/ui";
+import { ZoomImage } from "@/components/zoom-image";
 import { REFERENCE_PHOTOS_BEST } from "@/domain/generation/reference-plan";
 import { TEST_ENGINE_NOTE, VIEW_ENGINE_NOTES } from "@/domain/generation/view-engines";
 import type { ViewsQuote } from "@/server/reference-views";
@@ -37,6 +38,7 @@ export function ReferenceViewsPanel({
   atOnce,
   activeInProject,
   photoUpload,
+  photoPreviews = [],
 }: {
   slug: string;
   characterId: string;
@@ -70,6 +72,8 @@ export function ReferenceViewsPanel({
   activeInProject: number;
   /** where the creator adds photos of the Character (step 3) */
   photoUpload?: ReactNode;
+  /** the Character's own photos (step 3): what every view is made from */
+  photoPreviews?: Array<{ assetId: string; url: string | null; label: string }>;
 }) {
   const [low, high] = REFERENCE_PHOTOS_BEST;
   return (
@@ -98,6 +102,32 @@ export function ReferenceViewsPanel({
             >
               You have {photos} photo{photos === 1 ? "" : "s"}.
             </p>
+            {photoPreviews.length > 0 ? (
+              <div className="pt-1" data-testid="reference-photos">
+                <div className="text-[11.5px] text-muted">Every view is made from these:</div>
+                <ul className="mt-1 flex flex-wrap gap-1.5">
+                  {photoPreviews.map((p) => (
+                    <li
+                      key={p.assetId}
+                      className="h-20 overflow-hidden rounded-[3px] border border-line2 bg-[#1b1b1e]"
+                      title={p.label}
+                      data-testid="reference-photo"
+                      data-asset={p.assetId}
+                    >
+                      {p.url ? (
+                        <ZoomImage
+                          src={p.url}
+                          alt={p.label}
+                          wrapperClassName="block h-full"
+                          className="h-full w-auto object-contain"
+                          caption={p.label}
+                        />
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             {photoUpload ? <div className="pt-1.5">{photoUpload}</div> : null}
             <p className="pt-1 text-[11.5px] text-muted" data-testid="reference-views-start">
               {quote.startsFrom === "photos"

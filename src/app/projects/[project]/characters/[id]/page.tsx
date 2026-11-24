@@ -411,6 +411,9 @@ export default async function CharacterPage({
           engines={engines}
           suggestedEngine={SUGGESTED_VIEWS_MODEL}
           photos={ownPhotos}
+          photoPreviews={pictures.images
+            .filter((i) => i.origin === "uploaded")
+            .map((i) => ({ assetId: i.assetId, url: i.url, label: i.label }))}
           photoUpload={
             pictures.selected ? (
               <CharacterPhotoUpload
