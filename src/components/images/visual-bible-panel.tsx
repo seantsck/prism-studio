@@ -6,7 +6,7 @@ import type { ProjectData } from "@/domain/schemas";
 import { SUGGESTED_EXPRESSIONS, visualBibleReadiness, visualRoleOf } from "@/domain/visual-bible";
 import { assetUrl } from "@/lib/utils";
 import { ZoomImage } from "@/components/zoom-image";
-import { UseAsFront, ViewLock } from "@/components/characters/picture-actions";
+import { ViewLock } from "@/components/characters/picture-actions";
 import type { EditSource, ImageModelOption } from "@/server/subject-images";
 import {
   addViewsToReferenceSet,
@@ -174,21 +174,13 @@ export function VisualBiblePanel(props: {
                         alt={`${character.name}: ${v.label}`}
                         className={
                           v.state === "in_set"
-                            ? "aspect-[3/4] w-full max-w-[110px] rounded border border-pass/50 object-cover"
-                            : "aspect-[3/4] w-full max-w-[110px] rounded border border-dashed border-line object-cover opacity-70"
+                            ? "aspect-[3/4] w-full max-w-[110px] rounded border border-pass/50 bg-white object-contain"
+                            : "aspect-[3/4] w-full max-w-[110px] rounded border border-dashed border-line bg-white object-contain opacity-70"
                         }
                         caption={`${character.name} · ${v.label}${v.state === "in_set" ? (v.locked ? " · locked in the set" : " · in the set") : " · made, not added yet"}`}
                       >
                         {v.state === "in_set" ? (
                           <ViewLock slug={slug} characterId={characterId} view={v.id} locked={!!v.locked} />
-                        ) : null}
-                        {v.assetId ? (
-                          <UseAsFront
-                            slug={slug}
-                            characterId={characterId}
-                            assetId={v.assetId}
-                            isFront={v.id === "front" && v.state === "in_set"}
-                          />
                         ) : null}
                       </ZoomImage>
                     ) : (

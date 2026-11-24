@@ -13,6 +13,7 @@ export function ZoomImage({
   caption,
   children,
   testId,
+  wrapperClassName = "block",
 }: {
   src: string;
   alt: string;
@@ -20,6 +21,8 @@ export function ZoomImage({
   caption?: ReactNode;
   children?: ReactNode;
   testId?: string;
+  /** the clickable box around the picture ("block h-full w-full" to fill a sized frame) */
+  wrapperClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -39,7 +42,7 @@ export function ZoomImage({
           e.stopPropagation();
           setOpen(true);
         }}
-        className="block cursor-zoom-in p-0"
+        className={`${wrapperClassName} cursor-zoom-in p-0`}
         title="Click to see it large"
         data-testid="zoom-open"
       >
