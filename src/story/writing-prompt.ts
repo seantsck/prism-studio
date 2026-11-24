@@ -65,6 +65,8 @@ export interface WritingContext {
    * The new text starts from nothing; this is what it keeps the story of. Absent = not a redraft.
    */
   previousDraft?: string;
+  /** Adding Episodes: the ideas are for new Episodes numbered from `from`, each `minutes` long (null: not set). */
+  addEpisodes?: { from: number; count: number; minutes: number | null };
   /** A brainstorm asked for more ideas than the database records as requested (a season plan of 11+ episodes). */
   ideaCount?: number;
   /** The project Bible as it stands, field by field (refining it). */

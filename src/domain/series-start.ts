@@ -49,6 +49,37 @@ const kindOf = (data: ProjectData) =>
 export const isSeasonPlanRequest = (instruction: string) =>
   instruction.startsWith("Plan season 1") || instruction.startsWith("Revise the season plan");
 
+/** The most Episodes Prism adds in one go. */
+export const MAX_ADD_EPISODES = 20;
+/** The longest note for adding Episodes. */
+export const ADD_EPISODES_NOTE_MAX = 1000;
+export const isAddEpisodesRequest = (instruction: string) => instruction.startsWith("Plan the next");
+
+/**
+ * Adding Episodes with Prism: the next `count` Episodes of the series, continuing the plan the project has (sent as
+ * seasonPlan). A brainstorm: one idea per new Episode; nothing is added until the creator uses them.
+ */
+export function addEpisodesInstruction(
+  data: ProjectData,
+  from: number,
+  count: number,
+  minutes: number | null,
+  note: string,
+): string {
+  const to = from + count - 1;
+  return [
+    `Plan the next ${count} episode${count === 1 ? "" : "s"} of this series (episode${count === 1 ? ` ${from}` : `s ${from} to ${to}`}): give exactly ${count} idea${count === 1 ? "" : "s"}, one per new episode, in order.`,
+    "The episodes so far are in the context (seasonPlan): continue the story from where the last one ends, without repeating them. Keep the characters, their relationships and the Bible consistent.",
+    "Each idea's title is that episode's title (no number). Its detail is 2 to 4 sentences: what happens in the episode, how it ends, and the hook into the next one.",
+    ...(minutes ? [`Each new episode runs about ${minutes} minutes: pace what happens to fit.`] : []),
+    ...(note.trim() ? [`The creator's note: ${note.trim().slice(0, ADD_EPISODES_NOTE_MAX)}`] : []),
+    "",
+    `Premise: ${data.bible.premise.trim().slice(0, PREMISE_MAX)}`,
+  ]
+    .join("\n")
+    .slice(0, LIMITS.instruction);
+}
+
 /** What Prism is asked to plan a season from: one idea per Episode, in order (a brainstorm: nothing is written). */
 export function seasonPlanInstruction(data: ProjectData, episodes: number): string {
   return [
