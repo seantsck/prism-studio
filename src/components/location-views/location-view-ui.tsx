@@ -6,7 +6,7 @@ import {
   type LocationView,
 } from "@/domain/location-view";
 import type { Asset, Location } from "@/domain/schemas";
-import { assetUrl } from "@/lib/utils";
+import { previewUrl } from "@/lib/utils";
 
 const stamp = (iso: string) => `${iso.slice(0, 16).replace("T", " ")} UTC`;
 
@@ -123,7 +123,7 @@ export function LocationViewCard({
   children?: React.ReactNode;
   selected?: boolean;
 }) {
-  const url = assetUrl(asset);
+  const url = previewUrl(asset);
   const s = view.viewSpec;
   return (
     <div

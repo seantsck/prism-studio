@@ -3,7 +3,7 @@ import type { ImageSubjectRef, SubjectAttemptView } from "@/data/generation-repo
 import { catalogModel } from "@/domain/generation/models/catalog";
 import { hasStoredImage } from "@/domain/generation/subject-image";
 import type { ProjectData } from "@/domain/schemas";
-import { assetUrl } from "@/lib/utils";
+import { previewUrl } from "@/lib/utils";
 import { HOSTED_MATTING_ENGINE } from "@/generation/background-removal";
 import {
   PHOTOROOM_PRIVACY_DETAILS,
@@ -118,7 +118,7 @@ function editSources(
   const add = (assetId: string | null, label: string) => {
     const a = assetId ? assets.get(assetId) : undefined;
     if (!hasStoredImage(a) || out.some((x) => x.assetId === a.id)) return;
-    out.push({ assetId: a.id, label, url: assetUrl(a) ?? null });
+    out.push({ assetId: a.id, label, url: previewUrl(a) ?? null });
   };
   for (const v of attempts)
     for (const o of v.outputs) add(o.asset.id, `Generated #${v.attempt.attemptNumber} (${v.attempt.model})`);

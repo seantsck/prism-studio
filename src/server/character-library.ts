@@ -5,7 +5,7 @@ import { planLocationCopy, type LocationCopyPlan } from "@/domain/location-libra
 import type { Asset, ProjectData } from "@/domain/schemas";
 import { canonicalRefOf } from "@/domain/visual-bible";
 import { buildObjectPath } from "@/lib/storage-paths";
-import { assetUrl } from "@/lib/utils";
+import { previewUrl } from "@/lib/utils";
 import { CharacterLibraryUnavailableError } from "@/data/repository";
 import { UserFacingError } from "./action-result";
 import { getRepo } from "./repo";
@@ -57,7 +57,7 @@ export async function loadLibrary(): Promise<{ characters: LibraryCharacter[]; a
       projectId: data.project.id,
       projectSlug: slug,
       projectTitle: data.project.title,
-      thumbUrl: assetUrl(thumb),
+      thumbUrl: previewUrl(thumb),
       pictures: plan.assets.filter((a) => a.from.objectPath).length,
       looks: plan.looks.length,
       savedAt: e.savedAt,
@@ -221,7 +221,7 @@ export async function loadLocationLibrary(): Promise<{ locations: LibraryLocatio
       projectId: data.project.id,
       projectSlug: slug,
       projectTitle: data.project.title,
-      thumbUrl: assetUrl(data.assets.find((a) => a.id === thumbId)),
+      thumbUrl: previewUrl(data.assets.find((a) => a.id === thumbId)),
       pictures: plan.assets.filter((a) => a.from.objectPath).length,
       savedAt: e.savedAt,
     });

@@ -4,7 +4,7 @@ import { Badge, Button, Panel } from "@/components/ui";
 import { referenceOrigin, referenceOriginLabel } from "@/domain/generation/reference-integrity";
 import type { ProjectData } from "@/domain/schemas";
 import { SUGGESTED_EXPRESSIONS, visualBibleReadiness, visualRoleOf } from "@/domain/visual-bible";
-import { assetUrl } from "@/lib/utils";
+import { previewUrl } from "@/lib/utils";
 import { ZoomImage } from "@/components/zoom-image";
 import { ViewLock } from "@/components/characters/picture-actions";
 import type { EditSource, ImageModelOption } from "@/server/subject-images";
@@ -46,7 +46,7 @@ export function VisualBiblePanel(props: {
   if (!character) return null;
   const vb = visualBibleReadiness(data, characterId);
   const assets = new Map(data.assets.map((a) => [a.id, a]));
-  const url = (id: string | null) => (id ? (assetUrl(assets.get(id)) ?? null) : null);
+  const url = (id: string | null) => (id ? (previewUrl(assets.get(id)) ?? null) : null);
   const looks = data.looks.filter((l) => l.characterId === characterId);
   const cutoutRef = data.identityRefs.find(
     (r) => r.characterId === characterId && visualRoleOf(r) === "cutout",

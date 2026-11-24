@@ -7,7 +7,7 @@ import { useState } from "react";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button } from "@/components/ui";
 import { referencePreset, referenceSetViewOf, usd } from "@/domain/generation/reference-studio";
-import { cn } from "@/lib/utils";
+import { cn, fullUrl } from "@/lib/utils";
 import { setCanonicalLocation } from "@/server/location-visual-bible-actions";
 import type {
   StudioImage,
@@ -714,7 +714,7 @@ export function Stage({
                 </Button>
                 {focused.asset.url ? (
                   <a
-                    href={focused.asset.url}
+                    href={fullUrl(focused.asset.url)}
                     download={`${subject.name}-${focused.number}-${focused.what}.png`.replace(
                       /[^\w.-]+/g,
                       "-",

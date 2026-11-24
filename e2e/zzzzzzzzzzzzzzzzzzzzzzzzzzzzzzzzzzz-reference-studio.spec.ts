@@ -286,7 +286,7 @@ test("C: a 3/4 view FROM the photo: what will be sent is shown, then a labelled 
   await expect(page.getByTestId("studio-sent-strip")).toHaveAttribute("data-count", "1");
   await expect(page.getByTestId("studio-sent-strip").locator("img")).toHaveAttribute(
     "src",
-    `/api/assets/${photoId}`,
+    `/api/assets/${photoId}/preview`,
   );
   await sent.locator("summary").click();
   const prompt = page.getByTestId("studio-prompt");
@@ -323,7 +323,7 @@ test("C: a 3/4 view FROM the photo: what will be sent is shown, then a labelled 
   await expect(page.getByTestId("studio-inputs")).toContainText("Take #1 was made from");
   await expect(page.getByTestId("studio-inputs").locator("img")).toHaveAttribute(
     "src",
-    `/api/assets/${photoId}`,
+    `/api/assets/${photoId}/preview`,
   );
   await page.getByTestId("studio-provenance").locator("summary").click();
   await expect(page.getByTestId("studio-provenance")).toContainText("1 image: yumeko-front.png.");
@@ -2051,7 +2051,12 @@ test("ZG: the views are made with the engine picked beside them, and what is add
   const tqRow = page.locator('[data-testid="reference-view"][data-view="three_quarter"]');
   const tqSrc = await tqRow.getByTestId("reference-view-picture").getAttribute("src");
   await tqRow.getByTestId("zoom-open").click();
-  await expect(page.getByTestId("zoom-dialog").getByTestId("zoom-image")).toHaveAttribute("src", tqSrc!);
+  // the row shows the small preview; opened large, the original
+  expect(tqSrc).toMatch(/^\/api\/assets\/[0-9a-f-]{36}\/preview$/);
+  await expect(page.getByTestId("zoom-dialog").getByTestId("zoom-image")).toHaveAttribute(
+    "src",
+    tqSrc!.replace(/\/preview$/, ""),
+  );
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("zoom-dialog")).toHaveCount(0);
   // the whole picture is shown, never cropped to fit its frame
@@ -2365,4 +2370,32 @@ test("ZM: cover art: shape chosen, priced and confirmed, made without lettering,
   await expect(take.getByTestId("cover-take-current")).toBeVisible();
   await page.goto("/projects/ojousama/start");
   await expect(page.getByTestId("start-cover").getByTestId("cover-current")).toBeVisible();
+});
+
+test("ZN: pictures are shown as small previews the browser keeps; enlarging one opens the original", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await page.goto("/projects/ojousama/characters");
+  await page
+    .getByRole("link", { name: /^Takumi/ })
+    .first()
+    .click();
+  const picture = page.getByTestId("character-picture").first();
+  await expect(picture).toBeVisible();
+  const id = (await picture.getAttribute("data-asset"))!;
+  await expect(picture.locator("img")).toHaveAttribute("src", `/api/assets/${id}/preview`);
+  // a WebP no larger than 768 px, kept by the browser (a stored picture never changes)
+  const preview = await page.request.get(`/api/assets/${id}/preview`);
+  expect(preview.status()).toBe(200);
+  expect(preview.headers()["content-type"]).toBe("image/webp");
+  expect(preview.headers()["cache-control"]).toContain("immutable");
+  const size = await page.evaluate(async (url) => {
+    const b = await createImageBitmap(await (await fetch(url)).blob());
+    return Math.max(b.width, b.height);
+  }, `/api/assets/${id}/preview`);
+  expect(size).toBeLessThanOrEqual(768);
+  // enlarged: the original
+  await picture.getByTestId("zoom-open").click();
+  await expect(page.getByTestId("zoom-image")).toHaveAttribute("src", `/api/assets/${id}`);
 });

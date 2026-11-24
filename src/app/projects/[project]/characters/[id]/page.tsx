@@ -8,7 +8,7 @@ import {
   ContinuityLockCard,
 } from "@/components/character-continuity/continuity-lock-ui";
 import { referenceOrigin, referenceOriginLabel } from "@/domain/generation/reference-integrity";
-import { assetUrl } from "@/lib/utils";
+import { previewUrl } from "@/lib/utils";
 import {
   saveCharacter,
   saveVoiceProfile,
@@ -182,7 +182,7 @@ export default async function CharacterPage({
     { url: string | null; attemptId: string | null; assetId: string | null }
   > = {};
   for (const [view, asset] of Object.entries(slotAsset))
-    viewPictures[view] = { url: assetUrl(asset) ?? null, attemptId: null, assetId: asset.id };
+    viewPictures[view] = { url: previewUrl(asset) ?? null, attemptId: null, assetId: asset.id };
   const newestMade: Record<string, string> = {};
   for (const t of pictures.takes) {
     const view = referenceSetViewOf(t.settings.intent);
@@ -580,7 +580,7 @@ export default async function CharacterPage({
             {REFERENCE_SET_VIEWS.map((v) => {
               const ref = slots[v.id]?.ref;
               const asset = slots[v.id]?.asset;
-              const url = asset ? assetUrl(asset) : null;
+              const url = asset ? previewUrl(asset) : null;
               const origin = url ? referenceOrigin(asset) : null;
               return (
                 <div key={v.id} data-testid={`identity-slot-${v.id}`} className="border border-line p-2">
