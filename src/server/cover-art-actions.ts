@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { GenerationSubmitError } from "@/data/generation-repository";
+import { COVER_CAST_MAX } from "@/domain/generation/cover-art";
 import { MAX_SUBJECT_DIRECTION_CHARS, hasStoredImage } from "@/domain/generation/subject-image";
 import { paidConfirmationRefusal } from "@/domain/generation/paid-confirmation";
 import { prepareCoverArt } from "@/generation/cover-submission";
@@ -30,7 +31,14 @@ async function makeCoverArt_impl(form: FormData) {
   const key = str(form, "idempotencyKey");
   const prepared = prepareCoverArt({
     data,
-    input: { direction: str(form, "direction").slice(0, MAX_SUBJECT_DIRECTION_CHARS) },
+    input: {
+      direction: str(form, "direction").slice(0, MAX_SUBJECT_DIRECTION_CHARS),
+      // who and where the creator chose (absent: Prism's choice of leads, no location)
+      ...(form.has("castChosen")
+        ? { castIds: form.getAll("cast").map(String).filter(Boolean).slice(0, COVER_CAST_MAX) }
+        : {}),
+      locationId: str(form, "locationId") || null,
+    },
     registry,
     provider: provider ?? "",
     modelId: rest.join("/"),
