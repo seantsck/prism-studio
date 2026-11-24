@@ -2191,6 +2191,7 @@ test("ZI: photos are added on a character's page (chosen or dropped), and the vi
   await expect(upload.getByTestId("studio-upload-zone")).toContainText("Add reference photos of Sean");
   await expect(page.getByTestId("reference-plan-photos")).toHaveText("You have 0 photos.");
   await expect(page.getByTestId("reference-views-start")).toContainText("made from Sean's description");
+  await expect(page.getByTestId("reference-photos")).toHaveCount(0);
 
   // one chosen, one dropped; both read, shown, then uploaded together
   const photo = await drawnJpeg(page, 1200, 1600, 0);
@@ -2217,4 +2218,7 @@ test("ZI: photos are added on a character's page (chosen or dropped), and the vi
   );
   await expect(page.getByTestId("character-picture")).toHaveCount(2);
   await expect(upload.getByTestId("studio-upload-item")).toHaveCount(0);
+  // and shown in step 3 as what the views are made from
+  await expect(page.getByTestId("reference-photos")).toContainText("Every view is made from these:");
+  await expect(page.getByTestId("reference-photo")).toHaveCount(2);
 });
