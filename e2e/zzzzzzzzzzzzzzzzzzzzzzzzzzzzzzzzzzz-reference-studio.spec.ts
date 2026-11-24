@@ -2286,6 +2286,9 @@ test("ZL: episodes are added in bulk with Prism: priced and confirmed, planned, 
   page,
 }) => {
   test.setTimeout(150_000);
+  // offered on Start from a prompt too, in the season step
+  await page.goto("/projects/ojousama/start");
+  await expect(page.getByTestId("start-add-episodes").getByTestId("add-episodes-open")).toBeVisible();
   await page.goto("/projects/ojousama/episodes");
   const before = await page.locator('a[href*="/episodes/ep-"]').count();
   const add = page.getByTestId("add-episodes");

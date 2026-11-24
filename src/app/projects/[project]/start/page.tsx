@@ -2,6 +2,7 @@ import { priceText } from "@/domain/pricing/user-price";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { ActionForm } from "@/components/action-form";
+import { AddEpisodesSection } from "@/components/projects/add-episodes-section";
 import { WriteIt, type WriteQuotes } from "@/components/projects/write-it";
 import { Button, Field, PageHeader } from "@/components/ui";
 import type { WritingProposal } from "@/data/writing-repository";
@@ -207,6 +208,10 @@ export default async function StartPage({ params }: { params: Promise<{ project:
                     </ActionForm>
                   )}
                 </Priced>
+                <div className="border-t border-line pt-3" data-testid="start-add-episodes">
+                  <div className="mb-2 text-[13px] font-medium">Add more episodes</div>
+                  <AddEpisodesSection data={data} slug={slug} />
+                </div>
               </div>
             )}
           </Step>
