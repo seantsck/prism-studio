@@ -172,10 +172,11 @@ export function VisualBiblePanel(props: {
                       <ZoomImage
                         src={v.url}
                         alt={`${character.name}: ${v.label}`}
+                        wrapperClassName="block h-32 w-full"
                         className={
                           v.state === "in_set"
-                            ? "aspect-[3/4] w-full max-w-[110px] rounded border border-pass/50 bg-white object-contain"
-                            : "aspect-[3/4] w-full max-w-[110px] rounded border border-dashed border-line bg-white object-contain opacity-70"
+                            ? "h-full w-full rounded border border-pass/50 bg-[#1b1b1e] object-contain"
+                            : "h-full w-full rounded border border-dashed border-line bg-[#1b1b1e] object-contain opacity-70"
                         }
                         caption={`${character.name} · ${v.label}${v.state === "in_set" ? (v.locked ? " · locked in the set" : " · in the set") : " · made, not added yet"}`}
                       >
@@ -184,7 +185,7 @@ export function VisualBiblePanel(props: {
                         ) : null}
                       </ZoomImage>
                     ) : (
-                      <div className="flex aspect-[3/4] w-full max-w-[110px] items-center justify-center rounded border border-dashed border-line text-faint">
+                      <div className="flex h-32 w-full items-center justify-center rounded border border-dashed border-line text-faint">
                         {v.state === "making" ? "being made…" : "none yet"}
                       </div>
                     )}

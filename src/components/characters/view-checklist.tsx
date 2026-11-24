@@ -552,7 +552,7 @@ export function ViewChecklist({
                       <ZoomImage
                         src={v.pictureUrl}
                         alt={`${v.label}${v.state === "in_set" ? " in the set" : ", made"}`}
-                        className="h-10 w-8 shrink-0 rounded-[2px] border border-line bg-white object-contain"
+                        className="h-10 w-auto max-w-[80px] shrink-0 rounded-[2px] border border-line object-contain"
                         caption={`${v.label}${v.state === "in_set" ? (v.locked ? " · locked in the set" : " · in the set") : " · made"}`}
                         testId="reference-view-picture"
                       >
@@ -587,7 +587,7 @@ export function ViewChecklist({
                           <ZoomImage
                             src={v.newer.url}
                             alt={`New take: ${v.label}`}
-                            className="h-10 w-8 rounded-[2px] border border-accent/60 bg-white object-contain"
+                            className="h-10 w-auto max-w-[80px] rounded-[2px] border border-accent/60 object-contain"
                             caption={`${v.label} · the new take (use it with the button beside it)`}
                           />
                         ) : null}
@@ -706,7 +706,7 @@ export function ViewChecklist({
                             <ZoomImage
                               src={t.url}
                               alt={`${v.label}, ${t.engine}`}
-                              className="h-10 w-8 rounded-[2px] border border-line bg-white object-contain hover:border-accent"
+                              className="h-10 w-auto max-w-[80px] rounded-[2px] border border-line object-contain hover:border-accent"
                               caption={`${v.label} · another take (${t.engine})`}
                             >
                               {use}

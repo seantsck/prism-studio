@@ -66,7 +66,7 @@ export function ZoomImage({
             <img
               src={src}
               alt={alt}
-              className="max-h-[82vh] max-w-[90vw] rounded-[3px] bg-white object-contain"
+              className="max-h-[82vh] max-w-[90vw] rounded-[3px] object-contain"
               data-testid="zoom-image"
             />
             {caption ? <div className="text-[12.5px] text-fg">{caption}</div> : null}

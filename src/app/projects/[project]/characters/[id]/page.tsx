@@ -49,6 +49,12 @@ import Link from "next/link";
 
 const join = (xs: string[]) => xs.join("\n");
 
+/** The width of a picture's frame at the Pictures height (176 px), in its own shape (kept between 4:5 and 21:9). */
+function frameWidth(width: number | null, height: number | null): number {
+  const ratio = width && height ? width / height : 3 / 4;
+  return Math.round(176 * Math.min(21 / 9, Math.max(0.6, ratio)));
+}
+
 export default async function CharacterPage({
   params,
   searchParams,
@@ -441,21 +447,23 @@ export default async function CharacterPage({
                   No pictures yet. Add photos or make one in the Reference Studio.
                 </p>
               ) : (
-                <ul className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3">
+                <ul className="flex flex-wrap items-start gap-3">
                   {pictures.images.map((i) => (
                     <li
                       key={i.assetId}
                       className="flex flex-col gap-1"
+                      // each picture in its own shape, at one height: nothing is cropped and nothing is padded
+                      style={{ width: frameWidth(i.inspection.width, i.inspection.height) }}
                       data-testid="character-picture"
                       data-asset={i.assetId}
                     >
-                      <div className="aspect-[3/4] overflow-hidden rounded-[3px] border border-line2 bg-[#232326]">
+                      <div className="h-44 overflow-hidden rounded-[3px] border border-line2 bg-[#1b1b1e]">
                         {i.url ? (
                           <ZoomImage
                             src={i.url}
                             alt={i.label}
                             wrapperClassName="block h-full w-full"
-                            className="h-full w-full bg-white object-contain"
+                            className="h-full w-full object-contain"
                             caption={i.label}
                           ></ZoomImage>
                         ) : null}
@@ -582,8 +590,8 @@ export default async function CharacterPage({
                       <ZoomImage
                         src={url}
                         alt={`${c.name}: ${v.label}`}
-                        wrapperClassName="block w-full"
-                        className="aspect-[3/4] w-full bg-white object-contain"
+                        wrapperClassName="block h-48 w-full rounded-[2px] bg-[#1b1b1e]"
+                        className="h-full w-full object-contain"
                         caption={`${c.name} · ${v.label}${ref?.locked ? " · locked" : ""}`}
                       >
                         <ViewLock slug={slug} characterId={c.id} view={v.id} locked={!!ref?.locked} />
@@ -600,7 +608,7 @@ export default async function CharacterPage({
                       ) : null}
                     </figure>
                   ) : (
-                    <FramePlaceholder code={v.id} label="Missing" className="aspect-[3/4]" />
+                    <FramePlaceholder code={v.id} label="Missing" className="h-48" />
                   )}
                   {asset ? (
                     <div className="mt-1 flex flex-wrap gap-1">
