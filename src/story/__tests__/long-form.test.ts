@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WritingProposal, WritingWorkerStore } from "@/data/writing-repository";
 import {
+  estimateScreenMinutes,
   LONG_FORM_TAIL_CHARS,
   longFormPlan,
   longFormTokens,
@@ -206,16 +207,67 @@ describe("a whole Episode redrafted in parts", () => {
     });
     const { provider, calls } = stub((_req, i) => part(`INT. PLACE ${i + 1} - DAY\n\nNew scene ${i + 1}.`));
     const out = await run(provider, r);
-    expect(calls).toHaveLength(plan.parts);
+    // the stub writes a line a part, far short of 20 minutes: both reserve parts are added before the ending
+    expect(calls).toHaveLength(plan.parts + plan.extraParts!);
     // the first part starts from an empty page; every part sees the old screenplay in the context, never as its target
     expect(calls[0]!.targetText).toBe("");
-    expect(calls.every((c) => c.context.previousDraft === old && !c.targetText.includes("old short scene"))).toBe(
-      true,
-    );
+    expect(
+      calls.every((c) => c.context.previousDraft === old && !c.targetText.includes("old short scene")),
+    ).toBe(true);
     const done = out.complete as { result: WritingResult };
     const text = done.result.alternatives[0]!.text;
     expect(text.startsWith("INT. PLACE 1 - DAY")).toBe(true);
     expect(text).not.toContain("The old short scene.");
     expect(done.result.message).toMatch(/^Prism redrafted the whole episode in \d+ parts\./);
+  });
+});
+
+describe("a whole Episode written to its length", () => {
+  const plan = longFormPlan("series", 32_000, 20);
+  const page = (n: number) =>
+    `INT. ROOM ${n} - NIGHT\n\n${"Words of action and dialogue fill the page here. ".repeat(19)}`.trim();
+
+  it("asks each part for what is still missing, and needs no extra part when the parts reach the length", async () => {
+    // each part writes about five minutes (five pages of about 170 words)
+    const { provider, calls } = stub((_req, i) =>
+      part([1, 2, 3, 4, 5].map((k) => page(i * 5 + k)).join("\n\n")),
+    );
+    const out = await run(provider, row(plan));
+    expect(calls).toHaveLength(plan.parts);
+    expect(calls[0]!.instruction).toContain("at least 5 full screenplay pages");
+    expect(calls[0]!.instruction).toContain(
+      "The whole episode must run about 20 minutes; what is written so far runs about 0.",
+    );
+    expect(calls[0]!.instruction).toContain("Never summarise");
+    expect(calls.at(-1)!.instruction).toContain("This is the last part");
+    const done = out.complete as { result: WritingResult };
+    expect(done.result.message).toMatch(/It runs about (2[0-4]) minutes \(target 20\)\./);
+  });
+
+  it("a text running short gets parts added BEFORE the ending, each asked for more, never past the reserve", async () => {
+    // each part writes about two minutes only
+    const { provider, calls } = stub((_req, i) => part([1, 2].map((k) => page(i * 2 + k)).join("\n\n")));
+    const out = await run(provider, row(plan));
+    expect(calls).toHaveLength(plan.parts + plan.extraParts!);
+    // only the very last call ends it; every earlier call is told not to
+    expect(calls.slice(0, -1).every((c) => c.instruction.includes("Do not end the episode yet."))).toBe(true);
+    expect(calls.at(-1)!.instruction).toContain("This is the last part");
+    expect(calls[1]!.instruction).toMatch(/^This is part 2 of 4 /);
+    expect(calls.at(-1)!.instruction).toMatch(/^This is part 6 of 6 /);
+    // a part after a short one is asked for more than the first
+    const ask = (i: number) => Number(/at least (\d+) full screenplay pages/.exec(calls[i]!.instruction)![1]);
+    expect(ask(3)).toBeGreaterThan(ask(0));
+    expect((out.complete as { result: WritingResult }).result.message).toMatch(/in 6 parts\./);
+  });
+});
+
+describe("estimateScreenMinutes", () => {
+  it("is about a page a minute: about 170 English words, or about 400 Japanese characters of dialogue", () => {
+    expect(estimateScreenMinutes("")).toBe(0);
+    expect(estimateScreenMinutes("word ".repeat(1700))).toBe(10);
+    expect(estimateScreenMinutes("あ".repeat(4000))).toBe(10);
+    // the sample Episode 1 (six short scenes) runs about a minute
+    const sample = "INT. A - NIGHT\n\nShort.\n\n".repeat(6);
+    expect(estimateScreenMinutes(sample)).toBeLessThan(2);
   });
 });

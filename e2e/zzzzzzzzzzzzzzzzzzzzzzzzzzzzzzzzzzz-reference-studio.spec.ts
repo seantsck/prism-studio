@@ -2236,6 +2236,13 @@ test("ZJ: an episode with a script is redrafted whole: priced and confirmed, one
   const redraft = page.getByTestId("redraft-episode");
   await expect(redraft).toContainText("Prism writes a new complete screenplay of this episode");
   await expect(redraft.getByTestId("redraft-price")).toContainText("free");
+  // how long the script runs now, and the choice of what the redraft starts from
+  await expect(redraft.getByTestId("redraft-runs")).toContainText("The script now runs about");
+  await redraft.getByTestId("redraft-fresh").check();
+  await redraft.getByTestId("redraft-open").click();
+  await expect(page.getByTestId("redraft-confirm")).toContainText("the synopsis");
+  await page.getByTestId("redraft-confirm").getByRole("button", { name: "Cancel" }).click();
+  await redraft.getByRole("radio", { name: /Keep the story of the current script/ }).check();
   await redraft.getByTestId("redraft-note").fill("End on the contract signing.");
   // nothing runs before the confirmation
   await redraft.getByTestId("redraft-open").click();

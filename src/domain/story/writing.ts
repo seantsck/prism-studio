@@ -394,7 +394,17 @@ export interface LongFormPlan {
   partTokens: number;
   /** The creator's target length in minutes, when set: the parts are sized to it. */
   minutes?: number;
+  /**
+   * With a target length: parts the worker may add before the ending when what is written runs short of it (priced
+   * in the ceiling, used only when needed). Absent = none.
+   */
+  extraParts?: number;
 }
+
+/** About how many minutes of screen time a part with a target length is asked for. */
+export const MINUTES_PER_PART = 5;
+/** The most parts added to reach a target length. */
+export const MAX_EXTRA_PARTS = 2;
 
 /** How much of the text written so far each later part is shown (its tail), in characters. */
 export const LONG_FORM_TAIL_CHARS = 24_000;
@@ -423,13 +433,19 @@ export function longFormPlan(
   const partTokens = cap(kind === "film" ? 10_000 : kind === "short" ? 6_000 : 8_000);
   if (minutes && minutes > 0) {
     const need = minutes * TOKENS_PER_MINUTE;
-    // a long one gets bigger parts (up to the model's maximum) rather than more than MAX_LONG_FORM_PARTS of them
+    // about MINUTES_PER_PART minutes a part (a model writes a short stretch fully; asked for a long one it summarises),
+    // and never fewer parts than the output budget needs; at most MAX_LONG_FORM_PARTS
+    const parts = Math.min(
+      MAX_LONG_FORM_PARTS,
+      Math.max(1, Math.ceil(minutes / MINUTES_PER_PART), Math.ceil(need / partTokens)),
+    );
+    // each part's budget: twice its share (room for a model's thinking), at least half the default, within the model
     const size = Math.min(
       modelMaxOutputTokens || Infinity,
-      Math.max(partTokens, Math.ceil(need / MAX_LONG_FORM_PARTS)),
+      Math.max(Math.ceil(partTokens / 2), Math.ceil((2 * need) / parts)),
     );
-    const parts = Math.min(MAX_LONG_FORM_PARTS, Math.max(1, Math.ceil(need / size)));
-    return { kind, parts, partTokens: size, minutes };
+    const extraParts = Math.min(MAX_EXTRA_PARTS, MAX_LONG_FORM_PARTS - parts);
+    return { kind, parts, partTokens: size, minutes, ...(extraParts > 0 ? { extraParts } : {}) };
   }
   return { kind, parts: kind === "film" ? 4 : 2, partTokens };
 }
@@ -441,10 +457,26 @@ export function longFormPlan(
  */
 export function longFormTokens(baseInputTokens: number, plan: LongFormPlan) {
   const tail = Math.ceil(LONG_FORM_TAIL_CHARS * 1.5);
+  // the parts that may be added to reach the length are priced too (the ceiling the creator confirms)
+  const parts = plan.parts + (plan.extraParts ?? 0);
   return {
-    inputTokens: plan.parts * baseInputTokens + (plan.parts - 1) * tail,
-    maxOutputTokens: plan.parts * plan.partTokens,
+    inputTokens: parts * baseInputTokens + (parts - 1) * tail,
+    maxOutputTokens: parts * plan.partTokens,
   };
+}
+
+/**
+ * About how long a screenplay runs on screen, in minutes: the standard page a minute, a page being about 170 English
+ * words or about 400 Japanese/Chinese characters of dialogue (spoken more densely), plus a little for each scene
+ * heading. An estimate, shown as "about".
+ */
+export function estimateScreenMinutes(text: string): number {
+  const cjk = (text.match(/[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]/g) ?? []).length;
+  const words = (
+    text.replace(/[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]/g, " ").match(/[A-Za-z0-9'’-]+/g) ?? []
+  ).length;
+  const scenes = (text.match(/^\s*(INT\.|EXT\.|INT\/EXT\.|I\/E\.)/gim) ?? []).length;
+  return Math.round((words / 170 + cjk / 400 + scenes * 0.1) * 10) / 10;
 }
 
 /**
@@ -514,19 +546,35 @@ export function planBatchInstruction(instruction: string, start: number, end: nu
 }
 
 /** What each part is asked, on top of the creator's instruction. */
-export function longFormPartInstruction(instruction: string, plan: LongFormPlan, part: number): string {
+export function longFormPartInstruction(
+  instruction: string,
+  plan: LongFormPlan,
+  part: number,
+  /**
+   * With a target length, what the worker knows as it goes: how many parts in all now (extra parts included), whether
+   * this one ends it, about how long the text written so far runs, and how many minutes this part should add.
+   */
+  progress?: { total: number; last: boolean; writtenMinutes: number; askMinutes: number },
+): string {
   const whole = plan.kind === "film" ? "film" : plan.kind === "short" ? "short film" : "episode";
-  const share = plan.minutes
-    ? `about ${Math.max(1, Math.round(plan.minutes / plan.parts))} minutes of it (about a page a minute)`
+  const total = progress?.total ?? plan.parts;
+  const last = progress?.last ?? part === plan.parts - 1;
+  const ask =
+    progress?.askMinutes ?? (plan.minutes ? Math.max(1, Math.round(plan.minutes / plan.parts)) : null);
+  const share = ask
+    ? `at least ${ask} full screenplay pages, about ${ask} minutes on screen (a page a minute)`
     : `about ${Math.round(100 / plan.parts)}% of it`;
   const lines = [
-    `This is part ${part + 1} of ${plan.parts} of the whole ${whole}. Write ${share} and stop at the end of a scene.`,
+    `This is part ${part + 1} of ${total} of the whole ${whole}. Write ${share} and stop at the end of a scene.`,
+    ...(plan.minutes
+      ? [
+          `The whole ${whole} must run about ${plan.minutes} minutes${progress ? `; what is written so far runs about ${progress.writtenMinutes}` : ""}. Reach the length by dramatising every scene in full: action, behaviour and real back-and-forth dialogue. Never summarise, skip ahead or compress a scene into a line.`,
+        ]
+      : []),
     part === 0
       ? "Start at the very beginning."
       : "The TARGET is the end of what is written so far: continue exactly where it ends. Do not repeat or rewrite any of it.",
-    part === plan.parts - 1
-      ? `This is the last part: bring the ${whole} to its ending.`
-      : `Do not end the ${whole} yet.`,
+    last ? `This is the last part: bring the ${whole} to its ending.` : `Do not end the ${whole} yet.`,
     "",
     instruction,
   ];

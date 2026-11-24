@@ -205,7 +205,12 @@ export function quoteWhole(data: ProjectData, episode: Episode, writer?: string 
  * Redrafting an Episode that has a screenplay: the whole Episode written anew in parts at its length, with the current
  * screenplay sent as the story to keep (priced for the longest note the creator can add).
  */
-export function quoteRedraft(data: ProjectData, episode: Episode, writer?: string | null): QuoteResult {
+export function quoteRedraft(
+  data: ProjectData,
+  episode: Episode,
+  writer?: string | null,
+  fresh = false,
+): QuoteResult {
   const r = resolveWriter(writer);
   if (!r) return { ok: false, reason: WRITING_AI_OFF };
   const text = canonical(episode.scriptText);
@@ -216,7 +221,7 @@ export function quoteRedraft(data: ProjectData, episode: Episode, writer?: strin
     text,
     scope: scopeOf(text, "episode", { start: 0, end: text.length }, null),
     mode: "rewrite",
-    instruction: redraftInstruction(data, episode, "あ".repeat(REDRAFT_NOTE_MAX)),
+    instruction: redraftInstruction(data, episode, "あ".repeat(REDRAFT_NOTE_MAX), fresh),
     count: 1,
     targetText: text,
     draftText: null,
@@ -228,6 +233,7 @@ export function quoteRedraft(data: ProjectData, episode: Episode, writer?: strin
       episode.targetMinutes,
     ),
     redraft: true,
+    redraftFresh: fresh,
   });
   const refused = over(r.model, p.usd, `Redrafting "${episode.title}"`);
   if (refused || p.tooLong) return { ok: false, reason: refused ?? "The script is too long for the model." };

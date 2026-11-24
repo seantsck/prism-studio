@@ -10,6 +10,7 @@ import { validateShotPlan } from "@/domain/story/shot-list";
 import {
   LIMITS,
   LONG_FORM_TAIL_CHARS,
+  estimateScreenMinutes,
   longFormPartInstruction,
   planBatches,
   planBatchInstruction,
@@ -311,14 +312,29 @@ export class StoryWorker {
       inputTokens: unknownUsage ? null : inputTokens,
       outputTokens: unknownUsage ? null : outputTokens,
     });
-    for (let part = 0; part < plan.parts; part++) {
+    // with a target length, each part is asked for what is still missing, and parts are added before the ending
+    // (at most plan.extraParts, priced in the ceiling) while the text runs well short of it
+    let total = plan.parts;
+    let extraLeft = plan.extraParts ?? 0;
+    for (let part = 0; part < total; part++) {
+      let progress: Parameters<typeof longFormPartInstruction>[3];
+      if (plan.minutes) {
+        const written = estimateScreenMinutes(text);
+        const share = plan.minutes / plan.parts;
+        if (total - part === 1 && extraLeft > 0 && plan.minutes - written > 1.6 * share) {
+          total += 1;
+          extraLeft -= 1;
+        }
+        const askMinutes = Math.max(2, Math.round((plan.minutes - written) / (total - part)));
+        progress = { total, last: part === total - 1, writtenMinutes: Math.round(written), askMinutes };
+      }
       const tail = text.slice(-LONG_FORM_TAIL_CHARS);
       const result = await provider.write({
         model,
         operation: writingOperation("continue", false),
         mode: "continue",
         scopeKind: "episode",
-        instruction: longFormPartInstruction(row.instruction, plan, part),
+        instruction: longFormPartInstruction(row.instruction, plan, part, progress),
         count: 1,
         targetText: tail,
         draftText: null,
@@ -345,8 +361,7 @@ export class StoryWorker {
         return store.fail(row.id, this.deps.workerId, {
           error: {
             code: result.code,
-            message:
-              part === 0 ? result.message : `Part ${part + 1} of ${plan.parts} failed: ${result.message}`,
+            message: part === 0 ? result.message : `Part ${part + 1} of ${total} failed: ${result.message}`,
           },
           usage: usage(),
           actualUsd: actualUsd(model, usage()),
@@ -364,7 +379,7 @@ export class StoryWorker {
         spent != null &&
         row.confirmedUsd != null &&
         spent > row.confirmedUsd + 1e-9 &&
-        part < plan.parts - 1
+        part < total - 1
       )
         return store.fail(row.id, this.deps.workerId, {
           error: { code: "spend_ceiling", message: "Stopped before going over the confirmed amount." },
@@ -375,18 +390,21 @@ export class StoryWorker {
         });
     }
     const whole = plan.kind === "film" ? "film" : plan.kind === "short" ? "short film" : "episode";
+    const runs = plan.minutes
+      ? ` It runs about ${Math.round(estimateScreenMinutes(text))} minutes (target ${plan.minutes}).`
+      : "";
     return store.complete(row.id, this.deps.workerId, {
       result: {
         message: redraft
-          ? `Prism redrafted the whole ${whole} in ${plan.parts} parts. Read it, then accept it to replace the screenplay (the current one stays in the history), or ask for changes.`
-          : `Prism wrote the whole ${whole} in ${plan.parts} parts. Read it, then accept it or ask for changes.`,
+          ? `Prism redrafted the whole ${whole} in ${total} parts.${runs} Read it, then accept it to replace the screenplay (the current one stays in the history), or ask for changes.`
+          : `Prism wrote the whole ${whole} in ${total} parts.${runs} Read it, then accept it or ask for changes.`,
         alternatives: [
           {
             label: "A",
             text,
             explanation: redraft
-              ? `A new draft of the whole ${whole}, written in ${plan.parts} parts.`
-              : `The whole ${whole}, written in ${plan.parts} parts.`,
+              ? `A new draft of the whole ${whole}, written in ${total} parts.`
+              : `The whole ${whole}, written in ${total} parts.`,
             newCharacterFacts: facts.slice(0, LIMITS.facts),
           },
         ],
