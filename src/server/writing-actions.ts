@@ -174,6 +174,14 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
   if (parent?.mode === "brainstorm") mode = "rewrite";
   if (!parent && preset === "ask" && looksLikeBrainstorm(instruction)) mode = "brainstorm";
   if (mode === "brainstorm" && parent) mode = "rewrite";
+  // a redraft: the whole Episode rewritten from nothing at its length, replacing the screenplay when accepted
+  const redraft = str(form, "redraft") === "1";
+  if (redraft) {
+    if (parent || str(form, "length") !== "whole" || str(form, "scopeKind") !== "episode")
+      throw new UserFacingError("A redraft is of a whole Episode.");
+    if (!text.trim()) throw new UserFacingError("This Episode has no screenplay to redraft yet.");
+    mode = "rewrite";
+  }
 
   const scope = parent ? parent.scope : resolveScope(form, data, episode, text);
   const targetText = parent ? parent.targetText : text.slice(scope.start, scope.end);
@@ -201,7 +209,7 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
   // price it; nothing silently spends. A whole Episode or film ("length=whole") is written in parts by the worker.
   const { registry, model } = chooseModel(form);
   const whole = str(form, "length") === "whole";
-  if (whole && (mode !== "continue" || scope.kind !== "episode" || parent))
+  if (whole && (mode !== (redraft ? "rewrite" : "continue") || scope.kind !== "episode" || parent))
     throw new UserFacingError("A whole Episode is written from the start of an Episode.");
   const longForm = whole
     ? longFormPlan(data.project.projectType, model.maxOutputTokens || 32_000, episode.targetMinutes)
@@ -222,6 +230,7 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
     withPlan: str(form, "withPlan") === "1",
     withBible: str(form, "withBible") === "1",
     bibleText: bibleDraftOf(form),
+    redraft,
   });
   if (tooLong)
     throw new UserFacingError("This request is too long for the model. Choose a Scene or a shorter passage.");
@@ -362,7 +371,9 @@ async function accept_impl(form: FormData): Promise<ActionResult> {
   const next = applyAlternative(base, proposal.scope, proposal.mode, alt.text);
   const before = parseScreenplay(base).map((s) => s.slugline);
   const after = parseScreenplay(next.text).map((s) => s.slugline);
-  if (proposal.mode !== "continue" && JSON.stringify(before) !== JSON.stringify(after))
+  // a redraft is a new screenplay: its scenes may differ (scenes Shots use are kept, and flagged as changed)
+  const redraft = proposal.context.previousDraft != null;
+  if (proposal.mode !== "continue" && !redraft && JSON.stringify(before) !== JSON.stringify(after))
     throw new UserFacingError(
       "This version would change the Episode's scene headings, so it cannot be accepted.",
     );

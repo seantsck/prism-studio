@@ -8,6 +8,8 @@ import {
   seasonPlanInstruction,
   seasonRefineInstruction,
   wholeScriptInstruction,
+  redraftInstruction,
+  REDRAFT_NOTE_MAX,
 } from "@/domain/series-start";
 import {
   BIBLE_AI_FIELDS,
@@ -21,7 +23,14 @@ import {
 import { bibleSchema, type Episode } from "@/domain/schemas";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { getRepo, requireProjectFresh } from "./repo";
-import { episodesToWrite, quoteBible, quoteSeasonPlan, quoteWriting, resolveWriter } from "./series-start";
+import {
+  episodesToWrite,
+  quoteBible,
+  quoteRedraft,
+  quoteSeasonPlan,
+  quoteWriting,
+  resolveWriter,
+} from "./series-start";
 import { getWritingRepo } from "./story";
 import { askPrism } from "./writing-actions";
 
@@ -385,6 +394,44 @@ async function writeWhole_impl(form: FormData) {
   }
   revalidatePath(`/projects/${slug}`, "layout");
   redirect(`/projects/${slug}/start`);
+}
+
+/**
+ * Redraft an Episode that has a screenplay: the whole Episode written anew at its length (priced and confirmed first),
+ * as ONE proposal in the Episode's writing conversation. The screenplay changes only when the creator accepts it.
+ */
+async function redraftEpisode_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const data = await requireProjectFresh(slug);
+  const episode = data.episodes.find((e) => e.id === str(form, "episodeId"));
+  if (!episode) throw new UserFacingError("That Episode is not in this project.");
+  const note = str(form, "note").slice(0, REDRAFT_NOTE_MAX);
+  const q = quoteRedraft(data, episode, str(form, "model"));
+  if (!q.ok) throw new UserFacingError(q.reason);
+  confirmed(form, q.usd, q.paid);
+  const f = new FormData();
+  for (const [k, v] of Object.entries({
+    projectSlug: slug,
+    episodeId: episode.id,
+    preset: "ask",
+    scopeKind: "episode",
+    length: "whole",
+    redraft: "1",
+    instruction: redraftInstruction(data, episode, note),
+    model: q.model,
+    ...(str(form, "sessionId") ? { sessionId: str(form, "sessionId"), noRedirect: "1" } : {}),
+    ...(q.paid ? { confirmedTotalUsd: q.usd.toFixed(4) } : {}),
+  }))
+    f.set(k, v);
+  // without a conversation open, Ask Prism starts one and opens it; with one, the proposal joins it
+  const r = await askPrism(f);
+  if (!r.ok) throw new UserFacingError(r.error);
+  revalidatePath(`/projects/${slug}`, "layout");
+  return { ok: true as const, message: "Prism is redrafting the episode…" };
+}
+
+export async function redraftEpisode(form: FormData): Promise<ActionResult> {
+  return runAction(() => redraftEpisode_impl(form), { name: "redraftEpisode" });
 }
 
 export async function planSeason(form: FormData): Promise<ActionResult> {

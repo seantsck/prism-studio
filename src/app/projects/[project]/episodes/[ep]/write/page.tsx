@@ -4,12 +4,14 @@ import { ActionForm } from "@/components/action-form";
 import { RefreshWhileActive } from "@/components/images/refresh-while-active";
 import { Badge, Button, PageHeader, Panel } from "@/components/ui";
 import { DiffView } from "@/components/writing/diff-view";
+import { RedraftEpisode, type RedraftQuote } from "@/components/writing/redraft-episode";
 import { CopyButton, ScriptSelection } from "@/components/writing/script-selection";
 import type { WritingProposal } from "@/data/writing-repository";
 import { ORIGIN_LABEL, sceneRanges } from "@/domain/story/revisions";
 import { sourceFingerprint } from "@/domain/story/source";
 import { canonical, MODE_LABEL, WRITING_PRESETS, type WritingPreset } from "@/domain/story/writing";
 import { requireProject } from "@/server/repo";
+import { quoteRedraft, recommendedWriter, writers } from "@/server/series-start";
 import { getStoryRegistry, getStoryRepo, getWritingRepo } from "@/server/story";
 import {
   askPrism,
@@ -84,6 +86,14 @@ export default async function WritePage({
     session && session.budgetExpiresAt && session.budgetExpiresAt > new Date().toISOString()
       ? session.budgetUsd - session.reservedUsd
       : 0;
+  // redrafting the whole Episode: each writer that is switched on, with its price
+  const redraftWriters = writers();
+  const redraftRecommended = recommendedWriter()?.value ?? "";
+  const redraftQuotes: Record<string, RedraftQuote> = {};
+  for (const w of redraftWriters.filter((x) => x.available)) {
+    const r = quoteRedraft(data, episode, w.value);
+    redraftQuotes[w.value] = r.ok ? { ok: true, paid: r.paid, label: r.label, usd: r.usd } : r;
+  }
   const hidden = (
     <>
       <input type="hidden" name="projectSlug" value={slug} />
@@ -227,6 +237,20 @@ export default async function WritePage({
 
         {/* ───────────── right: the conversation ───────────── */}
         <div className="min-w-0 space-y-4">
+          {text.trim() ? (
+            <Panel title="Redraft the whole episode">
+              <RedraftEpisode
+                slug={slug}
+                episodeId={episode.id}
+                sessionId={session?.id ?? null}
+                minutes={episode.targetMinutes ?? null}
+                writers={redraftWriters}
+                recommended={redraftRecommended}
+                quotes={redraftQuotes}
+                busy={active}
+              />
+            </Panel>
+          ) : null}
           <Panel title="Prism AI">
             {turns.length === 0 ? (
               <p className="text-[12px] text-muted">
@@ -393,8 +417,10 @@ function Turn({
   return (
     <li className="space-y-2" data-testid={`turn-${p.turn}`}>
       <div className="ml-8 rounded-[3px] border border-line2 bg-panel2 px-3 py-2 text-[12.5px]">
-        <div>{p.instruction}</div>
+        {/* a redraft's request carries the whole writing brief: what the creator asked is shown instead */}
+        <div>{p.context.previousDraft != null ? redraftAsked(p) : p.instruction}</div>
         <div className="mt-1 flex flex-wrap gap-1.5">
+          {p.context.previousDraft != null ? <Badge tone="info">Redraft</Badge> : null}
           <Badge>{MODE_LABEL[p.mode]}</Badge>
           <Badge>{scopeLabel}</Badge>
           {p.parentId ? <Badge tone="info">follow-up</Badge> : null}
@@ -544,4 +570,11 @@ function Turn({
       </div>
     </li>
   );
+}
+
+/** What the creator asked for in a redraft: the whole Episode at its length, with their note when they wrote one. */
+function redraftAsked(p: WritingProposal): string {
+  const minutes = p.context.longForm?.minutes;
+  const note = /The creator's note for this redraft: (.*)/.exec(p.instruction)?.[1]?.trim();
+  return `Redraft the whole episode${minutes ? ` at ${minutes} minutes` : ""}.${note ? ` ${note}` : ""}`;
 }

@@ -192,3 +192,30 @@ describe("a whole film written in parts", () => {
     expect(usd).toBeLessThan(0.05);
   });
 });
+
+describe("a whole Episode redrafted in parts", () => {
+  it("writes the new screenplay from nothing, with the current one sent as previousDraft, into ONE proposal", async () => {
+    const plan = longFormPlan("series", 32_000, 20);
+    const old = "INT. LOBBY - NIGHT\n\nThe old short scene.";
+    const r = row(plan);
+    Object.assign(r, {
+      mode: "rewrite",
+      targetText: old,
+      scope: { kind: "episode", sceneId: null, start: 0, end: old.length, startLine: 1, endLine: 3 },
+      context: { ...r.context, previousDraft: old },
+    });
+    const { provider, calls } = stub((_req, i) => part(`INT. PLACE ${i + 1} - DAY\n\nNew scene ${i + 1}.`));
+    const out = await run(provider, r);
+    expect(calls).toHaveLength(plan.parts);
+    // the first part starts from an empty page; every part sees the old screenplay in the context, never as its target
+    expect(calls[0]!.targetText).toBe("");
+    expect(calls.every((c) => c.context.previousDraft === old && !c.targetText.includes("old short scene"))).toBe(
+      true,
+    );
+    const done = out.complete as { result: WritingResult };
+    const text = done.result.alternatives[0]!.text;
+    expect(text.startsWith("INT. PLACE 1 - DAY")).toBe(true);
+    expect(text).not.toContain("The old short scene.");
+    expect(done.result.message).toMatch(/^Prism redrafted the whole episode in \d+ parts\./);
+  });
+});
