@@ -19,8 +19,8 @@ const AREAS = [
       ["/start", "Start from a prompt"],
       ["/story", "Import Story"],
       ["/bible", "Bible"],
-      ["/script", "Script"],
       ["/episodes", "Episodes"],
+      ["/script", "Script"],
     ],
   },
   {
