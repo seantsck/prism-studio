@@ -411,7 +411,8 @@ async function redraftEpisode_impl(form: FormData) {
   const episode = data.episodes.find((e) => e.id === str(form, "episodeId"));
   if (!episode) throw new UserFacingError("That Episode is not in this project.");
   const note = str(form, "note").slice(0, REDRAFT_NOTE_MAX);
-  const q = quoteRedraft(data, episode, str(form, "model"));
+  const fresh = str(form, "fresh") === "1";
+  const q = quoteRedraft(data, episode, str(form, "model"), fresh);
   if (!q.ok) throw new UserFacingError(q.reason);
   confirmed(form, q.usd, q.paid);
   const f = new FormData();
@@ -422,7 +423,8 @@ async function redraftEpisode_impl(form: FormData) {
     scopeKind: "episode",
     length: "whole",
     redraft: "1",
-    instruction: redraftInstruction(data, episode, note),
+    instruction: redraftInstruction(data, episode, note, fresh),
+    ...(fresh ? { fresh: "1" } : {}),
     model: q.model,
     ...(str(form, "sessionId") ? { sessionId: str(form, "sessionId"), noRedirect: "1" } : {}),
     ...(q.paid ? { confirmedTotalUsd: q.usd.toFixed(4) } : {}),

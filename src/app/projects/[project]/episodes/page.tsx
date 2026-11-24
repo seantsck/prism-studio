@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Badge, Button, Field, PageHeader, Panel } from "@/components/ui";
 import { formatDuration } from "@/domain/duration";
+import { estimateScreenMinutes } from "@/domain/story/writing";
 import { summarizeEpisode } from "@/domain/summary";
 import { episodePath } from "@/lib/paths";
 import { createEpisode } from "@/server/actions";
@@ -32,7 +33,20 @@ export default async function EpisodesPage({ params }: { params: Promise<{ proje
                     {e.title}
                   </div>
                   <div className="flex gap-1.5">
-                    {e.targetMinutes ? <Badge>{e.targetMinutes} min</Badge> : null}
+                    {e.scriptText.trim() ? (
+                      <Badge
+                        tone={
+                          e.targetMinutes && estimateScreenMinutes(e.scriptText) < e.targetMinutes * 0.8
+                            ? "warn"
+                            : "neutral"
+                        }
+                      >
+                        runs about {Math.max(1, Math.round(estimateScreenMinutes(e.scriptText)))}
+                        {e.targetMinutes ? ` of ${e.targetMinutes}` : ""} min
+                      </Badge>
+                    ) : e.targetMinutes ? (
+                      <Badge>{e.targetMinutes} min</Badge>
+                    ) : null}
                     {e.scriptText.trim() ? null : <Badge tone="warn">no script yet</Badge>}
                     <Badge>{shots.length} shots</Badge>
                     <Badge tone="pass">{shots.filter((s) => s.report.ready).length} ready</Badge>

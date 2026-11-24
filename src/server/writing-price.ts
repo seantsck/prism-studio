@@ -64,6 +64,8 @@ export function priceWriting(args: {
    * nothing (the parts see only what they have written).
    */
   redraft?: boolean;
+  /** With `redraft`: start fresh from the synopsis (the current screenplay is not sent). */
+  redraftFresh?: boolean;
   /** Adding Episodes: recorded in the context, so the ideas can be added as those Episodes. */
   addEpisodes?: WritingContext["addEpisodes"];
 }): WritingPrice {
@@ -97,7 +99,9 @@ export function priceWriting(args: {
         }
       : {}),
     ...(batched ? { planBatch: { size: PLAN_BATCH, total: args.count } } : {}),
-    ...(args.redraft ? { previousDraft: args.targetText.slice(0, REDRAFT_SOURCE_MAX) } : {}),
+    ...(args.redraft
+      ? { previousDraft: args.redraftFresh ? "" : args.targetText.slice(0, REDRAFT_SOURCE_MAX) }
+      : {}),
     ...(args.addEpisodes ? { addEpisodes: args.addEpisodes } : {}),
   };
   const promptText = writingInput({

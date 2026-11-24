@@ -233,6 +233,7 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
     withBible: str(form, "withBible") === "1",
     bibleText: bibleDraftOf(form),
     redraft,
+    redraftFresh: redraft && str(form, "fresh") === "1",
     addEpisodes: addEpisodesOf(form, mode),
   });
   if (tooLong)

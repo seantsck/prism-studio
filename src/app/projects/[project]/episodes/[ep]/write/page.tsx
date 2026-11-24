@@ -9,7 +9,13 @@ import { CopyButton, ScriptSelection } from "@/components/writing/script-selecti
 import type { WritingProposal } from "@/data/writing-repository";
 import { ORIGIN_LABEL, sceneRanges } from "@/domain/story/revisions";
 import { sourceFingerprint } from "@/domain/story/source";
-import { canonical, MODE_LABEL, WRITING_PRESETS, type WritingPreset } from "@/domain/story/writing";
+import {
+  canonical,
+  estimateScreenMinutes,
+  MODE_LABEL,
+  WRITING_PRESETS,
+  type WritingPreset,
+} from "@/domain/story/writing";
 import { requireProject } from "@/server/repo";
 import { quoteRedraft, recommendedWriter, writers } from "@/server/series-start";
 import { getStoryRegistry, getStoryRepo, getWritingRepo } from "@/server/story";
@@ -90,9 +96,12 @@ export default async function WritePage({
   const redraftWriters = writers();
   const redraftRecommended = recommendedWriter()?.value ?? "";
   const redraftQuotes: Record<string, RedraftQuote> = {};
+  const freshQuotes: Record<string, RedraftQuote> = {};
   for (const w of redraftWriters.filter((x) => x.available)) {
     const r = quoteRedraft(data, episode, w.value);
     redraftQuotes[w.value] = r.ok ? { ok: true, paid: r.paid, label: r.label, usd: r.usd } : r;
+    const f = quoteRedraft(data, episode, w.value, true);
+    freshQuotes[w.value] = f.ok ? { ok: true, paid: f.paid, label: f.label, usd: f.usd } : f;
   }
   const hidden = (
     <>
@@ -247,6 +256,8 @@ export default async function WritePage({
                 writers={redraftWriters}
                 recommended={redraftRecommended}
                 quotes={redraftQuotes}
+                freshQuotes={freshQuotes}
+                runsMinutes={estimateScreenMinutes(text)}
                 busy={active}
               />
             </Panel>
@@ -576,5 +587,6 @@ function Turn({
 function redraftAsked(p: WritingProposal): string {
   const minutes = p.context.longForm?.minutes;
   const note = /The creator's note for this redraft: (.*)/.exec(p.instruction)?.[1]?.trim();
-  return `Redraft the whole episode${minutes ? ` at ${minutes} minutes` : ""}.${note ? ` ${note}` : ""}`;
+  const fresh = p.context.previousDraft === "" ? " from its synopsis" : "";
+  return `Redraft the whole episode${fresh}${minutes ? ` at ${minutes} minutes` : ""}.${note ? ` ${note}` : ""}`;
 }

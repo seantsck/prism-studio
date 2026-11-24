@@ -175,10 +175,17 @@ export const REDRAFT_NOTE_MAX = 1000;
  * Redrafting an Episode that already has a screenplay: a NEW complete screenplay at the Episode's length, written in
  * parts, keeping the story of the current one (sent as `previousDraft`). It replaces the screenplay only when accepted.
  */
-export function redraftInstruction(data: ProjectData, episode: Episode, note: string): string {
+export function redraftInstruction(data: ProjectData, episode: Episode, note: string, fresh = false): string {
   const lines = [
-    "REDRAFT: the episode's current screenplay is in the context (previousDraft). Write a NEW complete screenplay of the episode from its first scene to its last, replacing it.",
-    "Keep its story, characters, relationships and the moments that work; fix what is thin. Reach the full length with fuller scenes, more behaviour and real dialogue exchanges, and new scenes where the story needs them, never filler or repetition.",
+    ...(fresh
+      ? [
+          "REDRAFT FROM THE SYNOPSIS: write a NEW complete screenplay of this episode from its synopsis, from its first scene to its last. The current screenplay is discarded and not sent; do not continue or reuse it.",
+          "Reach the full length with fully dramatised scenes, behaviour and real dialogue exchanges, never filler or repetition.",
+        ]
+      : [
+          "REDRAFT: the episode's current screenplay is in the context (previousDraft). Write a NEW complete screenplay of the episode from its first scene to its last, replacing it.",
+          "Keep its story, characters, relationships and the moments that work; fix what is thin. Reach the full length with fuller scenes, more behaviour and real dialogue exchanges, and new scenes where the story needs them, never filler or repetition.",
+        ]),
     ...(note.trim()
       ? [`The creator's note for this redraft: ${note.trim().slice(0, REDRAFT_NOTE_MAX)}`]
       : []),

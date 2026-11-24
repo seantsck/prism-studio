@@ -917,14 +917,29 @@ describe("starting a series from a prompt", () => {
 
   it("a length sizes how a whole Episode or film is written: about a page a minute, in parts", () => {
     expect(longFormPlan("series", 32_000)).toEqual({ kind: "episode", parts: 2, partTokens: 8_000 });
+    // about five minutes a part (a model writes a short stretch in full), with up to two parts in reserve for when the
+    // text runs short; each part's budget is twice its share
+    expect(longFormPlan("series", 32_000, 20)).toEqual({
+      kind: "episode",
+      parts: 4,
+      partTokens: 6_000,
+      minutes: 20,
+      extraParts: 2,
+    });
     expect(longFormPlan("series", 32_000, 24)).toEqual({
       kind: "episode",
-      parts: 2,
-      partTokens: 8_000,
+      parts: 5,
+      partTokens: 5_760,
       minutes: 24,
+      extraParts: 2,
     });
-    expect(longFormPlan("series", 32_000, 60)).toMatchObject({ parts: 5, partTokens: 8_000 });
-    expect(longFormPlan("short", 32_000, 5)).toMatchObject({ parts: 1, partTokens: 6_000 });
+    expect(longFormPlan("series", 32_000, 60)).toEqual({
+      kind: "episode",
+      parts: MAX_LONG_FORM_PARTS,
+      partTokens: 6_000,
+      minutes: 60,
+    });
+    expect(longFormPlan("short", 32_000, 5)).toMatchObject({ parts: 1, partTokens: 6_000, extraParts: 2 });
     // a very long film gets bigger parts, never more than the most parts, never above the model's maximum
     const epic = longFormPlan("film", 32_000, 600);
     expect(epic.parts).toBe(MAX_LONG_FORM_PARTS);
@@ -1013,9 +1028,9 @@ describe("starting a series from a prompt", () => {
     expect(await writeWhole(form({ projectSlug: "runtime", scope: "one" }))).toEqual({ ok: true });
     const [p] = (await proposalsOf("runtime")).filter((x) => x.context.longForm);
     expect(p!.context.longForm).toEqual(longFormPlan("film", 32_000, 100));
-    expect(p!.context.longForm!.parts).toBe(6);
+    expect(p!.context.longForm!.parts).toBe(12);
     await work();
     const [done] = (await proposalsOf("runtime")).filter((x) => x.context.longForm);
-    expect(done).toMatchObject({ status: "ready", providerCalls: 6 });
+    expect(done).toMatchObject({ status: "ready", providerCalls: 12 });
   });
 });

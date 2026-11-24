@@ -22,6 +22,8 @@ export function RedraftEpisode({
   writers,
   recommended,
   quotes,
+  freshQuotes,
+  runsMinutes,
   busy,
 }: {
   slug: string;
@@ -31,13 +33,18 @@ export function RedraftEpisode({
   writers: Array<{ value: string; label: string; available: boolean; paid: boolean }>;
   recommended: string;
   quotes: Record<string, RedraftQuote>;
+  /** the same, starting fresh from the synopsis (the current screenplay is not sent) */
+  freshQuotes: Record<string, RedraftQuote>;
+  /** about how long the current screenplay runs, in minutes */
+  runsMinutes: number;
   /** a proposal of this conversation is being written: a second redraft waits */
   busy: boolean;
 }) {
   const [writer, setWriter] = useState(recommended);
   const [confirming, setConfirming] = useState(false);
   const [note, setNote] = useState("");
-  const quote = quotes[writer];
+  const [fresh, setFresh] = useState(false);
+  const quote = (fresh ? freshQuotes : quotes)[writer];
   const offered = writers.filter((w) => w.available);
   const price = quote?.ok ? (quote.paid ? priceText(quote.usd) : "free") : "";
 
@@ -49,6 +56,31 @@ export function RedraftEpisode({
         keeping its story. It arrives below as a proposal: the screenplay changes only when you accept it, and
         the current one stays in the history.
       </p>
+      <p
+        className={minutes && runsMinutes < minutes * 0.8 ? "text-warn" : "text-muted"}
+        data-testid="redraft-runs"
+      >
+        The script now runs about {Math.max(1, Math.round(runsMinutes))} minute
+        {Math.round(runsMinutes) === 1 ? "" : "s"}
+        {minutes ? ` of ${minutes}` : ""}. Prism writes it in parts of about five minutes and checks the
+        length as it goes, adding parts before the ending if it runs short.
+      </p>
+      <fieldset className="space-y-1" data-testid="redraft-start">
+        <label className="flex items-start gap-2">
+          <input type="radio" name="redraft-start" checked={!fresh} onChange={() => setFresh(false)} />
+          <span>Keep the story of the current script, rewritten at full length</span>
+        </label>
+        <label className="flex items-start gap-2">
+          <input
+            type="radio"
+            name="redraft-start"
+            checked={fresh}
+            onChange={() => setFresh(true)}
+            data-testid="redraft-fresh"
+          />
+          <span>Start fresh from the episode&apos;s synopsis (the current script is not used)</span>
+        </label>
+      </fieldset>
       {minutes ? null : (
         <p className="text-warn" data-testid="redraft-no-length">
           This episode has no length set, so Prism writes a standard-length episode. Set its length on the
@@ -122,6 +154,10 @@ export function RedraftEpisode({
                 <dd>{minutes ? `${minutes} minutes` : "standard"}</dd>
               </div>
               <div className="flex justify-between gap-4">
+                <dt className="text-muted">From</dt>
+                <dd>{fresh ? "the synopsis" : "the current script"}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
                 <dt className="text-muted">Writer</dt>
                 <dd>{quote.label}</dd>
               </div>
@@ -152,6 +188,7 @@ export function RedraftEpisode({
               {sessionId ? <input type="hidden" name="sessionId" value={sessionId} /> : null}
               <input type="hidden" name="model" value={writer} />
               <input type="hidden" name="note" value={note} />
+              {fresh ? <input type="hidden" name="fresh" value="1" /> : null}
               {quote.paid ? (
                 <input type="hidden" name="confirmedTotalUsd" value={quote.usd.toFixed(4)} />
               ) : null}
