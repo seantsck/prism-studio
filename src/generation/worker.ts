@@ -68,6 +68,21 @@ interface Classified {
   retryable: boolean;
 }
 
+/**
+ * The attempt's frozen request, as this worker understands it. A request it cannot read (made by a newer app, e.g. a
+ * new purpose) is refused once, permanently, with what to do, rather than retried forever as an unknown error: nothing
+ * was sent to a provider, so nothing can have been charged.
+ */
+function parseRequest(raw: unknown): GenerationRequest {
+  const parsed = generationRequestSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  throw new GenerationProviderError(
+    "invalid_request",
+    "request_not_understood",
+    "This generation worker cannot read this request: it is older than the app. Update and restart the generation worker, then make it again.",
+  );
+}
+
 function classify(err: unknown): Classified {
   if (err instanceof GenerationProviderError) {
     return {
@@ -271,7 +286,7 @@ export class GenerationWorker {
         "Attempt has no frozen request.",
       );
     }
-    const request = generationRequestSchema.parse(attempt.request);
+    const request = parseRequest(attempt.request);
 
     // Kill switch: a provider that was disabled or lost its configuration after the job was queued must not
     // receive NEW work. (Jobs already submitted keep being polled/ingested so their results are not lost.)
@@ -627,7 +642,7 @@ export class GenerationWorker {
         outcome = "not_supported";
       } else {
         try {
-          const request = generationRequestSchema.parse(claimed.attempt.request);
+          const request = parseRequest(claimed.attempt.request);
           const res = await adapter.cancel(this.ref(job, request), this.ctx(job.attemptId));
           if (res.completed) completedFirst = true;
           else outcome = res.confirmed ? "confirmed" : "failed";
@@ -639,7 +654,7 @@ export class GenerationWorker {
     if (completedFirst) {
       // Lost the race: the provider finished (and billed) first. Keep the paid output and say so honestly.
       const adapter = this.registry.adapter(job.provider)!;
-      const request = generationRequestSchema.parse(claimed.attempt.request);
+      const request = parseRequest(claimed.attempt.request);
       await this.store.update(
         job.id,
         token,

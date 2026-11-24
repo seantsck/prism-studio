@@ -261,3 +261,24 @@ describe("generation worker (mock provider, in-memory store)", () => {
     await expect(h.repo.generation.createAttemptWithJob(stale)).rejects.toMatchObject({ code: "stale_shot" });
   });
 });
+
+describe("a request the worker cannot read (made by a newer app)", () => {
+  it("fails once, permanently, with what to do; it is never retried and nothing reaches a provider", async () => {
+    const h = makeHarness();
+    const { attemptId, jobId } = await h.submit("3A");
+    // what an older worker sees of a newer request: a purpose it does not know
+    const projects = (
+      h.repo as unknown as { projects: Map<string, { attempts: Array<{ id: string; request: unknown }> }> }
+    ).projects;
+    for (const p of projects.values())
+      for (const a of p.attempts)
+        if (a.id === attemptId) a.request = { ...(a.request as object), purpose: "from_the_future" };
+    const job = await drive(h, jobId!, 5);
+    expect(job.status).toBe("failed");
+    expect(job.attemptCount).toBe(0);
+    expect(job.providerJobId ?? null).toBeNull();
+    expect(job.lastErrorCode).toBe("request_not_understood");
+    const events = await h.repo.generation.listJobEvents(jobId!);
+    expect(events.filter((e) => e.toStatus === "queued").length).toBeLessThanOrEqual(1);
+  });
+});

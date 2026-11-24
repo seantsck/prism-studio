@@ -8,6 +8,7 @@ import {
   coverPictureOfLocation,
   defaultCoverCast,
 } from "@/domain/generation/cover-art";
+import { offersTestModels } from "@/domain/generation/reference-studio";
 import { canonicalRefOf } from "@/domain/visual-bible";
 import { hasStoredImage } from "@/domain/generation/subject-image";
 import type { Asset, ProjectData } from "@/domain/schemas";
@@ -77,8 +78,15 @@ export async function coverArtState(data: ProjectData, userId: string | null) {
     locationId: locations.find((l) => l.pictured)?.id ?? null,
   };
   const engines: CoverEngine[] = [];
-  for (const m of registry.models()) {
-    if (!m.capabilities.image || !registry.availabilityOf(m).available) continue;
+  // test engines (coloured patterns, never a picture) only where the Studio offers them: no real engine is switched
+  // on, or the server asks for them beside the real ones
+  const imageModels = registry.models().filter((m) => m.capabilities.image && registry.availabilityOf(m).available);
+  const tests = offersTestModels(
+    imageModels.map((m) => ({ test: m.kind === "mock", available: true })),
+    config.mock.showBesideRealModels === true,
+  );
+  for (const m of imageModels) {
+    if (m.kind === "mock" && !tests) continue;
     const ratios = COVER_SHAPES.filter((s) => m.capabilities.image!.aspectRatios.includes(s.ratio));
     if (ratios.length === 0) continue;
     engines.push({
