@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { GenerationSubmitError } from "@/data/generation-repository";
+import { coverDesignOf } from "@/domain/cover-design";
 import { COVER_CAST_MAX } from "@/domain/generation/cover-art";
 import { MAX_SUBJECT_DIRECTION_CHARS, hasStoredImage } from "@/domain/generation/subject-image";
 import { paidConfirmationRefusal } from "@/domain/generation/paid-confirmation";
@@ -77,15 +78,48 @@ async function setCover_impl(form: FormData) {
   if (currentCover(data)?.id === asset.id)
     return { ok: true as const, message: "That is already the cover." };
   const at = new Date().toISOString();
+  // the title design carries over to the new cover
+  const before = currentCover(data);
+  const design = (before?.metadata as { cover?: { design?: unknown } } | undefined)?.cover?.design;
   await (
     await getRepo()
   ).upsert(data.project.id, "assets", {
     ...asset,
-    metadata: { ...asset.metadata, cover: { selectedAt: at } },
+    metadata: {
+      ...asset.metadata,
+      cover: { selectedAt: at, ...(design ? { design: coverDesignOf(design) } : {}) },
+    },
+    updatedAt: at,
+  });
+
+  refresh(slug);
+  return { ok: true as const, message: "Cover set." };
+}
+
+/** Save how the title is laid over the cover (style, subtitle, tagline, cast names, credits). */
+async function saveCoverDesign_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  await requireUser();
+  const data = await requireProjectFresh(slug);
+  const cover = currentCover(data);
+  if (!cover || cover.id !== str(form, "assetId")) throw new UserFacingError("Choose a cover first.");
+  let raw: unknown;
+  try {
+    raw = JSON.parse(str(form, "design") || "{}");
+  } catch {
+    throw new UserFacingError("That design could not be read.");
+  }
+  const at = new Date().toISOString();
+  const record = (cover.metadata as { cover?: Record<string, unknown> }).cover ?? {};
+  await (
+    await getRepo()
+  ).upsert(data.project.id, "assets", {
+    ...cover,
+    metadata: { ...cover.metadata, cover: { ...record, design: coverDesignOf(raw) } },
     updatedAt: at,
   });
   refresh(slug);
-  return { ok: true as const, message: "Cover set." };
+  return { ok: true as const, message: "Title design saved." };
 }
 
 /** Stop a cover still being made (nothing is charged for what never reached the engine). */
@@ -108,6 +142,10 @@ export async function makeCoverArt(form: FormData): Promise<ActionResult> {
 
 export async function setCover(form: FormData): Promise<ActionResult> {
   return runAction(() => setCover_impl(form), { name: "setCover" });
+}
+
+export async function saveCoverDesign(form: FormData): Promise<ActionResult> {
+  return runAction(() => saveCoverDesign_impl(form), { name: "saveCoverDesign" });
 }
 
 export async function stopCoverArt(form: FormData): Promise<ActionResult> {
