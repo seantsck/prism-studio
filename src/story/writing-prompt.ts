@@ -60,6 +60,11 @@ export interface WritingContext {
   conversation: Array<{ instruction: string; reply: string; chosen: string | null }>;
   /** A whole Episode or film written in parts (the worker runs the parts). Absent = one answer. */
   longForm?: LongFormPlan;
+  /**
+   * A redraft: the Episode's current screenplay, which the whole new version (written in parts, `longForm`) replaces.
+   * The new text starts from nothing; this is what it keeps the story of. Absent = not a redraft.
+   */
+  previousDraft?: string;
   /** A brainstorm asked for more ideas than the database records as requested (a season plan of 11+ episodes). */
   ideaCount?: number;
   /** The project Bible as it stands, field by field (refining it). */

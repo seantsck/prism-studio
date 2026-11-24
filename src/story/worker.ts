@@ -299,7 +299,9 @@ export class StoryWorker {
     plan: LongFormPlan,
   ) {
     const context = { ...row.context, longForm: undefined };
-    let text = row.targetText.trimEnd();
+    // a redraft writes the whole Episode anew (the current screenplay rides in the context as previousDraft)
+    const redraft = row.context.previousDraft != null;
+    let text = redraft ? "" : row.targetText.trimEnd();
     let inputTokens = 0;
     let outputTokens = 0;
     let unknownUsage = false;
@@ -375,12 +377,16 @@ export class StoryWorker {
     const whole = plan.kind === "film" ? "film" : plan.kind === "short" ? "short film" : "episode";
     return store.complete(row.id, this.deps.workerId, {
       result: {
-        message: `Prism wrote the whole ${whole} in ${plan.parts} parts. Read it, then accept it or ask for changes.`,
+        message: redraft
+          ? `Prism redrafted the whole ${whole} in ${plan.parts} parts. Read it, then accept it to replace the screenplay (the current one stays in the history), or ask for changes.`
+          : `Prism wrote the whole ${whole} in ${plan.parts} parts. Read it, then accept it or ask for changes.`,
         alternatives: [
           {
             label: "A",
             text,
-            explanation: `The whole ${whole}, written in ${plan.parts} parts.`,
+            explanation: redraft
+              ? `A new draft of the whole ${whole}, written in ${plan.parts} parts.`
+              : `The whole ${whole}, written in ${plan.parts} parts.`,
             newCharacterFacts: facts.slice(0, LIMITS.facts),
           },
         ],

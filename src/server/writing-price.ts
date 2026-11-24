@@ -1,5 +1,5 @@
 import { bibleAsText } from "@/domain/bible-ai";
-import { isSeasonPlanRequest } from "@/domain/series-start";
+import { isSeasonPlanRequest, REDRAFT_SOURCE_MAX } from "@/domain/series-start";
 import type { Episode, ProjectData } from "@/domain/schemas";
 import {
   estimateWritingInputTokens,
@@ -59,6 +59,11 @@ export function priceWriting(args: {
   withBible?: boolean;
   /** With `withBible`: send this draft of the Bible (field by field) instead of the Bible as it stands. */
   bibleText?: Record<string, string> | null;
+  /**
+   * A redraft (with `longForm`): the target is sent as `previousDraft` in the context, and the new text is written from
+   * nothing (the parts see only what they have written).
+   */
+  redraft?: boolean;
 }): WritingPrice {
   const built = buildWritingContext({
     data: args.data,
@@ -90,6 +95,7 @@ export function priceWriting(args: {
         }
       : {}),
     ...(batched ? { planBatch: { size: PLAN_BATCH, total: args.count } } : {}),
+    ...(args.redraft ? { previousDraft: args.targetText.slice(0, REDRAFT_SOURCE_MAX) } : {}),
   };
   const promptText = writingInput({
     mode: args.mode,
@@ -97,7 +103,7 @@ export function priceWriting(args: {
     count: args.count,
     scopeKind: args.scope.kind,
     context,
-    targetText: args.targetText,
+    targetText: args.redraft ? "" : args.targetText,
     draftText: args.draftText,
   });
   const base = estimateWritingInputTokens(WRITING_INSTRUCTIONS, promptText);
