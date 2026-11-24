@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planCharacterMerge } from "../character-merge";
+import { pictureOwnersOf, planCharacterMerge } from "../character-merge";
 import type { Asset, Character, IdentityRef, ProjectData } from "../schemas";
 import { seed, uid } from "./helpers";
 
@@ -119,5 +119,37 @@ describe("merging a Character into the same person", () => {
     expect(
       planCharacterMerge(data, saionji.id, takumi.id, { name: "Takumi", prefer: "merged" }),
     ).toMatchObject({ ok: false, reason: expect.stringMatching(/is locked/) });
+  });
+});
+
+describe("pictureOwnersOf: a merged Character's pictures belong on the Character it was merged into", () => {
+  const base = seed();
+  const kept = base.characters[0]!;
+  const now = new Date().toISOString();
+  const trashed = (key: string, into: string | null, trashedAt: string | null = now): Character => ({
+    ...kept,
+    id: uid(`char:${key}`),
+    name: key,
+    trashedAt,
+    mergedIntoId: into,
+  });
+
+  it("is the Character itself, plus every Character merged into it, directly or through another merge", () => {
+    const a = trashed("a", kept.id);
+    const b = trashed("b", a.id);
+    const other = trashed("other", null);
+    const owners = pictureOwnersOf(
+      { characters: base.characters, trashedCharacters: [b, a, other] },
+      kept.id,
+    );
+    expect([...owners].sort()).toEqual([kept.id, a.id, b.id].sort());
+  });
+
+  it("ignores a Character restored from the Trash (it is its own again) and links nothing else", () => {
+    const restored = trashed("restored", kept.id, null);
+    expect([
+      ...pictureOwnersOf({ characters: base.characters, trashedCharacters: [restored] }, kept.id),
+    ]).toEqual([kept.id]);
+    expect([...pictureOwnersOf({ characters: base.characters }, kept.id)]).toEqual([kept.id]);
   });
 });

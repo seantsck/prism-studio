@@ -2123,6 +2123,9 @@ test("ZH: a character made on its own is merged into the script's character of t
   await front.getByTestId("reference-view-pick").check();
   await page.getByTestId("reference-views-make").click();
   await expect(front).toHaveAttribute("data-state", "in_set", { timeout: 60_000 });
+  await page.reload();
+  const made = await page.getByTestId("character-picture").first().getAttribute("data-asset");
+  expect(made).toBeTruthy();
 
   // the script's Takumi looks like the same person: the merge is offered at the top, his place in the story named
   const merge = page.getByTestId("merge-character");
@@ -2144,6 +2147,22 @@ test("ZH: a character made on its own is merged into the script's character of t
     "data-state",
     "in_set",
   );
+  // the merged character's picture is among the kept one's pictures, and stays there after a new front takes its place
+  // in the set (its generation record still names the merged character, who is in the Trash)
+  const merged = page.locator(`[data-testid="character-picture"][data-asset="${made}"]`);
+  await expect(merged).toBeVisible();
+  await page.getByTestId("reference-views-engine").selectOption("mock/mock-image-1");
+  const keptFront = page.locator('[data-testid="reference-view"][data-view="front"]');
+  await keptFront.getByTestId("reference-view-pick").check();
+  await page.getByTestId("reference-views-make").click();
+  await expect(keptFront.getByTestId("reference-view-use-newer-button")).toBeVisible({ timeout: 60_000 });
+  page.once("dialog", (d) => void d.accept());
+  await keptFront.getByTestId("reference-view-use-newer-button").click();
+  await expect(keptFront.getByTestId("reference-view-use-newer-button")).toHaveCount(0, { timeout: 30_000 });
+  await page.reload();
+  await expect(merged).toBeVisible();
+  await expect(page.getByTestId("character-picture")).not.toHaveCount(1);
+
   await page.goto("/projects/ojousama/characters");
   await expect(page.getByRole("link", { name: /^Takumi Saionji \d+ identity refs/ })).toHaveCount(1);
   await expect(page.getByRole("link", { name: /^Takumi \d+ identity refs/ })).toHaveCount(0);
