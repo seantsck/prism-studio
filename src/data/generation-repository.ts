@@ -87,7 +87,10 @@ export interface AttemptView {
 
 /** Phase 5B-I1: what a Character / Location image attempt is generated FOR. */
 export type ImageSubjectRef =
-  { kind: "character"; characterId: string } | { kind: "location"; locationId: string };
+  | { kind: "character"; characterId: string }
+  | { kind: "location"; locationId: string }
+  /** the project's cover art (migration 0069) */
+  | { kind: "cover"; projectId: string };
 
 /** A Character / Location image attempt with its job, outputs and costs (the same shape as a Shot AttemptView). */
 export interface SubjectAttemptView {

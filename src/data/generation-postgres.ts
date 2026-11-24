@@ -435,15 +435,17 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
       }
 
       // the subject must exist IN THIS PROJECT (the composite foreign key enforces it too)
-      const subject = a.characterId
-        ? await c.query("select 1 from characters where id = $1 and project_id = $2", [
-            a.characterId,
-            a.projectId,
-          ])
-        : await c.query("select 1 from locations where id = $1 and project_id = $2", [
-            a.locationId,
-            a.projectId,
-          ]);
+      const subject = a.projectCover
+        ? { rowCount: 1 }
+        : a.characterId
+          ? await c.query("select 1 from characters where id = $1 and project_id = $2", [
+              a.characterId,
+              a.projectId,
+            ])
+          : await c.query("select 1 from locations where id = $1 and project_id = $2", [
+              a.locationId,
+              a.projectId,
+            ]);
       if (subject.rowCount === 0)
         throw new GenerationSubmitError(
           "not_found",
@@ -475,10 +477,12 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
       }
 
       const num = await c.query(
-        a.characterId
-          ? "select coalesce(max(attempt_number), 0) + 1 as n from generation_attempts where character_id = $1"
-          : "select coalesce(max(attempt_number), 0) + 1 as n from generation_attempts where location_id = $1",
-        [a.characterId ?? a.locationId],
+        a.projectCover
+          ? "select coalesce(max(attempt_number), 0) + 1 as n from generation_attempts where project_id = $1 and project_cover"
+          : a.characterId
+            ? "select coalesce(max(attempt_number), 0) + 1 as n from generation_attempts where character_id = $1"
+            : "select coalesce(max(attempt_number), 0) + 1 as n from generation_attempts where location_id = $1",
+        [a.projectCover ? a.projectId : (a.characterId ?? a.locationId)],
       );
       const attempt: SubjectImageAttempt = subjectImageAttemptSchema.parse({
         ...a,
@@ -543,8 +547,16 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
         await c.query(
           subject.kind === "character"
             ? "select * from generation_attempts where character_id = $1 order by attempt_number desc"
-            : "select * from generation_attempts where location_id = $1 order by attempt_number desc",
-          [subject.kind === "character" ? subject.characterId : subject.locationId],
+            : subject.kind === "cover"
+              ? "select * from generation_attempts where project_id = $1 and project_cover order by attempt_number desc"
+              : "select * from generation_attempts where location_id = $1 order by attempt_number desc",
+          [
+            subject.kind === "character"
+              ? subject.characterId
+              : subject.kind === "cover"
+                ? subject.projectId
+                : subject.locationId,
+          ],
         )
       ).rows;
       return this.viewsOf(c, rows, parseSubjectAttempt);
@@ -596,7 +608,8 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
       (
         await c.query(
           `select a.attempt_number, coalesce(ch.name, l.name, 'Unknown') as subject,
-                  case when a.character_id is not null then 'Character' else 'Location' end as kind
+                  case when a.character_id is not null then 'Character'
+                       when a.location_id is not null then 'Location' else 'Cover art' end as kind
              from generation_attempts a
              left join characters ch on ch.id = a.character_id
              left join locations l on l.id = a.location_id
@@ -604,9 +617,10 @@ export class PostgresGenerationData implements GenerationRepository, GenerationS
             order by a.attempt_number`,
           [projectId, assetId],
         )
-      ).rows.map(
-        (r: { attempt_number: number; subject: string; kind: string }) =>
-          `${r.kind} "${r.subject}" · image attempt ${r.attempt_number} input`,
+      ).rows.map((r: { attempt_number: number; subject: string; kind: string }) =>
+        r.kind === "Cover art"
+          ? `Cover art · image attempt ${r.attempt_number} input`
+          : `${r.kind} "${r.subject}" · image attempt ${r.attempt_number} input`,
       ),
     );
   }

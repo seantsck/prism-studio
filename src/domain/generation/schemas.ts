@@ -58,6 +58,8 @@ export const GENERATION_PURPOSES = [
    * redraw). Executed by a local matting engine; the source pixels are kept, only an alpha channel is added.
    */
   "background_removal",
+  /** A cover art image of the project itself (poster or key art); never a Shot output. */
+  "cover_art",
 ] as const;
 export type GenerationPurpose = (typeof GENERATION_PURPOSES)[number];
 
@@ -68,7 +70,9 @@ export type ShotGenerationPurpose = Extract<
 >;
 /** Narrows to a Shot purpose; a subject purpose (Character / Location image) is never a Shot purpose. */
 export const shotPurposeOf = (p: GenerationPurpose): ShotGenerationPurpose =>
-  p === "character_image" || p === "location_image" || p === "background_removal" ? "shot_output" : p;
+  p === "character_image" || p === "location_image" || p === "background_removal" || p === "cover_art"
+    ? "shot_output"
+    : p;
 
 /** The purpose of a frozen request; requests frozen before Phase 2G.2 carry none and are `shot_output`. */
 export const purposeOfRequest = (r: { purpose?: GenerationPurpose | null }): GenerationPurpose =>

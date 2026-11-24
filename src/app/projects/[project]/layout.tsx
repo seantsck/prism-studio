@@ -17,6 +17,7 @@ const AREAS = [
     title: "Story",
     items: [
       ["/start", "Start from a prompt"],
+      ["/cover", "Cover art"],
       ["/story", "Import Story"],
       ["/bible", "Bible"],
       ["/episodes", "Episodes"],
