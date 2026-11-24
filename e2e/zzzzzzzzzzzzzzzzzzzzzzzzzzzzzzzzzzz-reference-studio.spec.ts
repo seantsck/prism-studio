@@ -2281,3 +2281,47 @@ test("ZK: a character created in a project is in the library straight away, on t
   await page.goto("/");
   await expect(page.locator('[data-testid="home-character"][data-name="Haruki Doorman"]')).toBeVisible();
 });
+
+test("ZL: episodes are added in bulk with Prism: priced and confirmed, planned, reviewed, then the ticked ones added (free here)", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  await page.goto("/projects/ojousama/episodes");
+  const before = await page.locator('a[href*="/episodes/ep-"]').count();
+  const add = page.getByTestId("add-episodes");
+  await add.getByTestId("add-episodes-count").fill("2");
+  await add.getByTestId("add-episodes-minutes").fill("20");
+  await add.getByTestId("add-episodes-note").fill("The engagement is announced.");
+  await expect(add.getByTestId("add-episodes-price")).toContainText("free");
+  // nothing runs before the confirmation
+  await add.getByTestId("add-episodes-open").click();
+  const confirm = page.getByTestId("add-episodes-confirm");
+  await expect(confirm).toContainText(`Plan episodes ${before + 1}–${before + 2}?`);
+  await expect(confirm).toContainText("20 minutes");
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByTestId("added-episodes-planning")).toHaveCount(0);
+  await add.getByTestId("add-episodes-open").click();
+  await confirm.getByTestId("add-episodes-go").click();
+
+  // the ideas come back to review; nothing is added yet
+  const ideas = page.getByTestId("added-episodes");
+  await expect(async () => {
+    await page.reload();
+    await expect(ideas).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 90_000 });
+  await expect(ideas.getByTestId("added-episode-pick")).toHaveCount(2);
+  await expect(page.locator('a[href*="/episodes/ep-"]')).toHaveCount(before);
+
+  // only the ticked one is added; the other can still be added later
+  await ideas.getByTestId("added-episode-pick").nth(1).uncheck();
+  await ideas.getByTestId("added-episodes-add").click();
+  await expect(page.locator('a[href*="/episodes/ep-"]')).toHaveCount(before + 1, { timeout: 30_000 });
+  await expect(page.locator('a[href*="/episodes/ep-"]').last()).toContainText("20 min");
+  await page.reload();
+  await expect(ideas.getByTestId("added-episode-pick").nth(0)).toBeDisabled();
+  await expect(ideas.getByTestId("added-episode-pick").nth(1)).toBeEnabled();
+  // set aside: the ideas go, the added episode stays
+  await ideas.getByTestId("added-episodes-set-aside").click();
+  await expect(ideas).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.locator('a[href*="/episodes/ep-"]')).toHaveCount(before + 1);
+});

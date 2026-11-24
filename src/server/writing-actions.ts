@@ -1,5 +1,7 @@
 "use server";
 
+import { MAX_ADD_EPISODES, MAX_MINUTES } from "@/domain/series-start";
+import type { WritingContext } from "@/story/writing-prompt";
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -231,6 +233,7 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
     withBible: str(form, "withBible") === "1",
     bibleText: bibleDraftOf(form),
     redraft,
+    addEpisodes: addEpisodesOf(form, mode),
   });
   if (tooLong)
     throw new UserFacingError("This request is too long for the model. Choose a Scene or a shorter passage.");
@@ -310,6 +313,25 @@ async function ask_impl(form: FormData): Promise<ActionResult> {
     ok: true,
     message: record.mode === "brainstorm" ? "Prism is brainstorming…" : "Prism is writing a proposal…",
   };
+}
+
+/** Adding Episodes (a brainstorm from the Episodes page): which new Episodes its ideas are for. */
+function addEpisodesOf(form: FormData, mode: WritingMode): WritingContext["addEpisodes"] {
+  if (mode !== "brainstorm" || !str(form, "addCount")) return undefined;
+  const from = Number(str(form, "addFrom"));
+  const count = Number(str(form, "addCount"));
+  const minutes = str(form, "addMinutes") ? Number(str(form, "addMinutes")) : null;
+  if (
+    !Number.isInteger(from) ||
+    from < 1 ||
+    !Number.isInteger(count) ||
+    count < 1 ||
+    count > MAX_ADD_EPISODES
+  )
+    throw new UserFacingError("Choose how many episodes to add.");
+  if (minutes != null && (!Number.isInteger(minutes) || minutes < 1 || minutes > MAX_MINUTES))
+    throw new UserFacingError(`An episode's length is a whole number of minutes from 1 to ${MAX_MINUTES}.`);
+  return { from, count, minutes };
 }
 
 /** A Bible draft to refine (sent as JSON by the Bible page): only the Bible's own fields, each within its limit. */

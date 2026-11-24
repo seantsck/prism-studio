@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import {
@@ -10,6 +11,9 @@ import {
   wholeScriptInstruction,
   redraftInstruction,
   REDRAFT_NOTE_MAX,
+  addEpisodesInstruction,
+  ADD_EPISODES_NOTE_MAX,
+  MAX_ADD_EPISODES,
 } from "@/domain/series-start";
 import {
   BIBLE_AI_FIELDS,
@@ -20,11 +24,12 @@ import {
   isBibleRequest,
   parseBibleIdeas,
 } from "@/domain/bible-ai";
-import { bibleSchema, type Episode } from "@/domain/schemas";
+import { bibleSchema, episodeSchema, type Episode } from "@/domain/schemas";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { getRepo, requireProjectFresh } from "./repo";
 import {
   episodesToWrite,
+  quoteAddEpisodes,
   quoteBible,
   quoteRedraft,
   quoteSeasonPlan,
@@ -432,6 +437,123 @@ async function redraftEpisode_impl(form: FormData) {
 
 export async function redraftEpisode(form: FormData): Promise<ActionResult> {
   return runAction(() => redraftEpisode_impl(form), { name: "redraftEpisode" });
+}
+
+/**
+ * Add Episodes with Prism (the Episodes page): Prism plans the next `count` Episodes from the plan so far, one idea
+ * each, priced and confirmed first. Nothing is added until the creator uses the ideas (`applyAddedEpisodes`).
+ */
+async function addEpisodes_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const data = await requireProjectFresh(slug);
+  const count = Number(str(form, "count"));
+  if (!Number.isInteger(count) || count < 1 || count > MAX_ADD_EPISODES)
+    throw new UserFacingError(`Add 1 to ${MAX_ADD_EPISODES} episodes at a time.`);
+  const minutes = minutesOf(str(form, "minutes"), null) ?? null;
+  const note = str(form, "note").slice(0, ADD_EPISODES_NOTE_MAX);
+  const q = quoteAddEpisodes(data, count, str(form, "model"));
+  if (!q.ok) throw new UserFacingError(q.reason);
+  confirmed(form, q.usd, q.paid);
+  const first = [...data.episodes].sort((a, b) => a.number - b.number)[0]!;
+  const from = data.episodes.reduce((m, e) => Math.max(m, e.number), 0) + 1;
+  await queue({
+    projectSlug: slug,
+    episodeId: first.id,
+    preset: "brainstorm",
+    scopeKind: "episode",
+    instruction: addEpisodesInstruction(data, from, count, minutes, note),
+    model: q.model,
+    withPlan: "1",
+    addFrom: String(from),
+    addCount: String(count),
+    ...(minutes ? { addMinutes: String(minutes) } : {}),
+    ...(q.paid ? { confirmedTotalUsd: q.usd.toFixed(4) } : {}),
+  });
+  revalidatePath(`/projects/${slug}`, "layout");
+  return {
+    ok: true as const,
+    message: `Prism is planning ${count} new episode${count === 1 ? "" : "s"}…`,
+  };
+}
+
+/**
+ * Use Prism's ideas for new Episodes: each idea ticked becomes a new Episode (title, synopsis and length; no script
+ * yet), numbered after the last one. Ideas already added (an Episode with that synopsis) are not added twice.
+ */
+async function applyAddedEpisodes_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const data = await requireProjectFresh(slug);
+  const proposal = await (await getWritingRepo()).getProposal(data.project.id, str(form, "proposalId"));
+  const plan = proposal?.context.addEpisodes;
+  if (!proposal || !plan || proposal.mode !== "brainstorm" || proposal.status !== "ready" || !proposal.result)
+    throw new UserFacingError("Those episode ideas are not ready.");
+  const have = new Set(data.episodes.map((e) => e.synopsis.trim()));
+  const chosen = proposal.result.ideas
+    .map((idea, i) => ({ idea, i }))
+    .filter(({ i }) => str(form, `use_${i}`) === "1")
+    .map(({ idea }) => idea)
+    .filter((idea) => !have.has(idea.detail.slice(0, 2000).trim()));
+  if (chosen.length === 0)
+    throw new UserFacingError("Tick the episodes to add (ones already added are skipped).");
+  const repo = await getRepo();
+  let number = data.episodes.reduce((m, e) => Math.max(m, e.number), 0);
+  const order = data.episodes.reduce((m, e) => Math.max(m, e.order), -1);
+  const now = new Date().toISOString();
+  for (const [k, idea] of chosen.entries()) {
+    number += 1;
+    const episode = episodeSchema.parse({
+      id: randomUUID(),
+      projectId: data.project.id,
+      number,
+      slug: freeEpisodeSlug(data.episodes, number),
+      title: idea.title.replace(/^\s*(episode\s*\d+\s*[:.\-–]\s*)/i, "").slice(0, 120) || `Episode ${number}`,
+      synopsis: idea.detail.slice(0, 2000),
+      scriptText: "",
+      order: order + 1 + k,
+      ...(plan.minutes ? { targetMinutes: plan.minutes } : {}),
+      createdAt: now,
+      updatedAt: now,
+    });
+    if (plan.minutes) await saveEpisode(data.project.id, episode);
+    else await repo.upsert(data.project.id, "episodes", episode);
+  }
+  revalidatePath(`/projects/${slug}`, "layout");
+  return {
+    ok: true as const,
+    message: `${chosen.length} episode${chosen.length === 1 ? "" : "s"} added.`,
+  };
+}
+
+/** Set Prism's episode ideas aside (nothing is added). */
+async function setAsideAddedEpisodes_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const data = await requireProjectFresh(slug);
+  const repo = await getWritingRepo();
+  const proposal = await repo.getProposal(data.project.id, str(form, "proposalId"));
+  if (!proposal?.context.addEpisodes) throw new UserFacingError("Those episode ideas are gone.");
+  await repo.rejectProposal(data.project.id, proposal.id, new Date().toISOString());
+  revalidatePath(`/projects/${slug}`, "layout");
+  return { ok: true as const, message: "Set aside." };
+}
+
+/** An Episode slug not yet used in the project ("ep-5", else "ep-5-2" …). */
+function freeEpisodeSlug(episodes: readonly Episode[], number: number): string {
+  const used = new Set(episodes.map((e) => e.slug));
+  let slug = `ep-${number}`;
+  for (let n = 2; used.has(slug); n++) slug = `ep-${number}-${n}`;
+  return slug;
+}
+
+export async function addEpisodes(form: FormData): Promise<ActionResult> {
+  return runAction(() => addEpisodes_impl(form), { name: "addEpisodes" });
+}
+
+export async function applyAddedEpisodes(form: FormData): Promise<ActionResult> {
+  return runAction(() => applyAddedEpisodes_impl(form), { name: "applyAddedEpisodes" });
+}
+
+export async function setAsideAddedEpisodes(form: FormData): Promise<ActionResult> {
+  return runAction(() => setAsideAddedEpisodes_impl(form), { name: "setAsideAddedEpisodes" });
 }
 
 export async function planSeason(form: FormData): Promise<ActionResult> {

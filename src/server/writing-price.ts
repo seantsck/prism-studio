@@ -64,6 +64,8 @@ export function priceWriting(args: {
    * nothing (the parts see only what they have written).
    */
   redraft?: boolean;
+  /** Adding Episodes: recorded in the context, so the ideas can be added as those Episodes. */
+  addEpisodes?: WritingContext["addEpisodes"];
 }): WritingPrice {
   const built = buildWritingContext({
     data: args.data,
@@ -96,6 +98,7 @@ export function priceWriting(args: {
       : {}),
     ...(batched ? { planBatch: { size: PLAN_BATCH, total: args.count } } : {}),
     ...(args.redraft ? { previousDraft: args.targetText.slice(0, REDRAFT_SOURCE_MAX) } : {}),
+    ...(args.addEpisodes ? { addEpisodes: args.addEpisodes } : {}),
   };
   const promptText = writingInput({
     mode: args.mode,

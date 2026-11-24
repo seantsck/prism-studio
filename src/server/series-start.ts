@@ -13,6 +13,9 @@ import {
   redraftInstruction,
   REDRAFT_NOTE_MAX,
   wholeScriptInstruction,
+  addEpisodesInstruction,
+  ADD_EPISODES_NOTE_MAX,
+  MAX_MINUTES,
 } from "@/domain/series-start";
 import { estimateInputTokens, normalizeSourceText } from "@/domain/story/source";
 import { canonical, LIMITS, longFormPlan, scopeOf } from "@/domain/story/writing";
@@ -138,6 +141,34 @@ export function quoteSeasonPlan(
     withPlan: opts.refine,
   });
   const refused = over(r.model, p.usd, opts.refine ? "Refining the plan" : "Planning the season");
+  if (refused || p.tooLong) return { ok: false, reason: refused ?? "The plan is too long for the model." };
+  return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd: p.usd };
+}
+
+/** Adding `count` Episodes with Prism: one brainstorm idea per new Episode (priced for the longest note). */
+export function quoteAddEpisodes(data: ProjectData, count: number, writer?: string | null): QuoteResult {
+  const r = resolveWriter(writer);
+  if (!r) return { ok: false, reason: WRITING_AI_OFF };
+  const episode = [...data.episodes].sort((a, b) => a.number - b.number)[0];
+  if (!episode) return { ok: false, reason: "Add the first episode before Prism adds more." };
+  const from = data.episodes.reduce((m, e) => Math.max(m, e.number), 0) + 1;
+  const text = canonical(episode.scriptText);
+  const p = priceWriting({
+    data,
+    episode,
+    text,
+    scope: scopeOf(text, "episode", { start: 0, end: text.length }, null),
+    mode: "brainstorm",
+    instruction: addEpisodesInstruction(data, from, count, MAX_MINUTES, "あ".repeat(ADD_EPISODES_NOTE_MAX)),
+    count,
+    targetText: text,
+    draftText: null,
+    conversation: [],
+    model: r.model,
+    withPlan: true,
+    addEpisodes: { from, count, minutes: null },
+  });
+  const refused = over(r.model, p.usd, "Planning new episodes");
   if (refused || p.tooLong) return { ok: false, reason: refused ?? "The plan is too long for the model." };
   return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd: p.usd };
 }
