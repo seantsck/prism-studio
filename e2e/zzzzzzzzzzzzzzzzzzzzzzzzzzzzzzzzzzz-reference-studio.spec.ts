@@ -2325,3 +2325,41 @@ test("ZL: episodes are added in bulk with Prism: priced and confirmed, planned, 
   await expect(ideas).toHaveCount(0, { timeout: 30_000 });
   await expect(page.locator('a[href*="/episodes/ep-"]')).toHaveCount(before + 1);
 });
+
+test("ZM: cover art: shape chosen, priced and confirmed, made without lettering, used as the cover with the title over it", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  // in the sidebar under Start from a prompt, and under "Describe it" on the Start page
+  await page.goto("/projects/ojousama/start");
+  await expect(page.getByTestId("start-cover").getByTestId("cover-none")).toBeVisible();
+  await page.getByRole("link", { name: "Cover art", exact: true }).click();
+  await expect(page).toHaveURL(/\/projects\/ojousama\/cover$/);
+  const cover = page.getByTestId("cover-art");
+  await cover.getByTestId("cover-engine").selectOption({ label: "Mock Image 1 (free)" });
+  const shapes = cover.getByTestId("cover-shape");
+  await expect(shapes.first()).toBeVisible();
+  const ratio = (await shapes.last().getAttribute("data-ratio"))!;
+  await shapes.last().click();
+  await expect(cover.getByTestId("cover-price")).toContainText("free");
+  await cover.getByTestId("cover-direction").fill("The two leads under a rainy neon sky.");
+  // nothing runs before the confirmation
+  await cover.getByTestId("cover-make").click();
+  const confirm = page.getByTestId("cover-confirm");
+  await expect(confirm).toContainText("Make cover art?");
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(cover.getByTestId("cover-take")).toHaveCount(0);
+  await cover.getByTestId("cover-make").click();
+  await confirm.getByTestId("cover-go").click();
+
+  const take = cover.getByTestId("cover-take").first();
+  await expect(take).toHaveAttribute("data-status", "succeeded", { timeout: 90_000 });
+  await expect(take).toContainText(`#1 · ${ratio}`);
+  await take.getByTestId("cover-use").click();
+  await expect(cover.getByTestId("cover-current")).toContainText("お嬢様、僕と結婚してください。", {
+    timeout: 30_000,
+  });
+  await expect(take.getByTestId("cover-take-current")).toBeVisible();
+  await page.goto("/projects/ojousama/start");
+  await expect(page.getByTestId("start-cover").getByTestId("cover-current")).toBeVisible();
+});

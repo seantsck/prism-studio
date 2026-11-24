@@ -226,9 +226,11 @@ export class MemoryGenerationService implements GenerationRepository, Generation
       return { attempt: clone(prior), job: clone(replay), duplicate: true };
     }
     const a = input.attempt;
-    const exists = a.characterId
-      ? found.characters.some((ch) => ch.id === a.characterId)
-      : found.locations.some((l) => l.id === a.locationId);
+    const exists = a.projectCover
+      ? true
+      : a.characterId
+        ? found.characters.some((ch) => ch.id === a.characterId)
+        : found.locations.some((l) => l.id === a.locationId);
     if (!exists)
       throw new GenerationSubmitError(
         "not_found",
@@ -255,7 +257,11 @@ export class MemoryGenerationService implements GenerationRepository, Generation
       );
     }
     const sameSubject = this.subjectAttempts.filter((x) =>
-      a.characterId ? x.characterId === a.characterId : x.locationId === a.locationId,
+      a.projectCover
+        ? x.projectCover === true && x.projectId === a.projectId
+        : a.characterId
+          ? x.characterId === a.characterId
+          : !x.projectCover && x.locationId === a.locationId,
     );
     const attemptNumber = sameSubject.reduce((m, x) => Math.max(m, x.attemptNumber), 0) + 1;
     const attempt: SubjectImageAttempt = subjectImageAttemptSchema.parse({
@@ -281,7 +287,9 @@ export class MemoryGenerationService implements GenerationRepository, Generation
       .filter((a) =>
         subject.kind === "character"
           ? a.characterId === subject.characterId
-          : a.locationId === subject.locationId,
+          : subject.kind === "cover"
+            ? a.projectCover === true && a.projectId === subject.projectId
+            : a.locationId === subject.locationId,
       )
       .sort((x, y) => y.attemptNumber - x.attemptNumber)
       .flatMap((a) => {
@@ -321,9 +329,11 @@ export class MemoryGenerationService implements GenerationRepository, Generation
       .filter((a) => a.projectId === projectId && a.inputAssetIds.includes(assetId))
       .sort((x, y) => x.attemptNumber - y.attemptNumber)
       .map((a) => {
-        const subject = a.characterId
-          ? `Character "${project?.characters.find((c) => c.id === a.characterId)?.name ?? "Unknown"}"`
-          : `Location "${project?.locations.find((l) => l.id === a.locationId)?.name ?? "Unknown"}"`;
+        const subject = a.projectCover
+          ? "Cover art"
+          : a.characterId
+            ? `Character "${project?.characters.find((c) => c.id === a.characterId)?.name ?? "Unknown"}"`
+            : `Location "${project?.locations.find((l) => l.id === a.locationId)?.name ?? "Unknown"}"`;
         return `${subject} · image attempt ${a.attemptNumber} input`;
       });
   }

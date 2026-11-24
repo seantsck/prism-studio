@@ -8,12 +8,11 @@ const FILE = "0068_character_merged_into.sql";
 const code = readFileSync(`${DIR}/${FILE}`, "utf8").replace(/--.*$/gm, "").replace(/\s+/g, " ");
 
 describe("migration 0068: the Character a merged Character was merged into", () => {
-  it("is the latest migration, follows 0067, and leaves 0067 byte-for-byte unchanged (as applied)", () => {
+  it("follows 0067, and leaves 0067 byte-for-byte unchanged (as applied)", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe(FILE);
-    expect(files.at(-2)).toBe("0067_character_part_size.sql");
+    expect(files[files.indexOf(FILE) - 1]).toBe("0067_character_part_size.sql");
     expect(checksumOf(readFileSync(`${DIR}/0067_character_part_size.sql`, "utf8"))).toBe(
       "05ba6f3f450fad3da7570dcf45280ee2d843a92c933b59570a3e28c6309e6a55",
     );

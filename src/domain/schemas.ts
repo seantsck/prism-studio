@@ -678,10 +678,23 @@ export type GenerationAttempt = z.infer<typeof generationAttemptSchema>;
  * never appear in `ProjectData.attempts` (Shot history), so every Shot view is unchanged.
  */
 export const subjectImageAttemptSchema = generationAttemptSchema
-  .extend({ shotId: z.null(), characterId: nullableId.default(null), locationId: nullableId.default(null) })
-  .refine((a) => (a.characterId === null) !== (a.locationId === null), {
-    message: "a subject attempt names exactly one Character or Location",
-  });
+  .extend({
+    shotId: z.null(),
+    characterId: nullableId.default(null),
+    locationId: nullableId.default(null),
+    /**
+     * A cover art image of the project itself (migration 0069): no Character or Location. Absent on every other
+     * attempt (and never written for them), so a database without the column keeps working for them.
+     */
+    projectCover: z.boolean().optional(),
+  })
+  .refine(
+    (a) =>
+      a.projectCover
+        ? a.characterId === null && a.locationId === null
+        : (a.characterId === null) !== (a.locationId === null),
+    { message: "a subject attempt names exactly one Character or Location, or is the project's cover art" },
+  );
 export type SubjectImageAttempt = z.infer<typeof subjectImageAttemptSchema>;
 
 /** What the generation worker reads: any attempt, whatever its subject (the worker never uses the subject). */

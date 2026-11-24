@@ -2,6 +2,9 @@ import { priceText } from "@/domain/pricing/user-price";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { ActionForm } from "@/components/action-form";
+import { CoverArtPanel } from "@/components/projects/cover-art";
+import { requireUser } from "@/server/auth";
+import { coverArtState } from "@/server/cover-art";
 import { WriteIt, type WriteQuotes } from "@/components/projects/write-it";
 import { Button, Field, PageHeader } from "@/components/ui";
 import type { WritingProposal } from "@/data/writing-repository";
@@ -49,6 +52,8 @@ export default async function StartPage({ params }: { params: Promise<{ project:
   const first = episodes[0] ?? null;
 
   // what Prism has been asked so far, per Episode (newest first)
+  const user = await requireUser();
+  const cover = await coverArtState(data, user.kind === "supabase" ? user.id : null);
   const writing = await getWritingRepo();
   const asked = new Map<string, WritingProposal[]>();
   for (const e of episodes) {
@@ -132,6 +137,15 @@ export default async function StartPage({ params }: { params: Promise<{ project:
               <Link href={`${base}/bible`} className="text-[12px] text-accent hover:underline">
                 Edit it on the Bible page
               </Link>
+              <div className="mt-3 border-t border-line pt-3" data-testid="start-cover">
+                <div className="mb-2 flex items-baseline justify-between gap-2">
+                  <span className="text-[13px] font-medium">Cover art (optional)</span>
+                  <Link href={`${base}/cover`} className="text-[12px] text-accent hover:underline">
+                    Open Cover art
+                  </Link>
+                </div>
+                <CoverArtPanel slug={slug} title={data.project.title} state={cover} compact />
+              </div>
             </div>
           ) : (
             <ActionForm action={startFromPremise} successMessage="" className="space-y-2">

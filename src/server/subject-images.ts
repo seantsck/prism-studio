@@ -127,7 +127,7 @@ function editSources(
       add(r.assetId, `Reference: ${r.label || r.slot}`);
     for (const l of data.looks.filter((x) => x.characterId === subject.characterId))
       for (const id of l.referenceAssetIds) add(id, `Look "${l.name}"`);
-  } else {
+  } else if (subject.kind === "location") {
     const loc = data.locations.find((l) => l.id === subject.locationId);
     for (const id of loc?.referenceAssetIds ?? []) add(id, `Reference: ${assets.get(id)?.name ?? "image"}`);
   }
