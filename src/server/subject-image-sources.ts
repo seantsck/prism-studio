@@ -1,4 +1,5 @@
 import "server-only";
+import { pictureOwnersOf } from "@/domain/character-merge";
 import { hasStoredImage } from "@/domain/generation/subject-image";
 import type { ProjectData } from "@/domain/schemas";
 import { getGenerationRepo } from "./generation";
@@ -22,8 +23,17 @@ export async function subjectImageAssetIds(
   } else {
     ids.push(...(data.locations.find((l) => l.id === subject.locationId)?.referenceAssetIds ?? []));
   }
-  const views = await (await getGenerationRepo(opts)).listSubjectImageAttempts(subject);
-  for (const v of views) for (const o of v.outputs) ids.push(o.asset.id);
+  const repo = await getGenerationRepo(opts);
+  // a Character's own takes, and those of every Character merged into it (their records never change hands)
+  const subjects =
+    subject.kind === "character"
+      ? [...pictureOwnersOf(data, subject.characterId)].map((characterId) => ({
+          kind: "character" as const,
+          characterId,
+        }))
+      : [subject];
+  for (const s of subjects)
+    for (const v of await repo.listSubjectImageAttempts(s)) for (const o of v.outputs) ids.push(o.asset.id);
   return new Set(
     ids.filter((id): id is string => !!id && hasStoredImage(data.assets.find((a) => a.id === id))),
   );

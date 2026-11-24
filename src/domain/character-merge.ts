@@ -161,3 +161,25 @@ export function planCharacterMerge(
   ];
   return { ok: true, plan: { character, refMoves, refSwaps, lookIds, voiceIds, summary } };
 }
+
+/**
+ * The Characters whose pictures belong on this one: itself, and every Character merged into it (directly, or into one
+ * that was then merged into it). A generation record never changes hands, so a merged Character's takes are found here
+ * rather than moved. A merged Character restored from the Trash is its own again (its link is cleared).
+ */
+export function pictureOwnersOf(
+  data: Pick<ProjectData, "characters"> & { trashedCharacters?: Character[] },
+  characterId: string,
+): Set<string> {
+  const owners = new Set([characterId]);
+  const merged = (data.trashedCharacters ?? []).filter((c) => c.mergedIntoId && c.trashedAt);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const c of merged)
+      if (!owners.has(c.id) && owners.has(c.mergedIntoId!)) {
+        owners.add(c.id);
+        grew = true;
+      }
+  }
+  return owners;
+}

@@ -82,6 +82,7 @@ export function planCharacterCopy(
     relationshipNotes: "",
     trashedAt: undefined,
     partSize: undefined,
+    mergedIntoId: undefined,
     createdAt: now,
     updatedAt: now,
   };

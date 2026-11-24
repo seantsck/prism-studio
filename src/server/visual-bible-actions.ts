@@ -1,5 +1,6 @@
 "use server";
 
+import { pictureOwnersOf } from "@/domain/character-merge";
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { isReferenceSetView, REFERENCE_SET_VIEWS } from "@/domain/generation/reference-studio";
@@ -26,7 +27,12 @@ async function resolveSource(data: ProjectData, characterId: string, form: FormD
   const attemptId = str(form, "attemptId");
   if (!assetId && attemptId) {
     const view = await (await getGenerationRepo()).getSubjectImageAttempt(attemptId);
-    if (!view || view.attempt.characterId !== characterId || view.attempt.projectId !== data.project.id)
+    if (
+      !view ||
+      !view.attempt.characterId ||
+      !pictureOwnersOf(data, characterId).has(view.attempt.characterId) ||
+      view.attempt.projectId !== data.project.id
+    )
       throw new UserFacingError("That generated image no longer exists.");
     if (view.attempt.status !== "succeeded") throw new UserFacingError("Only a finished image can be used.");
     assetId = (view.outputs.find((o) => o.output.role === "primary") ?? view.outputs[0])?.asset.id ?? "";

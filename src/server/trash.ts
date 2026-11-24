@@ -106,18 +106,30 @@ const UNDEFINED_COLUMN = "42703";
 const NEEDS_0064 =
   "Deleting characters and locations (to the Trash) needs a one-time database update (migration 0064) that has not been applied yet.";
 
-/** Stamps (or clears) a Character's or Location's place in the Trash; nothing else about it changes. */
+/**
+ * Stamps (or clears) a Character's or Location's place in the Trash; nothing else about it changes, except the merge
+ * link: a merge sends the merged Character here with `mergedIntoId` (the Character kept), and a restore clears it (the
+ * Character is its own again). Before migration 0068 the link is not stored: the Character still goes to the Trash.
+ */
 export async function setSubjectTrashed(
   data: ProjectData,
   kind: TrashSubjectKind,
   id: string,
   trashedAt: string | null,
+  opts: { mergedIntoId?: string } = {},
 ): Promise<void> {
   const repo = await getRepo();
   try {
     if (kind === "character") {
       const c = [...data.characters, ...(data.trashedCharacters ?? [])].find((x) => x.id === id)!;
-      await repo.upsert(data.project.id, "characters", { ...c, trashedAt });
+      const mergedIntoId =
+        trashedAt === null ? (c.mergedIntoId ? null : c.mergedIntoId) : (opts.mergedIntoId ?? c.mergedIntoId);
+      try {
+        await repo.upsert(data.project.id, "characters", { ...c, trashedAt, mergedIntoId });
+      } catch (err) {
+        if ((err as { code?: string }).code !== UNDEFINED_COLUMN || mergedIntoId === undefined) throw err;
+        await repo.upsert(data.project.id, "characters", { ...c, trashedAt, mergedIntoId: undefined });
+      }
     } else {
       const l = [...data.locations, ...(data.trashedLocations ?? [])].find((x) => x.id === id)!;
       await repo.upsert(data.project.id, "locations", { ...l, trashedAt });

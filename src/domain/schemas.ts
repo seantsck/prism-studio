@@ -219,6 +219,12 @@ export const characterSchema = z.object({
    * Null / absent = not chosen (treated as a lead). Never copied with the Character: each project chooses its own.
    */
   partSize: z.enum(PART_SIZES).nullable().optional(),
+  /**
+   * The Character this one was merged into (migration 0068). Set when a merge sends it to the Trash, cleared when it is
+   * restored. Its pictures (generation records never change hands) show on that Character. Absent = never merged, or
+   * the column is not there yet.
+   */
+  mergedIntoId: id.nullable().optional(),
   createdAt: iso,
   updatedAt: iso,
 });

@@ -48,7 +48,7 @@ async function mergeCharacter_impl(form: FormData) {
     await repo.upsert(data.project.id, "voiceProfiles", { ...v, characterId: keptId });
   await saveCharacterWithSize(data.project.id, { ...plan.character, updatedAt: new Date().toISOString() });
   try {
-    await setSubjectTrashed(data, "character", mergedId, new Date().toISOString());
+    await setSubjectTrashed(data, "character", mergedId, new Date().toISOString(), { mergedIntoId: keptId });
   } catch (err) {
     if (needsMigration0064(err))
       throw new UserFacingError(

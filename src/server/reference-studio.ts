@@ -1,4 +1,5 @@
 import "server-only";
+import { pictureOwnersOf } from "@/domain/character-merge";
 import { userPrice } from "@/domain/pricing/user-price";
 import type { SubjectAttemptView } from "@/data/generation-repository";
 import { archiveOf, isArchived } from "@/domain/archive";
@@ -384,8 +385,14 @@ export async function referenceStudioState(
       if (r.characterId === id && r.assetId && stored(assets.get(r.assetId))) ids.add(r.assetId);
     for (const l of data.looks)
       if (l.characterId === id) for (const a of l.referenceAssetIds) if (stored(assets.get(a))) ids.add(a);
+    const owners = pictureOwnersOf(loaded, id);
     for (const v of all)
-      if (v.attempt.characterId === id && finished(v) && v.attempt.reviewStatus !== "rejected")
+      if (
+        v.attempt.characterId &&
+        owners.has(v.attempt.characterId) &&
+        finished(v) &&
+        v.attempt.reviewStatus !== "rejected"
+      )
         ids.add(primaryOf(v)!.asset.id);
     return ids;
   };
@@ -475,8 +482,10 @@ export async function referenceStudioState(
   }
 
   const character = base.kind === "character" ? data.characters.find((c) => c.id === base.id) : undefined;
+  // a Character's own takes, and those of every Character merged into it (they keep their record, so are found here)
+  const owners = base.kind === "character" ? pictureOwnersOf(loaded, base.id) : null;
   const own = all.filter((v) =>
-    base.kind === "character" ? v.attempt.characterId === base.id : v.attempt.locationId === base.id,
+    owners ? !!v.attempt.characterId && owners.has(v.attempt.characterId) : v.attempt.locationId === base.id,
   );
   const location = base.kind === "location" ? data.locations.find((l) => l.id === base.id) : undefined;
   const bible = location ? locationBibleOf(location) : null;
