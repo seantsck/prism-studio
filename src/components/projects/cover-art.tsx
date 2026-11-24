@@ -93,6 +93,8 @@ export function CoverArtPanel({
   const [ratio, setRatio] = useState(chosen?.shapes[0]?.ratio ?? "2:3");
   const shape = chosen?.shapes.find((s) => s.ratio === ratio) ?? chosen?.shapes[0];
   const [direction, setDirection] = useState("");
+  const [cast, setCast] = useState<string[]>(() => state.characters.filter((c) => c.chosen).map((c) => c.id));
+  const [locationId, setLocationId] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [key, setKey] = useState(() => crypto.randomUUID());
   const working = state.takes.some(
@@ -126,12 +128,65 @@ export function CoverArtPanel({
         </div>
         <div className="space-y-2">
           <p className="text-muted">
-            Prism makes a poster from the title, premise, tone and look of your project
-            {state.cast.length
-              ? `, featuring ${state.cast.join(", ")} (their front views are sent so the faces match)`
-              : ""}
-            . The picture has no lettering; the title is laid over it.
+            Prism makes a poster from the title, premise, tone and look of your project, with the characters
+            and place you choose: each one&apos;s main picture is sent so faces and the place match. The
+            picture has no lettering; the title is laid over it.
           </p>
+          {state.characters.length ? (
+            <fieldset data-testid="cover-cast">
+              <legend className="mb-1 text-muted">
+                Characters (up to {state.castMax}; {cast.length} chosen)
+              </legend>
+              <div className="flex flex-wrap gap-1.5">
+                {state.characters.map((c) => {
+                  const on = cast.includes(c.id);
+                  return (
+                    <label
+                      key={c.id}
+                      className={cn(
+                        "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                        on ? "border-accent bg-accent/10" : "border-line",
+                      )}
+                      title={
+                        c.pictured ? "Their main picture is sent" : "No main picture yet: described in words"
+                      }
+                    >
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        disabled={!on && cast.length >= state.castMax}
+                        onChange={() =>
+                          setCast((prev) => (on ? prev.filter((x) => x !== c.id) : [...prev, c.id]))
+                        }
+                        data-testid="cover-cast-pick"
+                        data-name={c.name}
+                      />
+                      {c.name}
+                      {c.pictured ? null : <span className="text-faint">(no picture)</span>}
+                    </label>
+                  );
+                })}
+              </div>
+            </fieldset>
+          ) : null}
+          {state.locations.length ? (
+            <label className="block">
+              <span className="mb-1 block text-muted">Location (optional)</span>
+              <select
+                value={locationId}
+                onChange={(e) => setLocationId(e.target.value)}
+                data-testid="cover-location"
+              >
+                <option value="">No particular place</option>
+                {state.locations.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                    {l.pictured ? "" : " (no picture: described in words)"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           {!state.available ? (
             <p className="text-warn" data-testid="cover-needs-update">
               Cover art needs a one-time database update (migration 0069) that has not been applied yet.
@@ -299,6 +354,15 @@ export function CoverArtPanel({
                 <dd>{shape.label}</dd>
               </div>
               <div className="flex justify-between gap-4">
+                <dt className="text-muted">Featuring</dt>
+                <dd className="text-right">
+                  {[
+                    ...state.characters.filter((c) => cast.includes(c.id)).map((c) => c.name),
+                    ...state.locations.filter((l) => l.id === locationId).map((l) => `at ${l.name}`),
+                  ].join(", ") || "no one in particular"}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
                 <dt className="text-muted">Engine</dt>
                 <dd>{chosen.label}</dd>
               </div>
@@ -329,6 +393,11 @@ export function CoverArtPanel({
               <input type="hidden" name="model" value={chosen.value} />
               <input type="hidden" name="aspectRatio" value={shape.ratio} />
               <input type="hidden" name="direction" value={direction} />
+              <input type="hidden" name="castChosen" value="1" />
+              {cast.map((id) => (
+                <input key={id} type="hidden" name="cast" value={id} />
+              ))}
+              <input type="hidden" name="locationId" value={locationId} />
               <input type="hidden" name="idempotencyKey" value={key} />
               {chosen.paid ? (
                 <input type="hidden" name="confirmedTotalUsd" value={shape.usd.toFixed(4)} />

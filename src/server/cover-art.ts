@@ -2,7 +2,13 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { SubjectAttemptView } from "@/data/generation-repository";
 import { isArchived } from "@/domain/archive";
-import { COVER_SHAPES, defaultCoverCast } from "@/domain/generation/cover-art";
+import {
+  COVER_CAST_MAX,
+  COVER_SHAPES,
+  coverPictureOfLocation,
+  defaultCoverCast,
+} from "@/domain/generation/cover-art";
+import { canonicalRefOf } from "@/domain/visual-bible";
 import { hasStoredImage } from "@/domain/generation/subject-image";
 import type { Asset, ProjectData } from "@/domain/schemas";
 import { isTrashed } from "@/domain/trash";
@@ -47,6 +53,29 @@ export interface CoverTake {
 export async function coverArtState(data: ProjectData, userId: string | null) {
   const registry = getRegistry();
   const config = getGenerationConfig();
+  // who and where a cover can feature, with whether a picture of them is sent (their canonical picture)
+  const picturedCharacter = (id: string) => {
+    const ref = canonicalRefOf(data, id);
+    return hasStoredImage(data.assets.find((a) => a.id === ref?.assetId));
+  };
+  const defaults = new Set(defaultCoverCast(data));
+  const characters = data.characters
+    .filter((c) => !c.trashedAt)
+    .map((c) => ({ id: c.id, name: c.name, pictured: picturedCharacter(c.id), chosen: defaults.has(c.id) }));
+  const locations = data.locations
+    .filter((l) => !l.trashedAt)
+    .map((l) => ({ id: l.id, name: l.name, pictured: coverPictureOfLocation(data, l.id) !== null }));
+  // the price is quoted for the most a cover can send: four pictured characters and a pictured location (a ceiling)
+  const ceiling = {
+    direction: "",
+    castIds: [
+      ...characters.filter((c) => c.pictured && c.chosen),
+      ...characters.filter((c) => c.pictured && !c.chosen),
+    ]
+      .slice(0, COVER_CAST_MAX)
+      .map((c) => c.id),
+    locationId: locations.find((l) => l.pictured)?.id ?? null,
+  };
   const engines: CoverEngine[] = [];
   for (const m of registry.models()) {
     if (!m.capabilities.image || !registry.availabilityOf(m).available) continue;
@@ -59,7 +88,7 @@ export async function coverArtState(data: ProjectData, userId: string | null) {
       shapes: ratios.map((s) => {
         const p = prepareCoverArt({
           data,
-          input: { direction: "" },
+          input: ceiling,
           registry,
           provider: m.provider,
           modelId: m.modelId,
@@ -111,14 +140,15 @@ export async function coverArtState(data: ProjectData, userId: string | null) {
     ];
   });
   const cover = currentCover(data);
-  const cast = defaultCoverCast(data).map((id) => data.characters.find((c) => c.id === id)!.name);
   return {
     engines,
+    characters,
+    locations,
+    castMax: COVER_CAST_MAX,
     takes,
     cover: cover
       ? { assetId: cover.id, url: previewUrl(cover), width: cover.width, height: cover.height }
       : null,
-    cast,
     available,
   };
 }

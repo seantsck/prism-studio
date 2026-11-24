@@ -2358,10 +2358,20 @@ test("ZM: cover art: shape chosen, priced and confirmed, made without lettering,
   await shapes.last().click();
   await expect(cover.getByTestId("cover-price")).toContainText("free");
   await cover.getByTestId("cover-direction").fill("The two leads under a rainy neon sky.");
+  // who and where: the leads are ticked to start; the creator changes it and picks a place
+  const picks = cover.getByTestId("cover-cast-pick");
+  await expect(picks.first()).toBeChecked();
+  const dropped = (await picks.first().getAttribute("data-name"))!;
+  await picks.first().uncheck();
+  const place = cover.getByTestId("cover-location");
+  const placeName = (await place.locator("option").nth(1).textContent())!.replace(/ \(no picture.*$/, "");
+  await place.selectOption({ index: 1 });
   // nothing runs before the confirmation
   await cover.getByTestId("cover-make").click();
   const confirm = page.getByTestId("cover-confirm");
   await expect(confirm).toContainText("Make cover art?");
+  await expect(confirm).toContainText(`at ${placeName}`);
+  await expect(confirm).not.toContainText(dropped);
   await confirm.getByRole("button", { name: "Cancel" }).click();
   await expect(cover.getByTestId("cover-take")).toHaveCount(0);
   await cover.getByTestId("cover-make").click();
