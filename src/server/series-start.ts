@@ -10,6 +10,8 @@ import {
   REFINE_NOTE_MAX,
   seasonPlanInstruction,
   seasonRefineInstruction,
+  redraftInstruction,
+  REDRAFT_NOTE_MAX,
   wholeScriptInstruction,
 } from "@/domain/series-start";
 import { estimateInputTokens, normalizeSourceText } from "@/domain/story/source";
@@ -164,6 +166,39 @@ export function quoteWhole(data: ProjectData, episode: Episode, writer?: string 
     ),
   });
   const refused = over(r.model, p.usd, `Writing "${episode.title}"`);
+  if (refused || p.tooLong) return { ok: false, reason: refused ?? "The script is too long for the model." };
+  return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd: p.usd };
+}
+
+/**
+ * Redrafting an Episode that has a screenplay: the whole Episode written anew in parts at its length, with the current
+ * screenplay sent as the story to keep (priced for the longest note the creator can add).
+ */
+export function quoteRedraft(data: ProjectData, episode: Episode, writer?: string | null): QuoteResult {
+  const r = resolveWriter(writer);
+  if (!r) return { ok: false, reason: WRITING_AI_OFF };
+  const text = canonical(episode.scriptText);
+  if (!text.trim()) return { ok: false, reason: "This Episode has no screenplay to redraft yet." };
+  const p = priceWriting({
+    data,
+    episode,
+    text,
+    scope: scopeOf(text, "episode", { start: 0, end: text.length }, null),
+    mode: "rewrite",
+    instruction: redraftInstruction(data, episode, "あ".repeat(REDRAFT_NOTE_MAX)),
+    count: 1,
+    targetText: text,
+    draftText: null,
+    conversation: [],
+    model: r.model,
+    longForm: longFormPlan(
+      data.project.projectType,
+      r.model.maxOutputTokens || 32_000,
+      episode.targetMinutes,
+    ),
+    redraft: true,
+  });
+  const refused = over(r.model, p.usd, `Redrafting "${episode.title}"`);
   if (refused || p.tooLong) return { ok: false, reason: refused ?? "The script is too long for the model." };
   return { ok: true, model: r.writer.value, label: r.writer.label, paid: r.model.paid, usd: p.usd };
 }

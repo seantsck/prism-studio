@@ -135,6 +135,27 @@ export function wholeScriptInstruction(data: ProjectData, episode: Episode): str
     .slice(0, LIMITS.instruction);
 }
 
+/** The longest current screenplay a redraft sends (the context keeps the story; a longer one is clipped at its end). */
+export const REDRAFT_SOURCE_MAX = 60_000;
+/** The longest note the creator can add to a redraft. */
+export const REDRAFT_NOTE_MAX = 1000;
+
+/**
+ * Redrafting an Episode that already has a screenplay: a NEW complete screenplay at the Episode's length, written in
+ * parts, keeping the story of the current one (sent as `previousDraft`). It replaces the screenplay only when accepted.
+ */
+export function redraftInstruction(data: ProjectData, episode: Episode, note: string): string {
+  const lines = [
+    "REDRAFT: the episode's current screenplay is in the context (previousDraft). Write a NEW complete screenplay of the episode from its first scene to its last, replacing it.",
+    "Keep its story, characters, relationships and the moments that work; fix what is thin. Reach the full length with fuller scenes, more behaviour and real dialogue exchanges, and new scenes where the story needs them, never filler or repetition.",
+    ...(note.trim()
+      ? [`The creator's note for this redraft: ${note.trim().slice(0, REDRAFT_NOTE_MAX)}`]
+      : []),
+    "",
+  ];
+  return [...lines, wholeScriptInstruction(data, episode)].join("\n").slice(0, LIMITS.instruction);
+}
+
 /** The longest project title kept. */
 export const TITLE_MAX = 120;
 /** What a new project keeps of its other fields (enough for the writing context, which clips them further). */

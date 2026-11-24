@@ -2222,3 +2222,46 @@ test("ZI: photos are added on a character's page (chosen or dropped), and the vi
   await expect(page.getByTestId("reference-photos")).toContainText("Every view is made from these:");
   await expect(page.getByTestId("reference-photo")).toHaveCount(2);
 });
+
+test("ZJ: an episode with a script is redrafted whole: priced and confirmed, one proposal, accepted, old one kept (free here)", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  await page.goto("/projects/ojousama/episodes/ep-1/write");
+  const redraft = page.getByTestId("redraft-episode");
+  await expect(redraft).toContainText("Prism writes a new complete screenplay of this episode");
+  await expect(redraft.getByTestId("redraft-price")).toContainText("free");
+  await redraft.getByTestId("redraft-note").fill("End on the contract signing.");
+  // nothing runs before the confirmation
+  await redraft.getByTestId("redraft-open").click();
+  const confirm = page.getByTestId("redraft-confirm");
+  await expect(confirm).toContainText("Redraft the whole episode?");
+  await expect(confirm.getByTestId("redraft-confirm-price")).toHaveText("free");
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(page.getByTestId("writing-conversation")).toHaveCount(0);
+  await redraft.getByTestId("redraft-open").click();
+  await confirm.getByTestId("redraft-go").click();
+
+  // one proposal in the conversation, labelled as the redraft the creator asked for
+  const versionA = page.getByTestId("version-A");
+  await expect(async () => {
+    await page.reload();
+    await expect(versionA).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 90_000 });
+  const conversation = page.getByTestId("writing-conversation");
+  await expect(conversation).toContainText("Redraft the whole episode");
+  await expect(conversation).toContainText("End on the contract signing.");
+  await expect(conversation).toContainText("Prism redrafted the whole episode in");
+  const before = await page
+    .getByTestId("revision-history")
+    .locator("li")
+    .count()
+    .catch(() => 0);
+
+  // accepted: it becomes the screenplay, and the old one is a revision that can be restored
+  await versionA.getByRole("button", { name: "Accept version A" }).click();
+  await expect(conversation).toContainText("Accepted version A", { timeout: 30_000 });
+  await page.reload();
+  await expect(page.getByTestId("revision-history").locator("li")).toHaveCount(Math.max(before, 1) + 1);
+});
