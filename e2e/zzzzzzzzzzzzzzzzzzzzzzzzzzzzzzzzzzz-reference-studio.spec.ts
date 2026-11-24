@@ -2264,6 +2264,8 @@ test("ZJ: an episode with a script is redrafted whole: priced and confirmed, one
   await expect(conversation).toContainText("Accepted version A", { timeout: 30_000 });
   await page.reload();
   await expect(page.getByTestId("revision-history").locator("li")).toHaveCount(Math.max(before, 1) + 1);
+});
+
 test("ZK: a character created in a project is in the library straight away, on the home page", async ({
   page,
 }) => {
