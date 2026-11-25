@@ -108,28 +108,28 @@ export function drawCover(
   if (image) ctx.drawImage(image, 0, 0, w, h);
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
-  const cast = text.cast.filter(Boolean);
+  // the creator's own cast line ("Yumeko & Sean") wins over the cast's names, on top and in the credits
+  const castLine = design.castText.trim()
+    ? design.castText.trim().toUpperCase()
+    : text.cast
+        .filter(Boolean)
+        .map((c) => c.toUpperCase())
+        .join("   ");
   const credits = [
-    cast.length ? `STARRING  ${cast.map((c) => c.toUpperCase()).join("   ")}` : "",
+    castLine ? `STARRING  ${castLine}` : "",
     text.kindLine.toUpperCase(),
     "A PRISM STUDIO PRODUCTION",
   ].filter(Boolean);
 
   const castRow = (y: number, color: string) => {
-    if (!design.showCast || !cast.length) return;
-    ctx.font = `600 ${2.6 * u}px ${SANS}`;
-    spacing(ctx, 0.6 * u);
+    if (!design.showCast || !castLine) return;
+    const row = design.castText.trim() ? castLine : castLine.replace(/ {3}/g, "     ");
     ctx.fillStyle = color;
-    ctx.shadowColor = "rgba(0,0,0,0.6)";
-    ctx.shadowBlur = 1.2 * u;
-    const { lines: ls } = fit(
-      ctx,
-      cast.map((c) => c.toUpperCase()).join("     "),
-      (s) => `600 ${s}px ${SANS}`,
-      2.6 * u,
-      90 * u,
-      1,
-    );
+    ctx.shadowColor = "rgba(0,0,0,0.7)";
+    ctx.shadowBlur = 1.4 * u;
+    spacing(ctx, 0.55 * u);
+    const { size, lines: ls } = fit(ctx, row, (s) => `700 ${s}px ${SANS}`, 4.4 * u, 90 * u, 1);
+    ctx.font = `700 ${size}px ${SANS}`;
     lines(ctx, ls, cx, y, 0);
     ctx.shadowBlur = 0;
   };
@@ -146,8 +146,8 @@ export function drawCover(
 
   if (design.style === "cinematic") {
     shade(ctx, w, h * 0.5, h, 0, 0.9);
-    shade(ctx, w, 0, h * 0.14, 0.55, 0);
-    castRow(6 * u, "rgba(255,255,255,0.92)");
+    shade(ctx, w, 0, h * 0.2, 0.6, 0);
+    castRow(9 * u, "rgba(255,255,255,0.95)");
     let y = creditBlock(h - 4 * u);
     if (design.subtitle) {
       ctx.font = `italic 400 ${3.4 * u}px ${SERIF}`;

@@ -2391,7 +2391,14 @@ test("ZM: cover art: shape chosen, priced and confirmed, made without lettering,
   await expect(current).toHaveAttribute("data-style", "bold");
   await design.getByTestId("cover-subtitle").fill("Will You Marry Me, My Lady?");
   await design.getByTestId("cover-tagline").fill("One proposal. No conditions.");
+  await design.getByTestId("cover-cast-text").fill("Yumeko & Sean");
   await design.getByTestId("cover-show-credits").uncheck();
+  // clicking the cover opens it large, drawn from the original picture with the same design
+  await current.getByTestId("cover-zoom-open").click();
+  const zoom = page.getByTestId("cover-zoom-dialog");
+  await expect(zoom.getByTestId("cover-zoom")).toHaveAttribute("data-style", "bold");
+  await page.keyboard.press("Escape");
+  await expect(zoom).toHaveCount(0);
   const saved = page.waitForResponse((r) => r.request().method() === "POST" && r.ok());
   await design.getByTestId("cover-design-save").click();
   await saved;
@@ -2404,6 +2411,7 @@ test("ZM: cover art: shape chosen, priced and confirmed, made without lettering,
   await expect(design.getByTestId("cover-subtitle")).toHaveValue("Will You Marry Me, My Lady?");
   await expect(design.getByTestId("cover-tagline")).toHaveValue("One proposal. No conditions.");
   await expect(design.getByTestId("cover-show-credits")).not.toBeChecked();
+  await expect(design.getByTestId("cover-cast-text")).toHaveValue("Yumeko & Sean");
   await page.goto("/projects/ojousama/start");
   await expect(page.getByTestId("start-cover").getByTestId("cover-current")).toHaveAttribute("data-style", "bold");
 });
