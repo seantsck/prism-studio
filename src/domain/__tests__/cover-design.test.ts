@@ -29,6 +29,9 @@ describe("coverDesignOf", () => {
       titleScale: 100,
       titleShift: 0,
       titleColor: "auto",
+      castScale: 100,
+      castShift: 0,
+      castColor: "auto",
     });
   });
 
@@ -52,6 +55,22 @@ describe("the title's size, position and colour", () => {
       titleScale: 100,
       titleShift: 0,
       titleColor: "auto",
+    });
+  });
+});
+
+describe("the cast line's size, position and colour", () => {
+  it("defaults to the style's own and clamps what is out of range", () => {
+    expect(coverDesignOf({})).toMatchObject({ castScale: 100, castShift: 0, castColor: "auto" });
+    expect(coverDesignOf({ castScale: 500, castShift: 300, castColor: "gold" })).toMatchObject({
+      castScale: 200,
+      castShift: 90,
+      castColor: "gold",
+    });
+    expect(coverDesignOf({ castScale: 10, castShift: -300, castColor: "neon" })).toMatchObject({
+      castScale: 60,
+      castShift: -90,
+      castColor: "auto",
     });
   });
 });

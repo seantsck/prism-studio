@@ -2397,6 +2397,11 @@ test("ZM: cover art: shape chosen, priced and confirmed, made without lettering,
   await design.getByTestId("cover-title-shift").fill("10");
   await design.locator('[data-testid="cover-title-color"][data-color="gold"]').click();
   await expect(design.getByTestId("cover-title-reset")).toBeVisible();
+  // and the cast line's own size, height and colour
+  await design.getByTestId("cover-cast-scale").fill("160");
+  await design.getByTestId("cover-cast-shift").fill("-20");
+  await design.locator('[data-testid="cover-cast-color"][data-color="gold"]').click();
+  await expect(design.getByTestId("cover-cast-reset")).toBeVisible();
   await design.getByTestId("cover-show-credits").uncheck();
   // clicking the cover opens it large, drawn from the original picture with the same design
   await current.getByTestId("cover-zoom-open").click();
@@ -2419,6 +2424,12 @@ test("ZM: cover art: shape chosen, priced and confirmed, made without lettering,
   await expect(design.getByTestId("cover-cast-text")).toHaveValue("Yumeko & Sean");
   await expect(design.getByTestId("cover-title-scale")).toHaveValue("120");
   await expect(design.getByTestId("cover-title-shift")).toHaveValue("10");
+  await expect(design.getByTestId("cover-cast-scale")).toHaveValue("160");
+  await expect(design.getByTestId("cover-cast-shift")).toHaveValue("-20");
+  await expect(design.locator('[data-testid="cover-cast-color"][data-color="gold"]')).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
   await expect(design.locator('[data-testid="cover-title-color"][data-color="gold"]')).toHaveAttribute(
     "aria-checked",
     "true",

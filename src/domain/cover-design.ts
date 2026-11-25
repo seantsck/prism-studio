@@ -28,6 +28,9 @@ export type CoverTitleColor = (typeof COVER_TITLE_COLORS)[number]["id"];
 /** How far the title can be resized (percent of the style's size) and moved (percent of the cover's height). */
 export const COVER_TITLE_SCALE = { min: 60, max: 150 } as const;
 export const COVER_TITLE_SHIFT = { min: -45, max: 45 } as const;
+/** The cast line is short, so it can grow further than the title. */
+export const COVER_CAST_SCALE = { min: 60, max: 200 } as const;
+export const COVER_CAST_SHIFT = { min: -90, max: 90 } as const;
 
 export interface CoverDesign {
   style: CoverStyle;
@@ -44,6 +47,11 @@ export interface CoverDesign {
   /** The title block moved down (+) or up (-), percent of the cover's height. */
   titleShift: number;
   titleColor: CoverTitleColor;
+  /** The cast line's size, percent of the style's own. */
+  castScale: number;
+  /** The cast line moved down (+) or up (-), percent of the cover's height. */
+  castShift: number;
+  castColor: CoverTitleColor;
   /** A credits block at the foot. */
   showCredits: boolean;
 }
@@ -59,6 +67,9 @@ export const DEFAULT_COVER_DESIGN: CoverDesign = {
   titleScale: 100,
   titleShift: 0,
   titleColor: "auto",
+  castScale: 100,
+  castShift: 0,
+  castColor: "auto",
   showCredits: true,
 };
 
@@ -88,6 +99,11 @@ export function coverDesignOf(raw: unknown): CoverDesign {
     titleColor: COVER_TITLE_COLORS.some((c) => c.id === r.titleColor)
       ? (r.titleColor as CoverTitleColor)
       : DEFAULT_COVER_DESIGN.titleColor,
+    castScale: num(r.castScale, COVER_CAST_SCALE.min, COVER_CAST_SCALE.max, DEFAULT_COVER_DESIGN.castScale),
+    castShift: num(r.castShift, COVER_CAST_SHIFT.min, COVER_CAST_SHIFT.max, DEFAULT_COVER_DESIGN.castShift),
+    castColor: COVER_TITLE_COLORS.some((c) => c.id === r.castColor)
+      ? (r.castColor as CoverTitleColor)
+      : DEFAULT_COVER_DESIGN.castColor,
     showCast: typeof r.showCast === "boolean" ? r.showCast : DEFAULT_COVER_DESIGN.showCast,
     showCredits: typeof r.showCredits === "boolean" ? r.showCredits : DEFAULT_COVER_DESIGN.showCredits,
   };
