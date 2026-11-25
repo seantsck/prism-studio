@@ -7,7 +7,7 @@ export const COVER_STYLES = [
   {
     id: "cinematic",
     label: "Cinematic",
-    hint: "Title low in a gold serif, tagline above, credits at the foot",
+    hint: "Gold serif title at the top, the cast and credits at the foot",
   },
   { id: "bold", label: "Bold drama", hint: "Big outlined title high in the frame, with a glow" },
   { id: "elegant", label: "Elegant", hint: "Fine serif title at the top between thin rules" },

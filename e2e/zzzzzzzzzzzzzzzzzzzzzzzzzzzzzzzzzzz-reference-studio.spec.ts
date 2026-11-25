@@ -2392,6 +2392,26 @@ test("ZM: cover art: shape chosen, priced and confirmed, made without lettering,
   await design.getByTestId("cover-subtitle").fill("Will You Marry Me, My Lady?");
   await design.getByTestId("cover-tagline").fill("One proposal. No conditions.");
   await design.getByTestId("cover-cast-text").fill("Yumeko & Sean");
+  // the title and the cast names can be dragged up and down on the cover; a drag does not open the large view
+  const dragOn = async (attr: string, dy: number) => {
+    const [top, bottom] = (await current.getAttribute(attr))!.split(",").map(Number);
+    const at = await current.boundingBox();
+    const x = at!.x + at!.width / 2;
+    const y = at!.y + (top! + bottom!) / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, y + dy / 2, { steps: 4 });
+    await page.mouse.move(x, y + dy, { steps: 4 });
+    await page.mouse.up();
+  };
+  await page.setViewportSize({ width: 1280, height: 1100 }); // the whole tall cover in view
+  await expect(current).toHaveAttribute("data-title-box", /^\d+,\d+$/);
+  await dragOn("data-title-box", 60);
+  await expect(design.getByTestId("cover-title-shift")).not.toHaveValue("0");
+  await expect(page.getByTestId("cover-zoom-dialog")).toHaveCount(0);
+  await dragOn("data-cast-box", -60);
+  await expect(design.getByTestId("cover-cast-shift")).not.toHaveValue("0");
+  await expect(page.getByTestId("cover-zoom-dialog")).toHaveCount(0);
   // the title's own size, height and colour
   await design.getByTestId("cover-title-scale").fill("120");
   await design.getByTestId("cover-title-shift").fill("10");

@@ -26,7 +26,7 @@ import {
   setCover,
   stopCoverArt,
 } from "@/server/cover-art-actions";
-import { drawCover, loadImage, type CoverText } from "./cover-render";
+import { drawCover, loadImage, type CoverBoxes, type CoverText } from "./cover-render";
 import type { CoverArtState } from "@/server/cover-art";
 
 const ratioOf = (r: string | null, w: number | null, h: number | null) => {
@@ -46,10 +46,13 @@ export function CoverWithTitle({
   className,
   testId,
   enlarge = true,
+  onMove,
 }: {
   url: string | null;
   /** clicking opens it large (the original picture) */
   enlarge?: boolean;
+  /** the title and the cast line can be dragged up and down on the cover: their new height (percent of the cover) */
+  onMove?: (which: keyof CoverBoxes, shift: number) => void;
   design: CoverDesign;
   text: CoverText;
   ratio?: string | null;
@@ -60,6 +63,27 @@ export function CoverWithTitle({
 }) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const boxes = useRef<CoverBoxes>({ title: null, cast: null });
+  // a drag in progress: what is moved, where the pointer started, the height it had; `moved` once it really moves
+  const drag = useRef<{ which: keyof CoverBoxes; y0: number; shift0: number; moved: boolean } | null>(null);
+  const dragged = useRef(false);
+  const [hover, setHover] = useState<keyof CoverBoxes | null>(null);
+  const hit = (clientY: number): keyof CoverBoxes | null => {
+    const el = box.current;
+    if (!el || !onMove) return null;
+    const r = el.getBoundingClientRect();
+    const y = clientY - r.top;
+    const pad = r.height * 0.015;
+    // where the two overlap, the one whose middle is nearest the pointer
+    let best: { which: keyof CoverBoxes; d: number } | null = null;
+    for (const which of ["title", "cast"] as const) {
+      const b = boxes.current[which];
+      if (!b || y < b.top - pad || y > b.bottom + pad) continue;
+      const d = Math.abs(y - (b.top + b.bottom) / 2);
+      if (!best || d < best.d) best = { which, d };
+    }
+    return best?.which ?? null;
+  };
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [fonts, setFonts] = useState(0);
   useEffect(() => {
@@ -91,7 +115,11 @@ export function CoverWithTitle({
       const ctx = c.getContext("2d");
       if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawCover(ctx, w, h, image, design, text);
+      boxes.current = drawCover(ctx, w, h, image, design, text);
+      // where the draggable lettering is (read by the tests)
+      const b = boxes.current;
+      el.dataset.titleBox = b.title ? `${Math.round(b.title.top)},${Math.round(b.title.bottom)}` : "";
+      el.dataset.castBox = b.cast ? `${Math.round(b.cast.top)},${Math.round(b.cast.bottom)}` : "";
     };
     draw();
     const observer = new ResizeObserver(draw);
@@ -123,12 +151,65 @@ export function CoverWithTitle({
           className="absolute inset-0 h-full w-full"
           aria-label={`Cover of ${text.title}`}
         />
-        {enlarge && url ? (
+        {(enlarge && url) || onMove ? (
           <button
             type="button"
-            onClick={() => setOpen(true)}
-            className="absolute inset-0 cursor-zoom-in"
-            title="Click to see it large"
+            onClick={() => {
+              // the click that ends a drag does not open the large view
+              if (dragged.current) {
+                dragged.current = false;
+                return;
+              }
+              if (enlarge && url) setOpen(true);
+            }}
+            onPointerDown={(e) => {
+              const which = hit(e.clientY);
+              if (!which) return;
+              drag.current = {
+                which,
+                y0: e.clientY,
+                shift0: which === "title" ? design.titleShift : design.castShift,
+                moved: false,
+              };
+              e.currentTarget.setPointerCapture(e.pointerId);
+            }}
+            onPointerMove={(e) => {
+              const d = drag.current;
+              if (!d) {
+                setHover(hit(e.clientY));
+                return;
+              }
+              const dy = e.clientY - d.y0;
+              if (!d.moved && Math.abs(dy) < 4) return;
+              d.moved = true;
+              const h = box.current?.clientHeight || 1;
+              const range = d.which === "title" ? COVER_TITLE_SHIFT : COVER_CAST_SHIFT;
+              const next = Math.round(Math.min(range.max, Math.max(range.min, d.shift0 + (dy / h) * 100)));
+              onMove?.(d.which, next);
+            }}
+            onPointerUp={(e) => {
+              if (drag.current?.moved) dragged.current = true;
+              drag.current = null;
+              if (e.currentTarget.hasPointerCapture(e.pointerId))
+                e.currentTarget.releasePointerCapture(e.pointerId);
+            }}
+            onPointerLeave={() => {
+              if (!drag.current) setHover(null);
+            }}
+            className={cn(
+              "absolute inset-0",
+              onMove && "touch-none",
+              hover
+                ? "cursor-grab active:cursor-grabbing"
+                : enlarge && url
+                  ? "cursor-zoom-in"
+                  : "cursor-default",
+            )}
+            title={
+              onMove
+                ? "Drag the title or the cast names up or down; click to see it large"
+                : "Click to see it large"
+            }
             aria-label={`See the cover of ${text.title} large`}
             data-testid="cover-zoom-open"
           />
@@ -612,8 +693,9 @@ export function CoverArtPanel({
   return (
     <div className="space-y-3 text-[12.5px]" data-testid="cover-art">
       <RefreshWhileActive active={working} intervalMs={1500} />
-      <div className={cn("grid gap-4", compact ? "sm:grid-cols-[160px_1fr]" : "md:grid-cols-[260px_1fr]")}>
-        <div>
+      <div className={cn("grid gap-4", compact ? "sm:grid-cols-[160px_1fr]" : "md:grid-cols-[320px_1fr]")}>
+        {/* the cover stays in view beside its controls while the page scrolls */}
+        <div className={cn(!compact && "md:sticky md:top-4 md:self-start")}>
           {state.cover ? (
             <>
               <CoverWithTitle
@@ -623,24 +705,21 @@ export function CoverArtPanel({
                 width={state.cover.width}
                 height={state.cover.height}
                 testId="cover-current"
+                onMove={
+                  compact
+                    ? undefined
+                    : (which, shift) =>
+                        setDesign(
+                          which === "title"
+                            ? { ...design, titleShift: shift }
+                            : { ...design, castShift: shift },
+                        )
+                }
               />
               {compact ? null : (
-                <div className="mt-2">
-                  <TitleDesign
-                    slug={slug}
-                    assetId={state.cover.assetId}
-                    castHint={state.cover.cast.join(" & ")}
-                    design={design}
-                    onChange={setDesign}
-                    onDownload={() =>
-                      state.cover?.url &&
-                      void downloadCover(state.cover.url, design, textOf(state.cover.cast), slug)
-                    }
-                  />
-                  <div className="mt-2">
-                    <EditPicture slug={slug} cover={state.cover} working={working} />
-                  </div>
-                </div>
+                <p className="mt-1.5 text-[11.5px] text-faint">
+                  Drag the title or the cast names up or down; click the cover to see it large.
+                </p>
               )}
             </>
           ) : (
@@ -653,6 +732,27 @@ export function CoverArtPanel({
           )}
         </div>
         <div className="space-y-2">
+          {state.cover && !compact ? (
+            <div className="grid gap-2 xl:grid-cols-2 xl:items-start">
+              <TitleDesign
+                slug={slug}
+                assetId={state.cover.assetId}
+                castHint={state.cover.cast.join(" & ")}
+                design={design}
+                onChange={setDesign}
+                onDownload={() =>
+                  state.cover?.url &&
+                  void downloadCover(state.cover.url, design, textOf(state.cover.cast), slug)
+                }
+              />
+              <EditPicture slug={slug} cover={state.cover} working={working} />
+            </div>
+          ) : null}
+          {state.cover && !compact ? (
+            <div className="pt-2 font-medium" data-testid="cover-make-new">
+              Make a new cover
+            </div>
+          ) : null}
           <p className="text-muted">
             Prism makes a poster from the title, premise, tone and look of your project, with the characters
             and place you choose: each one&apos;s main picture is sent so faces and the place match. The
