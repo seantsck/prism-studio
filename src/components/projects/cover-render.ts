@@ -130,13 +130,18 @@ export function drawCover(
   // the creator's own title size, position and colour (100 / 0 / the style's own: as designed)
   const scale = design.titleScale / 100;
   const shift = (design.titleShift / 100) * h;
-  const paint = (own: string | CanvasGradient, top: number, bottom: number): string | CanvasGradient => {
+  const paintIn = (
+    choice: CoverDesign["titleColor"],
+    own: string | CanvasGradient,
+    top: number,
+    bottom: number,
+  ): string | CanvasGradient => {
     const g = (stops: string[]) => {
       const gr = ctx.createLinearGradient(0, top, 0, bottom);
       stops.forEach((c, i) => gr.addColorStop(i / (stops.length - 1), c));
       return gr;
     };
-    switch (design.titleColor) {
+    switch (choice) {
       case "gold":
         return g(["#fbf1cf", "#d8b25a", "#b8892e", "#f3dfa2"]);
       case "silver":
@@ -151,6 +156,8 @@ export function drawCover(
         return own;
     }
   };
+  const paint = (own: string | CanvasGradient, top: number, bottom: number) =>
+    paintIn(design.titleColor, own, top, bottom);
   /** The title block (title, subtitle, tagline) drawn moved by the creator's shift. */
   const titleBlock = (draw: () => void) => {
     ctx.save();
@@ -162,14 +169,24 @@ export function drawCover(
   const castRow = (y: number, color: string) => {
     if (!design.showCast || !castLine) return;
     const row = design.castText.trim() ? castLine : castLine.replace(/ {3}/g, "     ");
-    ctx.fillStyle = color;
+    ctx.save();
+    // the creator's own size, height and colour for the cast line
+    ctx.translate(0, (design.castShift / 100) * h);
     ctx.shadowColor = "rgba(0,0,0,0.7)";
     ctx.shadowBlur = 1.4 * u;
-    spacing(ctx, 0.55 * u);
-    const { size, lines: ls } = fit(ctx, row, (s) => `700 ${s}px ${SANS}`, 4.4 * u, 90 * u, 1);
+    spacing(ctx, 0.55 * u * (design.castScale / 100));
+    const { size, lines: ls } = fit(
+      ctx,
+      row,
+      (s) => `700 ${s}px ${SANS}`,
+      4.4 * u * (design.castScale / 100),
+      92 * u,
+      1,
+    );
     ctx.font = `700 ${size}px ${SANS}`;
+    ctx.fillStyle = paintIn(design.castColor, color, y - size, y);
     lines(ctx, ls, cx, y, 0);
-    ctx.shadowBlur = 0;
+    ctx.restore();
   };
   const creditBlock = (bottom: number) => {
     if (!design.showCredits) return bottom;

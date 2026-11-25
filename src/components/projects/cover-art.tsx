@@ -10,8 +10,11 @@ import {
   COVER_TITLE_COLORS,
   COVER_TITLE_SCALE,
   COVER_TITLE_SHIFT,
+  COVER_CAST_SCALE,
+  COVER_CAST_SHIFT,
   DEFAULT_COVER_DESIGN,
   type CoverDesign,
+  type CoverTitleColor,
 } from "@/domain/cover-design";
 import { MAX_EDIT_INSTRUCTION_CHARS } from "@/domain/generation/image-edit";
 import { priceText } from "@/domain/pricing/user-price";
@@ -191,6 +194,96 @@ async function downloadCover(url: string, design: CoverDesign, text: CoverText, 
   setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
 }
 
+/** Size, height and colour of one line of lettering on the cover (the title, or the cast line). */
+function Placement({
+  what,
+  testPrefix,
+  scale,
+  shift,
+  color,
+  scaleRange,
+  shiftRange,
+  onChange,
+  resetLabel,
+}: {
+  what: string;
+  testPrefix: string;
+  scale: number;
+  shift: number;
+  color: CoverTitleColor;
+  scaleRange: { min: number; max: number };
+  shiftRange: { min: number; max: number };
+  onChange: (p: { scale?: number; shift?: number; color?: CoverTitleColor }) => void;
+  resetLabel: string;
+}) {
+  return (
+    <div className="grid gap-1.5" data-testid={`${testPrefix}-placement`}>
+      <label className="flex items-center gap-2">
+        <span className="w-24 shrink-0 text-muted">{what} size</span>
+        <input
+          type="range"
+          min={scaleRange.min}
+          max={scaleRange.max}
+          step={5}
+          value={scale}
+          onChange={(e) => onChange({ scale: Number(e.target.value) })}
+          className="flex-1"
+          aria-label={`${what} size`}
+          data-testid={`${testPrefix}-scale`}
+        />
+        <span className="w-10 text-right tabular-nums text-muted">{scale}%</span>
+      </label>
+      <label className="flex items-center gap-2">
+        <span className="w-24 shrink-0 text-muted">{what} height</span>
+        <input
+          type="range"
+          min={shiftRange.min}
+          max={shiftRange.max}
+          step={1}
+          value={shift}
+          onChange={(e) => onChange({ shift: Number(e.target.value) })}
+          className="flex-1"
+          aria-label={`Move the ${what.toLowerCase()} up or down`}
+          data-testid={`${testPrefix}-shift`}
+        />
+        <span className="w-10 text-right tabular-nums text-muted">
+          {shift === 0 ? "—" : shift < 0 ? "up" : "down"}
+        </span>
+      </label>
+      <div className="flex flex-wrap items-center gap-1" role="radiogroup" aria-label={`${what} colour`}>
+        <span className="w-24 shrink-0 text-muted">{what} colour</span>
+        {COVER_TITLE_COLORS.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            role="radio"
+            aria-checked={color === c.id}
+            onClick={() => onChange({ color: c.id })}
+            className={cn(
+              "rounded-full border px-2 py-0.5 text-[11.5px]",
+              color === c.id ? "border-accent bg-accent/10 text-fg" : "border-line text-muted hover:text-fg",
+            )}
+            data-testid={`${testPrefix}-color`}
+            data-color={c.id}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+      {scale !== 100 || shift !== 0 || color !== "auto" ? (
+        <button
+          type="button"
+          className="justify-self-start text-[11.5px] text-muted underline hover:text-fg"
+          onClick={() => onChange({ scale: 100, shift: 0, color: "auto" })}
+          data-testid={`${testPrefix}-reset`}
+        >
+          {resetLabel}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 /** The title design of the current cover: style, subtitle, tagline, cast names and credits, saved with the cover. */
 function TitleDesign({
   slug,
@@ -233,72 +326,23 @@ function TitleDesign({
           </button>
         ))}
       </div>
-      <div className="grid gap-1.5">
-        <label className="flex items-center gap-2">
-          <span className="w-20 shrink-0 text-muted">Title size</span>
-          <input
-            type="range"
-            min={COVER_TITLE_SCALE.min}
-            max={COVER_TITLE_SCALE.max}
-            step={5}
-            value={design.titleScale}
-            onChange={(e) => set({ titleScale: Number(e.target.value) })}
-            className="flex-1"
-            aria-label="Title size"
-            data-testid="cover-title-scale"
-          />
-          <span className="w-10 text-right tabular-nums text-muted">{design.titleScale}%</span>
-        </label>
-        <label className="flex items-center gap-2">
-          <span className="w-20 shrink-0 text-muted">Title height</span>
-          <input
-            type="range"
-            min={COVER_TITLE_SHIFT.min}
-            max={COVER_TITLE_SHIFT.max}
-            step={1}
-            value={design.titleShift}
-            onChange={(e) => set({ titleShift: Number(e.target.value) })}
-            className="flex-1"
-            aria-label="Move the title up or down"
-            data-testid="cover-title-shift"
-          />
-          <span className="w-10 text-right tabular-nums text-muted">
-            {design.titleShift === 0 ? "—" : design.titleShift < 0 ? "up" : "down"}
-          </span>
-        </label>
-        <div className="flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Title colour">
-          <span className="w-20 shrink-0 text-muted">Title colour</span>
-          {COVER_TITLE_COLORS.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              role="radio"
-              aria-checked={design.titleColor === c.id}
-              onClick={() => set({ titleColor: c.id })}
-              className={cn(
-                "rounded-full border px-2 py-0.5 text-[11.5px]",
-                design.titleColor === c.id
-                  ? "border-accent bg-accent/10 text-fg"
-                  : "border-line text-muted hover:text-fg",
-              )}
-              data-testid="cover-title-color"
-              data-color={c.id}
-            >
-              {c.label}
-            </button>
-          ))}
-        </div>
-        {design.titleScale !== 100 || design.titleShift !== 0 || design.titleColor !== "auto" ? (
-          <button
-            type="button"
-            className="justify-self-start text-[11.5px] text-muted underline hover:text-fg"
-            onClick={() => set({ titleScale: 100, titleShift: 0, titleColor: "auto" })}
-            data-testid="cover-title-reset"
-          >
-            Put the title back as the style has it
-          </button>
-        ) : null}
-      </div>
+      <Placement
+        what="Title"
+        testPrefix="cover-title"
+        scale={design.titleScale}
+        shift={design.titleShift}
+        color={design.titleColor}
+        scaleRange={COVER_TITLE_SCALE}
+        shiftRange={COVER_TITLE_SHIFT}
+        onChange={(p) =>
+          set({
+            ...(p.scale != null ? { titleScale: p.scale } : {}),
+            ...(p.shift != null ? { titleShift: p.shift } : {}),
+            ...(p.color != null ? { titleColor: p.color } : {}),
+          })
+        }
+        resetLabel="Put the title back as the style has it"
+      />
       <input
         value={design.subtitle}
         maxLength={COVER_TEXT_MAX.subtitle}
@@ -324,6 +368,25 @@ function TitleDesign({
         disabled={!design.showCast && !design.showCredits}
         data-testid="cover-cast-text"
       />
+      {design.showCast ? (
+        <Placement
+          what="Cast"
+          testPrefix="cover-cast"
+          scale={design.castScale}
+          shift={design.castShift}
+          color={design.castColor}
+          scaleRange={COVER_CAST_SCALE}
+          shiftRange={COVER_CAST_SHIFT}
+          onChange={(p) =>
+            set({
+              ...(p.scale != null ? { castScale: p.scale } : {}),
+              ...(p.shift != null ? { castShift: p.shift } : {}),
+              ...(p.color != null ? { castColor: p.color } : {}),
+            })
+          }
+          resetLabel="Put the cast line back as the style has it"
+        />
+      ) : null}
       <div className="flex flex-wrap gap-3">
         <label className="flex items-center gap-1.5">
           <input
