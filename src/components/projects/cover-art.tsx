@@ -4,10 +4,25 @@ import { useEffect, useRef, useState } from "react";
 import { ActionForm } from "@/components/action-form";
 import { RefreshWhileActive } from "@/components/images/refresh-while-active";
 import { Button } from "@/components/ui";
-import { COVER_STYLES, COVER_TEXT_MAX, DEFAULT_COVER_DESIGN, type CoverDesign } from "@/domain/cover-design";
+import {
+  COVER_STYLES,
+  COVER_TEXT_MAX,
+  COVER_TITLE_COLORS,
+  COVER_TITLE_SCALE,
+  COVER_TITLE_SHIFT,
+  DEFAULT_COVER_DESIGN,
+  type CoverDesign,
+} from "@/domain/cover-design";
+import { MAX_EDIT_INSTRUCTION_CHARS } from "@/domain/generation/image-edit";
 import { priceText } from "@/domain/pricing/user-price";
 import { cn, fullUrl } from "@/lib/utils";
-import { makeCoverArt, saveCoverDesign, setCover, stopCoverArt } from "@/server/cover-art-actions";
+import {
+  editCoverArt,
+  makeCoverArt,
+  saveCoverDesign,
+  setCover,
+  stopCoverArt,
+} from "@/server/cover-art-actions";
 import { drawCover, loadImage, type CoverText } from "./cover-render";
 import type { CoverArtState } from "@/server/cover-art";
 
@@ -100,7 +115,11 @@ export function CoverWithTitle({
         data-title={text.title}
         data-style={design.style}
       >
-        <canvas ref={canvas} className="absolute inset-0 h-full w-full" aria-label={`Cover of ${text.title}`} />
+        <canvas
+          ref={canvas}
+          className="absolute inset-0 h-full w-full"
+          aria-label={`Cover of ${text.title}`}
+        />
         {enlarge && url ? (
           <button
             type="button"
@@ -214,6 +233,72 @@ function TitleDesign({
           </button>
         ))}
       </div>
+      <div className="grid gap-1.5">
+        <label className="flex items-center gap-2">
+          <span className="w-20 shrink-0 text-muted">Title size</span>
+          <input
+            type="range"
+            min={COVER_TITLE_SCALE.min}
+            max={COVER_TITLE_SCALE.max}
+            step={5}
+            value={design.titleScale}
+            onChange={(e) => set({ titleScale: Number(e.target.value) })}
+            className="flex-1"
+            aria-label="Title size"
+            data-testid="cover-title-scale"
+          />
+          <span className="w-10 text-right tabular-nums text-muted">{design.titleScale}%</span>
+        </label>
+        <label className="flex items-center gap-2">
+          <span className="w-20 shrink-0 text-muted">Title height</span>
+          <input
+            type="range"
+            min={COVER_TITLE_SHIFT.min}
+            max={COVER_TITLE_SHIFT.max}
+            step={1}
+            value={design.titleShift}
+            onChange={(e) => set({ titleShift: Number(e.target.value) })}
+            className="flex-1"
+            aria-label="Move the title up or down"
+            data-testid="cover-title-shift"
+          />
+          <span className="w-10 text-right tabular-nums text-muted">
+            {design.titleShift === 0 ? "—" : design.titleShift < 0 ? "up" : "down"}
+          </span>
+        </label>
+        <div className="flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Title colour">
+          <span className="w-20 shrink-0 text-muted">Title colour</span>
+          {COVER_TITLE_COLORS.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              role="radio"
+              aria-checked={design.titleColor === c.id}
+              onClick={() => set({ titleColor: c.id })}
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-[11.5px]",
+                design.titleColor === c.id
+                  ? "border-accent bg-accent/10 text-fg"
+                  : "border-line text-muted hover:text-fg",
+              )}
+              data-testid="cover-title-color"
+              data-color={c.id}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+        {design.titleScale !== 100 || design.titleShift !== 0 || design.titleColor !== "auto" ? (
+          <button
+            type="button"
+            className="justify-self-start text-[11.5px] text-muted underline hover:text-fg"
+            onClick={() => set({ titleScale: 100, titleShift: 0, titleColor: "auto" })}
+            data-testid="cover-title-reset"
+          >
+            Put the title back as the style has it
+          </button>
+        ) : null}
+      </div>
       <input
         value={design.subtitle}
         maxLength={COVER_TEXT_MAX.subtitle}
@@ -272,6 +357,152 @@ function TitleDesign({
           Download cover
         </Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Change the picture of the current cover: say what to change, see the price, confirm. The engine redraws this picture
+ * with the change (same cast, same shape); the result is a new take, the cover itself is never changed.
+ */
+function EditPicture({
+  slug,
+  cover,
+  working,
+}: {
+  slug: string;
+  cover: NonNullable<CoverArtState["cover"]>;
+  working: boolean;
+}) {
+  const engines = cover.editEngines.filter((e) => e.usd != null);
+  const [engine, setEngine] = useState(engines[0]?.value ?? "");
+  const [instruction, setInstruction] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const [key, setKey] = useState(() => crypto.randomUUID());
+  const chosen = engines.find((e) => e.value === engine) ?? engines[0];
+  const price = chosen?.usd != null ? (chosen.paid ? priceText(chosen.usd) : "free") : "";
+  const refused = cover.editEngines.find((e) => e.usd == null)?.reason;
+  return (
+    <div className="space-y-2 rounded-[3px] border border-line p-2.5" data-testid="cover-edit">
+      <div className="font-medium">Change the picture</div>
+      {engines.length === 0 ? (
+        <p className="text-warn" data-testid="cover-edit-unavailable">
+          {refused ?? "No engine on this server can edit pictures."}
+        </p>
+      ) : (
+        <>
+          <textarea
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+            rows={3}
+            maxLength={MAX_EDIT_INSTRUCTION_CHARS}
+            placeholder="What to change, e.g. Put them closer together under one umbrella; make it night with neon reflections on the wet street."
+            aria-label="What to change in the picture"
+            data-testid="cover-edit-instruction"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            {engines.length > 1 ? (
+              <select
+                value={chosen?.value}
+                onChange={(e) => setEngine(e.target.value)}
+                aria-label="Engine for the edit"
+                data-testid="cover-edit-engine"
+              >
+                {engines.map((e) => (
+                  <option key={e.value} value={e.value}>
+                    {e.label}
+                    {e.paid ? "" : " (free)"}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            <Button
+              type="button"
+              size="sm"
+              disabled={working || !instruction.trim()}
+              onClick={() => setConfirming(true)}
+              data-testid="cover-edit-make"
+            >
+              {working ? "Prism is working on a cover…" : "Change the picture…"}
+            </Button>
+            <span className="text-muted" data-testid="cover-edit-price">
+              {price} with {chosen?.label}
+            </span>
+          </div>
+          <p className="text-[11.5px] text-faint">
+            The same people and shape; the change is made to this picture. It is added as a new take: your
+            cover stays as it is until you choose Use as cover.
+          </p>
+        </>
+      )}
+      {confirming && chosen && chosen.usd != null ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cover-edit-confirm-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          data-testid="cover-edit-confirm"
+        >
+          <div className="w-full max-w-md rounded-xl border border-line2 bg-panel p-5 shadow-2xl">
+            <h2 id="cover-edit-confirm-title" className="text-[16px] font-semibold">
+              Change the cover picture?
+            </h2>
+            <dl className="mt-3 space-y-1.5 text-[13px]">
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted">Picture</dt>
+                <dd>{cover.number != null ? `Take #${cover.number} (your cover)` : "Your cover"}</dd>
+              </div>
+              <div className="gap-4">
+                <dt className="text-muted">Change</dt>
+                <dd className="mt-0.5 whitespace-pre-wrap" data-testid="cover-edit-confirm-change">
+                  {instruction.trim()}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted">Engine</dt>
+                <dd>{chosen.label}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted">Price</dt>
+                <dd className="font-medium" data-testid="cover-edit-confirm-price">
+                  {price}
+                </dd>
+              </div>
+            </dl>
+            <p className="mt-3 text-[12px] text-muted">
+              One picture, added to the list.
+              {chosen.paid ? " This is the price, charged when you press Change." : ""}
+            </p>
+            <ActionForm
+              action={editCoverArt}
+              successMessage=""
+              className="mt-4 flex justify-end gap-2"
+              onResult={(r) => {
+                if (r.ok) {
+                  setConfirming(false);
+                  setInstruction("");
+                  setKey(crypto.randomUUID());
+                }
+              }}
+            >
+              <input type="hidden" name="projectSlug" value={slug} />
+              <input type="hidden" name="sourceAssetId" value={cover.assetId} />
+              <input type="hidden" name="model" value={chosen.value} />
+              <input type="hidden" name="instruction" value={instruction} />
+              <input type="hidden" name="idempotencyKey" value={key} />
+              {chosen.paid ? (
+                <input type="hidden" name="confirmedTotalUsd" value={chosen.usd.toFixed(4)} />
+              ) : null}
+              <Button type="button" variant="ghost" onClick={() => setConfirming(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary" data-testid="cover-edit-go">
+                Change · {price}
+              </Button>
+            </ActionForm>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -343,6 +574,9 @@ export function CoverArtPanel({
                       void downloadCover(state.cover.url, design, textOf(state.cover.cast), slug)
                     }
                   />
+                  <div className="mt-2">
+                    <EditPicture slug={slug} cover={state.cover} working={working} />
+                  </div>
                 </div>
               )}
             </>
@@ -536,6 +770,11 @@ export function CoverArtPanel({
                   <span>
                     #{t.number} · {t.ratio}
                   </span>
+                  {t.editOf ? (
+                    <span title={t.editOf.instruction} data-testid="cover-take-edit-of">
+                      · edit of {t.editOf.number != null ? `#${t.editOf.number}` : "an earlier take"}
+                    </span>
+                  ) : null}
                   {isCover ? (
                     <span className="text-pass" data-testid="cover-take-current">
                       · the cover

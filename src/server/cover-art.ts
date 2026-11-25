@@ -51,6 +51,45 @@ export interface CoverTake {
   createdAt: string;
   /** the characters the take features (from its frozen package) */
   cast: string[];
+  /** an edit of another take: which one (its number, when still listed) and what was asked */
+  editOf: { number: number | null; instruction: string } | null;
+}
+
+/** What an edit of a cover take keeps from it: who and where it shows, and its shape. */
+export interface CoverEditSource {
+  assetId: string;
+  castIds: string[];
+  locationId: string | null;
+  aspectRatio: string;
+}
+
+function editSourceOf(v: SubjectAttemptView, assetId: string): CoverEditSource | null {
+  const ratio = (v.attempt.modelSettings as { aspectRatio?: unknown }).aspectRatio;
+  if (typeof ratio !== "string") return null;
+  const snap = v.attempt.packageSnapshot as {
+    cast?: Array<{ id?: unknown }>;
+    location?: { id?: unknown } | null;
+  };
+  return {
+    assetId,
+    castIds: (snap.cast ?? []).map((c) => c.id).filter((id): id is string => typeof id === "string"),
+    locationId: typeof snap.location?.id === "string" ? snap.location.id : null,
+    aspectRatio: ratio,
+  };
+}
+
+/** A cover picture of this project that can be edited: one of its own finished cover takes. */
+export async function coverEditSource(data: ProjectData, assetId: string): Promise<CoverEditSource | null> {
+  const repo = await getGenerationRepo({ startInlineWorker: false });
+  const views = await repo.listSubjectImageAttempts({ kind: "cover", projectId: data.project.id });
+  for (const v of views) {
+    if (v.attempt.status !== "succeeded") continue;
+    if (!v.outputs.some((o) => o.asset.id === assetId)) continue;
+    const asset = data.assets.find((a) => a.id === assetId);
+    if (!hasStoredImage(asset) || isArchived(asset) || isTrashed(asset)) return null;
+    return editSourceOf(v, assetId);
+  }
+  return null;
 }
 
 /** Everything the cover art panel shows: engines and prices per shape, the takes made, and the current cover. */
@@ -152,10 +191,53 @@ export async function coverArtState(data: ProjectData, userId: string | null) {
         cast: ((v.attempt.packageSnapshot as { cast?: Array<{ name?: unknown }> }).cast ?? [])
           .map((c) => (typeof c.name === "string" ? c.name : ""))
           .filter(Boolean),
+        editOf: editOfAttempt(v),
       },
     ];
   });
+  // an edit names the take it was made from by its number
+  const numberOf = new Map(
+    views.flatMap((v) => v.outputs.map((o) => [o.asset.id, v.attempt.attemptNumber] as const)),
+  );
+  for (const t of takes) {
+    const source = (
+      views.find((v) => v.attempt.id === t.attemptId)?.attempt.modelSettings as {
+        editSourceAssetId?: unknown;
+      }
+    )?.editSourceAssetId;
+    if (t.editOf && typeof source === "string") t.editOf.number = numberOf.get(source) ?? null;
+  }
   const cover = currentCover(data);
+  // editing the cover: each engine that can edit, priced for this cover's shape and cast
+  const coverView = cover
+    ? views.find((v) => v.attempt.status === "succeeded" && v.outputs.some((o) => o.asset.id === cover.id))
+    : undefined;
+  const editSource = cover && coverView ? editSourceOf(coverView, cover.id) : null;
+  const editEngines = editSource
+    ? imageModels
+        .filter((m) => (m.kind !== "mock" || tests) && m.capabilities.image?.editing)
+        .map((m) => {
+          const p = prepareCoverArt({
+            data,
+            input: { direction: "", castIds: editSource.castIds, locationId: editSource.locationId },
+            registry,
+            provider: m.provider,
+            modelId: m.modelId,
+            aspectRatio: editSource.aspectRatio,
+            userId,
+            idempotencyKey: `quote-${randomUUID()}`,
+            config,
+            edit: { sourceAssetId: editSource.assetId, instruction: "quote" },
+          });
+          return {
+            value: `${m.provider}/${m.modelId}`,
+            label: m.displayName,
+            paid: registry.billsMoney(m),
+            usd: p.ok ? p.estimate.amount : null,
+            reason: p.ok ? null : p.reasons[0]!,
+          };
+        })
+    : [];
   return {
     engines,
     characters,
@@ -170,6 +252,8 @@ export async function coverArtState(data: ProjectData, userId: string | null) {
           height: cover.height,
           design: coverDesignOf((cover.metadata as { cover?: { design?: unknown } }).cover?.design),
           cast: takes.find((t) => t.assetId === cover.id)?.cast ?? [],
+          number: takes.find((t) => t.assetId === cover.id)?.number ?? null,
+          editEngines,
         }
       : null,
     kindLine:
@@ -179,6 +263,15 @@ export async function coverArtState(data: ProjectData, userId: string | null) {
           ? "A short film"
           : `A series in ${data.episodes.length} episode${data.episodes.length === 1 ? "" : "s"}`,
     available,
+  };
+}
+
+function editOfAttempt(v: SubjectAttemptView): CoverTake["editOf"] {
+  const settings = v.attempt.modelSettings as { editSourceAssetId?: unknown; composer?: { edit?: unknown } };
+  if (typeof settings.editSourceAssetId !== "string") return null;
+  return {
+    number: null,
+    instruction: typeof settings.composer?.edit === "string" ? settings.composer.edit : "",
   };
 }
 
