@@ -14,6 +14,7 @@ describe("coverDesignOf", () => {
         style: "bold",
         subtitle: "  Will You Marry Me, My Lady?  ",
         tagline: "One proposal. No conditions.",
+        castText: " Yumeko & Sean ",
         showCast: false,
         showCredits: false,
         extra: "ignored",
@@ -22,13 +23,15 @@ describe("coverDesignOf", () => {
       style: "bold",
       subtitle: "Will You Marry Me, My Lady?",
       tagline: "One proposal. No conditions.",
+      castText: "Yumeko & Sean",
       showCast: false,
       showCredits: false,
     });
   });
 
   it("caps the subtitle and tagline length", () => {
-    const d = coverDesignOf({ subtitle: "a".repeat(500), tagline: "b".repeat(500) });
+    const d = coverDesignOf({ subtitle: "a".repeat(500), tagline: "b".repeat(500), castText: "c".repeat(500) });
+    expect(d.castText).toHaveLength(COVER_TEXT_MAX.castText);
     expect(d.subtitle).toHaveLength(COVER_TEXT_MAX.subtitle);
     expect(d.tagline).toHaveLength(COVER_TEXT_MAX.tagline);
   });

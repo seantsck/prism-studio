@@ -27,8 +27,11 @@ export function CoverWithTitle({
   height,
   className,
   testId,
+  enlarge = true,
 }: {
   url: string | null;
+  /** clicking opens it large (the original picture) */
+  enlarge?: boolean;
   design: CoverDesign;
   text: CoverText;
   ratio?: string | null;
@@ -78,17 +81,71 @@ export function CoverWithTitle({
     return () => observer.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [image, key, fonts]);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [open]);
   return (
-    <div
-      ref={box}
-      className={cn("relative overflow-hidden rounded-[3px] border border-line2 bg-[#1b1b1e]", className)}
-      style={{ aspectRatio: ratioOf(ratio ?? null, width ?? null, height ?? null) }}
-      data-testid={testId}
-      data-title={text.title}
-      data-style={design.style}
-    >
-      <canvas ref={canvas} className="absolute inset-0 h-full w-full" aria-label={`Cover of ${text.title}`} />
-    </div>
+    <>
+      <div
+        ref={box}
+        className={cn("relative overflow-hidden rounded-[3px] border border-line2 bg-[#1b1b1e]", className)}
+        style={{ aspectRatio: ratioOf(ratio ?? null, width ?? null, height ?? null) }}
+        data-testid={testId}
+        data-title={text.title}
+        data-style={design.style}
+      >
+        <canvas ref={canvas} className="absolute inset-0 h-full w-full" aria-label={`Cover of ${text.title}`} />
+        {enlarge && url ? (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="absolute inset-0 cursor-zoom-in"
+            title="Click to see it large"
+            aria-label={`See the cover of ${text.title} large`}
+            data-testid="cover-zoom-open"
+          />
+        ) : null}
+      </div>
+      {open && url ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Cover of ${text.title}`}
+          onClick={() => setOpen(false)}
+          data-testid="cover-zoom-dialog"
+        >
+          <div className="flex max-h-full flex-col items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            {/* the original picture, drawn with the same title design */}
+            <CoverWithTitle
+              url={fullUrl(url)}
+              design={design}
+              text={text}
+              ratio={ratio}
+              width={width}
+              height={height}
+              enlarge={false}
+              className="h-[84vh] max-w-[92vw]"
+              testId="cover-zoom"
+            />
+            <button
+              type="button"
+              className="rounded-[3px] border border-line2 px-2 py-1 text-[12px] text-fg hover:bg-panel2"
+              onClick={() => setOpen(false)}
+              data-testid="cover-zoom-close"
+            >
+              ✕ Close
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -122,9 +179,11 @@ function TitleDesign({
   design,
   onChange,
   onDownload,
+  castHint,
 }: {
   slug: string;
   assetId: string;
+  castHint: string;
   design: CoverDesign;
   onChange: (d: CoverDesign) => void;
   onDownload: () => void;
@@ -170,6 +229,15 @@ function TitleDesign({
         placeholder="Tagline (optional), e.g. One proposal. No conditions."
         aria-label="Tagline"
         data-testid="cover-tagline"
+      />
+      <input
+        value={design.castText}
+        maxLength={COVER_TEXT_MAX.castText}
+        onChange={(e) => set({ castText: e.target.value })}
+        placeholder={`Cast line (optional), e.g. ${castHint || "Yumeko & Sean"}`}
+        aria-label="Cast line"
+        disabled={!design.showCast && !design.showCredits}
+        data-testid="cover-cast-text"
       />
       <div className="flex flex-wrap gap-3">
         <label className="flex items-center gap-1.5">
@@ -267,6 +335,7 @@ export function CoverArtPanel({
                   <TitleDesign
                     slug={slug}
                     assetId={state.cover.assetId}
+                    castHint={state.cover.cast.join(" & ")}
                     design={design}
                     onChange={setDesign}
                     onDownload={() =>
