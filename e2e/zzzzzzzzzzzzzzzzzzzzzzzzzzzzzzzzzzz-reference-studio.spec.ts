@@ -2392,6 +2392,11 @@ test("ZM: cover art: shape chosen, priced and confirmed, made without lettering,
   await design.getByTestId("cover-subtitle").fill("Will You Marry Me, My Lady?");
   await design.getByTestId("cover-tagline").fill("One proposal. No conditions.");
   await design.getByTestId("cover-cast-text").fill("Yumeko & Sean");
+  // the title's own size, height and colour
+  await design.getByTestId("cover-title-scale").fill("120");
+  await design.getByTestId("cover-title-shift").fill("10");
+  await design.locator('[data-testid="cover-title-color"][data-color="gold"]').click();
+  await expect(design.getByTestId("cover-title-reset")).toBeVisible();
   await design.getByTestId("cover-show-credits").uncheck();
   // clicking the cover opens it large, drawn from the original picture with the same design
   await current.getByTestId("cover-zoom-open").click();
@@ -2412,6 +2417,27 @@ test("ZM: cover art: shape chosen, priced and confirmed, made without lettering,
   await expect(design.getByTestId("cover-tagline")).toHaveValue("One proposal. No conditions.");
   await expect(design.getByTestId("cover-show-credits")).not.toBeChecked();
   await expect(design.getByTestId("cover-cast-text")).toHaveValue("Yumeko & Sean");
+  await expect(design.getByTestId("cover-title-scale")).toHaveValue("120");
+  await expect(design.getByTestId("cover-title-shift")).toHaveValue("10");
+  await expect(design.locator('[data-testid="cover-title-color"][data-color="gold"]')).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  // change the picture itself: priced and confirmed, made as a new take; the cover stays until chosen
+  const edit = cover.getByTestId("cover-edit");
+  await expect(edit.getByTestId("cover-edit-make")).toBeDisabled();
+  await edit.getByTestId("cover-edit-instruction").fill("Put them under one umbrella.");
+  await expect(edit.getByTestId("cover-edit-price")).toContainText("free");
+  await edit.getByTestId("cover-edit-make").click();
+  const editConfirm = page.getByTestId("cover-edit-confirm");
+  await expect(editConfirm.getByTestId("cover-edit-confirm-change")).toHaveText("Put them under one umbrella.");
+  await expect(editConfirm.getByTestId("cover-edit-confirm-price")).toHaveText("free");
+  await editConfirm.getByTestId("cover-edit-go").click();
+  const editedTake = cover.getByTestId("cover-take").filter({ has: page.getByTestId("cover-take-edit-of") });
+  await expect(editedTake).toHaveAttribute("data-status", "succeeded", { timeout: 90_000 });
+  await expect(editedTake.getByTestId("cover-take-edit-of")).toHaveText("· edit of #1");
+  await expect(editedTake.getByTestId("cover-use")).toBeVisible();
+  await expect(cover.getByTestId("cover-take")).toHaveCount(2);
   await page.goto("/projects/ojousama/start");
   await expect(page.getByTestId("start-cover").getByTestId("cover-current")).toHaveAttribute("data-style", "bold");
 });

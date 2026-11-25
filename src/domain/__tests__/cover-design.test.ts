@@ -26,6 +26,9 @@ describe("coverDesignOf", () => {
       castText: "Yumeko & Sean",
       showCast: false,
       showCredits: false,
+      titleScale: 100,
+      titleShift: 0,
+      titleColor: "auto",
     });
   });
 
@@ -34,5 +37,21 @@ describe("coverDesignOf", () => {
     expect(d.castText).toHaveLength(COVER_TEXT_MAX.castText);
     expect(d.subtitle).toHaveLength(COVER_TEXT_MAX.subtitle);
     expect(d.tagline).toHaveLength(COVER_TEXT_MAX.tagline);
+  });
+});
+
+describe("the title's size, position and colour", () => {
+  it("defaults to the style's own and clamps what is out of range", () => {
+    expect(coverDesignOf({})).toMatchObject({ titleScale: 100, titleShift: 0, titleColor: "auto" });
+    expect(coverDesignOf({ titleScale: 999, titleShift: -999, titleColor: "red" })).toMatchObject({
+      titleScale: 150,
+      titleShift: -45,
+      titleColor: "red",
+    });
+    expect(coverDesignOf({ titleScale: "big", titleShift: Number.NaN, titleColor: "plaid" })).toMatchObject({
+      titleScale: 100,
+      titleShift: 0,
+      titleColor: "auto",
+    });
   });
 });

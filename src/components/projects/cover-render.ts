@@ -48,27 +48,33 @@ function fit(
   maxWidth: number,
   maxLines: number,
 ): { size: number; lines: string[] } {
-  // a Japanese title with a comma: break after the comma if that fits within 60% of the largest size
+  const general = (): { size: number; lines: string[] } => {
+    for (let size = start; size > start * 0.35; size *= 0.94) {
+      ctx.font = font(size);
+      const lines = wrap(ctx, text, maxWidth);
+      if (lines.length <= maxLines && lines.every((l) => ctx.measureText(l).width <= maxWidth))
+        return { size, lines };
+    }
+    const size = start * 0.35;
+    ctx.font = font(size);
+    return { size, lines: wrap(ctx, text, maxWidth) };
+  };
+  // a Japanese title with a comma: break after the comma (a break mid-word reads badly) unless that makes it far smaller
   const t = text.trim();
   const comma = [...t].findIndex((ch, i) => i > 0 && i < [...t].length - 1 && "、，".includes(ch));
   if (!/\s/.test(t) && comma > 0 && maxLines >= 2) {
     const chars = [...t];
     const halves = [chars.slice(0, comma + 1).join(""), chars.slice(comma + 1).join("")];
-    for (let size = start; size > start * 0.6; size *= 0.94) {
+    const best = general();
+    for (let size = start; size >= best.size * 0.6; size *= 0.97) {
       ctx.font = font(size);
       if (ctx.measureText(t).width <= maxWidth) return { size, lines: [t] };
       if (halves.every((h) => ctx.measureText(h).width <= maxWidth)) return { size, lines: halves };
     }
+    ctx.font = font(best.size);
+    return best;
   }
-  for (let size = start; size > start * 0.35; size *= 0.94) {
-    ctx.font = font(size);
-    const lines = wrap(ctx, text, maxWidth);
-    if (lines.length <= maxLines && lines.every((l) => ctx.measureText(l).width <= maxWidth))
-      return { size, lines };
-  }
-  const size = start * 0.35;
-  ctx.font = font(size);
-  return { size, lines: wrap(ctx, text, maxWidth) };
+  return general();
 }
 
 function spacing(ctx: CanvasRenderingContext2D, px: number) {
@@ -121,6 +127,38 @@ export function drawCover(
     "A PRISM STUDIO PRODUCTION",
   ].filter(Boolean);
 
+  // the creator's own title size, position and colour (100 / 0 / the style's own: as designed)
+  const scale = design.titleScale / 100;
+  const shift = (design.titleShift / 100) * h;
+  const paint = (own: string | CanvasGradient, top: number, bottom: number): string | CanvasGradient => {
+    const g = (stops: string[]) => {
+      const gr = ctx.createLinearGradient(0, top, 0, bottom);
+      stops.forEach((c, i) => gr.addColorStop(i / (stops.length - 1), c));
+      return gr;
+    };
+    switch (design.titleColor) {
+      case "gold":
+        return g(["#fbf1cf", "#d8b25a", "#b8892e", "#f3dfa2"]);
+      case "silver":
+        return g(["#ffffff", "#c9ced6", "#8e96a3", "#eef1f5"]);
+      case "white":
+        return "#ffffff";
+      case "pink":
+        return g(["#ffe3ec", "#ff8fb2"]);
+      case "red":
+        return g(["#ff5a5a", "#b3121f"]);
+      default:
+        return own;
+    }
+  };
+  /** The title block (title, subtitle, tagline) drawn moved by the creator's shift. */
+  const titleBlock = (draw: () => void) => {
+    ctx.save();
+    ctx.translate(0, shift);
+    draw();
+    ctx.restore();
+  };
+
   const castRow = (y: number, color: string) => {
     if (!design.showCast || !castLine) return;
     const row = design.castText.trim() ? castLine : castLine.replace(/ {3}/g, "     ");
@@ -148,103 +186,115 @@ export function drawCover(
     shade(ctx, w, h * 0.5, h, 0, 0.9);
     shade(ctx, w, 0, h * 0.2, 0.6, 0);
     castRow(9 * u, "rgba(255,255,255,0.95)");
-    let y = creditBlock(h - 4 * u);
-    if (design.subtitle) {
-      ctx.font = `italic 400 ${3.4 * u}px ${SERIF}`;
-      spacing(ctx, 0.35 * u);
-      ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.fillText(design.subtitle, cx, y);
-      y -= 5.5 * u;
-    }
-    const t = fit(ctx, text.title, (s) => `700 ${s}px ${SERIF}`, 12 * u, 88 * u, 2);
-    ctx.font = `700 ${t.size}px ${SERIF}`;
-    spacing(ctx, 0.04 * t.size);
-    const top = y - (t.lines.length - 1) * t.size * 1.08;
-    const gold = ctx.createLinearGradient(0, top - t.size, 0, y);
-    gold.addColorStop(0, "#fbf1cf");
-    gold.addColorStop(0.45, "#d8b25a");
-    gold.addColorStop(0.55, "#b8892e");
-    gold.addColorStop(1, "#f3dfa2");
-    ctx.shadowColor = "rgba(0,0,0,0.75)";
-    ctx.shadowBlur = 2 * u;
-    ctx.shadowOffsetY = 0.4 * u;
-    ctx.fillStyle = gold;
-    lines(ctx, t.lines, cx, top, t.size * 1.08);
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetY = 0;
-    if (design.tagline) {
-      ctx.font = `italic 400 ${2.9 * u}px ${SERIF}`;
-      spacing(ctx, 0.2 * u);
-      ctx.fillStyle = "rgba(255,255,255,0.85)";
-      const tl = fit(ctx, design.tagline, (s) => `italic 400 ${s}px ${SERIF}`, 2.9 * u, 80 * u, 2);
-      lines(ctx, tl.lines, cx, top - t.size - 2 * u - (tl.lines.length - 1) * tl.size * 1.2, tl.size * 1.2);
-    }
+    const base = creditBlock(h - 4 * u);
+    titleBlock(() => {
+      let y = base;
+      if (design.subtitle) {
+        ctx.font = `italic 400 ${3.4 * u}px ${SERIF}`;
+        spacing(ctx, 0.35 * u);
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        ctx.fillText(design.subtitle, cx, y);
+        y -= 5.5 * u;
+      }
+      const t = fit(ctx, text.title, (s) => `700 ${s}px ${SERIF}`, 12 * u * scale, 88 * u, 2);
+      ctx.font = `700 ${t.size}px ${SERIF}`;
+      spacing(ctx, 0.04 * t.size);
+      const top = y - (t.lines.length - 1) * t.size * 1.08;
+      const gold = ctx.createLinearGradient(0, top - t.size, 0, y);
+      gold.addColorStop(0, "#fbf1cf");
+      gold.addColorStop(0.45, "#d8b25a");
+      gold.addColorStop(0.55, "#b8892e");
+      gold.addColorStop(1, "#f3dfa2");
+      ctx.shadowColor = "rgba(0,0,0,0.75)";
+      ctx.shadowBlur = 2 * u;
+      ctx.shadowOffsetY = 0.4 * u;
+      ctx.fillStyle = paint(gold, top - t.size, y);
+      lines(ctx, t.lines, cx, top, t.size * 1.08);
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
+      if (design.tagline) {
+        ctx.font = `italic 400 ${2.9 * u}px ${SERIF}`;
+        spacing(ctx, 0.2 * u);
+        ctx.fillStyle = "rgba(255,255,255,0.85)";
+        const tl = fit(ctx, design.tagline, (s) => `italic 400 ${s}px ${SERIF}`, 2.9 * u, 80 * u, 2);
+        lines(ctx, tl.lines, cx, top - t.size - 2 * u - (tl.lines.length - 1) * tl.size * 1.2, tl.size * 1.2);
+      }
+    });
   } else if (design.style === "bold") {
     shade(ctx, w, 0, h * 0.5, 0.75, 0);
     shade(ctx, w, h * 0.72, h, 0, 0.85);
-    const t = fit(ctx, text.title, (s) => `900 ${s}px ${SANS}`, 13 * u, 90 * u, 2);
-    ctx.font = `900 ${t.size}px ${SANS}`;
-    spacing(ctx, 0);
-    const first = 9 * u + t.size;
-    ctx.lineJoin = "round";
-    ctx.lineWidth = Math.max(2, t.size * 0.09);
-    ctx.strokeStyle = "rgba(20,8,14,0.95)";
-    t.lines.forEach((l, i) => ctx.strokeText(l, cx, first + i * t.size * 1.1));
-    ctx.shadowColor = "rgba(255,70,110,0.85)";
-    ctx.shadowBlur = 3 * u;
-    const fill = ctx.createLinearGradient(0, first - t.size, 0, first + (t.lines.length - 1) * t.size * 1.1);
-    fill.addColorStop(0, "#ffffff");
-    fill.addColorStop(1, "#ffd6e2");
-    ctx.fillStyle = fill;
-    const last = lines(ctx, t.lines, cx, first, t.size * 1.1);
-    ctx.shadowBlur = 0;
-    let y = last + 4.5 * u;
-    if (design.subtitle) {
-      ctx.font = `700 ${3.4 * u}px ${SANS}`;
-      spacing(ctx, 0.5 * u);
-      ctx.fillStyle = "#ffffff";
-      ctx.fillText(design.subtitle.toUpperCase(), cx, y);
-      y += 4.5 * u;
-    }
-    if (design.tagline) {
-      ctx.font = `500 ${2.7 * u}px ${SANS}`;
-      spacing(ctx, 0.1 * u);
-      ctx.fillStyle = "rgba(255,255,255,0.9)";
-      const tl = fit(ctx, design.tagline, (s) => `500 ${s}px ${SANS}`, 2.7 * u, 80 * u, 2);
-      lines(ctx, tl.lines, cx, y, tl.size * 1.25);
-    }
+    titleBlock(() => {
+      const t = fit(ctx, text.title, (s) => `900 ${s}px ${SANS}`, 13 * u * scale, 90 * u, 2);
+      ctx.font = `900 ${t.size}px ${SANS}`;
+      spacing(ctx, 0);
+      const first = 9 * u + t.size;
+      ctx.lineJoin = "round";
+      ctx.lineWidth = Math.max(2, t.size * 0.09);
+      ctx.strokeStyle = "rgba(20,8,14,0.95)";
+      t.lines.forEach((l, i) => ctx.strokeText(l, cx, first + i * t.size * 1.1));
+      ctx.shadowColor = "rgba(255,70,110,0.85)";
+      ctx.shadowBlur = 3 * u;
+      const fill = ctx.createLinearGradient(
+        0,
+        first - t.size,
+        0,
+        first + (t.lines.length - 1) * t.size * 1.1,
+      );
+      fill.addColorStop(0, "#ffffff");
+      fill.addColorStop(1, "#ffd6e2");
+      ctx.fillStyle = paint(fill, first - t.size, first + (t.lines.length - 1) * t.size * 1.1);
+      const last = lines(ctx, t.lines, cx, first, t.size * 1.1);
+      ctx.shadowBlur = 0;
+      let y = last + 4.5 * u;
+      if (design.subtitle) {
+        ctx.font = `700 ${3.4 * u}px ${SANS}`;
+        spacing(ctx, 0.5 * u);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(design.subtitle.toUpperCase(), cx, y);
+        y += 4.5 * u;
+      }
+      if (design.tagline) {
+        ctx.font = `500 ${2.7 * u}px ${SANS}`;
+        spacing(ctx, 0.1 * u);
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        const tl = fit(ctx, design.tagline, (s) => `500 ${s}px ${SANS}`, 2.7 * u, 80 * u, 2);
+        lines(ctx, tl.lines, cx, y, tl.size * 1.25);
+      }
+    });
     const foot = creditBlock(h - 4 * u);
     castRow(foot, "rgba(255,255,255,0.95)");
   } else {
     shade(ctx, w, 0, h * 0.36, 0.7, 0);
     shade(ctx, w, h * 0.75, h, 0, 0.8);
-    const t = fit(ctx, text.title, (s) => `400 ${s}px ${SERIF}`, 9 * u, 80 * u, 2);
-    ctx.font = `400 ${t.size}px ${SERIF}`;
-    spacing(ctx, 0.12 * t.size);
-    const first = 9 * u + t.size;
-    ctx.strokeStyle = "rgba(255,255,255,0.7)";
-    ctx.lineWidth = Math.max(1, 0.18 * u);
-    const rule = (y: number) => {
-      ctx.beginPath();
-      ctx.moveTo(cx - 18 * u, y);
-      ctx.lineTo(cx + 18 * u, y);
-      ctx.stroke();
-    };
-    rule(first - t.size - 2.5 * u);
-    ctx.fillStyle = "#ffffff";
-    ctx.shadowColor = "rgba(0,0,0,0.5)";
-    ctx.shadowBlur = 1.5 * u;
-    const last = lines(ctx, t.lines, cx, first, t.size * 1.15);
-    ctx.shadowBlur = 0;
-    let y = last + 3 * u;
-    rule(y);
-    if (design.subtitle) {
-      y += 4.2 * u;
-      ctx.font = `italic 400 ${3 * u}px ${SERIF}`;
-      spacing(ctx, 0.3 * u);
-      ctx.fillStyle = "rgba(255,255,255,0.92)";
-      ctx.fillText(design.subtitle, cx, y);
-    }
+    titleBlock(() => {
+      const t = fit(ctx, text.title, (s) => `400 ${s}px ${SERIF}`, 9 * u * scale, 80 * u, 2);
+      ctx.font = `400 ${t.size}px ${SERIF}`;
+      spacing(ctx, 0.12 * t.size);
+      const first = 9 * u + t.size;
+      ctx.strokeStyle = "rgba(255,255,255,0.7)";
+      ctx.lineWidth = Math.max(1, 0.18 * u);
+      const rule = (y: number) => {
+        ctx.beginPath();
+        ctx.moveTo(cx - 18 * u, y);
+        ctx.lineTo(cx + 18 * u, y);
+        ctx.stroke();
+      };
+      rule(first - t.size - 2.5 * u);
+      ctx.fillStyle = paint("#ffffff", first - t.size, first + (t.lines.length - 1) * t.size * 1.15);
+      ctx.shadowColor = "rgba(0,0,0,0.5)";
+      ctx.shadowBlur = 1.5 * u;
+      const last = lines(ctx, t.lines, cx, first, t.size * 1.15);
+      ctx.shadowBlur = 0;
+      let y = last + 3 * u;
+      rule(y);
+      if (design.subtitle) {
+        y += 4.2 * u;
+        ctx.font = `italic 400 ${3 * u}px ${SERIF}`;
+        spacing(ctx, 0.3 * u);
+        ctx.fillStyle = "rgba(255,255,255,0.92)";
+        ctx.fillText(design.subtitle, cx, y);
+      }
+    });
     let foot = creditBlock(h - 4 * u);
     if (design.tagline) {
       ctx.font = `italic 400 ${2.8 * u}px ${SERIF}`;

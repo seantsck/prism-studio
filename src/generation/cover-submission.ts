@@ -7,6 +7,9 @@ import {
   type CoverArtInputs,
 } from "@/domain/generation/cover-art";
 import { spendBlockers } from "@/domain/generation/gate";
+import { applyImageEdit, MAX_EDIT_INSTRUCTION_CHARS } from "@/domain/generation/image-edit";
+import { hasStoredImage } from "@/domain/generation/subject-image";
+import { fingerprint } from "@/domain/hash";
 import {
   generationRequestSchema,
   type CostEstimate,
@@ -32,6 +35,12 @@ export interface PrepareCoverArtArgs {
   idempotencyKey: string;
   config: GenerationConfig;
   now?: Date;
+  /**
+   * Edit an existing cover picture instead of making a new one: the picture is sent FIRST ("the image to edit") with
+   * the creator's instruction; the cast's pictures follow so faces stay the same. The source is never changed: the
+   * result is a new cover take.
+   */
+  edit?: { sourceAssetId: string; instruction: string };
 }
 
 export type PreparedCoverArt =
@@ -62,22 +71,34 @@ export function prepareCoverArt(args: PrepareCoverArtArgs): PreparedCoverArt {
       reasons: [`${model.displayName} offers ${caps.image.aspectRatios.join(", ")}; choose one of those.`],
     };
   const canRefs = caps.modalities.includes("image_to_image") && caps.references.referenceImages;
+  const edit = args.edit
+    ? { ...args.edit, instruction: args.edit.instruction.trim().slice(0, MAX_EDIT_INSTRUCTION_CHARS) }
+    : null;
+  if (edit) {
+    if (!caps.modalities.includes("image_to_image") || !caps.image.editing)
+      return { ok: false, reasons: [`${model.displayName} cannot edit pictures; choose another engine.`] };
+    if (!edit.instruction) return { ok: false, reasons: ["Say what to change in the picture."] };
+    if (!hasStoredImage(args.data.assets.find((a) => a.id === edit.sourceAssetId)))
+      return { ok: false, reasons: ["That cover picture is no longer in this project."] };
+  }
   const canText = caps.modalities.includes("text_to_image");
   let built;
   try {
     built = buildCoverArtPlan(args.data, args.input, {
-      maxReferences: canRefs ? caps.references.maxReferences : 0,
+      // an edit keeps one place for the picture being edited
+      maxReferences: canRefs ? Math.max(0, caps.references.maxReferences - (edit ? 1 : 0)) : 0,
     });
   } catch (e) {
     if (e instanceof CoverArtError) return { ok: false, reasons: [e.message] };
     throw e;
   }
-  const references = built.references;
-  if (references.length === 0 && !canText)
+  if (!edit && built.references.length === 0 && !canText)
     return { ok: false, reasons: [`${model.displayName} needs reference images; choose another engine.`] };
   const providerOptions: Record<string, string> = {};
-  if (references.length) providerOptions.prismImageOperation = "reference";
-  const request: GenerationRequest = generationRequestSchema.parse({
+  // a new cover from references; an edit keeps the provider's "edit the first image" reading
+  if (!edit && built.references.length) providerOptions.prismImageOperation = "reference";
+  const references = built.references;
+  const base: GenerationRequest = generationRequestSchema.parse({
     schemaVersion: 1,
     modality: references.length ? "image_to_image" : "text_to_image",
     purpose: "cover_art",
@@ -96,6 +117,19 @@ export function prepareCoverArt(args: PrepareCoverArtArgs): PreparedCoverArt {
     providerOptions,
     idempotencyKey: args.idempotencyKey,
   });
+  const edited = edit ? applyImageEdit(base, built.plan, edit, model) : null;
+  const request = edited ? generationRequestSchema.parse(edited.request) : base;
+  const plan = edited?.plan ?? built.plan;
+  const snapshot = edit
+    ? {
+        ...built.packageSnapshot,
+        edit: {
+          sourceAssetId: edit.sourceAssetId,
+          checksum: args.data.assets.find((a) => a.id === edit.sourceAssetId)?.checksum ?? null,
+          instruction: edit.instruction,
+        },
+      }
+    : built.packageSnapshot;
   const valid = adapter.validateRequest(request, model);
   if (!valid.ok) return { ok: false, reasons: valid.errors };
   const estimate = adapter.estimateCost(request, model);
@@ -108,7 +142,7 @@ export function prepareCoverArt(args: PrepareCoverArtArgs): PreparedCoverArt {
   return {
     ok: true,
     estimate,
-    referencesSent: references.length,
+    referencesSent: request.references.length,
     input: {
       attempt: {
         id: randomUUID(),
@@ -122,18 +156,23 @@ export function prepareCoverArt(args: PrepareCoverArtArgs): PreparedCoverArt {
         modality: "image",
         prompt: request.prompt.positive,
         negativePrompt: request.prompt.negative,
-        packageSnapshot: built.packageSnapshot,
-        packageFingerprint: built.packageFingerprint,
+        packageSnapshot: snapshot,
+        packageFingerprint: edit ? fingerprint(snapshot) : built.packageFingerprint,
         modelSettings: {
           purpose: "cover_art",
           aspectRatio: args.aspectRatio,
           intent: "cover_art",
           providerOptions,
           promptPolicy: COVER_ART_POLICY,
-          operation: built.operation,
-          ...(args.input.direction.trim() ? { composer: { direction: args.input.direction.trim() } } : {}),
+          operation: edit ? "edit" : built.operation,
+          ...(edit ? { editSourceAssetId: edit.sourceAssetId } : {}),
+          ...(edit
+            ? { composer: { edit: edit.instruction } }
+            : args.input.direction.trim()
+              ? { composer: { direction: args.input.direction.trim() } }
+              : {}),
         },
-        inputAssetIds: [...new Set(references.map((r) => r.assetId))].sort(),
+        inputAssetIds: [...new Set(request.references.map((r) => r.assetId))].sort(),
         outputAssetId: null,
         costUsd: null,
         durationMs: null,
@@ -145,7 +184,7 @@ export function prepareCoverArt(args: PrepareCoverArtArgs): PreparedCoverArt {
         notes: "",
         approved: false,
         requestModality: request.modality,
-        promptPlan: built.plan,
+        promptPlan: plan,
         request: JSON.parse(JSON.stringify(request)) as Record<string, unknown>,
         compatibility: null,
         acknowledgedIgnored: [],

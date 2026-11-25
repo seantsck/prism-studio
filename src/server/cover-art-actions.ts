@@ -10,7 +10,8 @@ import { paidConfirmationRefusal } from "@/domain/generation/paid-confirmation";
 import { prepareCoverArt } from "@/generation/cover-submission";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { requireUser } from "./auth";
-import { currentCover } from "./cover-art";
+import { coverEditSource, currentCover } from "./cover-art";
+import { MAX_EDIT_INSTRUCTION_CHARS } from "@/domain/generation/image-edit";
 import { getGenerationConfig, getGenerationRepo, getRegistry } from "./generation";
 import { getRepo, requireProjectFresh } from "./repo";
 
@@ -65,6 +66,51 @@ async function makeCoverArt_impl(form: FormData) {
   }
   refresh(slug);
   return { ok: true as const, message: "Prism is making the cover…" };
+}
+
+/**
+ * Edit a cover picture: the creator says what to change, and the engine redraws THAT picture with the change (same cast
+ * and shape). Priced and confirmed like a new cover; the result is a new take, the picture edited is never changed.
+ */
+async function editCoverArt_impl(form: FormData) {
+  const slug = str(form, "projectSlug");
+  const user = await requireUser();
+  const data = await requireProjectFresh(slug);
+  const source = await coverEditSource(data, str(form, "sourceAssetId"));
+  if (!source) throw new UserFacingError("That cover picture can no longer be edited.");
+  const [provider, ...rest] = str(form, "model").split("/");
+  const registry = getRegistry();
+  const key = str(form, "idempotencyKey");
+  const prepared = prepareCoverArt({
+    data,
+    input: { direction: "", castIds: source.castIds, locationId: source.locationId },
+    registry,
+    provider: provider ?? "",
+    modelId: rest.join("/"),
+    aspectRatio: source.aspectRatio,
+    userId: user.kind === "supabase" ? user.id : null,
+    idempotencyKey: key.length >= 8 ? `cover-edit-${key}` : `cover-edit-${randomUUID()}`,
+    config: getGenerationConfig(),
+    edit: {
+      sourceAssetId: source.assetId,
+      instruction: str(form, "instruction").slice(0, MAX_EDIT_INSTRUCTION_CHARS),
+    },
+  });
+  if (!prepared.ok) throw new UserFacingError(prepared.reasons.slice(0, 3).join(" · "));
+  const model = registry.model(provider ?? "", rest.join("/"));
+  if (model && registry.billsMoney(model)) {
+    const refusal = paidConfirmationRefusal(prepared.estimate.amount, str(form, "confirmedTotalUsd"));
+    if (refusal) throw new UserFacingError(refusal);
+  }
+  try {
+    await (await getGenerationRepo()).createSubjectImageAttempt(prepared.input);
+  } catch (err) {
+    if (err instanceof GenerationSubmitError || (err as { name?: string }).name === "GenerationSubmitError")
+      throw new UserFacingError((err as Error).message);
+    throw err;
+  }
+  refresh(slug);
+  return { ok: true as const, message: "Prism is editing the cover…" };
 }
 
 /** Use one of the project's cover pictures as its cover (the one before stays in the list). */
@@ -138,6 +184,10 @@ async function stopCoverArt_impl(form: FormData) {
 
 export async function makeCoverArt(form: FormData): Promise<ActionResult> {
   return runAction(() => makeCoverArt_impl(form), { name: "makeCoverArt" });
+}
+
+export async function editCoverArt(form: FormData): Promise<ActionResult> {
+  return runAction(() => editCoverArt_impl(form), { name: "editCoverArt" });
 }
 
 export async function setCover(form: FormData): Promise<ActionResult> {

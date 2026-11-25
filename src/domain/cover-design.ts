@@ -14,6 +14,21 @@ export const COVER_STYLES = [
 ] as const;
 export type CoverStyle = (typeof COVER_STYLES)[number]["id"];
 
+/** Title colours: the style's own, or one the creator picks. */
+export const COVER_TITLE_COLORS = [
+  { id: "auto", label: "Style's own" },
+  { id: "gold", label: "Gold" },
+  { id: "white", label: "White" },
+  { id: "silver", label: "Silver" },
+  { id: "pink", label: "Pink" },
+  { id: "red", label: "Red" },
+] as const;
+export type CoverTitleColor = (typeof COVER_TITLE_COLORS)[number]["id"];
+
+/** How far the title can be resized (percent of the style's size) and moved (percent of the cover's height). */
+export const COVER_TITLE_SCALE = { min: 60, max: 150 } as const;
+export const COVER_TITLE_SHIFT = { min: -45, max: 45 } as const;
+
 export interface CoverDesign {
   style: CoverStyle;
   /** A second title line, e.g. the English title of a Japanese series (may be empty). */
@@ -24,6 +39,11 @@ export interface CoverDesign {
   castText: string;
   /** Cast names across the top. */
   showCast: boolean;
+  /** The title's size, percent of the style's own (100 = as designed). */
+  titleScale: number;
+  /** The title block moved down (+) or up (-), percent of the cover's height. */
+  titleShift: number;
+  titleColor: CoverTitleColor;
   /** A credits block at the foot. */
   showCredits: boolean;
 }
@@ -36,6 +56,9 @@ export const DEFAULT_COVER_DESIGN: CoverDesign = {
   tagline: "",
   castText: "",
   showCast: true,
+  titleScale: 100,
+  titleShift: 0,
+  titleColor: "auto",
   showCredits: true,
 };
 
@@ -43,11 +66,28 @@ export const DEFAULT_COVER_DESIGN: CoverDesign = {
 export function coverDesignOf(raw: unknown): CoverDesign {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const text = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+  const num = (v: unknown, min: number, max: number, fallback: number) =>
+    typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : fallback;
   return {
     style: COVER_STYLES.some((s) => s.id === r.style) ? (r.style as CoverStyle) : DEFAULT_COVER_DESIGN.style,
     subtitle: text(r.subtitle, COVER_TEXT_MAX.subtitle),
     tagline: text(r.tagline, COVER_TEXT_MAX.tagline),
     castText: text(r.castText, COVER_TEXT_MAX.castText),
+    titleScale: num(
+      r.titleScale,
+      COVER_TITLE_SCALE.min,
+      COVER_TITLE_SCALE.max,
+      DEFAULT_COVER_DESIGN.titleScale,
+    ),
+    titleShift: num(
+      r.titleShift,
+      COVER_TITLE_SHIFT.min,
+      COVER_TITLE_SHIFT.max,
+      DEFAULT_COVER_DESIGN.titleShift,
+    ),
+    titleColor: COVER_TITLE_COLORS.some((c) => c.id === r.titleColor)
+      ? (r.titleColor as CoverTitleColor)
+      : DEFAULT_COVER_DESIGN.titleColor,
     showCast: typeof r.showCast === "boolean" ? r.showCast : DEFAULT_COVER_DESIGN.showCast,
     showCredits: typeof r.showCredits === "boolean" ? r.showCredits : DEFAULT_COVER_DESIGN.showCredits,
   };
