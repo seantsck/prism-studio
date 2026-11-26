@@ -1,4 +1,5 @@
 import { CharacterPhotoUpload } from "@/components/characters/character-photo-upload";
+import { AnimatedVersion } from "@/components/characters/animated-version";
 import { singleUploadLimit } from "@/lib/upload-policy";
 import { notFound } from "next/navigation";
 import { Badge, Button, Field, PageHeader, Panel } from "@/components/ui";
@@ -428,6 +429,16 @@ export default async function CharacterPage({
           batchId={randomUUID()}
           atOnce={getGenerationConfig().limits.maxActivePerProject}
           activeInProject={activeInProject}
+        />
+        <AnimatedVersion
+          slug={slug}
+          character={c}
+          likenessFrom={(() => {
+            const from = c.likenessFromId
+              ? data.characters.find((x) => x.id === c.likenessFromId && !x.trashedAt)
+              : undefined;
+            return from ? { id: from.id, name: from.name } : null;
+          })()}
         />
         {inLibrary ? (
           <div className="xl:col-span-2">

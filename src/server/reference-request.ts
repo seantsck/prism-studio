@@ -92,8 +92,19 @@ export async function readSubjectImageForm(
     throw new UserFacingError("Choose either an image to change or images to start from, not both.");
   if (editSourceId || startIds.length > 0) {
     const own = await subjectImageAssetIds(data, subjectRef, opts);
-    for (const id of [...startIds, ...(editSourceId ? [editSourceId] : [])])
-      if (!own.has(id)) throw new UserFacingError("That image does not belong to this subject.");
+    // an animated Character may start from the photos of the real Character it takes its likeness from
+    const source =
+      subjectRef.kind === "character"
+        ? data.characters.find((c) => c.id === subjectRef.characterId)?.likenessFromId
+        : null;
+    const theirs = source
+      ? await subjectImageAssetIds(data, { kind: "character", characterId: source }, opts)
+      : new Set<string>();
+    for (const id of startIds)
+      if (!own.has(id) && !theirs.has(id))
+        throw new UserFacingError("That image does not belong to this subject.");
+    if (editSourceId && !own.has(editSourceId))
+      throw new UserFacingError("That image does not belong to this subject.");
   }
 
   let edit: SubjectImageFormRequest["edit"];

@@ -258,6 +258,9 @@ function imageKind(asset: Asset | undefined): string {
       : "reference image";
 }
 
+/** The longest art style a Character keeps ("anime", "3D animated film, soft lighting"). */
+export const MAX_ART_STYLE_CHARS = 120;
+
 const KEEP_PERSON =
   "Keep everything else exactly as it is: the same person (face, features, skin tone, apparent age), expression, pose, framing and crop; and the hair, clothing, background and lighting unless the change above is about them.";
 const KEEP_PLACE =
@@ -290,6 +293,8 @@ export function buildSubjectImagePlan(
     if (!candidates.some((x) => x.assetId === c.assetId)) candidates.push(c);
   };
   let sent: Candidate[] = [];
+  /** A Character drawn in an art style (an animated Character): its pictures are illustrations, not photographs. */
+  let artStyle = "";
   let subjectSnapshot: Record<string, unknown>;
   let operation: SubjectImageOperation;
   const settle = () => {
@@ -304,6 +309,7 @@ export function buildSubjectImagePlan(
     const s = input.subject;
     const character: Character | undefined = data.characters.find((c) => c.id === s.characterId);
     if (!character) throw new SubjectImageError("That character no longer exists.");
+    artStyle = (character.artStyle ?? "").trim().slice(0, MAX_ART_STYLE_CHARS);
     const look: CharacterLook | undefined = s.lookId
       ? data.looks.find((l) => l.id === s.lookId && l.characterId === character.id)
       : undefined;
@@ -424,7 +430,9 @@ export function buildSubjectImagePlan(
         lines:
           sentIdentity > 0
             ? [
-                `The same person as in the identity reference image${plural(sentIdentity)}: keep the face, facial features, skin tone, ${keepHair ? "hair, " : ""}apparent age and build exactly as shown. Do not beautify, restyle or change them.`,
+                artStyle
+                  ? `The same person as in the identity reference image${plural(sentIdentity)}, drawn in the art style below: keep their recognisable face shape, eyes, nose, mouth, skin tone, ${keepHair ? "hair, " : ""}apparent age and build, translated into the style, so anyone who knows them recognises them.`
+                  : `The same person as in the identity reference image${plural(sentIdentity)}: keep the face, facial features, skin tone, ${keepHair ? "hair, " : ""}apparent age and build exactly as shown. Do not beautify, restyle or change them.`,
                 ...line(
                   sentIdentity === 1
                     ? "Written notes (the reference image wins where they differ)"
@@ -454,6 +462,7 @@ export function buildSubjectImagePlan(
       name: character.name,
       physicalDescription: character.physicalDescription,
       description: character.description,
+      ...(artStyle ? { artStyle } : {}),
       look: look
         ? { id: look.id, name: look.name, updatedAt: (look as { updatedAt?: string }).updatedAt ?? null }
         : null,
@@ -543,8 +552,11 @@ export function buildSubjectImagePlan(
     // style (it is the look of the film's world); a Character reference is a neutral studio picture, so the style
     // names the medium only, and a reference image, when one is sent, decides it.
     const style = (data.bible?.visualStyle ?? "").trim();
-    const rendering =
-      input.subject.kind === "location" || input.subject.intent === "scene_variation"
+    const rendering = artStyle
+      ? [
+          `Draw it as ${artStyle}: a stylised illustration in that style, not a photograph, even where the reference images are photographs. Every picture of this character is in this same style.`,
+        ]
+      : input.subject.kind === "location" || input.subject.intent === "scene_variation"
         ? line("Visual style", style)
         : operation! === "reference"
           ? [
@@ -555,6 +567,7 @@ export function buildSubjectImagePlan(
   }
   const negative = [
     "text, captions, watermark, logo, extra limbs, duplicated person",
+    ...(artStyle && !edit ? ["photograph, photorealistic, live action"] : []),
     ...(!edit && input.subject.kind === "character" && COMPOSITION[input.subject.intent].includes(STUDIO)
       ? [
           "scenery or a room behind the person, busy or patterned background, gradient background, grey or coloured background",

@@ -130,11 +130,13 @@ export function ReferenceViewsPanel({
             ) : null}
             {photoUpload ? <div className="pt-1.5">{photoUpload}</div> : null}
             <p className="pt-1 text-[11.5px] text-muted" data-testid="reference-views-start">
-              {quote.startsFrom === "photos"
-                ? `Every view is made from your ${photos === 1 ? "photo" : `${Math.min(photos, high)} photos`}.`
-                : quote.startsFrom === "front"
-                  ? "The other views are made from the front view, so they keep its face."
-                  : `With no photos, the front view is made from ${name}'s description. Make it first: the other views are then made from it and keep its face. Made all at once from the description, each view is drawn separately and faces can differ.`}
+              {quote.likenessFrom
+                ? `Every view is made from ${quote.likenessFrom}'s ${quote.startAssetIds.length === 1 ? "photo" : `${quote.startAssetIds.length} photos`}${quote.artStyle ? `, drawn as ${quote.artStyle}` : ""}.`
+                : quote.startsFrom === "photos"
+                  ? `Every view is made from your ${photos === 1 ? "photo" : `${Math.min(photos, high)} photos`}${quote.artStyle ? `, drawn as ${quote.artStyle}` : ""}.`
+                  : quote.startsFrom === "front"
+                    ? "The other views are made from the front view, so they keep its face."
+                    : `With no photos, the front view is made from ${name}'s description. Make it first: the other views are then made from it and keep its face. Made all at once from the description, each view is drawn separately and faces can differ.`}
             </p>
             <div className="space-y-1.5 pt-3" data-testid="reference-engines">
               <div className="font-medium">Which engine?</div>
