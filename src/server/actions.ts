@@ -1,6 +1,7 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
+import { MAX_SUBJECT_DIRECTION_CHARS } from "@/domain/generation/subject-image";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { buildShotContext } from "@/domain/context";
@@ -144,6 +145,12 @@ async function createProject_impl(form: FormData) {
   if (records.episodes.length) await repo.upsertMany(id, "episodes", records.episodes);
   if (cast.length || places.length) await copyLibraryIntoNewProject(slug, cast, places, await actorId());
   revalidatePath("/");
+  // the front page's cover box: straight to the new project's Cover art, its description filled in (nothing is made
+  // until the creator sees the price there and confirms)
+  if (str(form, "then") === "cover") {
+    const direction = str(form, "coverDirection").slice(0, MAX_SUBJECT_DIRECTION_CHARS);
+    redirect(`/projects/${slug}/cover${direction ? `?direction=${encodeURIComponent(direction)}` : ""}`);
+  }
   redirect(premise ? `/projects/${slug}/start` : `/projects/${slug}`);
 }
 

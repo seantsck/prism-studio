@@ -2582,3 +2582,25 @@ test("ZP: an animated character is made from a real one: drawn in the style writ
   await expect(page.getByTestId("animated-version")).toBeVisible();
   await expect(page.getByTestId("animated-character")).toHaveCount(0);
 });
+
+test("ZQ: the front page's cover box starts a project and opens its Cover art with the description filled in", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await page.goto("/");
+  const box = page.getByTestId("new-cover");
+  await expect(box).toContainText("Create cover art");
+  await box.getByTestId("new-cover-title").fill("Rain Proposal");
+  await box.getByTestId("new-cover-direction").fill("Two leads back to back under a rainy neon sky.");
+  await box.getByTestId("new-cover-go").click();
+  // a new project, straight on its Cover art page; nothing is made until the price is seen and confirmed there
+  await expect(page).toHaveURL(/\/projects\/rain-proposal[^/]*\/cover\?direction=/, { timeout: 30_000 });
+  const cover = page.getByTestId("cover-art");
+  await expect(cover.getByTestId("cover-direction")).toHaveValue("Two leads back to back under a rainy neon sky.");
+  await expect(cover.getByTestId("cover-none")).toBeVisible();
+  await expect(cover.getByTestId("cover-take")).toHaveCount(0);
+  await expect(cover.getByTestId("cover-make")).toBeVisible();
+  // and it is one of the projects on the front page
+  await page.goto("/");
+  await expect(page.locator('[data-testid="project-row"]').filter({ hasText: "Rain Proposal" })).toHaveCount(1);
+});
