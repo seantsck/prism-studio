@@ -83,6 +83,9 @@ export function planCharacterCopy(
     trashedAt: undefined,
     partSize: undefined,
     mergedIntoId: undefined,
+    // the real Character an animated one takes its likeness from belongs to the source project: the copy keeps its
+    // style and its own pictures, not the link
+    likenessFromId: undefined,
     createdAt: now,
     updatedAt: now,
   };

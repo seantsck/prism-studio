@@ -225,6 +225,16 @@ export const characterSchema = z.object({
    * the column is not there yet.
    */
   mergedIntoId: id.nullable().optional(),
+  /**
+   * The art style it is drawn in (migration 0070), as the creator wrote it ("anime", "3D animated film"): its pictures
+   * are illustrations in that style, not photographs. Null / absent = drawn as before.
+   */
+  artStyle: text.nullable().optional(),
+  /**
+   * The Character whose photos show who this one is (migration 0070): an animated Character made from a real one takes
+   * its likeness from that Character's photos while it has none of its own. Null / absent = none.
+   */
+  likenessFromId: id.nullable().optional(),
   createdAt: iso,
   updatedAt: iso,
 });
