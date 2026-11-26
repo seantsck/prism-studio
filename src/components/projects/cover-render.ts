@@ -2,7 +2,7 @@ import type { CoverDesign } from "@/domain/cover-design";
 
 /**
  * Draws a cover the way a DVD or poster is laid out: the picture, then the title treatment of the chosen style (title,
- * subtitle, tagline, cast names across the top, a credits block at the foot). One drawing for the screen and for the
+ * subtitle, tagline, the cast line, a credits block at the foot). One drawing for the screen and for the
  * downloaded cover, at any size: every measure is a share of the width.
  */
 export interface CoverText {
@@ -89,10 +89,25 @@ function shade(ctx: CanvasRenderingContext2D, w: number, y0: number, y1: number,
   ctx.fillRect(0, Math.min(y0, y1), w, Math.abs(y1 - y0));
 }
 
+/** Where the title block and the cast line were drawn (CSS px of the drawing): what can be dragged on the cover. */
+export interface CoverBoxes {
+  title: { top: number; bottom: number } | null;
+  cast: { top: number; bottom: number } | null;
+}
+
+/** While a block is being drawn, the extent of its lettering (its own moved offset included). */
+let recording: { key: keyof CoverBoxes; dy: number; top: number; bottom: number } | null = null;
+
 /** Centred text, one line per entry, from baseline `y` down (or up with `step` < 0). Returns the last baseline. */
 function lines(ctx: CanvasRenderingContext2D, ls: string[], x: number, y: number, step: number) {
+  const size = Number(/([\d.]+)px/.exec(ctx.font)?.[1] ?? 0);
   ls.forEach((l, i) => {
-    ctx.fillText(l, x, y + i * step);
+    const at = y + i * step;
+    ctx.fillText(l, x, at);
+    if (recording) {
+      recording.top = Math.min(recording.top, at - size * 0.95 + recording.dy);
+      recording.bottom = Math.max(recording.bottom, at + size * 0.3 + recording.dy);
+    }
   });
   return y + (ls.length - 1) * step;
 }
@@ -104,8 +119,19 @@ export function drawCover(
   image: CanvasImageSource | null,
   design: CoverDesign,
   text: CoverText,
-) {
+): CoverBoxes {
   const u = w / 100;
+  const boxes: CoverBoxes = { title: null, cast: null };
+  const record = (key: keyof CoverBoxes, dy: number, draw: () => void) => {
+    recording = { key, dy, top: Infinity, bottom: -Infinity };
+    try {
+      draw();
+    } finally {
+      const r = recording;
+      recording = null;
+      if (r && r.top < r.bottom) boxes[key] = { top: r.top, bottom: r.bottom };
+    }
+  };
   const cx = w / 2;
   ctx.save();
   ctx.clearRect(0, 0, w, h);
@@ -162,7 +188,7 @@ export function drawCover(
   const titleBlock = (draw: () => void) => {
     ctx.save();
     ctx.translate(0, shift);
-    draw();
+    record("title", shift, draw);
     ctx.restore();
   };
 
@@ -171,7 +197,9 @@ export function drawCover(
     const row = design.castText.trim() ? castLine : castLine.replace(/ {3}/g, "     ");
     ctx.save();
     // the creator's own size, height and colour for the cast line
-    ctx.translate(0, (design.castShift / 100) * h);
+    const castDy = (design.castShift / 100) * h;
+    ctx.translate(0, castDy);
+    recording = { key: "cast", dy: castDy, top: Infinity, bottom: -Infinity };
     ctx.shadowColor = "rgba(0,0,0,0.7)";
     ctx.shadowBlur = 1.4 * u;
     spacing(ctx, 0.55 * u * (design.castScale / 100));
@@ -186,6 +214,9 @@ export function drawCover(
     ctx.font = `700 ${size}px ${SANS}`;
     ctx.fillStyle = paintIn(design.castColor, color, y - size, y);
     lines(ctx, ls, cx, y, 0);
+    const r = recording;
+    recording = null;
+    if (r && r.top < r.bottom) boxes.cast = { top: r.top, bottom: r.bottom };
     ctx.restore();
   };
   const creditBlock = (bottom: number) => {
@@ -200,24 +231,25 @@ export function drawCover(
   };
 
   if (design.style === "cinematic") {
-    shade(ctx, w, h * 0.5, h, 0, 0.9);
-    shade(ctx, w, 0, h * 0.2, 0.6, 0);
-    castRow(9 * u, "rgba(255,255,255,0.95)");
-    const base = creditBlock(h - 4 * u);
+    // title at the top in gold, tagline above it and subtitle below; the cast line at the foot over the credits
+    shade(ctx, w, 0, h * 0.45, 0.75, 0);
+    shade(ctx, w, h * 0.68, h, 0, 0.9);
     titleBlock(() => {
-      let y = base;
-      if (design.subtitle) {
-        ctx.font = `italic 400 ${3.4 * u}px ${SERIF}`;
-        spacing(ctx, 0.35 * u);
-        ctx.fillStyle = "rgba(255,255,255,0.9)";
-        ctx.fillText(design.subtitle, cx, y);
-        y -= 5.5 * u;
+      let y = 7 * u;
+      if (design.tagline) {
+        ctx.font = `italic 400 ${2.9 * u}px ${SERIF}`;
+        spacing(ctx, 0.2 * u);
+        ctx.fillStyle = "rgba(255,255,255,0.88)";
+        const tl = fit(ctx, design.tagline, (s) => `italic 400 ${s}px ${SERIF}`, 2.9 * u, 80 * u, 2);
+        ctx.font = `italic 400 ${tl.size}px ${SERIF}`;
+        y = lines(ctx, tl.lines, cx, y + tl.size, tl.size * 1.2) + 2.5 * u;
       }
       const t = fit(ctx, text.title, (s) => `700 ${s}px ${SERIF}`, 12 * u * scale, 88 * u, 2);
       ctx.font = `700 ${t.size}px ${SERIF}`;
       spacing(ctx, 0.04 * t.size);
-      const top = y - (t.lines.length - 1) * t.size * 1.08;
-      const gold = ctx.createLinearGradient(0, top - t.size, 0, y);
+      const first = y + t.size;
+      const bottom = first + (t.lines.length - 1) * t.size * 1.08;
+      const gold = ctx.createLinearGradient(0, first - t.size, 0, bottom);
       gold.addColorStop(0, "#fbf1cf");
       gold.addColorStop(0.45, "#d8b25a");
       gold.addColorStop(0.55, "#b8892e");
@@ -225,18 +257,19 @@ export function drawCover(
       ctx.shadowColor = "rgba(0,0,0,0.75)";
       ctx.shadowBlur = 2 * u;
       ctx.shadowOffsetY = 0.4 * u;
-      ctx.fillStyle = paint(gold, top - t.size, y);
-      lines(ctx, t.lines, cx, top, t.size * 1.08);
+      ctx.fillStyle = paint(gold, first - t.size, bottom);
+      lines(ctx, t.lines, cx, first, t.size * 1.08);
       ctx.shadowBlur = 0;
       ctx.shadowOffsetY = 0;
-      if (design.tagline) {
-        ctx.font = `italic 400 ${2.9 * u}px ${SERIF}`;
-        spacing(ctx, 0.2 * u);
-        ctx.fillStyle = "rgba(255,255,255,0.85)";
-        const tl = fit(ctx, design.tagline, (s) => `italic 400 ${s}px ${SERIF}`, 2.9 * u, 80 * u, 2);
-        lines(ctx, tl.lines, cx, top - t.size - 2 * u - (tl.lines.length - 1) * tl.size * 1.2, tl.size * 1.2);
+      if (design.subtitle) {
+        ctx.font = `italic 400 ${3.4 * u}px ${SERIF}`;
+        spacing(ctx, 0.35 * u);
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        lines(ctx, [design.subtitle], cx, bottom + 5.5 * u, 0);
       }
     });
+    const foot = creditBlock(h - 4 * u);
+    castRow(foot, "rgba(255,255,255,0.95)");
   } else if (design.style === "bold") {
     shade(ctx, w, 0, h * 0.5, 0.75, 0);
     shade(ctx, w, h * 0.72, h, 0, 0.85);
@@ -267,7 +300,7 @@ export function drawCover(
         ctx.font = `700 ${3.4 * u}px ${SANS}`;
         spacing(ctx, 0.5 * u);
         ctx.fillStyle = "#ffffff";
-        ctx.fillText(design.subtitle.toUpperCase(), cx, y);
+        lines(ctx, [design.subtitle.toUpperCase()], cx, y, 0);
         y += 4.5 * u;
       }
       if (design.tagline) {
@@ -309,7 +342,7 @@ export function drawCover(
         ctx.font = `italic 400 ${3 * u}px ${SERIF}`;
         spacing(ctx, 0.3 * u);
         ctx.fillStyle = "rgba(255,255,255,0.92)";
-        ctx.fillText(design.subtitle, cx, y);
+        lines(ctx, [design.subtitle], cx, y, 0);
       }
     });
     let foot = creditBlock(h - 4 * u);
@@ -324,6 +357,7 @@ export function drawCover(
     castRow(foot, "rgba(255,255,255,0.9)");
   }
   ctx.restore();
+  return boxes;
 }
 
 /** Loads a picture for drawing (same-origin: the canvas stays exportable). */
