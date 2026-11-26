@@ -14,6 +14,8 @@ import { PREMISE_MAX } from "@/domain/series-start";
 import type { Project } from "@/domain/schemas";
 import { requireUser } from "@/server/auth";
 import { getRepo } from "@/server/repo";
+import { CoverFinal } from "@/components/projects/cover-art";
+import { coverCardOf, pickCover, type CoverCard } from "@/server/cover-art";
 
 export const dynamic = "force-dynamic";
 
@@ -66,6 +68,12 @@ export default async function HomePage({
   const libraryNamesOf = (projectId: string) =>
     library.characters.filter((c) => c.projectId === projectId).map((c) => c.name);
   const projects = all.filter((p) => !archive.ids.has(p.id));
+  // each project's finished cover (the picture with its title design) on its card
+  const pictures = await repo.coverPictures();
+  const coverOf = (p: Project) => {
+    const asset = pickCover(pictures.filter((a) => a.projectId === p.id));
+    return asset ? coverCardOf(p, asset) : null;
+  };
   const archived = all.filter((p) => archive.ids.has(p.id));
   return (
     <main className="relative min-h-screen overflow-hidden">
@@ -116,6 +124,7 @@ export default async function HomePage({
               <ProjectCard
                 key={p.id}
                 project={p}
+                cover={coverOf(p)}
                 archiveAvailable={archive.available}
                 libraryNames={libraryNamesOf(p.id)}
               />
@@ -133,6 +142,7 @@ export default async function HomePage({
                 <ProjectCard
                   key={p.id}
                   project={p}
+                  cover={coverOf(p)}
                   archived
                   archiveAvailable={archive.available}
                   libraryNames={libraryNamesOf(p.id)}
@@ -273,11 +283,13 @@ export default async function HomePage({
 
 function ProjectCard({
   project: p,
+  cover,
   archived = false,
   archiveAvailable,
   libraryNames,
 }: {
   project: Project;
+  cover: CoverCard | null;
   archived?: boolean;
   archiveAvailable: boolean;
   libraryNames: string[];
@@ -289,13 +301,20 @@ function ProjectCard({
       data-slug={p.slug}
       data-archived={archived ? "true" : undefined}
     >
-      <Link href={`/projects/${p.slug}`} className="block min-w-0">
-        <div className="truncate text-[15px] font-medium group-hover:text-accent">{p.title}</div>
-        <div className="mt-1 line-clamp-2 min-h-[2.5em] text-[12.5px] text-muted">
-          {p.description || `${TYPE_LABEL[p.projectType]} in ${p.productionStatus.replace("_", " ")}`}
-        </div>
-        <div className="mt-2 text-[11.5px] text-faint">
-          {TYPE_LABEL[p.projectType]} · started {day(p.createdAt)}
+      <Link href={`/projects/${p.slug}`} className="flex min-w-0 gap-3">
+        {cover ? (
+          <div className="w-[92px] shrink-0" data-testid="project-cover">
+            <CoverFinal cover={cover} enlarge={false} className="w-full" />
+          </div>
+        ) : null}
+        <div className="min-w-0">
+          <div className="truncate text-[15px] font-medium group-hover:text-accent">{p.title}</div>
+          <div className="mt-1 line-clamp-2 min-h-[2.5em] text-[12.5px] text-muted">
+            {p.description || `${TYPE_LABEL[p.projectType]} in ${p.productionStatus.replace("_", " ")}`}
+          </div>
+          <div className="mt-2 text-[11.5px] text-faint">
+            {TYPE_LABEL[p.projectType]} · started {day(p.createdAt)}
+          </div>
         </div>
       </Link>
       <ProjectActions

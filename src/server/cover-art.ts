@@ -2,7 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { SubjectAttemptView } from "@/data/generation-repository";
 import { isArchived } from "@/domain/archive";
-import { coverDesignOf } from "@/domain/cover-design";
+import { coverDesignOf, type CoverDesign } from "@/domain/cover-design";
 import {
   COVER_CAST_MAX,
   COVER_SHAPES,
@@ -12,21 +12,81 @@ import {
 import { offersTestModels } from "@/domain/generation/reference-studio";
 import { canonicalRefOf } from "@/domain/visual-bible";
 import { hasStoredImage } from "@/domain/generation/subject-image";
-import type { Asset, ProjectData } from "@/domain/schemas";
+import type { Asset, Project, ProjectData } from "@/domain/schemas";
 import { isTrashed } from "@/domain/trash";
 import { prepareCoverArt } from "@/generation/cover-submission";
 import { previewUrl } from "@/lib/utils";
 import { getGenerationConfig, getGenerationRepo, getRegistry } from "./generation";
 
-/** The cover chosen: the picture most recently used as the cover (`metadata.cover.selectedAt`), or none. */
-export function currentCover(data: ProjectData): Asset | null {
+/** The cover chosen among pictures: the one most recently used as the cover (`metadata.cover.selectedAt`), or none. */
+export function pickCover(assets: readonly Asset[]): Asset | null {
   let best: { asset: Asset; at: string } | null = null;
-  for (const a of data.assets) {
+  for (const a of assets) {
     const at = (a.metadata as { cover?: { selectedAt?: unknown } }).cover?.selectedAt;
     if (typeof at !== "string" || !hasStoredImage(a) || isArchived(a) || isTrashed(a)) continue;
     if (!best || at > best.at) best = { asset: a, at };
   }
   return best?.asset ?? null;
+}
+
+/** The project's cover: the picture most recently used as the cover, or none. */
+export function currentCover(data: ProjectData): Asset | null {
+  return pickCover(data.assets);
+}
+
+/** "A series in 10 episodes" / "A feature film" / "A short film": the line in the cover's credits. */
+export function kindLineOf(project: Pick<Project, "projectType">, episodes: number | null): string {
+  if (project.projectType === "film") return "A feature film";
+  if (project.projectType === "short") return "A short film";
+  return episodes == null ? "A series" : `A series in ${episodes} episode${episodes === 1 ? "" : "s"}`;
+}
+
+/**
+ * The finished cover as it is shown outside the Cover art page (the Start page, the project's card): the picture with
+ * its saved title design. The cast names and the credits line are those saved with the cover when it was chosen or its
+ * design saved (`metadata.cover.cast` / `kindLine`); a cover chosen before then shows the design's own cast line.
+ */
+export interface CoverCard {
+  url: string | null;
+  width: number | null;
+  height: number | null;
+  design: CoverDesign;
+  title: string;
+  cast: string[];
+  kindLine: string;
+}
+
+export function coverCardOf(project: Project, asset: Asset, episodes: number | null = null): CoverCard {
+  const record =
+    (asset.metadata as { cover?: { design?: unknown; cast?: unknown; kindLine?: unknown } }).cover ?? {};
+  return {
+    url: previewUrl(asset),
+    width: asset.width,
+    height: asset.height,
+    design: coverDesignOf(record.design),
+    title: project.title,
+    cast: Array.isArray(record.cast) ? record.cast.filter((c): c is string => typeof c === "string") : [],
+    kindLine: typeof record.kindLine === "string" ? record.kindLine : kindLineOf(project, episodes),
+  };
+}
+
+/** What is saved with a cover so it can be drawn anywhere: who it features (from its take) and the credits line. */
+export async function coverSnapshotOf(
+  data: ProjectData,
+  assetId: string,
+): Promise<{ cast: string[]; kindLine: string }> {
+  let cast: string[] = [];
+  try {
+    const repo = await getGenerationRepo({ startInlineWorker: false });
+    const views = await repo.listSubjectImageAttempts({ kind: "cover", projectId: data.project.id });
+    const view = views.find((v) => v.outputs.some((o) => o.asset.id === assetId));
+    cast = ((view?.attempt.packageSnapshot as { cast?: Array<{ name?: unknown }> } | undefined)?.cast ?? [])
+      .map((c) => (typeof c.name === "string" ? c.name : ""))
+      .filter(Boolean);
+  } catch {
+    cast = [];
+  }
+  return { cast, kindLine: kindLineOf(data.project, data.episodes.length) };
 }
 
 export interface CoverEngine {
@@ -256,12 +316,7 @@ export async function coverArtState(data: ProjectData, userId: string | null) {
           editEngines,
         }
       : null,
-    kindLine:
-      data.project.projectType === "film"
-        ? "A feature film"
-        : data.project.projectType === "short"
-          ? "A short film"
-          : `A series in ${data.episodes.length} episode${data.episodes.length === 1 ? "" : "s"}`,
+    kindLine: kindLineOf(data.project, data.episodes.length),
     available,
   };
 }

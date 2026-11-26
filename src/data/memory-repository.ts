@@ -426,6 +426,13 @@ export class MemoryRepository implements Repository {
       this.touchCharacter(projectId, (removed as unknown as IdentityRef).characterId);
   }
 
+  async coverPictures(): Promise<Asset[]> {
+    return [...this.projects.values()]
+      .filter((p) => !this.trashed.has(p.project.id))
+      .flatMap((p) => p.assets.filter((a) => (a.metadata as { cover?: unknown }).cover != null))
+      .map((a) => clone(a));
+  }
+
   async findAsset(assetId: string): Promise<Asset | null> {
     for (const p of this.projects.values()) {
       const a = p.assets.find((x) => x.id === assetId);

@@ -27,7 +27,7 @@ import {
   stopCoverArt,
 } from "@/server/cover-art-actions";
 import { drawCover, loadImage, type CoverBoxes, type CoverText } from "./cover-render";
-import type { CoverArtState } from "@/server/cover-art";
+import type { CoverArtState, CoverCard } from "@/server/cover-art";
 
 const ratioOf = (r: string | null, w: number | null, h: number | null) => {
   if (w && h) return `${w} / ${h}`;
@@ -249,6 +249,45 @@ export function CoverWithTitle({
         </div>
       ) : null}
     </>
+  );
+}
+
+/**
+ * The finished cover alone (the picture with its saved title design), as the Start page and the project's card show
+ * it; `enlarge` false inside a link.
+ */
+export function CoverFinal({
+  cover,
+  enlarge = true,
+  className,
+}: {
+  cover: CoverCard | null;
+  enlarge?: boolean;
+  className?: string;
+}) {
+  if (!cover)
+    return (
+      <div
+        className={cn(
+          "flex aspect-[2/3] max-w-[220px] items-center justify-center rounded-[3px] border border-dashed border-line2 px-3 text-center text-[12px] text-muted",
+          className,
+        )}
+        data-testid="cover-none"
+      >
+        No cover yet
+      </div>
+    );
+  return (
+    <CoverWithTitle
+      url={cover.url}
+      design={cover.design}
+      text={{ title: cover.title, cast: cover.cast, kindLine: cover.kindLine }}
+      width={cover.width}
+      height={cover.height}
+      enlarge={enlarge}
+      className={className ?? "max-w-[220px]"}
+      testId="cover-current"
+    />
   );
 }
 
