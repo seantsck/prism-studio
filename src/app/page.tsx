@@ -5,6 +5,7 @@ import { purgeExpiredProjects } from "@/server/trash";
 import { TrashedProjectActions } from "@/components/projects/project-actions";
 import { trashDaysLeft } from "@/domain/trash";
 import { NewSeries, type SeriesCast } from "@/components/projects/new-series";
+import { NewCover } from "@/components/projects/new-cover";
 import { singleUploadLimit } from "@/lib/upload-policy";
 import { quoteNewFill } from "@/server/series-start";
 import { NewCharacter, NewLocation } from "@/components/projects/new-character";
@@ -101,6 +102,9 @@ export default async function HomePage({
           </p>
           <div className="mt-8 w-full max-w-3xl text-left" id="new-series">
             <NewSeries premiseMax={PREMISE_MAX} cast={cast} />
+          </div>
+          <div className="mt-5 w-full max-w-xl text-left" id="new-cover">
+            <NewCover />
           </div>
         </div>
         <div className="xl:order-1 xl:pt-[10.75rem]" data-testid="home-create-character">

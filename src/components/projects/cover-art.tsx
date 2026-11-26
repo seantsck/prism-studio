@@ -699,10 +699,13 @@ export function CoverArtPanel({
   title,
   state,
   compact = false,
+  initialDirection = "",
 }: {
   slug: string;
   title: string;
   state: CoverArtState;
+  /** a description written before arriving (the front page's cover box) */
+  initialDirection?: string;
   /** Start from a prompt: the current cover and the maker only, newest takes in a short row */
   compact?: boolean;
 }) {
@@ -711,7 +714,7 @@ export function CoverArtPanel({
   const chosen = engines.find((e) => e.value === engine);
   const [ratio, setRatio] = useState(chosen?.shapes[0]?.ratio ?? "2:3");
   const shape = chosen?.shapes.find((s) => s.ratio === ratio) ?? chosen?.shapes[0];
-  const [direction, setDirection] = useState("");
+  const [direction, setDirection] = useState(initialDirection);
   const [cast, setCast] = useState<string[]>(() => state.characters.filter((c) => c.chosen).map((c) => c.id));
   const [locationId, setLocationId] = useState("");
   const [confirming, setConfirming] = useState(false);

@@ -38,7 +38,7 @@ export function currentCover(data: ProjectData): Asset | null {
 export function kindLineOf(project: Pick<Project, "projectType">, episodes: number | null): string {
   if (project.projectType === "film") return "A feature film";
   if (project.projectType === "short") return "A short film";
-  return episodes == null ? "A series" : `A series in ${episodes} episode${episodes === 1 ? "" : "s"}`;
+  return !episodes ? "A series" : `A series in ${episodes} episode${episodes === 1 ? "" : "s"}`;
 }
 
 /**
