@@ -25,6 +25,7 @@ export function RedraftEpisode({
   freshQuotes,
   runsMinutes,
   busy,
+  opensOnWritePage = false,
 }: {
   slug: string;
   episodeId: string;
@@ -39,6 +40,8 @@ export function RedraftEpisode({
   runsMinutes: number;
   /** a proposal of this conversation is being written: a second redraft waits */
   busy: boolean;
+  /** shown away from the Write page (the Script page): the new draft opens there */
+  opensOnWritePage?: boolean;
 }) {
   const [writer, setWriter] = useState(recommended);
   const [confirming, setConfirming] = useState(false);
@@ -53,8 +56,8 @@ export function RedraftEpisode({
       <p className="text-muted">
         Prism writes a new complete screenplay of this episode
         {minutes ? ` at ${minutes} minutes` : ""}, from the Bible, the characters and the current script,
-        keeping its story. It arrives below as a proposal: the screenplay changes only when you accept it, and
-        the current one stays in the history.
+        keeping its story. It arrives {opensOnWritePage ? "on the episode's Write page" : "below"} as a
+        proposal: the screenplay changes only when you accept it, and the current one stays in the history.
       </p>
       <p
         className={minutes && runsMinutes < minutes * 0.8 ? "text-warn" : "text-muted"}

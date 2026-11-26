@@ -5,6 +5,7 @@ import type { Episode, ProjectData } from "@/domain/schemas";
 import { parseScreenplay, syncScript } from "@/domain/script";
 import { saveScript } from "@/server/actions";
 import { ActionForm } from "@/components/action-form";
+import { RewritePanel } from "@/components/writing/rewrite-panel";
 
 export function ScriptView({ data, episode }: { data: ProjectData; episode: Episode }) {
   const parsed = parseScreenplay(episode.scriptText);
@@ -61,6 +62,7 @@ export function ScriptView({ data, episode }: { data: ProjectData; episode: Epis
         </Panel>
 
         <div className="space-y-4">
+          <RewritePanel data={data} episode={episode} />
           {sync.lockedConflicts.length > 0 ? (
             <Panel title="Locked dialogue conflicts" className="border-warn/40">
               <ul className="space-y-2">

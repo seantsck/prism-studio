@@ -2302,7 +2302,7 @@ test("ZL: episodes are added in bulk with Prism: priced and confirmed, planned, 
   await page.goto("/projects/ojousama/start");
   await expect(page.getByTestId("start-add-episodes").getByTestId("add-episodes-open")).toBeVisible();
   await page.goto("/projects/ojousama/episodes");
-  const before = await page.locator('a[href*="/episodes/ep-"]').count();
+  const before = await page.getByTestId("episode-row").count();
   const add = page.getByTestId("add-episodes");
   await add.getByTestId("add-episodes-count").fill("2");
   await add.getByTestId("add-episodes-minutes").fill("20");
@@ -2325,20 +2325,20 @@ test("ZL: episodes are added in bulk with Prism: priced and confirmed, planned, 
     await expect(ideas).toBeVisible({ timeout: 1000 });
   }).toPass({ timeout: 90_000 });
   await expect(ideas.getByTestId("added-episode-pick")).toHaveCount(2);
-  await expect(page.locator('a[href*="/episodes/ep-"]')).toHaveCount(before);
+  await expect(page.getByTestId("episode-row")).toHaveCount(before);
 
   // only the ticked one is added; the other can still be added later
   await ideas.getByTestId("added-episode-pick").nth(1).uncheck();
   await ideas.getByTestId("added-episodes-add").click();
-  await expect(page.locator('a[href*="/episodes/ep-"]')).toHaveCount(before + 1, { timeout: 30_000 });
-  await expect(page.locator('a[href*="/episodes/ep-"]').last()).toContainText("20 min");
+  await expect(page.getByTestId("episode-row")).toHaveCount(before + 1, { timeout: 30_000 });
+  await expect(page.getByTestId("episode-row").last()).toContainText("20 min");
   await page.reload();
   await expect(ideas.getByTestId("added-episode-pick").nth(0)).toBeDisabled();
   await expect(ideas.getByTestId("added-episode-pick").nth(1)).toBeEnabled();
   // set aside: the ideas go, the added episode stays
   await ideas.getByTestId("added-episodes-set-aside").click();
   await expect(ideas).toHaveCount(0, { timeout: 30_000 });
-  await expect(page.locator('a[href*="/episodes/ep-"]')).toHaveCount(before + 1);
+  await expect(page.getByTestId("episode-row")).toHaveCount(before + 1);
 });
 
 test("ZM: cover art: shape chosen, priced and confirmed, made without lettering, used as the cover with the title over it", async ({
@@ -2510,4 +2510,33 @@ test("ZN: pictures are shown as small previews the browser keeps; enlarging one 
   // enlarged: the original
   await picture.getByTestId("zoom-open").click();
   await expect(page.getByTestId("zoom-image")).toHaveAttribute("src", `/api/assets/${id}`);
+});
+
+test("ZO: a written episode can be rewritten from wherever its script is shown: priced, confirmed, opens on Write", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  // the Episodes list: a written episode offers Rewrite, which opens its script at the rewrite panel
+  await page.goto("/projects/ojousama/episodes");
+  const row = page.locator('[data-testid="episode-row"][data-episode="ep-1"]');
+  await row.getByTestId("episode-rewrite").click();
+  await expect(page).toHaveURL(/\/projects\/ojousama\/episodes\/ep-1\/script#rewrite$/);
+  const panel = page.getByTestId("rewrite-panel");
+  await expect(panel).toContainText("It arrives on the episode's Write page as a proposal");
+  await expect(panel.getByTestId("redraft-price")).toContainText("free");
+  await expect(panel.getByTestId("rewrite-part")).toHaveAttribute("href", "/projects/ojousama/episodes/ep-1/write");
+  // nothing runs before the confirmation
+  await panel.getByTestId("redraft-note").fill("Make the proposal scene funnier.");
+  await panel.getByTestId("redraft-open").click();
+  const confirm = page.getByTestId("redraft-confirm");
+  await expect(confirm.getByTestId("redraft-confirm-price")).toHaveText("free");
+  await confirm.getByTestId("redraft-go").click();
+  // the new draft opens on the Write page as a proposal; the script changes only when it is accepted
+  await expect(page).toHaveURL(/\/projects\/ojousama\/episodes\/ep-1\/write/, { timeout: 30_000 });
+  await expect(async () => {
+    await page.reload();
+    await expect(page.getByTestId("writing-conversation")).toContainText("Make the proposal scene funnier.", {
+      timeout: 1000,
+    });
+  }).toPass({ timeout: 90_000 });
 });

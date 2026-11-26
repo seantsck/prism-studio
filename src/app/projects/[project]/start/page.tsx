@@ -567,9 +567,18 @@ function WritingStatus({
             {e.title}
           </span>
           {e.scriptText.trim() ? (
-            <Link href={`${base}/episodes/${e.slug}/script`} className="text-pass hover:underline">
-              Written
-            </Link>
+            <>
+              <Link href={`${base}/episodes/${e.slug}/script`} className="text-pass hover:underline">
+                Written
+              </Link>
+              <Link
+                href={`${base}/episodes/${e.slug}/script#rewrite`}
+                className="text-accent hover:underline"
+                data-testid="start-writing-rewrite"
+              >
+                Rewrite…
+              </Link>
+            </>
           ) : p && (p.status === "queued" || p.status === "running") ? (
             <span className="text-muted">Prism is writing it…</span>
           ) : p && p.status === "ready" ? (
