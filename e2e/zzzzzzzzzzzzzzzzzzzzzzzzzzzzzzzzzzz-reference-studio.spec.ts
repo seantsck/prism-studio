@@ -2470,7 +2470,18 @@ test("ZM: cover art: shape chosen, priced and confirmed, made without lettering,
   await expect(editedTake.getByTestId("cover-use")).toBeVisible();
   await expect(cover.getByTestId("cover-take")).toHaveCount(2);
   await page.goto("/projects/ojousama/start");
-  await expect(page.getByTestId("start-cover").getByTestId("cover-current")).toHaveAttribute("data-style", "bold");
+  // the Start page shows only the finished cover: no takes, nothing to make there
+  const startCover = page.getByTestId("start-cover");
+  await expect(startCover.getByTestId("cover-current")).toHaveAttribute("data-style", "bold");
+  await expect(startCover.getByTestId("cover-take")).toHaveCount(0);
+  await expect(startCover.getByTestId("cover-make")).toHaveCount(0);
+  // and the project's card on the front page shows the same cover
+  await page.goto("/");
+  const card = page.locator('[data-testid="project-row"][data-slug="ojousama"]');
+  await expect(card.getByTestId("project-cover").getByTestId("cover-current")).toHaveAttribute(
+    "data-style",
+    "bold",
+  );
 });
 
 test("ZN: pictures are shown as small previews the browser keeps; enlarging one opens the original", async ({

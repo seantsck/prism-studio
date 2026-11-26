@@ -26,6 +26,11 @@ export interface Repository {
   remove(projectId: string, name: CollectionName, id: string): Promise<void>;
   findAsset(assetId: string): Promise<Asset | null>;
   /**
+   * Every picture ever used as a cover in the owner's projects outside the Trash (`metadata.cover.selectedAt` set),
+   * for the project cards: one small query, not a load of each project.
+   */
+  coverPictures(): Promise<Asset[]>;
+  /**
    * Which of the owner's projects are archived. `available: false` when this database cannot record it yet
    * (migration 0060 not applied): then nothing is archived and Archive is offered as unavailable.
    */

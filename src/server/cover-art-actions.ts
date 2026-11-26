@@ -10,7 +10,7 @@ import { paidConfirmationRefusal } from "@/domain/generation/paid-confirmation";
 import { prepareCoverArt } from "@/generation/cover-submission";
 import { runAction, UserFacingError, type ActionResult } from "./action-result";
 import { requireUser } from "./auth";
-import { coverEditSource, currentCover } from "./cover-art";
+import { coverEditSource, coverSnapshotOf, currentCover } from "./cover-art";
 import { MAX_EDIT_INSTRUCTION_CHARS } from "@/domain/generation/image-edit";
 import { getGenerationConfig, getGenerationRepo, getRegistry } from "./generation";
 import { getRepo, requireProjectFresh } from "./repo";
@@ -127,13 +127,14 @@ async function setCover_impl(form: FormData) {
   // the title design carries over to the new cover
   const before = currentCover(data);
   const design = (before?.metadata as { cover?: { design?: unknown } } | undefined)?.cover?.design;
+  const snapshot = await coverSnapshotOf(data, asset.id);
   await (
     await getRepo()
   ).upsert(data.project.id, "assets", {
     ...asset,
     metadata: {
       ...asset.metadata,
-      cover: { selectedAt: at, ...(design ? { design: coverDesignOf(design) } : {}) },
+      cover: { selectedAt: at, ...snapshot, ...(design ? { design: coverDesignOf(design) } : {}) },
     },
     updatedAt: at,
   });
@@ -157,11 +158,12 @@ async function saveCoverDesign_impl(form: FormData) {
   }
   const at = new Date().toISOString();
   const record = (cover.metadata as { cover?: Record<string, unknown> }).cover ?? {};
+  const snapshot = await coverSnapshotOf(data, cover.id);
   await (
     await getRepo()
   ).upsert(data.project.id, "assets", {
     ...cover,
-    metadata: { ...cover.metadata, cover: { ...record, design: coverDesignOf(raw) } },
+    metadata: { ...cover.metadata, cover: { ...record, ...snapshot, design: coverDesignOf(raw) } },
     updatedAt: at,
   });
   refresh(slug);

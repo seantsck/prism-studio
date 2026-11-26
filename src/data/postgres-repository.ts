@@ -653,6 +653,15 @@ abstract class PostgresRepositoryBase implements Repository {
     });
   }
 
+  async coverPictures(): Promise<Asset[]> {
+    const rows = await this.rows(
+      `select a.* from assets a join projects p on p.id = a.project_id
+        where p.user_id = $1 and p.trashed_at is null and a.metadata -> 'cover' ->> 'selectedAt' is not null`,
+      [this.ownerUserId],
+    );
+    return rows.map((r) => this.parse(assetSchema, flatFromRow(r, COLLECTIONS.assets)));
+  }
+
   async findAsset(assetId: string): Promise<Asset | null> {
     const rows = await this.rows(
       "select a.* from assets a join projects p on p.id = a.project_id where a.id = $1 and p.user_id = $2",

@@ -3,9 +3,9 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { ActionForm } from "@/components/action-form";
 import { AddEpisodesSection } from "@/components/projects/add-episodes-section";
-import { CoverArtPanel } from "@/components/projects/cover-art";
+import { CoverFinal } from "@/components/projects/cover-art";
 import { requireUser } from "@/server/auth";
-import { coverArtState } from "@/server/cover-art";
+import { coverCardOf, coverSnapshotOf, currentCover } from "@/server/cover-art";
 import { WriteIt, type WriteQuotes } from "@/components/projects/write-it";
 import { Button, Field, PageHeader } from "@/components/ui";
 import type { WritingProposal } from "@/data/writing-repository";
@@ -53,8 +53,12 @@ export default async function StartPage({ params }: { params: Promise<{ project:
   const first = episodes[0] ?? null;
 
   // what Prism has been asked so far, per Episode (newest first)
-  const user = await requireUser();
-  const cover = await coverArtState(data, user.kind === "supabase" ? user.id : null);
+  await requireUser();
+  // only the finished cover (the picture with its title design); every take and the making stay on Cover art
+  const coverAsset = currentCover(data);
+  const cover = coverAsset ? coverCardOf(data.project, coverAsset, data.episodes.length) : null;
+  if (cover && coverAsset && !(coverAsset.metadata as { cover?: { cast?: unknown } }).cover?.cast)
+    cover.cast = (await coverSnapshotOf(data, coverAsset.id)).cast;
   const writing = await getWritingRepo();
   const asked = new Map<string, WritingProposal[]>();
   for (const e of episodes) {
@@ -142,10 +146,10 @@ export default async function StartPage({ params }: { params: Promise<{ project:
                 <div className="mb-2 flex items-baseline justify-between gap-2">
                   <span className="text-[13px] font-medium">Cover art (optional)</span>
                   <Link href={`${base}/cover`} className="text-[12px] text-accent hover:underline">
-                    Open Cover art
+                    {cover ? "Change it on Cover art" : "Make one on Cover art"}
                   </Link>
                 </div>
-                <CoverArtPanel slug={slug} title={data.project.title} state={cover} compact />
+                <CoverFinal cover={cover} />
               </div>
             </div>
           ) : (
