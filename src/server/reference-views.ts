@@ -38,6 +38,10 @@ export interface ViewsQuote {
   /** what every view starts from */
   startsFrom: "photos" | "front" | "description";
   startAssetIds: string[];
+  /** an animated Character starting from the real Character's photos: that Character's name (null otherwise) */
+  likenessFrom: string | null;
+  /** the art style the views are drawn in (empty: as photographs) */
+  artStyle: string;
   views: ViewQuote[];
   /** the views still to make, and their total (Prism's cost; null when any is unknown) */
   missing: string[];
@@ -48,7 +52,24 @@ export interface ViewsQuote {
  * The creator's own photos of this Character, then the front view; only pictures that are really stored and are this
  * Character's own (what a generation may start from), so a slot holding a placeholder is never sent.
  */
-async function startingImages(data: ProjectData, character: Character) {
+async function startingImages(
+  data: ProjectData,
+  character: Character,
+): Promise<{ photos: string[]; front: string | null; from: string | null }> {
+  const mine = await ownStartingImages(data, character);
+  if (mine.photos.length || mine.front) return { ...mine, from: null };
+  // an animated Character made from a real one, with no pictures of its own yet: the real one's photos show who it is
+  // (or its front view when it has no photos)
+  const source = character.likenessFromId
+    ? data.characters.find((c) => c.id === character.likenessFromId && !c.trashedAt)
+    : undefined;
+  if (!source) return { ...mine, from: null };
+  const theirs = await ownStartingImages(data, source);
+  const photos = theirs.photos.length ? theirs.photos : theirs.front ? [theirs.front] : [];
+  return { photos, front: null, from: photos.length ? source.name : null };
+}
+
+async function ownStartingImages(data: ProjectData, character: Character) {
   const own = await subjectImageAssetIds(
     data,
     { kind: "character", characterId: character.id },
@@ -182,7 +203,7 @@ export async function quoteReferenceViews(
 ): Promise<ViewsQuote> {
   const registry = getRegistry();
   const m = modelOf(model);
-  const { photos, front } = await startingImages(data, character);
+  const { photos, front, from } = await startingImages(data, character);
   const left = await leftProfileOf(data, character);
   const views: ViewQuote[] = [];
   for (const v of REFERENCE_SET_VIEWS) {
@@ -227,6 +248,8 @@ export async function quoteReferenceViews(
     paid: !!m && registry.billsMoney(m),
     startsFrom: photos.length ? "photos" : front ? "front" : "description",
     startAssetIds: photos.length ? photos : front ? [front] : [],
+    likenessFrom: from,
+    artStyle: (character.artStyle ?? "").trim(),
     views,
     missing,
     totalUsd,

@@ -9,12 +9,11 @@ const raw = readFileSync(`${DIR}/${FILE}`, "utf8");
 const code = raw.replace(/--.*$/gm, "").replace(/\s+/g, " ");
 
 describe("migration 0069: project cover art", () => {
-  it("is the latest migration, follows 0068, and leaves 0068 byte-for-byte unchanged (as applied)", () => {
+  it("follows 0068, and leaves 0068 byte-for-byte unchanged (as applied)", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe(FILE);
-    expect(files.at(-2)).toBe("0068_character_merged_into.sql");
+    expect(files[files.indexOf(FILE) - 1]).toBe("0068_character_merged_into.sql");
     expect(checksumOf(readFileSync(`${DIR}/0068_character_merged_into.sql`, "utf8"))).toBe(
       "efd8c465e0cd52d11a12eb5663d78822dad4d67d77b4a866139a3d10976c9093",
     );

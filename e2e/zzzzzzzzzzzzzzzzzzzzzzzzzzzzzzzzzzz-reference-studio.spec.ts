@@ -2540,3 +2540,45 @@ test("ZO: a written episode can be rewritten from wherever its script is shown: 
     });
   }).toPass({ timeout: 90_000 });
 });
+
+test("ZP: an animated character is made from a real one: drawn in the style written, from the real one's photos", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  // Sean, with the two photos added in ZI
+  await page.goto("/");
+  await page.locator('[data-testid="home-character"][data-name="Sean"] a').first().click();
+  await expect(page.getByRole("heading", { name: "Sean", exact: true })).toBeVisible({ timeout: 30_000 });
+  const real = page.url();
+  const make = page.getByTestId("animated-version");
+  await expect(make).toContainText("Sean and their pictures stay as they are");
+  await make.getByTestId("animated-version-style").fill("anime");
+  await make.getByTestId("animated-version-create").click();
+
+  // a new character, drawn as anime, with Sean's likeness from Sean's photos
+  await expect(page.getByRole("heading", { name: "Sean (anime)", exact: true })).toBeVisible({ timeout: 30_000 });
+  expect(page.url()).not.toBe(real);
+  const animated = page.getByTestId("animated-character");
+  await expect(animated.getByTestId("animated-style")).toHaveText("anime");
+  await expect(animated.getByTestId("animated-likeness")).toHaveText("Sean");
+  await expect(page.getByTestId("reference-views-start")).toHaveText(
+    "Every view is made from Sean's 2 photos, drawn as anime.",
+  );
+
+  // its front view is made from those photos (free here) and goes into its own set
+  await page.getByTestId("reference-views-engine").selectOption("mock/mock-image-1");
+  await expect(page.getByTestId("reference-views-make")).toHaveText("Make 6 views · free", { timeout: 30_000 });
+  await page.getByTestId("reference-views-select-all").click();
+  const front = page.locator('[data-testid="reference-view"][data-view="front"]');
+  await front.getByTestId("reference-view-pick").check();
+  await page.getByTestId("reference-views-make").click();
+  await expect(front).toHaveAttribute("data-state", "in_set", { timeout: 60_000 });
+
+  // the style can be changed (new pictures only); the real Sean is unchanged
+  await animated.getByTestId("animated-style-input").fill("3D animated film");
+  await animated.getByTestId("animated-style-save").click();
+  await expect(animated.getByTestId("animated-style")).toHaveText("3D animated film", { timeout: 30_000 });
+  await page.goto(real);
+  await expect(page.getByTestId("animated-version")).toBeVisible();
+  await expect(page.getByTestId("animated-character")).toHaveCount(0);
+});

@@ -305,6 +305,9 @@ async function saveCharacter_impl(form: FormData) {
     relationshipNotes: str(form, "relationshipNotes"),
     // the size of part when the form has the choice; otherwise the stored one stands (an absent value is not written)
     ...(form.has("partSize") ? { partSize: partSizeFrom(form) } : {}),
+    // an animated Character keeps its style and likeness source (the sheet does not edit them)
+    ...(existing?.artStyle != null ? { artStyle: existing.artStyle } : {}),
+    ...(existing?.likenessFromId != null ? { likenessFromId: existing.likenessFromId } : {}),
     createdAt: existing?.createdAt ?? now(),
     updatedAt: now(),
   });
