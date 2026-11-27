@@ -398,7 +398,7 @@ test("4C Character Lock: a master Look edit keeps the clip fresh; switching to L
   // Shot 4C: Yumeko wears that Look under Lock v1; a Production Frame uploaded under v1 is current
   await page.goto(`${url}?section=character`);
   await yumekoLook(page).selectOption({ label: LOOK });
-  await page.getByRole("button", { name: "Save characters" }).click();
+  await page.getByRole("button", { name: "Save actors" }).click();
   await expect(page.getByText("Saved").first()).toBeVisible({ timeout: 15_000 });
   await page.goto(`${url}?section=look`);
   const cc = page.getByTestId("character-continuity");

@@ -137,20 +137,18 @@ export const PREFLIGHT_RULES: PreflightRule[] = [
     id: "character.assigned",
     section: "character",
     severity: "required",
-    label: "Characters assigned",
+    label: "Actors assigned",
     evaluate: (c) => {
       if (hasCharacters(c)) return pass();
       // An explicit character count of 0 means an intentionally empty frame (e.g. establishing shot).
-      return c.shot.continuity.characterCount === 0
-        ? na("No characters (explicit)")
-        : fail("No characters assigned");
+      return c.shot.continuity.characterCount === 0 ? na("No actors (explicit)") : fail("No actors assigned");
     },
   },
   {
     id: "character.look_assigned",
     section: "character",
     severity: "required",
-    label: "Every character has a Look",
+    label: "Every actor has a Look",
     evaluate: (c) => {
       if (!hasCharacters(c)) return na();
       const bad = c.characters.filter((x) => !x.look);
@@ -163,7 +161,7 @@ export const PREFLIGHT_RULES: PreflightRule[] = [
     id: "character.look_valid",
     section: "character",
     severity: "required",
-    label: "Looks match their characters",
+    label: "Looks match their actors",
     evaluate: (c) => {
       if (!hasCharacters(c)) return na();
       const looks = c.characters.flatMap((x) => (x.look ? [x.look] : []));
@@ -208,7 +206,7 @@ export const PREFLIGHT_RULES: PreflightRule[] = [
     id: "character.continuity_lock",
     section: "character",
     severity: "required",
-    label: "Selected Character Continuity Locks match their assignments",
+    label: "Selected Actor Continuity Locks match their assignments",
     evaluate: (c) => {
       const issues = [
         ...c.characters.flatMap((x) => (x.continuityLockIssue ? [x.continuityLockIssue] : [])),
@@ -218,7 +216,7 @@ export const PREFLIGHT_RULES: PreflightRule[] = [
       const locked = c.characters.filter((x) => x.continuityLock);
       return locked.length > 0
         ? pass(locked.map((x) => `${x.appearance.name}: ${x.continuityLock!.name}`).join(" · "))
-        : na("No Character Continuity Lock selected");
+        : na("No Actor Continuity Lock selected");
     },
   },
   // Set
@@ -321,10 +319,10 @@ export const PREFLIGHT_RULES: PreflightRule[] = [
     id: "continuity.character_count",
     section: "continuity",
     severity: "required",
-    label: "Named character count declared and consistent",
+    label: "Named actor count declared and consistent",
     evaluate: (c) => {
       const declared = c.shot.continuity.characterCount;
-      if (declared == null) return fail("Character count not declared");
+      if (declared == null) return fail("Actor count not declared");
       return declared === c.characters.length
         ? pass()
         : fail(`Declared ${declared} but ${c.characters.length} assigned`);

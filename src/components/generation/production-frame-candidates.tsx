@@ -13,8 +13,8 @@ import { getGenerationConfig, getRegistry } from "@/server/generation";
 const ROLE_LABEL: Record<string, string> = {
   production_frame: "Current Production Frame",
   storyboard: "Approved Storyboard",
-  identity: "Character identity",
-  character_look: "Character Look",
+  identity: "Actor identity",
+  character_look: "Actor Look",
   location_view: "Location View",
   location: "Location reference",
   style: "Lighting reference",

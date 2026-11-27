@@ -133,7 +133,7 @@ test("fast human review: reject for identity, reject for motion, mark the third 
   await card(page, "A").getByTestId("review-reject").click();
   await card(page, "A").getByTestId("reject-character_identity").click();
   await expect(card(page, "A")).toHaveAttribute("data-decision", "reject", { timeout: 20_000 });
-  await expect(card(page, "A").getByTestId("review-tags")).toContainText("Character identity");
+  await expect(card(page, "A").getByTestId("review-tags")).toContainText("Actor identity");
 
   await card(page, "B").getByTestId("review-reject").click();
   await card(page, "B").getByTestId("reject-body_motion").click();
@@ -174,7 +174,7 @@ test("model history and the recommendation now use the human outcomes", async ({
   const m1 = page.locator('[data-testid="model-card"][data-model="mock-video-1"]');
   await expect(m1.getByTestId("model-history-stats")).toContainText("Reviewed 1");
   await expect(m1.getByTestId("model-history-stats")).toContainText("rejected 1");
-  await expect(m1.getByTestId("model-history-stats")).toContainText("Character identity");
+  await expect(m1.getByTestId("model-history-stats")).toContainText("Actor identity");
   const m169 = page.locator('[data-testid="model-card"][data-model="mock-video-169"]');
   await expect(m169.getByTestId("model-history-stats")).toContainText("good 1");
   await expect(m169.getByTestId("model-history-stats")).toContainText("Preferred wins 1");

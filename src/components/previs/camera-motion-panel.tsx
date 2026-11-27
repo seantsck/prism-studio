@@ -584,7 +584,7 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
     if (!path || path.keyframes.length < 2) reasons.push("Add at least two keyframes.");
     if (props.sceneDirty || !props.savedSceneFingerprint) reasons.push("Save the 3D set first.");
     if (dirty || !saved) reasons.push("Save the camera path first.");
-    if (props.blocking.dirty) reasons.push("Save the character blocking first.");
+    if (props.blocking.dirty) reasons.push("Save the actor blocking first.");
     if (!props.lighting.loaded) reasons.push("This Shot's lighting is still loading.");
     if (props.lighting.dirty) reasons.push("Save or discard the Shot lighting first.");
     if (sceneStale) reasons.push("The set changed since this path was saved — re-save the path.");
@@ -1100,7 +1100,7 @@ export function CameraMotionPanel(props: CameraMotionPanelProps) {
                     : r === "camera"
                       ? "camera path"
                       : r === "blocking"
-                        ? "character blocking"
+                        ? "actor blocking"
                         : "performance audio",
                 )
                 .join(", ")}{" "}

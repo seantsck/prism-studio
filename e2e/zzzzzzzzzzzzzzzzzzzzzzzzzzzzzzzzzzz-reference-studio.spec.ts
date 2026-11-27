@@ -1601,7 +1601,7 @@ test("Y: a character is deleted to the Trash, restored, then deleted for good; o
   // in the Trash: Restore brings them back
   await page.goto(`${P}/trash`);
   const row = page.locator('[data-testid="trash-subject"][data-name="Extra Waiter"]');
-  await expect(row).toContainText("Character · 30 days left");
+  await expect(row).toContainText("Actor · 30 days left");
   await row.getByTestId("trash-subject-restore").click();
   await expect(row).toHaveCount(0, { timeout: 30_000 });
   await page.goto(`${P}/characters`);
@@ -1800,7 +1800,7 @@ test("ZC: a new character's page starts with Fill in with Prism and the referenc
   // the creator edits the sheet afterwards: Prism offers to bring the rest in line with the edits
   await page.waitForTimeout(2_100);
   await page.locator('textarea[name="personality"]').fill("Quiet, exact, and secretly afraid of his father.");
-  await page.getByRole("button", { name: "Save character" }).click();
+  await page.getByRole("button", { name: "Save actor" }).click();
   const edited = page.getByTestId("character-ai-edited");
   await expect(edited).toContainText("You edited Kenji since Prism's last suggestion", { timeout: 30_000 });
   await expect(page.getByTestId("character-ai-fill")).toHaveText("Refine with Prism");
@@ -1945,7 +1945,7 @@ test("ZG: the views are made with the engine picked beside them, and what is add
 
   // the panels are numbered in the order they are used
   await expect(page.getByRole("heading", { name: "1. Fill in the sheet with Prism" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "2. Character", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "2. Actor", exact: true })).toBeVisible();
   const plan = page.getByTestId("reference-plan");
   await expect(plan).toContainText("3. Photos");
   await expect(plan).toContainText("4. Six views");

@@ -275,7 +275,7 @@ test("hosted: Lock → Shot selects it → worker generates from the LOCKED imag
     .locator('select[name^="look:"]')
     .filter({ has: page.locator("option", { hasText: LOOK }) })
     .selectOption({ label: LOOK });
-  await page.getByRole("button", { name: "Save characters" }).click();
+  await page.getByRole("button", { name: "Save actors" }).click();
   await expect(page.getByText("Saved").first()).toBeVisible({ timeout: 30_000 });
   await page.goto(`${shotUrl}?section=look`);
   const cc = page.getByTestId("character-continuity");

@@ -108,7 +108,7 @@ async function block(page: Page, name: string, x: string) {
   await expect(page.getByTestId("blocking-figure").filter({ hasText: name })).toHaveCount(1);
   await setInput(page, "blocking-pos-x", x);
   await page.getByTestId("save-blocking").click();
-  await expect(page.getByTestId("blocking-status")).toContainText("Character blocking saved", {
+  await expect(page.getByTestId("blocking-status")).toContainText("Actor blocking saved", {
     timeout: 60_000,
   });
 }
@@ -288,7 +288,7 @@ test("D + E — shared Location: independent Shot state; the shared warning only
   await expect(warning).toHaveCount(0);
   await setInput(page, "blocking-pos-x", "-1");
   await page.getByTestId("save-blocking").click();
-  await expect(page.getByTestId("blocking-status")).toContainText("Character blocking saved", {
+  await expect(page.getByTestId("blocking-status")).toContainText("Actor blocking saved", {
     timeout: 60_000,
   });
   await expect(set(page)).toHaveAttribute("data-dirty", "false");

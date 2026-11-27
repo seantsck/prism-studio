@@ -151,7 +151,7 @@ function StaleDetails({ item }: { item: ShotSequenceItem }) {
 }
 
 function CharacterLines({ item }: { item: ShotSequenceItem }) {
-  if (item.characters.length === 0) return <span className="text-faint">No Characters</span>;
+  if (item.characters.length === 0) return <span className="text-faint">No Actors</span>;
   return (
     <ul className="space-y-0.5">
       {item.characters.map((c) => (
@@ -291,7 +291,7 @@ function SequenceCard({
           <dd data-testid="sequence-location-view">
             {item.locationView?.name ?? <span className="text-faint">none</span>}
           </dd>
-          <dt className="text-muted">Characters</dt>
+          <dt className="text-muted">Actors</dt>
           <dd>
             <CharacterLines item={item} />
           </dd>
@@ -467,8 +467,8 @@ function SyncPanel({
           </ul>
           <p className="text-warn">
             Changing these links changes Shot continuity truth and may make existing Storyboard Frames,
-            Production Frames and generations stale. Nothing else changes: order, Characters, Looks, Location
-            and frames stay as they are.
+            Production Frames and generations stale. Nothing else changes: order, Actors, Looks, Location and
+            frames stay as they are.
           </p>
           {locked.length > 0 ? (
             <p role="alert" className="text-fail" data-testid="sequence-sync-locked">
@@ -529,7 +529,7 @@ function ShotFacts({ item }: { item: ShotSequenceItem }) {
       <dd>
         {item.location?.name ?? "none"} / {item.locationView?.name ?? "no View"}
       </dd>
-      <dt className="text-muted">Characters</dt>
+      <dt className="text-muted">Actors</dt>
       <dd>
         <CharacterLines item={item} />
       </dd>

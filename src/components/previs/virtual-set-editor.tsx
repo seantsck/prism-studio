@@ -750,7 +750,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
                 onChange={(e) => setCharacterId(e.target.value)}
                 data-testid="mannequin-character"
               >
-                <option value="">(no character)</option>
+                <option value="">(no actor)</option>
                 {props.characters.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
@@ -940,7 +940,7 @@ export function VirtualSetEditor(props: VirtualSetProps) {
               extra={
                 selected.kind === "mannequin" ? (
                   <label className="mt-2 block text-xs text-muted">
-                    Blocks character
+                    Blocks actor
                     <select
                       className="mt-1 w-full"
                       value={selected.characterId ?? ""}

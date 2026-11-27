@@ -193,16 +193,16 @@ export default async function HomePage({
 
       <section className="relative mx-auto max-w-6xl px-6 pb-20" data-testid="home-characters">
         <div className="mb-4 flex items-baseline justify-between border-b border-line pb-3">
-          <h2 className="text-[15px] font-semibold tracking-tight">Your characters</h2>
+          <h2 className="text-[15px] font-semibold tracking-tight">Your actors</h2>
           <span className="text-[12px] text-muted">{library.characters.length}</span>
         </div>
         {!library.available ? (
           <p className="py-6 text-center text-[13px] text-muted">
-            Your character library needs a one-time database update (migration 0062).
+            Your actor library needs a one-time database update (migration 0062).
           </p>
         ) : library.characters.length === 0 ? (
           <p className="py-6 text-center text-[13px] text-muted" data-testid="home-characters-empty">
-            Every character you create appears here, ready for any project.
+            Every actor you create appears here, ready for any project.
           </p>
         ) : (
           <ul className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3">
@@ -231,8 +231,7 @@ export default async function HomePage({
         )}
         {library.characters.length > 0 ? (
           <p className="mt-3 text-[12px] text-muted">
-            Add one to another project from that project&apos;s Characters page (&ldquo;From your
-            library&rdquo;).
+            Add one to another project from that project&apos;s Actors page (&ldquo;From your library&rdquo;).
           </p>
         ) : null}
       </section>

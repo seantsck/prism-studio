@@ -497,7 +497,7 @@ function Turn({
                 {a.explanation ? <p className="text-muted">{a.explanation}</p> : null}
                 {a.newCharacterFacts.length ? (
                   <p className="text-[11.5px] text-warn">
-                    Implies (kept in this revision only — not saved to the Character):{" "}
+                    Implies (kept in this revision only — not saved to the Actor):{" "}
                     {a.newCharacterFacts.join(" · ")}
                   </p>
                 ) : null}

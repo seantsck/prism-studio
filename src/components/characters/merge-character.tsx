@@ -48,19 +48,19 @@ export function MergeCharacter({
   const finalName = keepName === "merged" || !target ? name : target.name;
   return (
     <div className="xl:col-span-2" id="merge-character">
-      <Panel title="Same person as another character?">
+      <Panel title="Same person as another actor?">
         <details data-testid="merge-character" open={!!likely}>
           <summary className="cursor-pointer text-[12.5px]">
-            Merge {name} into another character
+            Merge {name} into another actor
             {likely ? (
               <span className="ml-2 text-accent">{likely.name} looks like the same person</span>
             ) : null}
           </summary>
           <div className="mt-3 space-y-3 text-[12.5px]">
             <p className="text-muted">
-              The character you choose is kept, with its place in the story (its shots, scenes and lines).{" "}
-              {name}&apos;s pictures, reference set, Looks and sheet join it, and {name} goes to the Trash,
-              where it can be restored. Nothing is deleted.
+              The actor you choose is kept, with its place in the story (its shots, scenes and lines). {name}
+              &apos;s pictures, reference set, Looks and sheet join it, and {name} goes to the Trash, where it
+              can be restored. Nothing is deleted.
             </p>
             <label className="flex items-center gap-2">
               <span className="shrink-0 text-muted">Merge into</span>

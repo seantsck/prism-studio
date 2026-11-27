@@ -55,9 +55,9 @@ export function RedraftEpisode({
     <div className="space-y-2 text-[12.5px]" data-testid="redraft-episode">
       <p className="text-muted">
         Prism writes a new complete screenplay of this episode
-        {minutes ? ` at ${minutes} minutes` : ""}, from the Bible, the characters and the current script,
-        keeping its story. It arrives {opensOnWritePage ? "on the episode's Write page" : "below"} as a
-        proposal: the screenplay changes only when you accept it, and the current one stays in the history.
+        {minutes ? ` at ${minutes} minutes` : ""}, from the Bible, the actors and the current script, keeping
+        its story. It arrives {opensOnWritePage ? "on the episode's Write page" : "below"} as a proposal: the
+        screenplay changes only when you accept it, and the current one stays in the history.
       </p>
       <p
         className={minutes && runsMinutes < minutes * 0.8 ? "text-warn" : "text-muted"}

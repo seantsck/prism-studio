@@ -861,7 +861,7 @@ function SidePane({ side }: { side: SideVM }) {
           <li className="text-warn">⚠ Source not current: {side.currentness.join(" ")}</li>
         )}
         <li>Location: {side.location}</li>
-        {side.characters.length ? <li>Characters: {side.characters.join(", ")}</li> : null}
+        {side.characters.length ? <li>Actors: {side.characters.join(", ")}</li> : null}
         {side.direction ? <li>Direction: {side.direction}</li> : null}
         {side.time ? <li>Time / weather / lighting: {side.time}</li> : null}
       </ul>

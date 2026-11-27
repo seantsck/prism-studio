@@ -161,7 +161,7 @@ test.describe("spatial control passes (signed in, Postgres + private Storage)", 
     await page.getByTestId("preset-hands_on_hips").click();
     await page.getByTestId("save-blocking").click();
     await expect(page.getByTestId("blocking-status")).toContainText(
-      "Character blocking saved (2 characters)",
+      "Actor blocking saved (2 actors)",
       {
         timeout: 90_000,
       },

@@ -278,8 +278,8 @@ export function ShotLightingPanel(props: ShotLightingPanelProps) {
       ))}
       {props.hasVisibleSplat ? (
         <div className="mb-1 text-xs text-muted" data-testid="lighting-splat-note">
-          Shot lighting affects mesh and Character geometry. This Gaussian-splat environment carries its own
-          baked appearance and does not respond to these lights.
+          Shot lighting affects mesh and Actor geometry. This Gaussian-splat environment carries its own baked
+          appearance and does not respond to these lights.
         </div>
       ) : null}
 

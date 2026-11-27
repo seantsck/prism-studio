@@ -944,17 +944,17 @@ export async function saveShotBlocking(
     const locationId = str(form, "locationId");
     const raw = String(form.get("blockingJson") ?? "");
     if (raw.length === 0 || raw.length > MAX_BLOCKING_JSON_BYTES)
-      throw new UserFacingError("The character blocking is empty or too large to save.");
+      throw new UserFacingError("The actor blocking is empty or too large to save.");
     let candidate: { save?: unknown; remove?: unknown };
     try {
       candidate = JSON.parse(raw);
     } catch {
-      throw new UserFacingError("The character blocking data is not valid JSON.");
+      throw new UserFacingError("The actor blocking data is not valid JSON.");
     }
     const saves = Array.isArray(candidate.save) ? (candidate.save as unknown[]) : [];
     const removes = Array.isArray(candidate.remove) ? (candidate.remove as unknown[]) : [];
     if (saves.length + removes.length === 0) throw new UserFacingError("There is no blocking to save.");
-    if (saves.length + removes.length > 32) throw new UserFacingError("Too many characters in one shot.");
+    if (saves.length + removes.length > 32) throw new UserFacingError("Too many actors in one shot.");
 
     const user = await requireUser();
     const data = await requireProjectFresh(slug);
@@ -967,7 +967,7 @@ export async function saveShotBlocking(
     const previs = await getPrevisRepo();
     const scene = await previs.getSceneForLocation(locationId);
     if (!scene || scene.projectId !== data.project.id)
-      throw new UserFacingError("Save the 3D set before saving character blocking.");
+      throw new UserFacingError("Save the 3D set before saving actor blocking.");
 
     const existing = new Map((await previs.listShotBlocking(shotId)).map((r) => [r.characterId, r]));
     const out: SavedBlockingFigure[] = [];
@@ -979,10 +979,10 @@ export async function saveShotBlocking(
       try {
         entry = parseBlockingEntry(it.entry);
       } catch {
-        throw new UserFacingError("A character's blocking data is not valid.");
+        throw new UserFacingError("An actor's blocking data is not valid.");
       }
       if (!data.characters.some((c) => c.id === entry.characterId))
-        throw new UserFacingError("That character is not in this project.");
+        throw new UserFacingError("That actor is not in this project.");
       const claimed = it.expectedRevision === null ? null : Number(it.expectedRevision);
       if (claimed !== null && !Number.isInteger(claimed)) throw new UserFacingError("Invalid revision.");
       const cur = existing.get(entry.characterId);
@@ -1071,7 +1071,7 @@ export async function reanchorShotBlocking(
     const previs = await getPrevisRepo();
     const scene = await previs.getSceneForLocation(locationId);
     if (!scene || scene.projectId !== data.project.id)
-      throw new UserFacingError("Save the 3D set before re-anchoring character blocking.");
+      throw new UserFacingError("Save the 3D set before re-anchoring actor blocking.");
     const recs = await previs.reanchorShotBlocking({
       projectId: data.project.id,
       shotId,

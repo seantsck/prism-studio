@@ -69,9 +69,9 @@ export default async function Page({
       ) : (
         <div className="p-6">
           <Empty>
-            This project has no Character or Location yet.{" "}
+            This project has no Actor or Location yet.{" "}
             <Link href={`/projects/${slug}/characters`} className="text-accent hover:underline">
-              Add a Character
+              Add an Actor
             </Link>{" "}
             to start making references.
           </Empty>
