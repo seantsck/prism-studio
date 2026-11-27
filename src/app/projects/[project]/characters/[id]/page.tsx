@@ -1,5 +1,6 @@
 import { CharacterPhotoUpload } from "@/components/characters/character-photo-upload";
 import { AnimatedVersion } from "@/components/characters/animated-version";
+import { PlayedBy } from "@/components/characters/played-by";
 import { singleUploadLimit } from "@/lib/upload-policy";
 import { notFound } from "next/navigation";
 import { Badge, Button, Field, PageHeader, Panel } from "@/components/ui";
@@ -273,6 +274,18 @@ export default async function CharacterPage({
   const saved = library.entries.some((e) => e.characterId === c.id);
   // made on its own (the account's library, in no story): it has no role here, and joins projects from this page
   const inLibrary = data.project.purpose === "library";
+  // Actors (the library's people) and the Characters they play
+  const libraryProject = (await repo.listProjects()).find((p) => p.purpose === "library");
+  const libraryData = !inLibrary && libraryProject ? await repo.loadProject(libraryProject.slug) : null;
+  const actorOptions = (libraryData?.characters ?? [])
+    .filter((x) => !x.trashedAt)
+    .map((x) => ({
+      id: x.id,
+      name: x.name,
+      href: `/projects/${libraryData!.project.slug}/characters/${x.id}`,
+    }));
+  const playedBy = c.actorId ? (actorOptions.find((a) => a.id === c.actorId) ?? null) : null;
+  const plays = inLibrary ? await repo.charactersPlayedBy(c.id) : [];
   const projects = inLibrary
     ? (await repo.listProjects())
         .filter((p) => p.purpose !== "library")
@@ -430,6 +443,33 @@ export default async function CharacterPage({
           atOnce={getGenerationConfig().limits.maxActivePerProject}
           activeInProject={activeInProject}
         />
+        {inLibrary ? (
+          <Panel title="Plays" className="xl:col-span-2">
+            <div className="text-[12.5px]" data-testid="actor-plays">
+              {plays.length === 0 ? (
+                <p className="text-muted">
+                  No character yet. On a character&apos;s page in a project, choose {c.name} under
+                  &ldquo;Played by&rdquo;.
+                </p>
+              ) : (
+                <ul className="space-y-1">
+                  {plays.map((p) => (
+                    <li key={p.characterId} data-testid="actor-plays-role">
+                      <Link
+                        href={`/projects/${p.projectSlug}/characters/${p.characterId}`}
+                        className="text-accent hover:underline"
+                      >
+                        {p.name} — {p.projectTitle}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </Panel>
+        ) : (
+          <PlayedBy slug={slug} characterId={c.id} name={c.name} actor={playedBy} actors={actorOptions} />
+        )}
         <AnimatedVersion
           slug={slug}
           character={c}

@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { planCharacterCopy, type CharacterCopyPlan } from "@/domain/character-library";
+import { planActorReferences, planCharacterCopy, type CharacterCopyPlan } from "@/domain/character-library";
 import { planLocationCopy, type LocationCopyPlan } from "@/domain/location-library";
 import type { Asset, ProjectData } from "@/domain/schemas";
 import { canonicalRefOf } from "@/domain/visual-bible";
@@ -120,7 +120,15 @@ export async function copyIntoProject(
   userId: string | null,
 ): Promise<CharacterCopyPlan> {
   const now = new Date().toISOString();
-  const plan = planCharacterCopy(source, characterId, target, randomUUID, now);
+  return copyPlanIntoProject(target, planCharacterCopy(source, characterId, target, randomUUID, now), userId);
+}
+
+/** Writes a copy plan into `target` (pictures first; everything undone if any step fails). */
+export async function copyPlanIntoProject(
+  target: ProjectData,
+  plan: CharacterCopyPlan,
+  userId: string | null,
+): Promise<CharacterCopyPlan> {
   const repo = await getRepo();
   const storage = await getUploadStorage();
   const paths: string[] = [];
@@ -299,5 +307,43 @@ export async function keepInLibrary(projectId: string, characterIds: readonly st
       if (err instanceof CharacterLibraryUnavailableError) return;
       throw err;
     }
+  }
+}
+
+/**
+ * Lends a Character the reference pictures of the Actor that plays it: copies them into the Character's project
+ * (pictures first, then the references; undone on failure). Returns how many were added (0: it had them all already).
+ */
+export async function copyActorReferences(
+  target: ProjectData,
+  characterId: string,
+  actorData: ProjectData,
+  actorId: string,
+  userId: string | null,
+): Promise<number> {
+  const plan = planActorReferences(
+    actorData,
+    actorId,
+    target,
+    characterId,
+    randomUUID,
+    new Date().toISOString(),
+  );
+  if (plan.identityRefs.length === 0) return 0;
+  const repo = await getRepo();
+  const storage = await getUploadStorage();
+  const paths: string[] = [];
+  const written: string[] = [];
+  try {
+    const actor = actorData.characters.find((c) => c.id === actorId)!;
+    const assets = await copyPictures(target, plan.assets, userId, actor.name, paths);
+    await repo.upsertMany(target.project.id, "assets", assets);
+    written.push(...assets.map((a) => a.id));
+    await repo.upsertMany(target.project.id, "identityRefs", plan.identityRefs);
+    return plan.identityRefs.length;
+  } catch (err) {
+    for (const id of written) await repo.remove(target.project.id, "assets", id).catch(() => undefined);
+    for (const p of paths) await storage.remove(p).catch(() => undefined);
+    throw err;
   }
 }

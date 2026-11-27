@@ -55,6 +55,8 @@ async function createAnimatedCharacter_impl(form: FormData) {
     artStyle: style,
     // the real person: an animated copy of an animated Character still takes its likeness from the real one
     likenessFromId: source.likenessFromId ?? source.id,
+    // the same person: played by the same Actor
+    ...(source.actorId ? { actorId: source.actorId } : {}),
     createdAt: at,
     updatedAt: at,
   });

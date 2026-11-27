@@ -1,4 +1,5 @@
 import "server-only";
+import { isFromActor } from "@/domain/character-library";
 import {
   CHARACTER_PRESETS,
   preferredFormat,
@@ -81,7 +82,10 @@ async function ownStartingImages(data: ProjectData, character: Character) {
   );
   const photos = [
     ...new Set(
-      refs.filter((r) => referenceOrigin(assets.get(r.assetId!)) === "uploaded").map((r) => r.assetId!),
+      refs
+        // the creator's photos, and the pictures the Actor playing this Character lent it (its face)
+        .filter((r) => referenceOrigin(assets.get(r.assetId!)) === "uploaded" || isFromActor(r))
+        .map((r) => r.assetId!),
     ),
   ].slice(0, REFERENCE_PHOTOS_BEST[1]);
   const front = refs.find((r) => r.slot === "front")?.assetId ?? null;

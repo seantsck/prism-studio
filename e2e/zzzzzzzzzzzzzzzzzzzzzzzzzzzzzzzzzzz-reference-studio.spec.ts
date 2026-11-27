@@ -1501,7 +1501,9 @@ test("W: a character saved to the library is added to another project as its own
   const card = page.locator('[data-testid="home-character"][data-name="Yumeko"]');
   await expect(card).toBeVisible();
   // a Character is listed with its story
-  await expect(card.getByTestId("home-character-label")).toHaveText("Yumeko — お嬢様、僕と結婚してください。");
+  await expect(card.getByTestId("home-character-label")).toHaveText(
+    "Yumeko — お嬢様、僕と結婚してください。",
+  );
   await card.getByRole("link").click();
   await expect(page.getByRole("heading", { name: "Yumeko" })).toBeVisible();
   // her own project does not offer her
@@ -2464,7 +2466,9 @@ test("ZM: cover art: shape chosen, priced and confirmed, made without lettering,
   await expect(edit.getByTestId("cover-edit-price")).toContainText("free");
   await edit.getByTestId("cover-edit-make").click();
   const editConfirm = page.getByTestId("cover-edit-confirm");
-  await expect(editConfirm.getByTestId("cover-edit-confirm-change")).toHaveText("Put them under one umbrella.");
+  await expect(editConfirm.getByTestId("cover-edit-confirm-change")).toHaveText(
+    "Put them under one umbrella.",
+  );
   await expect(editConfirm.getByTestId("cover-edit-confirm-price")).toHaveText("free");
   await editConfirm.getByTestId("cover-edit-go").click();
   const editedTake = cover.getByTestId("cover-take").filter({ has: page.getByTestId("cover-take-edit-of") });
@@ -2527,7 +2531,10 @@ test("ZO: a written episode can be rewritten from wherever its script is shown: 
   const panel = page.getByTestId("rewrite-panel");
   await expect(panel).toContainText("It arrives on the episode's Write page as a proposal");
   await expect(panel.getByTestId("redraft-price")).toContainText("free");
-  await expect(panel.getByTestId("rewrite-part")).toHaveAttribute("href", "/projects/ojousama/episodes/ep-1/write");
+  await expect(panel.getByTestId("rewrite-part")).toHaveAttribute(
+    "href",
+    "/projects/ojousama/episodes/ep-1/write",
+  );
   // nothing runs before the confirmation
   await panel.getByTestId("redraft-note").fill("Make the proposal scene funnier.");
   await panel.getByTestId("redraft-open").click();
@@ -2559,7 +2566,9 @@ test("ZP: an animated character is made from a real one: drawn in the style writ
   await make.getByTestId("animated-version-create").click();
 
   // a new character, drawn as anime, with Sean's likeness from Sean's photos
-  await expect(page.getByRole("heading", { name: "Sean (anime)", exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Sean (anime)", exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
   expect(page.url()).not.toBe(real);
   const animated = page.getByTestId("animated-character");
   await expect(animated.getByTestId("animated-style")).toHaveText("anime");
@@ -2570,7 +2579,9 @@ test("ZP: an animated character is made from a real one: drawn in the style writ
 
   // its front view is made from those photos (free here) and goes into its own set
   await page.getByTestId("reference-views-engine").selectOption("mock/mock-image-1");
-  await expect(page.getByTestId("reference-views-make")).toHaveText("Make 6 views · free", { timeout: 30_000 });
+  await expect(page.getByTestId("reference-views-make")).toHaveText("Make 6 views · free", {
+    timeout: 30_000,
+  });
   await page.getByTestId("reference-views-select-all").click();
   const front = page.locator('[data-testid="reference-view"][data-view="front"]');
   await front.getByTestId("reference-view-pick").check();
@@ -2599,11 +2610,70 @@ test("ZQ: the front page's cover box starts a project and opens its Cover art wi
   // a new project, straight on its Cover art page; nothing is made until the price is seen and confirmed there
   await expect(page).toHaveURL(/\/projects\/rain-proposal[^/]*\/cover\?direction=/, { timeout: 30_000 });
   const cover = page.getByTestId("cover-art");
-  await expect(cover.getByTestId("cover-direction")).toHaveValue("Two leads back to back under a rainy neon sky.");
+  await expect(cover.getByTestId("cover-direction")).toHaveValue(
+    "Two leads back to back under a rainy neon sky.",
+  );
   await expect(cover.getByTestId("cover-none")).toBeVisible();
   await expect(cover.getByTestId("cover-take")).toHaveCount(0);
   await expect(cover.getByTestId("cover-make")).toBeVisible();
   // and it is one of the projects on the front page
   await page.goto("/");
-  await expect(page.locator('[data-testid="project-row"]').filter({ hasText: "Rain Proposal" })).toHaveCount(1);
+  await expect(page.locator('[data-testid="project-row"]').filter({ hasText: "Rain Proposal" })).toHaveCount(
+    1,
+  );
+});
+
+test("ZR: Characters are played by Actors: an actor made from a character, and an actor's photos lent to another", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const open = async (name: string) => {
+    await page.goto("/projects/ojousama/characters");
+    // not a numbered copy ("Takumi (2)") another test made
+    await page
+      .getByRole("link", { name: new RegExp(`^${name}\\b(?! \\(\\d)`) })
+      .first()
+      .click();
+    // (an earlier test may have filled in a family name)
+    await expect(page.getByRole("heading", { level: 1, name: new RegExp(`^${name}`) })).toBeVisible({
+      timeout: 30_000,
+    });
+  };
+  // Yumeko of the drama becomes an actor of the library, and is played by it; she keeps everything she has
+  await open("Yumeko");
+  const played = page.getByTestId("played-by");
+  await expect(played).toHaveAttribute("data-actor", "");
+  await played.getByTestId("played-by-make").click();
+  await expect(played.getByTestId("played-by-actor")).toHaveText("Yumeko", { timeout: 30_000 });
+  // the actor's page lists the role with its story
+  await played.getByTestId("played-by-actor").click();
+  await expect(page.getByText("Actor · in your library, not part of any project")).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("actor-plays-role")).toHaveText(
+    /^Yumeko.* — お嬢様、僕と結婚してください。$/,
+  );
+  await page.goto("/");
+  await expect(page.locator('[data-testid="home-actor"][data-name="Yumeko"]')).toBeVisible();
+
+  // Takumi is played by the actor Sean (two photos, from ZI): Sean's photos become Takumi's references
+  await open("Takumi");
+  await played.getByTestId("played-by-select").selectOption({ label: "Sean" });
+  await played.getByTestId("played-by-link").click();
+  await expect(played.getByTestId("played-by-actor")).toHaveText("Sean", { timeout: 30_000 });
+  await expect(page.getByTestId("reference-views-start")).toContainText("Every view is made from your", {
+    timeout: 30_000,
+  });
+  // linking again brings in nothing twice
+  const pictures = page.getByRole("heading", { level: 2, name: /^Pictures \(\d+\)$/ });
+  const count = await pictures.textContent();
+  await played.getByTestId("played-by-refresh").click();
+  await page.waitForLoadState("networkidle");
+  await page.reload();
+  await expect(pictures).toHaveText(count!);
+  // unlinked: no actor, and the pictures stay
+  page.once("dialog", (d) => void d.accept());
+  await played.getByTestId("played-by-unlink").click();
+  await expect(played).toHaveAttribute("data-actor", "", { timeout: 30_000 });
+  await expect(page.getByTestId("reference-views-start")).toContainText("Every view is made from your");
 });

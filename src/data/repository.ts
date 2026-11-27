@@ -31,6 +31,13 @@ export interface Repository {
    */
   coverPictures(): Promise<Asset[]>;
   /**
+   * The Characters an Actor plays (`actor_id`, migration 0071) in the owner's projects outside the Trash, with their
+   * project. Empty before the migration.
+   */
+  charactersPlayedBy(
+    actorId: string,
+  ): Promise<Array<{ characterId: string; name: string; projectSlug: string; projectTitle: string }>>;
+  /**
    * Which of the owner's projects are archived. `available: false` when this database cannot record it yet
    * (migration 0060 not applied): then nothing is archived and Archive is offered as unavailable.
    */

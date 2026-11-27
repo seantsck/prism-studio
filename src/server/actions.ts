@@ -315,6 +315,7 @@ async function saveCharacter_impl(form: FormData) {
     // an animated Character keeps its style and likeness source (the sheet does not edit them)
     ...(existing?.artStyle != null ? { artStyle: existing.artStyle } : {}),
     ...(existing?.likenessFromId != null ? { likenessFromId: existing.likenessFromId } : {}),
+    ...(existing?.actorId != null ? { actorId: existing.actorId } : {}),
     createdAt: existing?.createdAt ?? now(),
     updatedAt: now(),
   });
