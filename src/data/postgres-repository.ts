@@ -653,6 +653,29 @@ abstract class PostgresRepositoryBase implements Repository {
     });
   }
 
+  async charactersPlayedBy(
+    actorId: string,
+  ): Promise<Array<{ characterId: string; name: string; projectSlug: string; projectTitle: string }>> {
+    try {
+      const rows = await this.rows(
+        `select c.id, c.name, p.slug, p.title from characters c join projects p on p.id = c.project_id
+          where p.user_id = $1 and p.trashed_at is null and c.trashed_at is null and c.actor_id = $2
+          order by p.title, c.name`,
+        [this.ownerUserId, actorId],
+      );
+      return rows.map((r) => ({
+        characterId: String(r.id),
+        name: String(r.name),
+        projectSlug: String(r.slug),
+        projectTitle: String(r.title),
+      }));
+    } catch (err) {
+      // migration 0071 not applied yet: no Character is played by an Actor
+      if ((err as { code?: string }).code === UNDEFINED_COLUMN) return [];
+      throw err;
+    }
+  }
+
   async coverPictures(): Promise<Asset[]> {
     const rows = await this.rows(
       `select a.* from assets a join projects p on p.id = a.project_id

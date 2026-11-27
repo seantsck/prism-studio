@@ -65,7 +65,9 @@ const spec = (
 
 export const COLLECTIONS: Record<CollectionName, CollectionSpec> = {
   assets: spec("assets", assetSchema, { json: ["metadata"], numeric: ["byteSize", "frameRate"] }),
-  characters: spec("characters", characterSchema, { optional: ["trashedAt", "partSize", "mergedIntoId", "artStyle", "likenessFromId"] }),
+  characters: spec("characters", characterSchema, {
+    optional: ["trashedAt", "partSize", "mergedIntoId", "artStyle", "likenessFromId", "actorId"],
+  }),
   identityRefs: spec("character_identity_refs", identityRefSchema, { json: ["metadata"] }),
   looks: spec("character_looks", lookSchema),
   voiceProfiles: spec("voice_profiles", voiceProfileSchema),

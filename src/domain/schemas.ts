@@ -235,6 +235,11 @@ export const characterSchema = z.object({
    * its likeness from that Character's photos while it has none of its own. Null / absent = none.
    */
   likenessFromId: id.nullable().optional(),
+  /**
+   * The Actor that plays this Character (migration 0071): a Character of the account's library project, whose reference
+   * pictures are copied into this project so the Character's pictures have the Actor's face. Null / absent = none.
+   */
+  actorId: id.nullable().optional(),
   createdAt: iso,
   updatedAt: iso,
 });

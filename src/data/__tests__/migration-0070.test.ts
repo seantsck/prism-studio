@@ -8,12 +8,11 @@ const FILE = "0070_character_art_style.sql";
 const code = readFileSync(`${DIR}/${FILE}`, "utf8").replace(/--.*$/gm, "").replace(/\s+/g, " ");
 
 describe("migration 0070: animated Characters", () => {
-  it("is the latest migration, follows 0069, and leaves 0069 byte-for-byte unchanged (as applied)", () => {
+  it("follows 0069, and leaves 0069 byte-for-byte unchanged (as applied)", () => {
     const files = readdirSync(DIR)
       .filter((f) => /^\d{4}_.*\.sql$/.test(f))
       .sort();
-    expect(files.at(-1)).toBe(FILE);
-    expect(files.at(-2)).toBe("0069_project_cover_art.sql");
+    expect(files[files.indexOf(FILE) - 1]).toBe("0069_project_cover_art.sql");
     expect(checksumOf(readFileSync(`${DIR}/0069_project_cover_art.sql`, "utf8"))).toBe(
       "07b96d96d43459454dd16019d76b59a44eac60be86ee4553c0db67f37294e3ff",
     );

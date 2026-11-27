@@ -426,6 +426,23 @@ export class MemoryRepository implements Repository {
       this.touchCharacter(projectId, (removed as unknown as IdentityRef).characterId);
   }
 
+  async charactersPlayedBy(
+    actorId: string,
+  ): Promise<Array<{ characterId: string; name: string; projectSlug: string; projectTitle: string }>> {
+    return [...this.projects.values()]
+      .filter((p) => !this.trashed.has(p.project.id))
+      .flatMap((p) =>
+        p.characters
+          .filter((c) => c.actorId === actorId && !c.trashedAt)
+          .map((c) => ({
+            characterId: c.id,
+            name: c.name,
+            projectSlug: p.project.slug,
+            projectTitle: p.project.title,
+          })),
+      );
+  }
+
   async coverPictures(): Promise<Asset[]> {
     return [...this.projects.values()]
       .filter((p) => !this.trashed.has(p.project.id))
