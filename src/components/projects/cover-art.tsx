@@ -22,9 +22,12 @@ import { cn, fullUrl } from "@/lib/utils";
 import {
   editCoverArt,
   makeCoverArt,
+  quoteCoverArt,
+  quoteCoverEdit,
   saveCoverDesign,
   setCover,
   stopCoverArt,
+  type CoverQuote,
 } from "@/server/cover-art-actions";
 import { drawCover, loadImage, type CoverBoxes, type CoverText } from "./cover-render";
 import type { CoverArtState, CoverCard } from "@/server/cover-art";
@@ -545,6 +548,36 @@ function TitleDesign({
 }
 
 /**
+ * The price of exactly what is about to be made, asked for when the confirmation opens: the price beside the button
+ * assumes nothing written, and an engine billed by words (GPT Image) costs a little more once a direction is written.
+ */
+type ExactPrice =
+  | { state: "idle" }
+  | { state: "loading" }
+  | { state: "ready"; usd: number; paid: boolean }
+  | { state: "error"; error: string };
+function useExactPrice(ask: (form: FormData) => Promise<CoverQuote>) {
+  const [price, setPrice] = useState<ExactPrice>({ state: "idle" });
+  const request = (form: FormData) => {
+    setPrice({ state: "loading" });
+    void ask(form).then(
+      (r) =>
+        setPrice(r.ok ? { state: "ready", usd: r.usd, paid: r.paid } : { state: "error", error: r.error }),
+      () => setPrice({ state: "error", error: "The price could not be worked out. Try again." }),
+    );
+  };
+  const text =
+    price.state === "ready"
+      ? price.paid
+        ? priceText(price.usd)
+        : "free"
+      : price.state === "loading"
+        ? "…"
+        : "";
+  return { price, request, text, reset: () => setPrice({ state: "idle" }) };
+}
+
+/**
  * Change the picture of the current cover: say what to change, see the price, confirm. The engine redraws this picture
  * with the change (same cast, same shape); the result is a new take, the cover itself is never changed.
  */
@@ -564,6 +597,7 @@ function EditPicture({
   const [key, setKey] = useState(() => crypto.randomUUID());
   const chosen = engines.find((e) => e.value === engine) ?? engines[0];
   const price = chosen?.usd != null ? (chosen.paid ? priceText(chosen.usd) : "free") : "";
+  const exact = useExactPrice(quoteCoverEdit);
   const refused = cover.editEngines.find((e) => e.usd == null)?.reason;
   return (
     <div className="space-y-2 rounded-[3px] border border-line p-2.5" data-testid="cover-edit">
@@ -603,7 +637,15 @@ function EditPicture({
               type="button"
               size="sm"
               disabled={working || !instruction.trim()}
-              onClick={() => setConfirming(true)}
+              onClick={() => {
+                const f = new FormData();
+                f.set("projectSlug", slug);
+                f.set("sourceAssetId", cover.assetId);
+                f.set("model", chosen?.value ?? "");
+                f.set("instruction", instruction);
+                exact.request(f);
+                setConfirming(true);
+              }}
               data-testid="cover-edit-make"
             >
               {working ? "Prism is working on a cover…" : "Change the picture…"}
@@ -648,10 +690,15 @@ function EditPicture({
               <div className="flex justify-between gap-4">
                 <dt className="text-muted">Price</dt>
                 <dd className="font-medium" data-testid="cover-edit-confirm-price">
-                  {price}
+                  {exact.text}
                 </dd>
               </div>
             </dl>
+            {exact.price.state === "error" ? (
+              <p className="mt-2 text-[12px] text-warn" data-testid="cover-edit-confirm-error">
+                {exact.price.error}
+              </p>
+            ) : null}
             <p className="mt-3 text-[12px] text-muted">
               One picture, added to the list.
               {chosen.paid ? " This is the price, charged when you press Change." : ""}
@@ -674,13 +721,22 @@ function EditPicture({
               <input type="hidden" name="instruction" value={instruction} />
               <input type="hidden" name="idempotencyKey" value={key} />
               {chosen.paid ? (
-                <input type="hidden" name="confirmedTotalUsd" value={chosen.usd.toFixed(4)} />
+                <input
+                  type="hidden"
+                  name="confirmedTotalUsd"
+                  value={exact.price.state === "ready" ? exact.price.usd.toFixed(4) : ""}
+                />
               ) : null}
               <Button type="button" variant="ghost" onClick={() => setConfirming(false)}>
                 Cancel
               </Button>
-              <Button type="submit" variant="primary" data-testid="cover-edit-go">
-                Change · {price}
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={exact.price.state !== "ready"}
+                data-testid="cover-edit-go"
+              >
+                Change · {exact.text}
               </Button>
             </ActionForm>
           </div>
@@ -723,6 +779,7 @@ export function CoverArtPanel({
     (t) => t.status !== "succeeded" && t.status !== "failed" && t.status !== "cancelled",
   );
   const price = shape?.usd != null ? (chosen?.paid ? priceText(shape.usd) : "free") : "";
+  const exact = useExactPrice(quoteCoverArt);
   const takes = compact ? state.takes.slice(0, 4) : state.takes;
   // the title design being edited (saved with the cover): edits hold until the saved design or the cover changes
   const saved = state.cover?.design ?? DEFAULT_COVER_DESIGN;
@@ -924,7 +981,19 @@ export function CoverArtPanel({
                     type="button"
                     variant="primary"
                     disabled={working}
-                    onClick={() => setConfirming(true)}
+                    onClick={() => {
+                      const f = new FormData();
+                      f.set("projectSlug", slug);
+                      f.set("model", chosen?.value ?? "");
+                      f.set("aspectRatio", shape?.ratio ?? "");
+                      f.set("direction", direction);
+                      f.set("castChosen", "1");
+                      for (const id of cast) f.append("cast", id);
+                      f.set("locationId", locationId);
+                      f.set("idempotencyKey", key);
+                      exact.request(f);
+                      setConfirming(true);
+                    }}
                     data-testid="cover-make"
                   >
                     {working ? "Prism is making a cover…" : "Make cover art…"}
@@ -1043,10 +1112,15 @@ export function CoverArtPanel({
               <div className="flex justify-between gap-4">
                 <dt className="text-muted">Price</dt>
                 <dd className="font-medium" data-testid="cover-confirm-price">
-                  {price}
+                  {exact.text}
                 </dd>
               </div>
             </dl>
+            {exact.price.state === "error" ? (
+              <p className="mt-2 text-[12px] text-warn" data-testid="cover-confirm-error">
+                {exact.price.error}
+              </p>
+            ) : null}
             <p className="mt-3 text-[12px] text-muted">
               One picture. It is added to the list; your current cover changes only when you choose Use as
               cover.
@@ -1074,13 +1148,22 @@ export function CoverArtPanel({
               <input type="hidden" name="locationId" value={locationId} />
               <input type="hidden" name="idempotencyKey" value={key} />
               {chosen.paid ? (
-                <input type="hidden" name="confirmedTotalUsd" value={shape.usd.toFixed(4)} />
+                <input
+                  type="hidden"
+                  name="confirmedTotalUsd"
+                  value={exact.price.state === "ready" ? exact.price.usd.toFixed(4) : ""}
+                />
               ) : null}
               <Button type="button" variant="ghost" onClick={() => setConfirming(false)}>
                 Cancel
               </Button>
-              <Button type="submit" variant="primary" data-testid="cover-go">
-                Make · {price}
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={exact.price.state !== "ready"}
+                data-testid="cover-go"
+              >
+                Make · {exact.text}
               </Button>
             </ActionForm>
           </div>
