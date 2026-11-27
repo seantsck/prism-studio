@@ -171,13 +171,13 @@ test("Shot Prep 4C: assign Ivory Suit, choose the Lock; the package (v5) carries
     .locator('select[name^="look:"]')
     .filter({ has: page.locator("option", { hasText: "Ivory Suit" }) });
   await lookSelect.selectOption({ label: "Ivory Suit" });
-  await page.getByRole("button", { name: "Save actors" }).click();
+  await page.getByRole("button", { name: "Save characters" }).click();
   await expect(page.getByText("Saved").first()).toBeVisible({ timeout: 15_000 });
 
   await page.goto(`${shotUrl}?section=look`);
   const cc = page.getByTestId("character-continuity");
   await expect(cc.getByTestId("cc-empty")).toContainText(
-    "No Actor Continuity Lock selected. Prism will use the Actor's current IdentityRefs and Look.",
+    "No Character Continuity Lock selected. Prism will use the Character's current IdentityRefs and Look.",
   );
   await cc.getByTestId("continuity-lock-card").filter({ hasText: LOCK_V1 }).getByTestId("cc-choose").click();
   await expect(cc.getByTestId("cc-selected")).toContainText(LOCK_V1, { timeout: 15_000 });

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ProjectActions } from "@/components/projects/project-actions";
-import { loadLibrary, loadLocationLibrary } from "@/server/character-library";
+import { loadLibrary, loadLocationLibrary, type LibraryCharacter } from "@/server/character-library";
 import { purgeExpiredProjects } from "@/server/trash";
 import { TrashedProjectActions } from "@/components/projects/project-actions";
 import { trashDaysLeft } from "@/domain/trash";
@@ -69,6 +69,9 @@ export default async function HomePage({
   const libraryNamesOf = (projectId: string) =>
     library.characters.filter((c) => c.projectId === projectId).map((c) => c.name);
   const projects = all.filter((p) => !archive.ids.has(p.id));
+  // Actors (made on their own: photos and views) and the Characters of the projects (a role in a story)
+  const actors = library.characters.filter((c) => c.actor);
+  const characters = library.characters.filter((c) => !c.actor);
   // each project's finished cover (the picture with its title design) on its card
   const pictures = await repo.coverPictures();
   const coverOf = (p: Project) => {
@@ -191,47 +194,40 @@ export default async function HomePage({
         ) : null}
       </section>
 
-      <section className="relative mx-auto max-w-6xl px-6 pb-20" data-testid="home-characters">
+      <section className="relative mx-auto max-w-6xl px-6 pb-20" data-testid="home-actors">
         <div className="mb-4 flex items-baseline justify-between border-b border-line pb-3">
           <h2 className="text-[15px] font-semibold tracking-tight">Your actors</h2>
-          <span className="text-[12px] text-muted">{library.characters.length}</span>
+          <span className="text-[12px] text-muted">{actors.length}</span>
         </div>
         {!library.available ? (
           <p className="py-6 text-center text-[13px] text-muted">
-            Your actor library needs a one-time database update (migration 0062).
+            Your library needs a one-time database update (migration 0062).
           </p>
-        ) : library.characters.length === 0 ? (
-          <p className="py-6 text-center text-[13px] text-muted" data-testid="home-characters-empty">
-            Every actor you create appears here, ready for any project.
+        ) : actors.length === 0 ? (
+          <p className="py-6 text-center text-[13px] text-muted" data-testid="home-actors-empty">
+            An actor is who someone is and how they look: their photos and views. Create one above; in a
+            project they play Characters.
           </p>
         ) : (
-          <ul className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3">
-            {library.characters.map((c) => (
-              <li key={c.characterId} data-testid="home-character" data-name={c.name}>
-                <Link
-                  href={`/projects/${c.projectSlug}/characters/${c.characterId}`}
-                  className="group block overflow-hidden rounded-xl border border-line bg-panel transition-colors hover:border-line2"
-                >
-                  <div className="aspect-[3/4] bg-[#232326]">
-                    {c.thumbUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={c.thumbUrl} alt="" className="h-full w-full object-cover" />
-                    ) : null}
-                  </div>
-                  <div className="space-y-0.5 p-2.5">
-                    <div className="truncate text-[13.5px] font-medium group-hover:text-accent">{c.name}</div>
-                    <div className="truncate text-[11px] text-faint" title={c.projectTitle}>
-                      {c.projectTitle} · {c.pictures} picture{c.pictures === 1 ? "" : "s"}
-                    </div>
-                  </div>
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <PeopleGrid people={actors} testId="home-actor" />
         )}
-        {library.characters.length > 0 ? (
+      </section>
+      <section className="relative mx-auto max-w-6xl px-6 pb-20" data-testid="home-characters">
+        <div className="mb-4 flex items-baseline justify-between border-b border-line pb-3">
+          <h2 className="text-[15px] font-semibold tracking-tight">Your characters</h2>
+          <span className="text-[12px] text-muted">{characters.length}</span>
+        </div>
+        {!library.available ? null : characters.length === 0 ? (
+          <p className="py-6 text-center text-[13px] text-muted" data-testid="home-characters-empty">
+            The characters of your projects appear here, ready to bring into another project.
+          </p>
+        ) : (
+          <PeopleGrid people={characters} testId="home-character" withProject />
+        )}
+        {characters.length > 0 ? (
           <p className="mt-3 text-[12px] text-muted">
-            Add one to another project from that project&apos;s Actors page (&ldquo;From your library&rdquo;).
+            Add one to another project from that project&apos;s Characters page (&ldquo;From your
+            library&rdquo;).
           </p>
         ) : null}
       </section>
@@ -328,5 +324,52 @@ function ProjectCard({
         libraryNames={libraryNames}
       />
     </li>
+  );
+}
+
+/**
+ * Actors or Characters as picture cards. A Character is shown with its project ("Yumeko — お嬢様、僕と結婚してください。"):
+ * the same name can be a role in several stories.
+ */
+function PeopleGrid({
+  people,
+  testId,
+  withProject = false,
+}: {
+  people: LibraryCharacter[];
+  testId: string;
+  withProject?: boolean;
+}) {
+  return (
+    <ul className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3">
+      {people.map((c) => (
+        <li key={c.characterId} data-testid={testId} data-name={c.name}>
+          <Link
+            href={`/projects/${c.projectSlug}/characters/${c.characterId}`}
+            className="group block overflow-hidden rounded-xl border border-line bg-panel transition-colors hover:border-line2"
+          >
+            <div className="aspect-[3/4] bg-[#232326]">
+              {c.thumbUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={c.thumbUrl} alt="" className="h-full w-full object-cover" />
+              ) : null}
+            </div>
+            <div className="space-y-0.5 p-2.5">
+              <div
+                className="truncate text-[13.5px] font-medium group-hover:text-accent"
+                title={withProject ? `${c.name} — ${c.projectTitle}` : c.name}
+                data-testid={`${testId}-label`}
+              >
+                {c.name}
+                {withProject ? <span className="font-normal text-muted"> — {c.projectTitle}</span> : null}
+              </div>
+              <div className="truncate text-[11px] text-faint">
+                {c.pictures} picture{c.pictures === 1 ? "" : "s"}
+              </div>
+            </div>
+          </Link>
+        </li>
+      ))}
+    </ul>
   );
 }

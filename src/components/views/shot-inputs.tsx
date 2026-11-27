@@ -37,7 +37,7 @@ export function ShotInputs({ slug, shot, assets }: { slug: string; shot: Shot; a
     <div className="mx-6 mt-3">
       <Panel title={`Pictures this Shot is made from (${inputs.length})`}>
         <p className="mb-2 text-[12px] text-muted">
-          Sent with every generation of this Shot, as well as its actors&apos; and location&apos;s own
+          Sent with every generation of this Shot, as well as its characters&apos; and location&apos;s own
           references. Remove one to stop sending it; the picture itself is kept (delete it afterwards if you
           want).
         </p>

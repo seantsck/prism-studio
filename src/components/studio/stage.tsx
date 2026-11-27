@@ -571,7 +571,7 @@ export function Stage({
                       disabled={subject.looks.every((l) => l.locked)}
                       title={
                         subject.looks.every((l) => l.locked)
-                          ? "Every Look is locked. Unlock one on the Actor page to add references to it."
+                          ? "Every Look is locked. Unlock one on the Character page to add references to it."
                           : undefined
                       }
                       data-testid="studio-use-look"

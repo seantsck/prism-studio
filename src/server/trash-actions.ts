@@ -113,7 +113,7 @@ async function empty_impl(form: FormData) {
 
 const kindOf = (form: FormData): TrashSubjectKind => {
   const k = str(form, "kind");
-  if (k !== "character" && k !== "location") throw new UserFacingError("Choose an actor or a location.");
+  if (k !== "character" && k !== "location") throw new UserFacingError("Choose a character or a location.");
   return k;
 };
 

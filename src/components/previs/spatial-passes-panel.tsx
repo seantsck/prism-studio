@@ -164,10 +164,10 @@ export function SpatialPassesPanel(props: SpatialPassesPanelProps) {
   // exact depth / ids / masks cannot include a Gaussian splat yet; refuse instead of omitting the environment
   if (props.hasVisibleSplat) reasons.push(CONTROL_PASS_REFUSAL.message);
   if (props.scene.dirty || !props.scene.fingerprint) reasons.push("Save the 3D set first.");
-  if (!props.blocking) reasons.push("Actor blocking is still loading.");
+  if (!props.blocking) reasons.push("Character blocking is still loading.");
   else {
-    if (props.blocking.dirty) reasons.push("Save the actor blocking first.");
-    if (props.blocking.stale) reasons.push("Re-anchor the actor blocking to the current set first.");
+    if (props.blocking.dirty) reasons.push("Save the character blocking first.");
+    if (props.blocking.stale) reasons.push("Re-anchor the character blocking to the current set first.");
   }
   let source: ControlCameraSource | null = null;
   let sourceError: string | null = null;
@@ -281,7 +281,7 @@ export function SpatialPassesPanel(props: SpatialPassesPanelProps) {
     <section data-testid="spatial-passes" data-loaded={loaded ? "true" : "false"} className="mt-4">
       <h2 className="mb-1 text-xs uppercase tracking-wide text-muted">Spatial control passes</h2>
       <p className="mb-2 text-xs text-muted">
-        Depth, object IDs and exact Actor masks for one frame of this shot&apos;s{" "}
+        Depth, object IDs and exact Character masks for one frame of this shot&apos;s{" "}
         <strong>production camera</strong>, rendered from saved state. Machine data for later conditioning,
         compositing and QA; no provider is called.
       </p>
@@ -344,7 +344,7 @@ export function SpatialPassesPanel(props: SpatialPassesPanelProps) {
               </div>
               <div className="text-muted" data-testid="spatial-bundle-meta">
                 {b.width}×{b.height} · {b.objectIds.manifest.objects.length} object
-                {b.objectIds.manifest.objects.length === 1 ? "" : "s"} · {characterIds.length} actor
+                {b.objectIds.manifest.objects.length === 1 ? "" : "s"} · {characterIds.length} character
                 {characterIds.length === 1 ? "" : "s"} · depth {b.depth.metadata.minDepth?.toFixed(2) ?? "—"}–
                 {b.depth.metadata.maxDepth?.toFixed(2) ?? "—"} m · {short(b.bundleFingerprint)}
               </div>
@@ -363,7 +363,8 @@ export function SpatialPassesPanel(props: SpatialPassesPanelProps) {
                 <ul className="mt-0.5 text-muted" data-testid="spatial-bundle-masks">
                   {characterIds.map((id) => (
                     <li key={id} data-character-id={id}>
-                      {names.get(id) ?? "Actor"} mask · {b.characterMasks.masks[id].visiblePixelCount} px ·{" "}
+                      {names.get(id) ?? "Character"} mask · {b.characterMasks.masks[id].visiblePixelCount} px
+                      ·{" "}
                       <a
                         className="underline"
                         href={`/api/assets/${b.characterMasks.masks[id].assetId}`}
@@ -424,7 +425,7 @@ export function SpatialPassesPanel(props: SpatialPassesPanelProps) {
                       height={p.height}
                       testId="spatial-mask-preview"
                       characterId={m.characterId}
-                      label={`ACTOR MASK · ${names.get(m.characterId) ?? "Actor"}`}
+                      label={`CHARACTER MASK · ${names.get(m.characterId) ?? "Character"}`}
                     />
                   ))}
                 </div>

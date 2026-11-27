@@ -82,7 +82,7 @@ export function ReferenceCheck({ integrity }: { integrity: ShotReferenceIntegrit
           })}
         </ul>
       ) : (
-        <p className="text-[12px] text-muted">This Shot has no Actor or Location to reference.</p>
+        <p className="text-[12px] text-muted">This Shot has no Character or Location to reference.</p>
       )}
       <p
         className={`mt-1.5 text-[12px] ${

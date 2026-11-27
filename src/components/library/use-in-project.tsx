@@ -38,7 +38,7 @@ export function UseInProject({
       </h2>
       <p className="mt-0.5 text-[12px] text-muted">
         {kind === "character"
-          ? "This actor belongs to no project yet. Each project gets its own copy, where you give them a role."
+          ? "This character belongs to no project yet. Each project gets its own copy, where you give them a role."
           : "This location belongs to no project yet. Each project gets its own copy."}
         {fresh ? " You can add photos and make pictures first, or any time later." : ""}
       </p>

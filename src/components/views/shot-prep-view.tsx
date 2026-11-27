@@ -173,7 +173,7 @@ const SECTION_ORDER: Array<{ key: string; label: string; preflight: PreflightSec
   { key: "story", label: "1 · Story", preflight: ["story"] },
   { key: "source", label: "2 · Source script", preflight: [] },
   { key: "performance", label: "3 · Performance", preflight: ["performance"] },
-  { key: "character", label: "4 · Actor", preflight: ["character"] },
+  { key: "character", label: "4 · Character", preflight: ["character"] },
   { key: "look", label: "5 · Look", preflight: [] },
   { key: "set", label: "6 · Location / set", preflight: ["set"] },
   { key: "camera", label: "7 · Camera", preflight: ["camera"] },
@@ -701,10 +701,10 @@ export function ShotPrepView({
               })}
               <label className="flex items-center gap-2 text-muted">
                 <input type="checkbox" name="syncCount" defaultChecked />
-                Set continuity actor count to the number assigned
+                Set continuity character count to the number assigned
               </label>
               <Button size="sm" variant="primary" type="submit">
-                Save actors
+                Save characters
               </Button>
             </ActionForm>
           </SectionChrome>
@@ -712,12 +712,12 @@ export function ShotPrepView({
           {/* 5 Look (resolved, read-only) */}
           <SectionChrome {...sectionProps("look")}>
             {ctx.characters.length === 0 ? (
-              <div className="text-muted">No actors assigned.</div>
+              <div className="text-muted">No characters assigned.</div>
             ) : (
               ctx.characters.map((c) => (
                 <div key={c.assignment.characterId} className="border border-line p-2.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-medium">{c.character?.name ?? "Unknown actor"}</span>
+                    <span className="font-medium">{c.character?.name ?? "Unknown character"}</span>
                     {c.look ? (
                       <Badge tone={c.look.locked ? "pass" : "warn"}>
                         {c.look.locked ? "locked" : "unlocked"}
@@ -818,7 +818,7 @@ export function ShotPrepView({
                 {ctx.spatial?.shotBlocking ? (
                   <div className="mt-2" data-testid="shot-character-blocking">
                     <div className="mb-0.5 text-[11.5px]">
-                      Actor blocking · {ctx.spatial.shotBlocking.figures.length} figure
+                      Character blocking · {ctx.spatial.shotBlocking.figures.length} figure
                       {ctx.spatial.shotBlocking.figures.length === 1 ? "" : "s"}
                       {isShotBlockingStale(ctx.spatial) ? (
                         <Badge tone="warn">set changed since the blocking was authored</Badge>

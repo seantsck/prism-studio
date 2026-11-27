@@ -302,7 +302,7 @@ export default async function StartPage({ params }: { params: Promise<{ project:
         >
           {applied ? (
             <p className="text-[13px] text-muted">
-              Applied. Your actors, places and Shots are in the project.{" "}
+              Applied. Your characters, places and Shots are in the project.{" "}
               <Link href={`${base}/characters`} className="text-accent hover:underline">
                 See the cast
               </Link>
@@ -326,8 +326,8 @@ export default async function StartPage({ params }: { params: Promise<{ project:
           ) : (
             <div className="space-y-2">
               <p className="text-[13px] text-muted">
-                Prism reads the script and proposes the Bible, each actor with a written description of how
-                they look, the places and a first list of Shots. Nothing changes until you review it and
+                Prism reads the script and proposes the Bible, each character with a written description of
+                how they look, the places and a first list of Shots. Nothing changes until you review it and
                 choose Apply.
               </p>
               {proposal?.status === "failed" ? (
@@ -360,8 +360,8 @@ export default async function StartPage({ params }: { params: Promise<{ project:
 
         <Step n={next()} state={applied ? "now" : "later"} title="Carry on in any order" testId="start-next">
           <p className="text-[13px] text-muted">
-            Add photos or descriptions for each actor, give places a look, then make frames. Home shows what
-            each part of the project needs next.
+            Add photos or descriptions for each character, give places a look, then make frames. Home shows
+            what each part of the project needs next.
           </p>
           <Link href={base} className="mt-1 inline-block text-[13px] text-accent hover:underline">
             Go to Home

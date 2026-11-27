@@ -31,7 +31,7 @@ interface Photo {
 const TEXT: Record<Kind, { title: string; hint: string; placeholder: string; button: string }> = {
   character: {
     title: "Create an actor",
-    hint: "Who they are and how they look. Their role is set in each project you add them to.",
+    hint: "Who they are and how they look: their photos and views. In a project they play Characters.",
     placeholder:
       "Takumi, late 20s, Japanese, lean build, short black hair swept back, calm eyes, navy overcoat over a white shirt.",
     button: "Create actor",

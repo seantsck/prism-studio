@@ -212,8 +212,8 @@ test.describe("shot character blocking", () => {
     await expect(page.locator('[data-testid="outliner-item"]', { hasText: "mannequin" })).toHaveCount(1);
     const fig = page.getByTestId("blocking-figure").filter({ hasText: "Yumeko" });
     // identified as the Character's proxy, never a generic mannequin
-    await expect(fig).toContainText("Actor Proxy");
-    await expect(page.getByTestId("blocking-name")).toHaveText("Yumeko · Actor Proxy");
+    await expect(fig).toContainText("Character Proxy");
+    await expect(page.getByTestId("blocking-name")).toHaveText("Yumeko · Character Proxy");
     expect((await info(page)).proxyCount).toBe(1);
     await expect(page.getByTestId("blocking-dirty")).toBeVisible();
 
@@ -324,7 +324,7 @@ test.describe("shot character blocking", () => {
     // ── save, leave, return ──
     await page.getByTestId("pose-mode-toggle").click();
     await page.getByTestId("save-blocking").click();
-    await expect(page.getByTestId("blocking-status")).toContainText(/Actor blocking saved/, {
+    await expect(page.getByTestId("blocking-status")).toContainText(/Character blocking saved/, {
       timeout: 60_000,
     });
     await expect(page.getByTestId("character-blocking")).toHaveAttribute("data-dirty", "false");
@@ -409,7 +409,7 @@ test.describe("shot character blocking", () => {
     expect((await info(page)).helpers).toHaveLength(0); // no joint sphere or skeleton line is left behind
     await page.getByTestId("save-blocking").click();
     await expect(page.getByTestId("blocking-status")).toContainText(
-      "Actor blocking saved (2 actors)",
+      "Character blocking saved (2 characters)",
       { timeout: 60_000 },
     );
   });
@@ -428,7 +428,7 @@ test.describe("shot character blocking", () => {
     const walkA = (await jointState(page, yId, "leftUpperLeg"))!.quaternion;
     expect(walkA[0]).toBeLessThan(-0.1);
     await page.getByTestId("save-blocking").click();
-    await expect(page.getByTestId("blocking-status")).toContainText("Actor blocking saved", {
+    await expect(page.getByTestId("blocking-status")).toContainText("Character blocking saved", {
       timeout: 60_000,
     });
 
@@ -444,7 +444,7 @@ test.describe("shot character blocking", () => {
     await setInput(page, "blocking-pos-x", "-2");
     await page.getByTestId("preset-seated").click();
     await page.getByTestId("save-blocking").click();
-    await expect(page.getByTestId("blocking-status")).toContainText("Actor blocking saved", {
+    await expect(page.getByTestId("blocking-status")).toContainText("Character blocking saved", {
       timeout: 60_000,
     });
 

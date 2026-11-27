@@ -179,10 +179,10 @@ export function CharacterBlockingPanel(props: CharacterBlockingPanelProps) {
       return { fingerprint: renderedBlockingFingerprint(live, anchorNow) };
     const scene = await props.ensureSceneSaved();
     if (!scene) {
-      setStatus({ tone: "error", text: "Save the 3D set before saving actor blocking." });
+      setStatus({ tone: "error", text: "Save the 3D set before saving character blocking." });
       return null;
     }
-    setStatus({ tone: "busy", text: "Saving actor blocking…" });
+    setStatus({ tone: "busy", text: "Saving character blocking…" });
     const fd = new FormData();
     fd.set("projectSlug", props.projectSlug);
     fd.set("shotId", props.shotId);
@@ -223,7 +223,7 @@ export function CharacterBlockingPanel(props: CharacterBlockingPanelProps) {
     setSaved(next);
     setStatus({
       tone: "ok",
-      text: `Actor blocking saved (${live.length} actor${live.length === 1 ? "" : "s"}).`,
+      text: `Character blocking saved (${live.length} character${live.length === 1 ? "" : "s"}).`,
     });
     return {
       fingerprint: renderedBlockingFingerprint(
@@ -317,9 +317,9 @@ export function CharacterBlockingPanel(props: CharacterBlockingPanelProps) {
       data-saved-fingerprint={savedFingerprint ?? ""}
       data-live-fingerprint={loaded && props.ready ? (liveFingerprint ?? "") : ""}
     >
-      <h2 className="mb-1 text-xs uppercase tracking-wide text-muted">Actor blocking</h2>
+      <h2 className="mb-1 text-xs uppercase tracking-wide text-muted">Character blocking</h2>
       <p className="mb-2 text-xs text-muted">
-        Where each actor stands and how their body is posed in <strong>this shot</strong>. The proxy is a
+        Where each character stands and how their body is posed in <strong>this shot</strong>. The proxy is a
         neutral mannequin: it shows position, facing, height and pose, not who they are.
       </p>
       {dirty ? (
@@ -350,10 +350,10 @@ export function CharacterBlockingPanel(props: CharacterBlockingPanelProps) {
           value={chosen}
           onChange={(e) => setPick(e.target.value)}
           disabled={available.length === 0}
-          aria-label="Actor"
+          aria-label="Character"
           data-testid="blocking-character"
         >
-          {available.length === 0 ? <option value="">(all actors placed)</option> : null}
+          {available.length === 0 ? <option value="">(all characters placed)</option> : null}
           {available.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
@@ -366,13 +366,13 @@ export function CharacterBlockingPanel(props: CharacterBlockingPanelProps) {
           onClick={addProxy}
           data-testid="add-character-proxy"
         >
-          Add Actor Proxy
+          Add Character Proxy
         </button>
       </div>
 
       <ul className="mt-2 space-y-0.5" data-testid="blocking-figures">
         {figures.length === 0 ? (
-          <li className="text-xs text-muted">No actors blocked in this shot.</li>
+          <li className="text-xs text-muted">No characters blocked in this shot.</li>
         ) : null}
         {figures.map((f) => (
           <li key={f.characterId}>
@@ -385,7 +385,7 @@ export function CharacterBlockingPanel(props: CharacterBlockingPanelProps) {
               onClick={() => overlay().select(f.characterId)}
             >
               {names.get(f.characterId) ?? f.label}
-              <span className="ml-1 text-xs text-muted">Actor Proxy</span>
+              <span className="ml-1 text-xs text-muted">Character Proxy</span>
               {stale(f.characterId) ? <span className="ml-1 text-xs text-warn">stale</span> : null}
               {!f.visible ? <span className="ml-1 text-xs text-muted">hidden</span> : null}
             </button>
@@ -396,7 +396,7 @@ export function CharacterBlockingPanel(props: CharacterBlockingPanelProps) {
       {sel && entryOfSel ? (
         <div className="mt-2 rounded border border-line p-2" data-testid="blocking-inspector">
           <div className="mb-1 font-medium" data-testid="blocking-name">
-            {names.get(sel.characterId) ?? sel.label} · Actor Proxy
+            {names.get(sel.characterId) ?? sel.label} · Character Proxy
           </div>
           <div className="text-xs text-muted">Root (where and which way)</div>
           <div
@@ -457,8 +457,8 @@ export function CharacterBlockingPanel(props: CharacterBlockingPanelProps) {
             </label>
           </div>
           <p className="mt-0.5 text-[11px] text-muted">
-            Height is a proxy default (1.70 m), not a recorded fact about the actor. Use Move/Rotate in the
-            viewport to drag the whole figure.
+            Height is a proxy default (1.70 m), not a recorded fact about the character. Use Move/Rotate in
+            the viewport to drag the whole figure.
           </p>
           <label className="mt-1.5 flex items-center gap-1.5 text-xs">
             <input
@@ -604,7 +604,7 @@ export function CharacterBlockingPanel(props: CharacterBlockingPanelProps) {
         onClick={() => void doSave()}
         data-testid="save-blocking"
       >
-        Save actor blocking
+        Save character blocking
       </button>
       <div
         role="status"

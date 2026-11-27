@@ -289,7 +289,7 @@ describe("5B-I3b local first, hosted only on request", () => {
       await removeBackground(
         form({ subjectId: a!.id, sourceAssetId: other.id, quality: "high", confirmedTotalUsd: "0.02" }),
       ),
-    ).toMatchObject({ ok: false, error: "That image does not belong to this actor." });
+    ).toMatchObject({ ok: false, error: "That image does not belong to this character." });
     const foreign = { ...other, id: randomUUID(), projectId: randomUUID() } as Asset;
     expect(
       prepareBackgroundRemoval({

@@ -1500,6 +1500,8 @@ test("W: a character saved to the library is added to another project as its own
   await page.goto("/");
   const card = page.locator('[data-testid="home-character"][data-name="Yumeko"]');
   await expect(card).toBeVisible();
+  // a Character is listed with its story
+  await expect(card.getByTestId("home-character-label")).toHaveText("Yumeko — お嬢様、僕と結婚してください。");
   await card.getByRole("link").click();
   await expect(page.getByRole("heading", { name: "Yumeko" })).toBeVisible();
   // her own project does not offer her
@@ -1601,7 +1603,7 @@ test("Y: a character is deleted to the Trash, restored, then deleted for good; o
   // in the Trash: Restore brings them back
   await page.goto(`${P}/trash`);
   const row = page.locator('[data-testid="trash-subject"][data-name="Extra Waiter"]');
-  await expect(row).toContainText("Actor · 30 days left");
+  await expect(row).toContainText("Character · 30 days left");
   await row.getByTestId("trash-subject-restore").click();
   await expect(row).toHaveCount(0, { timeout: 30_000 });
   await page.goto(`${P}/characters`);
@@ -1644,9 +1646,10 @@ test("Z: a character created on its own from the home page is in Your library, n
     timeout: 30_000,
   });
   await expect(page.getByTestId("library-toggle")).toHaveAttribute("data-saved", "1");
-  // home: under Your characters, and the characters project is not among Your projects
+  // home: under Your actors (made on its own), and the library project is not among Your projects
   await page.goto("/");
-  await expect(page.locator('[data-testid="home-character"][data-name="Aiko Mori"]')).toBeVisible();
+  await expect(page.locator('[data-testid="home-actor"][data-name="Aiko Mori"]')).toBeVisible();
+  await expect(page.locator('[data-testid="home-character"][data-name="Aiko Mori"]')).toHaveCount(0);
   await expect(page.locator('[data-testid="project-row"]').filter({ hasText: "Your library" })).toHaveCount(
     0,
   );
@@ -1728,7 +1731,7 @@ test("ZB: a character made with photos opens on its own page, in no project, the
 
   // or start a new project with him
   await page.goto("/");
-  await page.locator('[data-testid="home-character"][data-name="Takumi"]').click();
+  await page.locator('[data-testid="home-actor"][data-name="Takumi"]').click();
   await page.getByTestId("use-in-new-project").click();
   await expect(page.locator('[data-testid="new-series-cast-member"][data-name="Takumi"]')).toBeVisible();
   await page.getByTestId("new-series-title").fill("Takumi Rising");
@@ -1800,7 +1803,7 @@ test("ZC: a new character's page starts with Fill in with Prism and the referenc
   // the creator edits the sheet afterwards: Prism offers to bring the rest in line with the edits
   await page.waitForTimeout(2_100);
   await page.locator('textarea[name="personality"]').fill("Quiet, exact, and secretly afraid of his father.");
-  await page.getByRole("button", { name: "Save actor" }).click();
+  await page.getByRole("button", { name: "Save character" }).click();
   const edited = page.getByTestId("character-ai-edited");
   await expect(edited).toContainText("You edited Kenji since Prism's last suggestion", { timeout: 30_000 });
   await expect(page.getByTestId("character-ai-fill")).toHaveText("Refine with Prism");
@@ -2547,7 +2550,7 @@ test("ZP: an animated character is made from a real one: drawn in the style writ
   test.setTimeout(150_000);
   // Sean, with the two photos added in ZI
   await page.goto("/");
-  await page.locator('[data-testid="home-character"][data-name="Sean"] a').first().click();
+  await page.locator('[data-testid="home-actor"][data-name="Sean"] a').first().click();
   await expect(page.getByRole("heading", { name: "Sean", exact: true })).toBeVisible({ timeout: 30_000 });
   const real = page.url();
   const make = page.getByTestId("animated-version");

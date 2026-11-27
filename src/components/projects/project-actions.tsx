@@ -131,7 +131,7 @@ export function TrashedProjectActions({ id, title }: { id: string; title: string
           <input type="hidden" name="projectId" value={id} />
           <p>
             This deletes <span className="font-medium">{title}</span> and everything in it for good: episodes,
-            scripts, actors, places, Shots, pictures and takes. It can&apos;t be undone.
+            scripts, characters, places, Shots, pictures and takes. It can&apos;t be undone.
           </p>
           <label className="block text-muted">
             Type the title to confirm

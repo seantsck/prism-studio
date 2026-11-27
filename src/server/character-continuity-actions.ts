@@ -46,11 +46,11 @@ const createdMessage = (name: string, created: boolean, skipped: number) =>
 /** Drafts a Lock of `characterId` in `lookId` (null = intentionally no Look) from the CURRENT source library. */
 async function draftFrom(data: ProjectData, characterId: string, lookId: string | null, name: string) {
   const character = data.characters.find((c) => c.id === characterId);
-  if (!character) throw new UserFacingError("Actor not found.");
+  if (!character) throw new UserFacingError("Character not found.");
   const look = lookId ? (data.looks.find((l) => l.id === lookId) ?? null) : null;
   if (lookId && !look) throw new UserFacingError("Look not found.");
   if (look && look.characterId !== character.id)
-    throw new UserFacingError("That Look is not one of this Actor's Looks.");
+    throw new UserFacingError("That Look is not one of this Character's Looks.");
   const repo = await getRepo();
   const drafted = draftCharacterContinuityLock({
     id: randomUUID(),
@@ -90,7 +90,7 @@ async function loadAssignment(form: FormData) {
   const shot = data.shots.find((s) => s.id === str(form, "shotId"));
   if (!shot) throw new UserFacingError("Shot not found.");
   const assignment = shot.characters.find((c) => c.characterId === str(form, "characterId"));
-  if (!assignment) throw new UserFacingError("That Actor is not assigned to this Shot.");
+  if (!assignment) throw new UserFacingError("That Character is not assigned to this Shot.");
   return { data, shot, assignment };
 }
 
@@ -127,7 +127,7 @@ async function select_impl(form: FormData): Promise<ActionResult> {
   if (lock && !lockMatchesAssignment(lock, assignment))
     throw new UserFacingError(
       lock.characterId !== assignment.characterId
-        ? "That Continuity Lock belongs to a different Actor than this assignment's."
+        ? "That Continuity Lock belongs to a different Character than this assignment's."
         : "That Continuity Lock was made for a different Look than this Shot assigns.",
     );
   try {
@@ -165,7 +165,7 @@ async function clear_impl(form: FormData): Promise<ActionResult> {
     refresh(data.project.slug);
     return {
       ok: true,
-      message: "No Continuity Lock: this Actor uses its current IdentityRefs and Look.",
+      message: "No Continuity Lock: this Character uses its current IdentityRefs and Look.",
     };
   } catch (err) {
     return asUserError(err);

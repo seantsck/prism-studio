@@ -44,7 +44,8 @@ export default async function TrashPage({ params }: { params: Promise<{ project:
     if (!key) return "Assets";
     const [kind, id] = key.split(":");
     return kind === "character"
-      ? ([...data.characters, ...(data.trashedCharacters ?? [])].find((c) => c.id === id)?.name ?? "an actor")
+      ? ([...data.characters, ...(data.trashedCharacters ?? [])].find((c) => c.id === id)?.name ??
+          "a character")
       : ([...data.locations, ...(data.trashedLocations ?? [])].find((l) => l.id === id)?.name ??
           "a location");
   };
@@ -53,11 +54,11 @@ export default async function TrashPage({ params }: { params: Promise<{ project:
     <div>
       <PageHeader
         title="Trash"
-        subtitle="Deleted actors, locations, pictures, takes and files stay here for 30 days, then they are deleted for good. Restore puts one back where it was."
+        subtitle="Deleted characters, locations, pictures, takes and files stay here for 30 days, then they are deleted for good. Restore puts one back where it was."
       />
       <div className="space-y-4 p-6">
         {subjects.length ? (
-          <Panel title={`Actors and locations (${subjects.length})`}>
+          <Panel title={`Characters and locations (${subjects.length})`}>
             <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" data-testid="trash-subjects">
               {subjects.map((x) => {
                 const left = trashDaysLeft(x.at, now);
@@ -72,7 +73,7 @@ export default async function TrashPage({ params }: { params: Promise<{ project:
                     <div className="min-w-0">
                       <div className="truncate font-medium">{x.name}</div>
                       <div className="text-muted">
-                        {x.kind === "character" ? "Actor" : "Location"} ·{" "}
+                        {x.kind === "character" ? "Character" : "Location"} ·{" "}
                         {left === 0 ? "deleted today" : `${left} day${left === 1 ? "" : "s"} left`}
                       </div>
                     </div>

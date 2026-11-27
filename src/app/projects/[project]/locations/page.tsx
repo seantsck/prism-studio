@@ -369,8 +369,8 @@ export default async function LocationsPage({
                 {l ? (
                   <Panel title="3D Set" className="mt-4 max-w-4xl">
                     <p className="text-muted">
-                      A persistent virtual set for this location: block actors, place the production camera,
-                      and render a master frame for any shot set here.
+                      A persistent virtual set for this location: block characters, place the production
+                      camera, and render a master frame for any shot set here.
                     </p>
                     <Link
                       href={`/projects/${slug}/locations/${l.id}/3d`}

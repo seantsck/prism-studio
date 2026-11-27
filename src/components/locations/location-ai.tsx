@@ -48,7 +48,7 @@ export function LocationAi({
       refineQuote={refineQuote}
       prominent={prominent}
       filled={filled}
-      intro={`Prism writes every field from what is already here${inStory ? ", the Bible and the actors" : ""}: a precise visual description for its pictures, the layout, the zones and entrances Shots use to place people, the light, and the props that are always there.`}
+      intro={`Prism writes every field from what is already here${inStory ? ", the Bible and the characters" : ""}: a precise visual description for its pictures, the layout, the zones and entrances Shots use to place people, the light, and the props that are always there.`}
       notePlaceholder="Old-money Kyoto; the dining room overlooks a moss garden; the kitchen door is always ajar."
       fill={fillLocation}
       review={reviewLocationFill}

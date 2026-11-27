@@ -146,7 +146,7 @@ describe("Home's four areas", () => {
     data.locations = [];
     data.shots = [];
     const [, cast, world, shots] = projectAreas(data);
-    expect(cast!.next).toMatchObject({ label: "Add an actor" });
+    expect(cast!.next).toMatchObject({ label: "Add a character" });
     expect(world!.next).toMatchObject({ label: "Add a place" });
     expect(shots!.waiting).toBeNull();
   });

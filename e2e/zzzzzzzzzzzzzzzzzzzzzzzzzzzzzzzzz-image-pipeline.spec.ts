@@ -400,7 +400,7 @@ test("K — Import Story: screenplay → Production Proposal → review → Appl
       { timeout: 60_000, intervals: [1000] },
     )
     .toBe("ready");
-  await expect(page.getByTestId("story-counts")).toContainText("5 Actors");
+  await expect(page.getByTestId("story-counts")).toContainText("5 Characters");
   await expect(page.getByTestId("story-counts")).toContainText("5 Locations");
   await expect(page.getByTestId("story-counts")).toContainText("6 Scenes");
   const characters = page.getByTestId("story-section-character");
@@ -410,7 +410,7 @@ test("K — Import Story: screenplay → Production Proposal → review → Appl
     await expect(locations).toContainText(name);
   // the project already has Yumeko: surfaced as a possible match, never merged silently
   const yumeko = characters.getByTestId("story-item").filter({ hasText: "Yumeko" });
-  await expect(yumeko.getByTestId("story-match")).toContainText("Possible match: existing Actor Yumeko");
+  await expect(yumeko.getByTestId("story-match")).toContainText("Possible match: existing Character Yumeko");
   await expect(yumeko.getByTestId("story-source")).toContainText("Why: lines");
   // deselect one optional item: the first suggested Shot
   const shots = page.getByTestId("story-section-shot").getByTestId("story-item");
@@ -910,7 +910,7 @@ test("Q — Sequence + Animatic: 3A/3B Shot Clips, 3C Production Frame; reorder,
         os.map((o) => ({ value: (o as HTMLOptionElement).value, label: o.textContent ?? "" })),
       );
     await look.selectOption(options.find((o) => o.label.includes("Formal Black"))!.value);
-    await page.getByRole("button", { name: "Save actors" }).click();
+    await page.getByRole("button", { name: "Save characters" }).click();
     await expect
       .poll(async () => (await page.goto(`${shotUrl}?section=character`), look.inputValue()), {
         timeout: 30_000,

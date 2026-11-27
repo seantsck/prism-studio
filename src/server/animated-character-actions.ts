@@ -18,7 +18,7 @@ import { getRepo, requireProjectFresh } from "./repo";
  */
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 const NEEDS_0070 =
-  "Animated actors need a one-time database update (migration 0070) that has not been applied yet.";
+  "Animated characters need a one-time database update (migration 0070) that has not been applied yet.";
 const UNDEFINED_COLUMN = "42703";
 
 async function save(projectId: string, character: Character) {
@@ -35,7 +35,7 @@ async function createAnimatedCharacter_impl(form: FormData) {
   await requireUser();
   const data = await requireProjectFresh(slug);
   const source = data.characters.find((c) => c.id === str(form, "characterId") && !c.trashedAt);
-  if (!source) throw new UserFacingError("That actor is not in this project.");
+  if (!source) throw new UserFacingError("That character is not in this project.");
   const style = str(form, "style").slice(0, MAX_ART_STYLE_CHARS);
   if (!style) throw new UserFacingError("Say what style to draw them in, for example anime.");
   const at = new Date().toISOString();
@@ -70,7 +70,7 @@ async function setArtStyle_impl(form: FormData) {
   await requireUser();
   const data = await requireProjectFresh(slug);
   const character = data.characters.find((c) => c.id === str(form, "characterId"));
-  if (!character) throw new UserFacingError("That actor is not in this project.");
+  if (!character) throw new UserFacingError("That character is not in this project.");
   const style = str(form, "style").slice(0, MAX_ART_STYLE_CHARS);
   await save(data.project.id, { ...character, artStyle: style || null, updatedAt: new Date().toISOString() });
   revalidatePath(`/projects/${slug}`, "layout");
