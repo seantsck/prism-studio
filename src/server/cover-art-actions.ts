@@ -24,7 +24,8 @@ const refresh = (slug: string) => revalidatePath(`/projects/${slug}`, "layout");
 const NEEDS_0069 =
   "Cover art needs a one-time database update (migration 0069) that has not been applied yet.";
 
-async function makeCoverArt_impl(form: FormData) {
+/** A new cover exactly as the form asks for it (the same preparation for its price and for making it). */
+async function prepareMake(form: FormData) {
   const slug = str(form, "projectSlug");
   const user = await requireUser();
   const data = await requireProjectFresh(slug);
@@ -50,9 +51,14 @@ async function makeCoverArt_impl(form: FormData) {
     config: getGenerationConfig(),
   });
   if (!prepared.ok) throw new UserFacingError(prepared.reasons.slice(0, 3).join(" · "));
-  // a paid picture is never started on a click that showed no price: the confirmed amount must cover the estimate
   const model = registry.model(provider ?? "", rest.join("/"));
-  if (model && registry.billsMoney(model)) {
+  return { slug, prepared, paid: !!model && registry.billsMoney(model) };
+}
+
+async function makeCoverArt_impl(form: FormData) {
+  const { slug, prepared, paid } = await prepareMake(form);
+  // a paid picture is never started on a click that showed no price: the confirmed amount must cover the estimate
+  if (paid) {
     const refusal = paidConfirmationRefusal(prepared.estimate.amount, str(form, "confirmedTotalUsd"));
     if (refusal) throw new UserFacingError(refusal);
   }
@@ -72,7 +78,8 @@ async function makeCoverArt_impl(form: FormData) {
  * Edit a cover picture: the creator says what to change, and the engine redraws THAT picture with the change (same cast
  * and shape). Priced and confirmed like a new cover; the result is a new take, the picture edited is never changed.
  */
-async function editCoverArt_impl(form: FormData) {
+/** An edit of a cover exactly as the form asks for it (the same preparation for its price and for making it). */
+async function prepareEdit(form: FormData) {
   const slug = str(form, "projectSlug");
   const user = await requireUser();
   const data = await requireProjectFresh(slug);
@@ -98,7 +105,12 @@ async function editCoverArt_impl(form: FormData) {
   });
   if (!prepared.ok) throw new UserFacingError(prepared.reasons.slice(0, 3).join(" · "));
   const model = registry.model(provider ?? "", rest.join("/"));
-  if (model && registry.billsMoney(model)) {
+  return { slug, prepared, paid: !!model && registry.billsMoney(model) };
+}
+
+async function editCoverArt_impl(form: FormData) {
+  const { slug, prepared, paid } = await prepareEdit(form);
+  if (paid) {
     const refusal = paidConfirmationRefusal(prepared.estimate.amount, str(form, "confirmedTotalUsd"));
     if (refusal) throw new UserFacingError(refusal);
   }
@@ -182,6 +194,38 @@ async function stopCoverArt_impl(form: FormData) {
   await generation.requestCancel(v.job.id, new Date().toISOString());
   refresh(slug);
   return { ok: true as const, message: "Stopping…" };
+}
+
+/**
+ * The price of exactly this cover or edit, before it is confirmed: what is written (a direction, a change), who and
+ * where it shows. The price beside the button is the price with nothing written; an engine billed by the words it is
+ * sent (GPT Image) costs a little more once they are written, and the confirmation shows this price.
+ */
+export type CoverQuote = { ok: true; usd: number; paid: boolean } | { ok: false; error: string };
+
+async function quote(
+  prepare: () => Promise<{ prepared: { ok: true; estimate: { amount: number | null } }; paid: boolean }>,
+): Promise<ActionResult> {
+  const { prepared, paid } = await prepare();
+  const usd = prepared.estimate.amount;
+  if (usd == null || !Number.isFinite(usd))
+    throw new UserFacingError("This engine has no known price right now.");
+  const priced = { ok: true as const, usd, paid };
+  return priced;
+}
+
+export async function quoteCoverArt(form: FormData): Promise<CoverQuote> {
+  const r = await runAction(() => quote(() => prepareMake(form)), { name: "quoteCoverArt" });
+  return r.ok
+    ? { ok: true, ...(r as unknown as { usd: number; paid: boolean }) }
+    : { ok: false, error: r.error };
+}
+
+export async function quoteCoverEdit(form: FormData): Promise<CoverQuote> {
+  const r = await runAction(() => quote(() => prepareEdit(form)), { name: "quoteCoverEdit" });
+  return r.ok
+    ? { ok: true, ...(r as unknown as { usd: number; paid: boolean }) }
+    : { ok: false, error: r.error };
 }
 
 export async function makeCoverArt(form: FormData): Promise<ActionResult> {
