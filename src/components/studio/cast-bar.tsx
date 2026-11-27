@@ -60,11 +60,11 @@ export function CastBar({
   };
   return (
     <nav
-      aria-label="Actors and locations"
+      aria-label="Characters and locations"
       className="flex flex-wrap items-center gap-x-6 gap-y-2 overflow-x-auto border-b border-line px-6 py-2.5"
       data-testid="studio-cast"
     >
-      {group("character", "Actors")}
+      {group("character", "Characters")}
       {group("location", "Locations")}
     </nav>
   );

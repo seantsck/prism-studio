@@ -55,7 +55,7 @@ export const POSITIVE_TAGS = [
 export type PositiveTag = (typeof POSITIVE_TAGS)[number];
 
 export const NEGATIVE_LABELS: Record<NegativeTag, string> = {
-  character_identity: "Actor identity",
+  character_identity: "Character identity",
   wardrobe: "Wardrobe",
   hair_makeup: "Hair / makeup",
   location_set: "Location / set",

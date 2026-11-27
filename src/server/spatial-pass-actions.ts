@@ -155,7 +155,7 @@ export async function captureSpatialPassBundle(
       )
     )
       throw new UserFacingError(
-        "The actor blocking is stale for the current set. Re-anchor it before capturing control passes.",
+        "The character blocking is stale for the current set. Re-anchor it before capturing control passes.",
       );
 
     // A visible Gaussian splat is spatial geometry these passes cannot represent exactly. Refuse rather than ship
@@ -264,18 +264,20 @@ export async function captureSpatialPassBundle(
       maskKeys.length !== derived.length ||
       derived.some((d) => !maskKeys.includes(`mask:${d.characterId}`))
     )
-      throw new UserFacingError("The Actor masks do not match the visible Actors of this shot.");
+      throw new UserFacingError("The Character masks do not match the visible Characters of this shot.");
     const maskBytes = new Map<string, Uint8Array>();
     for (const d of derived) {
       // a fully occluded Character still has a (w×h, all-zero) mask: that is truthful
       const bytes = await bytesOf(form, `mask:${d.characterId}`);
       if (bytes.byteLength !== expectedRasterBytes.mask(width, height))
-        throw new UserFacingError(`An Actor mask must be ${expectedRasterBytes.mask(width, height)} bytes.`);
+        throw new UserFacingError(
+          `A Character mask must be ${expectedRasterBytes.mask(width, height)} bytes.`,
+        );
       if (!validateMaskValues(bytes))
-        throw new UserFacingError("An Actor mask contains values other than 0 and 255.");
+        throw new UserFacingError("A Character mask contains values other than 0 and 255.");
       for (let i = 0; i < bytes.length; i++)
         if (bytes[i] !== d.mask[i])
-          throw new UserFacingError("An Actor mask does not match the object-id pass.");
+          throw new UserFacingError("A Character mask does not match the object-id pass.");
       maskBytes.set(d.characterId, bytes);
     }
 

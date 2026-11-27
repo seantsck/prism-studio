@@ -93,7 +93,7 @@ async function saveAsCharacterReference_impl(form: FormData) {
   const data = await requireProjectFresh(slug);
   const characterId = str(form, "characterId");
   const character = data.characters.find((c) => c.id === characterId);
-  if (!character) throw new UserFacingError("That actor no longer exists.");
+  if (!character) throw new UserFacingError("That character no longer exists.");
   const slot = str(form, "slot") as (typeof IDENTITY_SLOTS)[number];
   if (!(IDENTITY_SLOTS as readonly string[]).includes(slot))
     throw new UserFacingError("Choose a reference slot.");
@@ -169,7 +169,7 @@ async function replaceLookReference_impl(form: FormData) {
   if (!look) throw new UserFacingError("That Look no longer exists.");
   if (look.locked)
     throw new UserFacingError(
-      `The Look "${look.name}" is locked. Unlock it on the Actors page before changing its picture.`,
+      `The Look "${look.name}" is locked. Unlock it on the Characters page before changing its picture.`,
     );
   const { assetId } = await generatedImage(data, str(form, "attemptId"), { characterId: look.characterId });
   if (look.referenceAssetIds.length === 1 && look.referenceAssetIds[0] === assetId) return;
@@ -265,10 +265,10 @@ async function removeBackground_impl(form: FormData) {
   const characterId = str(form, "subjectId");
   const sourceAssetId = str(form, "sourceAssetId");
   if (!data.characters.some((c) => c.id === characterId))
-    throw new UserFacingError("That actor no longer exists.");
+    throw new UserFacingError("That character no longer exists.");
   if (!sourceAssetId) throw new UserFacingError("Choose the image to cut out.");
   const own = await subjectImageAssetIds(data, { kind: "character", characterId });
-  if (!own.has(sourceAssetId)) throw new UserFacingError("That image does not belong to this actor.");
+  if (!own.has(sourceAssetId)) throw new UserFacingError("That image does not belong to this character.");
   // Phase 5B-I3b: the local engine is the default. The hosted engine runs ONLY on the creator's explicit High Quality
   // Removal, with the price they saw confirmed (the server recomputes it and refuses a mismatch).
   const hosted = str(form, "quality") === "high";

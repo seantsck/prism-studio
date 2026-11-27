@@ -17,16 +17,16 @@ export default async function LooksPage({ params }: { params: Promise<{ project:
     <div>
       <PageHeader
         title="Looks"
-        subtitle={`${total} Look${total === 1 ? "" : "s"} across ${data.characters.length} actor${data.characters.length === 1 ? "" : "s"}`}
+        subtitle={`${total} Look${total === 1 ? "" : "s"} across ${data.characters.length} character${data.characters.length === 1 ? "" : "s"}`}
       />
       <div className="space-y-4 p-6">
         <p className="max-w-[80ch] text-[12.5px] text-muted" data-testid="looks-explainer">
-          A Look is an outfit an actor wears in some scenes: wardrobe, shoes, jewelry, hair, makeup and
-          accessories, with its own pictures. A shot uses the Look its actor wears there, so the clothes match
-          from shot to shot. Lock a Look when it is final: a locked Look can&apos;t be edited by accident. An
-          actor&apos;s face comes from their reference set, not from a Look.
+          A Look is an outfit a character wears in some scenes: wardrobe, shoes, jewelry, hair, makeup and
+          accessories, with its own pictures. A shot uses the Look its character wears there, so the clothes
+          match from shot to shot. Lock a Look when it is final: a locked Look can&apos;t be edited by
+          accident. A character&apos;s face comes from their reference set, not from a Look.
         </p>
-        {data.characters.length === 0 ? <p className="text-[12.5px] text-faint">No actors yet.</p> : null}
+        {data.characters.length === 0 ? <p className="text-[12.5px] text-faint">No characters yet.</p> : null}
         {data.characters.map((c) => {
           const looks = data.looks.filter((l) => l.characterId === c.id);
           return (

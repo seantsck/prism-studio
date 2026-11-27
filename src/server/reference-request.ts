@@ -69,7 +69,7 @@ export async function readSubjectImageForm(
   let subjectRef: ImageSubjectRef;
   if (kind === "character") {
     if (!(CHARACTER_IMAGE_INTENTS as readonly string[]).includes(intent))
-      throw new UserFacingError("Choose what to generate for this actor.");
+      throw new UserFacingError("Choose what to generate for this character.");
     subject = {
       kind: "character",
       characterId: subjectId,

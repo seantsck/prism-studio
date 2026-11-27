@@ -129,7 +129,7 @@ export function CopySetupPanel(props: {
   }
 
   const plan = preview?.plan ?? null;
-  const name = (id: string) => preview?.characters[id] ?? "Actor";
+  const name = (id: string) => preview?.characters[id] ?? "Character";
   const templates = props.templates ?? [];
 
   return (

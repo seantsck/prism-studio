@@ -22,7 +22,7 @@ export function AnimatedVersion({
   const style = (character.artStyle ?? "").trim();
   if (style || likenessFrom)
     return (
-      <Panel title="Animated actor" className="xl:col-span-2">
+      <Panel title="Animated character" className="xl:col-span-2">
         <div className="space-y-2 text-[12.5px]" data-testid="animated-character">
           <p className="text-muted">
             {style ? (
@@ -73,7 +73,7 @@ export function AnimatedVersion({
     <Panel title="Make an animated version" className="xl:col-span-2">
       <div className="space-y-2 text-[12.5px]" data-testid="animated-version">
         <p className="text-muted">
-          A new actor drawn in the style you write, from {character.name}&apos;s photos, so it still looks
+          A new character drawn in the style you write, from {character.name}&apos;s photos, so it still looks
           like them. {character.name} and their pictures stay as they are. Making it costs nothing; its
           pictures are made on its page, priced first as always. Use photos only of people who agreed to it.
         </p>
@@ -90,7 +90,7 @@ export function AnimatedVersion({
             data-testid="animated-version-style"
           />
           <Button type="submit" size="sm" variant="primary" data-testid="animated-version-create">
-            Create animated actor
+            Create animated character
           </Button>
         </ActionForm>
       </div>

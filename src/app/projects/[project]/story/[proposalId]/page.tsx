@@ -132,7 +132,7 @@ export default async function ProposalPage({
                 </Panel>
                 <Items
                   kind="character"
-                  title="Actors"
+                  title="Characters"
                   items={p.characters}
                   p={p}
                   review={review}
@@ -251,7 +251,7 @@ function ProposalSummary({ p }: { p: ProductionProposal }) {
   const c = proposalCounts(p);
   return (
     <div className="flex flex-wrap gap-2 text-[13px]" data-testid="story-counts">
-      <Badge tone="info">{c.characters} Actors</Badge>
+      <Badge tone="info">{c.characters} Characters</Badge>
       <Badge tone="info">{c.locations} Locations</Badge>
       <Badge tone="info">{c.scenes} Scenes</Badge>
       <Badge tone="info">{c.shots} suggested Shots</Badge>
@@ -270,7 +270,7 @@ function Applied({ slug, record }: { slug: string; record: StoryProposalRecord }
   } | null;
   return (
     <div className="border border-pass/40 bg-pass/10 p-3 text-[13px]" data-testid="story-applied">
-      Applied {record.appliedAt?.slice(0, 16).replace("T", " ")} UTC: {s?.charactersCreated ?? 0} Actors,{" "}
+      Applied {record.appliedAt?.slice(0, 16).replace("T", " ")} UTC: {s?.charactersCreated ?? 0} Characters,{" "}
       {s?.locationsCreated ?? 0} Locations, {s?.scenes ?? 0} Scenes, {s?.shots ?? 0} Shots created.
       {s?.episodeSlug ? (
         <span className="ml-2">
@@ -343,8 +343,8 @@ function Items(props: {
               : kind === "location"
                 ? `${String(item.intExt)}${item.recurringSet ? " · recurring set" : ""}`
                 : kind === "scene"
-                  ? `${locName(item.locationKey as string | null)} · ${String(item.timeOfDay)} · ${(item.characterKeys as string[]).map(charName).join(", ") || "no named Actors"}`
-                  : `${(item.characterKeys as string[]).map(charName).join(", ") || "no Actors"} · ${locName(item.locationKey as string | null)}`;
+                  ? `${locName(item.locationKey as string | null)} · ${String(item.timeOfDay)} · ${(item.characterKeys as string[]).map(charName).join(", ") || "no named Characters"}`
+                  : `${(item.characterKeys as string[]).map(charName).join(", ") || "no Characters"} · ${locName(item.locationKey as string | null)}`;
           return (
             <li key={id} className="space-y-1 p-3 text-[13px]" data-testid="story-item" data-item={id}>
               <div className="flex flex-wrap items-center gap-2">
@@ -379,7 +379,7 @@ function Items(props: {
               {r?.match ? (
                 <div className="flex flex-wrap items-center gap-2 text-[12px]" data-testid="story-match">
                   <span>
-                    Possible match: existing {kind === "character" ? "Actor" : "Location"}{" "}
+                    Possible match: existing {kind === "character" ? "Character" : "Location"}{" "}
                     <strong>{existingName(r.match.existingId)}</strong>
                   </span>
                   <select

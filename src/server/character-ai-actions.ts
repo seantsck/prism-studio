@@ -45,7 +45,7 @@ async function load(form: FormData): Promise<{ slug: string; data: ProjectData; 
     data = await requireProjectFresh(slug);
   }
   const character = data.characters.find((c) => c.id === str(form, "characterId"));
-  if (!character) throw new UserFacingError("That actor is not in this project.");
+  if (!character) throw new UserFacingError("That character is not in this project.");
   return { slug, data, character };
 }
 

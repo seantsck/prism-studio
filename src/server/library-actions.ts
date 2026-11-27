@@ -34,7 +34,7 @@ async function setInLibrary_impl(form: FormData) {
   const slug = str(form, "projectSlug");
   const data = await requireProjectFresh(slug);
   const character = data.characters.find((c) => c.id === str(form, "characterId"));
-  if (!character) throw new UserFacingError("That actor is not in this project.");
+  if (!character) throw new UserFacingError("That character is not in this project.");
   const saved = str(form, "saved") !== "0";
   try {
     await (await getRepo()).setInLibrary(data.project.id, character.id, saved);
@@ -57,12 +57,12 @@ async function addFromLibrary_impl(form: FormData) {
   const { entries, available } = await repo.libraryEntries();
   if (!available) throw new UserFacingError(new CharacterLibraryUnavailableError().message);
   const entry = entries.find((e) => e.characterId === characterId);
-  if (!entry) throw new UserFacingError("That actor is not in your library.");
+  if (!entry) throw new UserFacingError("That character is not in your library.");
   if (entry.projectId === target.project.id)
-    throw new UserFacingError("That actor already lives in this project.");
+    throw new UserFacingError("That character already lives in this project.");
   const sourceSlug = (await repo.listProjects()).find((p) => p.id === entry.projectId)?.slug;
   const source = sourceSlug ? await repo.loadProject(sourceSlug) : null;
-  if (!source) throw new UserFacingError("The project that actor lives in is not available.");
+  if (!source) throw new UserFacingError("The project that character lives in is not available.");
   const plan = await copyIntoProject(target, source, characterId, await actorId());
   revalidatePath(`/projects/${slug}`, "layout");
   // from the library's own page ("Add to a project"): open the copy in that project
@@ -93,7 +93,7 @@ async function characterStudio(): Promise<Project> {
     title: CHARACTER_STUDIO_TITLE,
     slug,
     projectType: "film",
-    description: "Actors and locations made on their own, ready to add to any project.",
+    description: "Characters and locations made on their own, ready to add to any project.",
     now: new Date().toISOString(),
   });
   const project = projectSchema.parse({ ...records.project, purpose: "library" });
@@ -103,7 +103,7 @@ async function characterStudio(): Promise<Project> {
     // 23514: the purpose check does not allow `library` yet
     if ((err as { code?: string }).code === "23514")
       throw new UserFacingError(
-        "Creating actors and locations on their own needs a one-time database update (migration 0065) that has not been applied yet.",
+        "Creating characters and locations on their own needs a one-time database update (migration 0065) that has not been applied yet.",
       );
     throw err;
   }
@@ -116,7 +116,7 @@ async function characterStudio(): Promise<Project> {
  */
 async function createStandaloneCharacter_impl(form: FormData) {
   const prompt = str(form, "prompt").slice(0, CHARACTER_PROMPT_MAX);
-  if (!prompt) throw new UserFacingError("Describe your actor first.");
+  if (!prompt) throw new UserFacingError("Describe your character first.");
   const name = (str(form, "name") || nameFromPrompt(prompt)).slice(0, CHARACTER_NAME_MAX);
   const studio = await characterStudio();
   const repo = await getRepo();

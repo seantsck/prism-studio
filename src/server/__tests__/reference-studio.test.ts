@@ -223,7 +223,7 @@ describe("add my photo", () => {
     ).toEqual({
       ok: false,
       error:
-        "Yumeko already has a front reference. Add this photo as an extra reference, or replace that slot on the Actor page.",
+        "Yumeko already has a front reference. Add this photo as an extra reference, or replace that slot on the Character page.",
     });
     // refused BEFORE storing: no orphan file, no new Asset
     expect((await data()).assets.length).toBe(assetsBefore);
@@ -1214,7 +1214,7 @@ describe("a Character's reference set", () => {
     const sean = (await data()).characters.find((c) => c.name === "Sean")!;
     expect(await put(sean.id, "front", { assetId: photo })).toMatchObject({
       ok: false,
-      error: "That image does not belong to this actor.",
+      error: "That image does not belong to this character.",
     });
     expect(await put(yumeko.id, "three_quarter", { assetId: photo })).toEqual({ ok: true });
     const d = await data();

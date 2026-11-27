@@ -63,11 +63,12 @@ export function LibraryPanel({
       <div className="space-y-3" data-testid="library-panel">
         {!available ? (
           <p className="text-[13px] text-warn">
-            The actor library needs a one-time database update (migration 0062) that has not been applied yet.
+            The character library needs a one-time database update (migration 0062) that has not been applied
+            yet.
           </p>
         ) : others.length === 0 ? (
           <p className="text-[13px] text-muted">
-            Save an actor to your library from its page (&ldquo;Save to library&rdquo;), then add it to any
+            Save a character to your library from its page (&ldquo;Save to library&rdquo;), then add it to any
             other project from here. Each project gets its own copy.
           </p>
         ) : (

@@ -210,7 +210,7 @@ async function uploadReferencePhoto_impl(form: FormData): Promise<string> {
   }
   if (kind !== "character") throw new UserFacingError("Choose who or where this photo shows.");
   const character = data.characters.find((c) => c.id === subjectId);
-  if (!character) throw new UserFacingError("That actor no longer exists.");
+  if (!character) throw new UserFacingError("That character no longer exists.");
 
   if (as.startsWith("look:")) {
     const look = data.looks.find((l) => l.id === as.slice(5) && l.characterId === character.id);
@@ -235,7 +235,7 @@ async function uploadReferencePhoto_impl(form: FormData): Promise<string> {
       : data.identityRefs.find((r) => r.characterId === character.id && r.slot === slot);
   if (existing && hasStoredImage(assetOf(existing.assetId)))
     throw new UserFacingError(
-      `${character.name} already has a ${slot.replace("_", " ")} reference. Add this photo as an extra reference, or replace that slot on the Actor page.`,
+      `${character.name} already has a ${slot.replace("_", " ")} reference. Add this photo as an extra reference, or replace that slot on the Character page.`,
     );
   const asset = await store("identity_ref", ["identity"]);
   await repo.upsert(data.project.id, "identityRefs", {

@@ -52,7 +52,7 @@ async function mergeCharacter_impl(form: FormData) {
   } catch (err) {
     if (needsMigration0064(err))
       throw new UserFacingError(
-        "The merge is done, but the merged actor could not go to the Trash: that needs a one-time database update (migration 0064).",
+        "The merge is done, but the merged character could not go to the Trash: that needs a one-time database update (migration 0064).",
       );
     throw err;
   }

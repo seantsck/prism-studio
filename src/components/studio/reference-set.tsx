@@ -102,7 +102,7 @@ export function ReferenceSetPanel({
     setChoosing(null);
     if (view.assetId === picture.assetId) return;
     if (view.assetId && view.locked) {
-      setMessage({ view: view.id, text: "This view is locked on the Actor page.", ok: false });
+      setMessage({ view: view.id, text: "This view is locked on the Character page.", ok: false });
       return;
     }
     const form = new FormData();
@@ -520,7 +520,7 @@ export function AddToSet({
             : `Add to the set as ${view.label.toLowerCase()}`}
       </Button>
       {blocked ? (
-        <span className="text-[11px] text-warn">That view is locked on the Actor page.</span>
+        <span className="text-[11px] text-warn">That view is locked on the Character page.</span>
       ) : here.length > 0 && !same ? (
         <span className="text-[11px] text-muted">Already the {here.join(" and ")}.</span>
       ) : null}

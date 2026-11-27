@@ -302,7 +302,7 @@ export default async function CharacterPage({
             data-testid="merged-note"
             role="status"
           >
-            Merged. The other actor is in the Trash, where it can be restored.
+            Merged. The other character is in the Trash, where it can be restored.
           </p>
         ) : null}
         {likelySame ? merge : null}
@@ -327,7 +327,7 @@ export default async function CharacterPage({
               Date.parse(aiLast.decidedAt ?? aiLast.completedAt ?? aiLast.createdAt) + 2_000
           }
         />
-        <Panel title="2. Actor">
+        <Panel title="2. Character">
           {/* keyed by the sheet's version: Prism's filled-in fields show here at once */}
           <ActionForm key={c.updatedAt} action={saveCharacter} className="space-y-3">
             {hidden}
@@ -336,7 +336,7 @@ export default async function CharacterPage({
               label="Size of part"
               hint={
                 inLibrary
-                  ? "Each project sets its own when the actor is added; here it decides what Prism fills in."
+                  ? "Each project sets its own when the character is added; here it decides what Prism fills in."
                   : PART_SIZE_HINT[size]
               }
             >
@@ -392,7 +392,7 @@ export default async function CharacterPage({
               <textarea name="continuityRules" rows={3} defaultValue={join(c.continuityRules)} />
             </SheetField>
             <Button type="submit" variant="primary">
-              Save actor
+              Save character
             </Button>
           </ActionForm>
         </Panel>
@@ -670,7 +670,7 @@ export default async function CharacterPage({
         >
           <p className="mb-2 text-[12px] text-muted">
             A Look is an outfit (wardrobe, hair, makeup, accessories) {c.name} wears in some scenes, with its
-            own pictures. Looks are made and edited on the Looks page, under Actors in the sidebar.
+            own pictures. Looks are made and edited on the Looks page, under Characters in the sidebar.
           </p>
           {looks.length ? (
             <ul className="flex flex-wrap gap-2 text-[12.5px]" data-testid="character-looks">
@@ -708,7 +708,8 @@ export default async function CharacterPage({
               </li>
               <li>
                 <span className="text-fg">When:</span> once you are happy with {c.name}&apos;s look and start
-                making and approving shots. While you are still designing the actor, you don&apos;t need one.
+                making and approving shots. While you are still designing the character, you don&apos;t need
+                one.
               </li>
               <li>
                 <span className="text-fg">How:</span> choose a Look below and save a Lock; then pin shots to

@@ -76,7 +76,7 @@ export function ScenesView({ data, episode }: { data: ProjectData; episode: Epis
                   <input name="timeOfDay" defaultValue={s.timeOfDay} />
                 </Field>
                 <div>
-                  <div className="mb-1 text-[11px] text-muted">Actors</div>
+                  <div className="mb-1 text-[11px] text-muted">Characters</div>
                   {data.characters.map((c) => (
                     <label key={c.id} className="mr-3 inline-flex items-center gap-1">
                       <input

@@ -796,14 +796,14 @@ export function CoverArtPanel({
             </div>
           ) : null}
           <p className="text-muted">
-            Prism makes a poster from the title, premise, tone and look of your project, with the actors and
-            place you choose: each one&apos;s main picture is sent so faces and the place match. The picture
-            has no lettering; the title is laid over it.
+            Prism makes a poster from the title, premise, tone and look of your project, with the characters
+            and place you choose: each one&apos;s main picture is sent so faces and the place match. The
+            picture has no lettering; the title is laid over it.
           </p>
           {state.characters.length ? (
             <fieldset data-testid="cover-cast">
               <legend className="mb-1 text-muted">
-                Actors (up to {state.castMax}; {cast.length} chosen)
+                Characters (up to {state.castMax}; {cast.length} chosen)
               </legend>
               <div className="flex flex-wrap gap-1.5">
                 {state.characters.map((c) => {

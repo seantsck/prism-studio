@@ -29,7 +29,7 @@ export function CharacterContinuitySection({
   slug: string;
 }) {
   const selected = c.continuityLock;
-  const name = c.character?.name ?? "Unknown actor";
+  const name = c.character?.name ?? "Unknown character";
   const compatible = c.continuityLocks.filter(
     (l) => l.id !== selected?.id && lockMatchesAssignment(l, c.assignment),
   );
@@ -49,7 +49,7 @@ export function CharacterContinuitySection({
       className="mt-2 space-y-1.5 border-t border-line pt-2"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted">Actor continuity</h4>
+        <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted">Character continuity</h4>
         <span className="text-[11px] text-faint">{CONTINUITY_LOCK_EXPLANATION}</span>
       </div>
 
@@ -83,7 +83,8 @@ export function CharacterContinuitySection({
         </div>
       ) : !c.continuityLockIssue ? (
         <p data-testid="cc-empty" className="text-[12px] text-muted">
-          No Actor Continuity Lock selected. Prism will use the Actor&apos;s current IdentityRefs and Look.
+          No Character Continuity Lock selected. Prism will use the Character&apos;s current IdentityRefs and
+          Look.
         </p>
       ) : null}
 

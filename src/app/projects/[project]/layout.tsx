@@ -27,7 +27,7 @@ const AREAS = [
   {
     title: "Cast",
     items: [
-      ["/characters", "Actors"],
+      ["/characters", "Characters"],
       ["/looks", "Looks"],
       ["/studio", "Reference Studio"],
     ],
@@ -47,7 +47,7 @@ const LIBRARY_AREAS = [
   {
     title: "Your library",
     items: [
-      ["/characters", "Actors"],
+      ["/characters", "Characters"],
       ["/looks", "Looks"],
       ["/locations", "Locations"],
       ["/studio", "Reference Studio"],

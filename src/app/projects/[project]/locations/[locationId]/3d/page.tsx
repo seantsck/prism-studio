@@ -39,7 +39,7 @@ export default async function VirtualSetPage({
     <div>
       <PageHeader
         title={`3D Set — ${location.name}`}
-        subtitle="A persistent virtual set for this location, shared by every Shot set here. Place objects and actor blocking, frame the production camera, and render a master frame."
+        subtitle="A persistent virtual set for this location, shared by every Shot set here. Place objects and character blocking, frame the production camera, and render a master frame."
       />
       <div className="px-6 pb-1 text-xs text-muted">
         <Link href={`/projects/${slug}/locations`} className="underline">

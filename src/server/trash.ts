@@ -104,7 +104,7 @@ export type TrashSubjectKind = "character" | "location";
 
 const UNDEFINED_COLUMN = "42703";
 const NEEDS_0064 =
-  "Deleting actors and locations (to the Trash) needs a one-time database update (migration 0064) that has not been applied yet.";
+  "Deleting characters and locations (to the Trash) needs a one-time database update (migration 0064) that has not been applied yet.";
 
 /**
  * Stamps (or clears) a Character's or Location's place in the Trash; nothing else about it changes, except the merge

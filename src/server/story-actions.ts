@@ -442,7 +442,7 @@ async function apply_impl(form: FormData): Promise<ActionResult> {
   const s = plan.summary;
   return {
     ok: true,
-    message: `Applied: ${s.charactersCreated} Actors, ${s.locationsCreated} Locations, ${s.scenes} Scenes, ${s.shots} Shots created${s.charactersReused + s.locationsReused ? ` (${s.charactersReused + s.locationsReused} existing reused)` : ""}.`,
+    message: `Applied: ${s.charactersCreated} Characters, ${s.locationsCreated} Locations, ${s.scenes} Scenes, ${s.shots} Shots created${s.charactersReused + s.locationsReused ? ` (${s.charactersReused + s.locationsReused} existing reused)` : ""}.`,
   };
 }
 

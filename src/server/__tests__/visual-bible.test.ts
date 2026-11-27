@@ -246,7 +246,7 @@ describe("5B-I4 Character Visual Bible", () => {
     const before = structuredClone((await data()).assets.find((x) => x.id === seanImg.id));
     expect(await setCanonicalIdentity(form({ characterId: y.id, assetId: seanImg.id }))).toMatchObject({
       ok: false,
-      error: "That image does not belong to this actor.",
+      error: "That image does not belong to this character.",
     });
     expect(await setCanonicalIdentity(form({ characterId: y.id, assetId: randomUUID() }))).toMatchObject({
       ok: false,
@@ -273,7 +273,7 @@ describe("5B-I4 Character Visual Bible", () => {
     for (const action of [setCanonicalIdentity, setCharacterCutout])
       expect(await action(f({}))).toMatchObject({
         ok: false,
-        error: "That image does not belong to this actor.",
+        error: "That image does not belong to this character.",
       });
     expect(await addExpressionReference(f({ expression: "happy" }))).toMatchObject({ ok: false });
     expect((await data()).identityRefs.some((r) => r.assetId === foreign.id)).toBe(false);
