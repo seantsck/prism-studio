@@ -263,7 +263,7 @@ describe("5B-I3 Remove Background — Yumeko portrait acceptance", () => {
       await removeBackground(form({ subjectKind: "character", subjectId: a!.id, sourceAssetId: other.id })),
     ).toMatchObject({
       ok: false,
-      error: "That image does not belong to this character.",
+      error: "That image does not belong to this actor.",
     });
     expect(
       await removeBackground(

@@ -215,7 +215,7 @@ export default async function DirectShotPage({
                 </dd>
               </div>
               <div>
-                <dt className="inline text-muted">Characters: </dt>
+                <dt className="inline text-muted">Actors: </dt>
                 <dd className="inline">
                   {(snap?.context.characters ?? [])
                     .map((c) => `${c.name}${c.look ? ` (${c.look})` : ""}`)

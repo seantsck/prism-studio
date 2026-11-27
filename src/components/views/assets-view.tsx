@@ -296,7 +296,7 @@ export async function AssetLibraryView({
             <input
               name="q"
               defaultValue={q}
-              placeholder="Search file, tag, character, scene, shot, location…"
+              placeholder="Search file, tag, actor, scene, shot, location…"
               className="flex-1"
               aria-label="Search assets"
             />

@@ -194,7 +194,7 @@ describe("the character library", () => {
     // not into its own project
     expect(
       await addFromLibrary(form({ projectSlug: source.project.slug, characterId: yumeko.id })),
-    ).toMatchObject({ ok: false, error: "That character already lives in this project." });
+    ).toMatchObject({ ok: false, error: "That actor already lives in this project." });
     const before = JSON.stringify(await repo.loadProject(source.project.slug));
     const filesBefore = world.files.size;
     expect(await addFromLibrary(form({ projectSlug: "second-show", characterId: yumeko.id }))).toMatchObject({
@@ -228,7 +228,7 @@ describe("the character library", () => {
     expect((await loadLibrary()).characters).toEqual([]);
     expect(await addFromLibrary(form({ projectSlug: "second-show", characterId: yumeko.id }))).toMatchObject({
       ok: false,
-      error: "That character is not in your library.",
+      error: "That actor is not in your library.",
     });
   });
 

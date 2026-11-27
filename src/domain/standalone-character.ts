@@ -24,7 +24,7 @@ export function nameFromPrompt(prompt: string): string {
     .slice(0, 4)
     .join(" ")
     .replace(/[.,;:!?。、]+$/, "");
-  return (words || "New character").slice(0, CHARACTER_NAME_MAX);
+  return (words || "New actor").slice(0, CHARACTER_NAME_MAX);
 }
 
 export const LOCATION_PROMPT_MAX = 1200;

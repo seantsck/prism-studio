@@ -252,7 +252,7 @@ export default async function ScenePlanPage({
                             </span>
                           </div>
                           <div className="mt-1 text-muted">
-                            {s.characterKeys.map(nameOf).join(", ") || "no Characters"} ·{" "}
+                            {s.characterKeys.map(nameOf).join(", ") || "no Actors"} ·{" "}
                             {ctx?.locations.find((l) => l.key === s.locationKey)?.name ?? "no Location"}
                           </div>
                           <div className="mt-1">

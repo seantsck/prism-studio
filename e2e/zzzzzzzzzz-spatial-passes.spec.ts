@@ -544,7 +544,7 @@ test.describe("spatial control passes: capture flow", () => {
     // the gate states why capture is unavailable while there is unsaved blocking
     await changePose(page, "Yumeko");
     await expect(page.getByTestId("capture-spatial-passes")).toBeDisabled();
-    await expect(page.getByTestId("spatial-gate")).toContainText("Save the character blocking first.");
+    await expect(page.getByTestId("spatial-gate")).toContainText("Save the actor blocking first.");
     await page.getByTestId("save-blocking").click();
     await expect(page.getByTestId("blocking-status")).toContainText("saved", { timeout: 60_000 });
     await expect(page.getByTestId("spatial-gate")).toHaveCount(0);

@@ -102,7 +102,7 @@ export class LocationLibraryUnavailableError extends Error {
 export class CharacterLibraryUnavailableError extends Error {
   constructor() {
     super(
-      "The character library needs a one-time database update (migration 0062) that has not been applied yet.",
+      "The actor library needs a one-time database update (migration 0062) that has not been applied yet.",
     );
     this.name = "CharacterLibraryUnavailableError";
   }

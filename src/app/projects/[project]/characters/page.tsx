@@ -16,7 +16,7 @@ export default async function CharactersPage({ params }: { params: Promise<{ pro
   return (
     <div>
       <PageHeader
-        title="Characters"
+        title="Actors"
         subtitle="Identity, Looks and voices. Shots reference these by id — never by repeated text."
       />
       <div className="grid gap-6 p-6 lg:grid-cols-[1fr_320px]">
@@ -46,7 +46,7 @@ export default async function CharactersPage({ params }: { params: Promise<{ pro
           })}
         </div>
         <div className="space-y-4">
-          <Panel title="New character">
+          <Panel title="New actor">
             <ActionForm action={saveCharacter} className="space-y-3">
               <input type="hidden" name="projectSlug" value={slug} />
               <Field label="Name">

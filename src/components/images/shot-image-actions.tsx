@@ -181,7 +181,7 @@ export async function ShotImageActions({
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="text-[13px] font-medium">Production Frame Inputs</h3>
           <div className="text-[11.5px]" data-testid="pf-ready">
-            {tick("characters", "Characters")}
+            {tick("characters", "Actors")}
             {tick("location", "Location")}
             {tick("direction", "Direction")}
             {tick("story", "Story")}
@@ -189,7 +189,7 @@ export async function ShotImageActions({
         </div>
         <div className="grid gap-2 sm:grid-cols-2">
           {block(
-            "Characters",
+            "Actors",
             inputs.characters.flatMap((c) => c.lines),
             "pf-inputs-characters",
           )}
@@ -198,8 +198,7 @@ export async function ShotImageActions({
           {block("Story", inputs.story, "pf-inputs-story")}
         </div>
         <p className="text-[11px] text-muted">
-          Prism sends these automatically from the Character and Location Visual Bibles. Nothing needs
-          attaching.
+          Prism sends these automatically from the Actor and Location Visual Bibles. Nothing needs attaching.
         </p>
         {fit?.refusal ? (
           <p className="text-[12px] text-warn" data-testid="pf-inputs-refusal">

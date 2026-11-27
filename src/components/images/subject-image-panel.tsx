@@ -390,7 +390,7 @@ export function SubjectImagePanel(props: {
                         </ActionForm>
                         <ActionForm
                           action={saveAsCharacterReference}
-                          successMessage="Character reference set"
+                          successMessage="Actor reference set"
                           className="flex gap-1"
                         >
                           <input type="hidden" name="projectSlug" value={props.projectSlug} />
@@ -404,7 +404,7 @@ export function SubjectImagePanel(props: {
                             ))}
                           </select>
                           <Button type="submit" size="sm" data-testid="use-as-character-reference">
-                            Use as Character Reference
+                            Use as Actor Reference
                           </Button>
                         </ActionForm>
                         {subject.looks.length > 0 ? (

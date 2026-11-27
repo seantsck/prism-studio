@@ -37,7 +37,7 @@ export default async function OverviewPage({ params }: { params: Promise<{ proje
     ["Shots", String(allShots.length), `${ready} ready to generate`],
     ["Runtime", formatDuration(runtime), "animatic estimate"],
     ["Dialogue", `${linesWithTake}/${lines}`, "lines with canonical take"],
-    ["Characters", String(data.characters.length), `${data.looks.length} looks`],
+    ["Actors", String(data.characters.length), `${data.looks.length} looks`],
     ["Locations", String(data.locations.length), `${data.locations.filter((l) => l.locked).length} locked`],
     ["Attempts", String(data.attempts.length), `${data.attempts.filter((a) => a.approved).length} approved`],
   ];

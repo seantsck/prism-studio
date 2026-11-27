@@ -3,7 +3,7 @@ import { MemoryRepository } from "@/data/memory-repository";
 import { locationNameFromPrompt, nameFromPrompt, photoCountNote } from "@/domain/standalone-character";
 
 /**
- * A character made on its own (the home page's "Create a character"), through the REAL actions and loaders in memory
+ * A character made on its own (the home page's "Create an actor"), through the REAL actions and loaders in memory
  * mode: it lives in the account's one `library` project (never among their projects), is in the library at once, and
  * any project adds a copy of it.
  */
@@ -53,13 +53,13 @@ describe("a character made on its own", () => {
     expect(nameFromPrompt("an old fisherman called Gen who never smiles")).toBe("Gen");
     expect(nameFromPrompt("Name: Aria. A pilot.")).toBe("Aria");
     expect(nameFromPrompt("A quiet librarian with silver hair.")).toBe("A quiet librarian with");
-    expect(nameFromPrompt("   ")).toBe("New character");
+    expect(nameFromPrompt("   ")).toBe("New actor");
   });
 
   it("is created in the account's characters project, in the library, and opened", async () => {
     expect(await createStandaloneCharacter(form({ prompt: " " }))).toMatchObject({
       ok: false,
-      error: "Describe your character first.",
+      error: "Describe your actor first.",
     });
     const prompt = "A sharp detective named Aiko Mori, early 30s, short black bob, long charcoal coat.";
     const made = await createStandaloneCharacter(form({ prompt }));

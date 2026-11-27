@@ -78,7 +78,7 @@ export default async function StoryPage({ params }: { params: Promise<{ project:
     <div>
       <PageHeader
         title="Import Story"
-        subtitle="Paste or upload a screenplay, treatment or outline. Prism proposes Characters, Locations, Scenes and Shots; you review and apply what you want."
+        subtitle="Paste or upload a screenplay, treatment or outline. Prism proposes Actors, Locations, Scenes and Shots; you review and apply what you want."
       />
       <div className="grid gap-4 p-6 xl:grid-cols-[1fr_360px]">
         <div className="space-y-4">
@@ -186,7 +186,7 @@ export default async function StoryPage({ params }: { params: Promise<{ project:
                       (p.sourceKind === "episode_script" ? "Episode script" : "Pasted text")}
                     {p.scope.kind === "section" ? ` · revised ${p.scope.section}` : ""}
                     {counts
-                      ? ` · ${counts.characters} Characters · ${counts.locations} Locations · ${counts.scenes} Scenes · ${counts.shots} Shots`
+                      ? ` · ${counts.characters} Actors · ${counts.locations} Locations · ${counts.scenes} Scenes · ${counts.shots} Shots`
                       : ""}
                   </div>
                 </li>

@@ -88,7 +88,7 @@ test("A — the source Shot builds a setup on the shared set", async ({ page }) 
   await page.getByTestId("add-character-proxy").click();
   await setInput(page, "blocking-pos-x", "2");
   await page.getByTestId("save-blocking").click();
-  await expect(page.getByTestId("blocking-status")).toContainText("Character blocking saved", {
+  await expect(page.getByTestId("blocking-status")).toContainText("Actor blocking saved", {
     timeout: 60_000,
   });
   await saveLight(page, "200");

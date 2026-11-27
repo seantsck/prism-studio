@@ -26,7 +26,7 @@ async function makeReferenceViews_impl(form: FormData) {
   const user = await requireUser();
   const data = await requireProjectFresh(slug);
   const character = data.characters.find((c) => c.id === str(form, "characterId"));
-  if (!character) throw new UserFacingError("That character is not in this project.");
+  if (!character) throw new UserFacingError("That actor is not in this project.");
   const viewIds = [...new Set(str(form, "views").split(",").filter(Boolean))];
   if (viewIds.length === 0) throw new UserFacingError("Choose which views to make.");
   // the same click twice (a double press, a retry) never makes the same views twice
@@ -212,7 +212,7 @@ async function stopReferenceViews_impl(form: FormData) {
   const data = await requireProjectFresh(slug);
   const characterId = str(form, "characterId");
   if (!data.characters.some((c) => c.id === characterId))
-    throw new UserFacingError("That character is not in this project.");
+    throw new UserFacingError("That actor is not in this project.");
   const generation = await getGenerationRepo();
   const attempts = await generation.listSubjectImageAttempts({ kind: "character", characterId });
   const wanted = new Set(form.getAll("jobId").map(String));

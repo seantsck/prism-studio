@@ -39,7 +39,7 @@ async function resolveSource(data: ProjectData, characterId: string, form: FormD
   }
   if (!assetId) throw new UserFacingError("Choose an image.");
   const own = await subjectImageAssetIds(data, { kind: "character", characterId });
-  if (!own.has(assetId)) throw new UserFacingError("That image does not belong to this character.");
+  if (!own.has(assetId)) throw new UserFacingError("That image does not belong to this actor.");
   return assetId;
 }
 
@@ -48,7 +48,7 @@ async function loadCharacter(form: FormData) {
   await requireUser();
   const data = await requireProjectFresh(slug);
   const character = data.characters.find((c) => c.id === str(form, "characterId"));
-  if (!character) throw new UserFacingError("That character no longer exists.");
+  if (!character) throw new UserFacingError("That actor no longer exists.");
   return { slug, data, character };
 }
 

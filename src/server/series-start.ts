@@ -350,7 +350,7 @@ export function quoteCharacterFill(
   const r = resolveWriter(writer);
   if (!r) return { ok: false, reason: WRITING_AI_OFF };
   const character = data.characters.find((c) => c.id === characterId);
-  if (!character) return { ok: false, reason: "That character is not in this project." };
+  if (!character) return { ok: false, reason: "That actor is not in this project." };
   const episode =
     [...data.episodes].sort((a, b) => a.number - b.number)[0] ??
     emptyEpisodeOne(data.project.id, new Date().toISOString());

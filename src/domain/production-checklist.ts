@@ -402,7 +402,7 @@ export function projectAreas(data: ProjectData): AreaCard[] {
     title: "Cast",
     summary:
       data.characters.length === 0
-        ? "No characters yet"
+        ? "No actors yet"
         : [
             ready.length ? `${ready.map((c) => c.name).join(", ")} ready` : "",
             notReady.length ? `${notReady.map((c) => c.name).join(", ")} not started` : "",
@@ -411,7 +411,7 @@ export function projectAreas(data: ProjectData): AreaCard[] {
             .join(" · "),
     next:
       data.characters.length === 0
-        ? { label: "Add a character", href: `${base}/characters` }
+        ? { label: "Add an actor", href: `${base}/characters` }
         : (first(["people", "outfits"]) ??
           (notReady[0]
             ? {
