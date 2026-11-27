@@ -284,7 +284,7 @@ export default async function CharacterPage({
     <div>
       <PageHeader
         title={c.name}
-        subtitle={inLibrary ? "In your library · not part of any project" : c.role}
+        subtitle={inLibrary ? "Actor · in your library, not part of any project" : c.role}
         actions={
           <div className="flex items-center gap-3">
             <LibraryToggle slug={slug} characterId={c.id} saved={saved} available={library.available} />
@@ -327,7 +327,7 @@ export default async function CharacterPage({
               Date.parse(aiLast.decidedAt ?? aiLast.completedAt ?? aiLast.createdAt) + 2_000
           }
         />
-        <Panel title="2. Character">
+        <Panel title={inLibrary ? "2. Actor" : "2. Character"}>
           {/* keyed by the sheet's version: Prism's filled-in fields show here at once */}
           <ActionForm key={c.updatedAt} action={saveCharacter} className="space-y-3">
             {hidden}

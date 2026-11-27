@@ -20,6 +20,8 @@ export interface LibraryCharacter {
   projectId: string;
   projectSlug: string;
   projectTitle: string;
+  /** an Actor (made on its own, in the account's library) rather than a Character of a story */
+  actor: boolean;
   thumbUrl: string | null;
   /** Pictures that travel with it (identity references, Look pictures, voice samples). */
   pictures: number;
@@ -32,7 +34,9 @@ export async function loadLibrary(): Promise<{ characters: LibraryCharacter[]; a
   const repo = await getRepo();
   const { entries, available } = await repo.libraryEntries();
   if (!entries.length) return { characters: [], available };
-  const slugs = new Map((await repo.listProjects()).map((p) => [p.id, p.slug]));
+  const listed = await repo.listProjects();
+  const slugs = new Map(listed.map((p) => [p.id, p.slug]));
+  const library = new Set(listed.filter((p) => p.purpose === "library").map((p) => p.id));
   const loaded = new Map<string, ProjectData | null>();
   const characters: LibraryCharacter[] = [];
   for (const e of entries) {
@@ -57,6 +61,7 @@ export async function loadLibrary(): Promise<{ characters: LibraryCharacter[]; a
       projectId: data.project.id,
       projectSlug: slug,
       projectTitle: data.project.title,
+      actor: library.has(data.project.id),
       thumbUrl: previewUrl(thumb),
       pictures: plan.assets.filter((a) => a.from.objectPath).length,
       looks: plan.looks.length,

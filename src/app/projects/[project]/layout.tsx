@@ -47,7 +47,8 @@ const LIBRARY_AREAS = [
   {
     title: "Your library",
     items: [
-      ["/characters", "Characters"],
+      // the library's people are Actors: their photos and views; in a project they play Characters
+      ["/characters", "Actors"],
       ["/looks", "Looks"],
       ["/locations", "Locations"],
       ["/studio", "Reference Studio"],

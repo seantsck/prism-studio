@@ -15,10 +15,17 @@ export default async function CharactersPage({ params }: { params: Promise<{ pro
 
   return (
     <div>
-      <PageHeader
-        title="Characters"
-        subtitle="Identity, Looks and voices. Shots reference these by id — never by repeated text."
-      />
+      {data.project.purpose === "library" ? (
+        <PageHeader
+          title="Actors"
+          subtitle="Who someone is and how they look: their photos and views. In a project they play Characters."
+        />
+      ) : (
+        <PageHeader
+          title="Characters"
+          subtitle="Identity, Looks and voices. Shots reference these by id — never by repeated text."
+        />
+      )}
       <div className="grid gap-6 p-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-2">
           {data.characters.map((c) => {
@@ -46,7 +53,7 @@ export default async function CharactersPage({ params }: { params: Promise<{ pro
           })}
         </div>
         <div className="space-y-4">
-          <Panel title="New character">
+          <Panel title={data.project.purpose === "library" ? "New actor" : "New character"}>
             <ActionForm action={saveCharacter} className="space-y-3">
               <input type="hidden" name="projectSlug" value={slug} />
               <Field label="Name">
